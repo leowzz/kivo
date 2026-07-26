@@ -6,13 +6,16 @@
 
 **Architecture:** A hardware-independent `LedController` owns blink timing, input debounce, and role state. A small Arduino entry point reads GPIO6, calls the controller with `esp_timer_get_time()`, and writes the returned levels to GPIO10 and GPIO11. PlatformIO runs Unity tests natively on macOS and builds/uploads the ESP32-S3 firmware.
 
-**Tech Stack:** C++17, PlatformIO, Arduino-ESP32, Unity, ESP32-S3 `esp_timer`
+**Tech Stack:** C++17, uv, PlatformIO, Arduino-ESP32, Unity, ESP32-S3 `esp_timer`
 
 ---
 
 ## File Map
 
 - `.gitignore`: excludes the local Python environment and PlatformIO outputs.
+- `.python-version`: pins the local tool runtime to Python 3.13.
+- `pyproject.toml`: declares PlatformIO as a uv-managed development dependency.
+- `uv.lock`: locks the complete Python tool dependency graph.
 - `platformio.ini`: defines the native test and ESP32-S3 firmware environments.
 - `lib/led_controller/src/LedController.h`: public controller API, constants, and board pin mapping.
 - `lib/led_controller/src/LedController.cpp`: drift-resistant blink and debounced role-switch state machine.
@@ -23,19 +26,21 @@
 
 **Files:**
 - Create: `.gitignore`
+- Create: `.python-version`
+- Create: `pyproject.toml`
+- Create: `uv.lock`
 - Create: `platformio.ini`
 
-- [ ] **Step 1: Create the local tool environment**
+- [ ] **Step 1: Initialize the uv-managed tool environment**
 
 Run:
 
 ```bash
-/opt/homebrew/bin/python3.13 -m venv .venv
-./.venv/bin/python -m pip install --upgrade pip
-./.venv/bin/pip install platformio
+uv init --bare --python 3.13 --vcs none
+uv add --dev "platformio>=6.1,<7"
 ```
 
-Expected: `./.venv/bin/pio --version` prints `PlatformIO Core` and exits 0.
+Expected: uv creates `.python-version`, `pyproject.toml`, `uv.lock`, and `.venv`; `uv run pio --version` prints `PlatformIO Core` and exits 0.
 
 - [ ] **Step 2: Add generated-file exclusions**
 
@@ -78,7 +83,7 @@ monitor_speed = 115200
 Run:
 
 ```bash
-./.venv/bin/pio project config
+uv run pio project config
 ```
 
 Expected: both `[env:native]` and `[env:esp32s3]` are listed without configuration errors.
@@ -86,7 +91,7 @@ Expected: both `[env:native]` and `[env:esp32s3]` are listed without configurati
 - [ ] **Step 5: Commit the skeleton**
 
 ```bash
-git add .gitignore platformio.ini
+git add .gitignore .python-version pyproject.toml uv.lock platformio.ini
 git commit -m "build: configure PlatformIO for ESP32-S3"
 ```
 
@@ -142,7 +147,7 @@ int main(int, char **) {
 Run:
 
 ```bash
-./.venv/bin/pio test -e native
+uv run pio test -e native
 ```
 
 Expected: compilation fails because `LedController.h` does not exist. This is the expected missing-feature failure.
@@ -211,7 +216,7 @@ LedOutputs LedController::update(std::uint64_t nowUs, bool) {
 Run:
 
 ```bash
-./.venv/bin/pio test -e native
+uv run pio test -e native
 ```
 
 Expected: 2 tests pass with no failures.
@@ -286,7 +291,7 @@ RUN_TEST(test_bounce_does_not_switch_and_stable_release_rearms_input);
 Run:
 
 ```bash
-./.venv/bin/pio test -e native
+uv run pio test -e native
 ```
 
 Expected: the two new tests fail because GPIO6 input is ignored and LEDA remains the blinking LED.
@@ -356,7 +361,7 @@ Keep the existing timing and output logic below that call unchanged.
 Run:
 
 ```bash
-./.venv/bin/pio test -e native
+uv run pio test -e native
 ```
 
 Expected: all 4 tests pass.
@@ -398,7 +403,7 @@ RUN_TEST(test_uses_luatos_esp32s3_aio_board_pins);
 Run:
 
 ```bash
-./.venv/bin/pio test -e native
+uv run pio test -e native
 ```
 
 Expected: compilation fails because `BoardPins` is not defined.
@@ -420,7 +425,7 @@ struct BoardPins {
 Run:
 
 ```bash
-./.venv/bin/pio test -e native
+uv run pio test -e native
 ```
 
 Expected: all 5 tests pass.
@@ -466,7 +471,7 @@ void loop() {
 Run:
 
 ```bash
-./.venv/bin/pio run -e esp32s3
+uv run pio run -e esp32s3
 ```
 
 Expected: `SUCCESS` and `.pio/build/esp32s3/firmware.bin` exists.
@@ -498,8 +503,8 @@ Expected: exit status 0.
 Run:
 
 ```bash
-./.venv/bin/pio test -e native
-./.venv/bin/pio run -e esp32s3
+uv run pio test -e native
+uv run pio run -e esp32s3
 ```
 
 Expected: all 5 tests pass and the firmware build reports `SUCCESS`.
@@ -509,7 +514,7 @@ Expected: all 5 tests pass and the firmware build reports `SUCCESS`.
 Run:
 
 ```bash
-./.venv/bin/pio run -e esp32s3 -t upload
+uv run pio run -e esp32s3 -t upload
 ```
 
 Expected: PlatformIO detects ESP32-S3, writes and verifies the firmware, then resets the board.
