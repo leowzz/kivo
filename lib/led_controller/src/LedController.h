@@ -18,7 +18,13 @@ class LedController {
   LedOutputs update(std::uint64_t nowUs, bool inputHigh);
 
  private:
+  void updateInput(std::uint64_t nowUs, bool inputHigh);
+
   bool blinkLedA_ = true;
   bool blinkOn_ = true;
   std::uint64_t nextBlinkToggleUs_ = kHalfPeriodUs;
+  bool rawInputHigh_ = true;
+  bool stableInputHigh_ = true;
+  bool inputArmed_ = true;
+  std::uint64_t rawInputChangedUs_ = 0;
 };
