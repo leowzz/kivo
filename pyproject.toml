@@ -8,4 +8,6 @@ dependencies = []
 dev = [
     "pip>=25,<26",
     "platformio>=6.1,<7",
+    "pyserial>=3.5,<4",
+    "pyyaml>=6,<7",
 ]
