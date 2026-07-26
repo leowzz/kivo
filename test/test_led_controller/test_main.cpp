@@ -63,11 +63,18 @@ void test_bounce_does_not_switch_and_stable_release_rearms_input() {
   TEST_ASSERT_TRUE(controller.update(336667, false).ledB);
 }
 
+void test_uses_luatos_esp32s3_aio_board_pins() {
+  TEST_ASSERT_EQUAL_UINT8(10, BoardPins::kLedA);
+  TEST_ASSERT_EQUAL_UINT8(11, BoardPins::kLedB);
+  TEST_ASSERT_EQUAL_UINT8(6, BoardPins::kModeInput);
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_starts_with_led_a_on_and_led_b_steady_on);
   RUN_TEST(test_led_a_completes_three_flashes_per_second_without_drift);
   RUN_TEST(test_stable_low_swaps_roles_once_after_debounce);
   RUN_TEST(test_bounce_does_not_switch_and_stable_release_rearms_input);
+  RUN_TEST(test_uses_luatos_esp32s3_aio_board_pins);
   return UNITY_END();
 }

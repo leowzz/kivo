@@ -2,6 +2,12 @@
 
 #include <cstdint>
 
+struct BoardPins {
+  static constexpr std::uint8_t kLedA = 10;
+  static constexpr std::uint8_t kLedB = 11;
+  static constexpr std::uint8_t kModeInput = 6;
+};
+
 struct LedOutputs {
   bool ledA;
   bool ledB;
