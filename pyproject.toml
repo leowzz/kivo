@@ -6,5 +6,6 @@ dependencies = []
 
 [dependency-groups]
 dev = [
+    "pip>=25,<26",
     "platformio>=6.1,<7",
 ]
