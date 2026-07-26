@@ -37,10 +37,11 @@ Run:
 
 ```bash
 uv init --bare --python 3.13 --vcs none
+uv python pin 3.13
 uv add --dev "platformio>=6.1,<7"
 ```
 
-Expected: uv creates `.python-version`, `pyproject.toml`, `uv.lock`, and `.venv`; `uv run pio --version` prints `PlatformIO Core` and exits 0.
+Expected: uv creates `.python-version`, `pyproject.toml`, `uv.lock`, and `.venv`; `uv run python --version` prints Python 3.13 and `uv run pio --version` prints `PlatformIO Core`.
 
 - [ ] **Step 2: Add generated-file exclusions**
 
