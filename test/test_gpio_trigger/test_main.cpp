@@ -6,12 +6,12 @@
 void setUp() {}
 void tearDown() {}
 
-void test_exposes_only_safe_gpio_inputs() {
+void test_exposes_supported_gpio_inputs() {
+  TEST_ASSERT_TRUE(GpioTriggerController::isSupportedPin(0));
   TEST_ASSERT_TRUE(GpioTriggerController::isSupportedPin(1));
   TEST_ASSERT_TRUE(GpioTriggerController::isSupportedPin(9));
   TEST_ASSERT_TRUE(GpioTriggerController::isSupportedPin(12));
   TEST_ASSERT_TRUE(GpioTriggerController::isSupportedPin(18));
-  TEST_ASSERT_FALSE(GpioTriggerController::isSupportedPin(0));
   TEST_ASSERT_FALSE(GpioTriggerController::isSupportedPin(10));
   TEST_ASSERT_FALSE(GpioTriggerController::isSupportedPin(11));
   TEST_ASSERT_FALSE(GpioTriggerController::isSupportedPin(19));
@@ -136,7 +136,7 @@ void test_matching_skip_response_clears_without_keypress() {
 
 int main(int, char **) {
   UNITY_BEGIN();
-  RUN_TEST(test_exposes_only_safe_gpio_inputs);
+  RUN_TEST(test_exposes_supported_gpio_inputs);
   RUN_TEST(test_stable_low_emits_one_event_after_debounce);
   RUN_TEST(test_release_rearms_pin_for_a_later_press);
   RUN_TEST(test_pending_event_blocks_other_pins_until_timeout);

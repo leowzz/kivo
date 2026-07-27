@@ -19,8 +19,8 @@ class GpioTriggerController {
  public:
   static constexpr std::uint32_t kDebounceMs = 30;
   static constexpr std::uint32_t kResponseTimeoutMs = 2000;
-  static constexpr std::array<std::uint8_t, 16> kSupportedPins = {
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18};
+  static constexpr std::array<std::uint8_t, 17> kSupportedPins = {
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18};
 
   explicit GpioTriggerController(std::uint32_t startMs = 0);
 
