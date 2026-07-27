@@ -135,6 +135,25 @@ pub fn run() {
         .expect("error while building Vibe Tool");
 
     app.run(|app_handle, event| match event {
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::CloseRequested { api, .. },
+            ..
+        } => {
+            api.prevent_close();
+            if let Some(window) = app_handle.get_webview_window(&label) {
+                let _ = window.hide();
+            }
+        }
+        tauri::RunEvent::Reopen {
+            has_visible_windows: false,
+            ..
+        } => {
+            if let Some(window) = app_handle.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
         tauri::RunEvent::ExitRequested { .. } => {
             app_handle
                 .state::<AppState>()

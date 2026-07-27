@@ -83,20 +83,24 @@ mod tests {
         collections::BTreeMap,
         fs,
         path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
     struct TestDirectory(PathBuf);
 
     impl TestDirectory {
         fn new() -> Self {
             let name = format!(
-                "vibe-tool-{}-{}",
+                "vibe-tool-{}-{}-{}",
                 std::process::id(),
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
-                    .as_nanos()
+                    .as_nanos(),
+                NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed)
             );
             let path = std::env::temp_dir().join(name);
             fs::create_dir(&path).unwrap();
