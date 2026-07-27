@@ -12,7 +12,9 @@ rebuilding or reflashing the board.
 
 ## Configuration
 
-The project-root `config.yaml` uses an integer-to-string mapping:
+The desktop app stores `config.yaml` in its macOS application configuration
+directory. On first launch it imports the project-root `config.yaml` when that
+file exists. The file uses an integer-to-string mapping:
 
 ```yaml
 buttons:
@@ -26,21 +28,22 @@ Keys must be integers in the supported GPIO set. Values must be strings and
 may contain UTF-8 text, spaces, punctuation, and newlines. Empty strings are
 valid and result in no paste action.
 
-The helper checks the file modification time every 500 milliseconds and
-atomically replaces its in-memory mapping after a successful parse. If the
-file is missing or invalid, the helper logs the error and keeps the last valid
-mapping. Fixing the file causes the next poll to load it without restarting
-the helper.
+The graphical editor validates and atomically replaces the YAML file when Save
+or Command-S is used. A successful save replaces the Rust serial worker's
+shared in-memory mapping immediately. Invalid startup content opens as empty
+mappings with a visible error; correcting and saving it clears the error.
 
 ## Supported Inputs
 
-The firmware monitors GPIO1 through GPIO9 and GPIO12 through GPIO18. Each pin
+The firmware monitors GPIO0 through GPIO9 and GPIO12 through GPIO18. Each pin
 uses the internal pull-up and is active low. The following pins are excluded:
 
-- GPIO0: boot strap and BOOT button
 - GPIO10 and GPIO11: onboard LEDs
 - GPIO19 and GPIO20: native USB
 - All other non-exposed or flash/PSRAM-related pins
+
+GPIO0 is a boot strap and BOOT-button pin. It works as an input after startup,
+but holding it low during power-on or reset puts the board into download mode.
 
 Each input is debounced for 30 milliseconds. A stable high-to-low transition
 generates one event. Holding a pin low does not repeat. The pin must return to
@@ -91,16 +94,17 @@ stopped helper cannot permanently block later presses.
 
 ## Helper Lifecycle
 
-`make helper` starts the helper in the foreground. It repeatedly scans macOS
-serial ports for the board's TinyUSB CDC interface, reconnects after USB
-disconnects, and continues monitoring `config.yaml`. Stopping the command
-stops the helper; no LaunchAgent or background service is installed.
+`make helper` starts the Tauri 2 desktop application in development mode. Its
+Rust backend repeatedly scans macOS serial ports for the board's TinyUSB CDC
+interface and reconnects after USB disconnects. Closing the application stops
+and joins the single serial worker. `make helper-build` creates the distributable
+macOS application bundle.
 
 ## Build And Upload
 
-The default `make` target builds and uploads the firmware. `make test` runs
-the native C++ controller tests and Python helper tests. `make build` and
-`make upload` remain available separately.
+The default `make` target builds and uploads the firmware. `make test` runs the
+native C++ controller, Rust backend, and React interface tests. `make build`,
+`make upload`, and `make helper-build` remain available separately.
 
 The initial upload uses the board's built-in USB/JTAG interface. Once the HID
 firmware is running, another JTAG upload may require holding BOOT and tapping
@@ -111,9 +115,13 @@ board's USB connection.
 
 - Native C++ tests cover the supported GPIO set, debounce, held-low behavior,
   event serialization, pending-event exclusion, timeout, and matching ACKs.
-- Python tests cover valid YAML, Unicode and multiline values, hot reload,
-  invalid-file fallback, mapped paste, and unmapped skip responses.
+- Rust tests cover valid YAML, Unicode and multiline values, atomic save
+  failures, exact USB-device matching, mapped paste, clipboard failure, and
+  unmapped skip responses.
+- React tests cover initial load, Unicode edits, dirty/save state, save errors,
+  runtime events, cleanup, and the GPIO0 warning.
 - The firmware builds for ESP32-S3 in USB OTG mode.
 - The default `make` target uploads the firmware.
+- `make helper-build` produces a macOS `.app` bundle.
 - A physical check grounds at least two configured GPIOs and confirms each
   inserts its exact mapped Chinese text once into the focused application.

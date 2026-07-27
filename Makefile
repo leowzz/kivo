@@ -1,4 +1,4 @@
-.PHONY: all build upload test helper
+.PHONY: all build upload test helper helper-build
 
 all: upload
 
@@ -10,7 +10,11 @@ upload:
 
 test:
 	uv run pio test -e native
-	uv run python -m unittest discover -s test -p 'test_helper.py' -v
+	cargo test --manifest-path src-tauri/Cargo.toml
+	npm test
 
 helper:
-	uv run python -m host.text_helper
+	npm run tauri dev
+
+helper-build:
+	npm run tauri build -- --bundles app
