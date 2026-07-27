@@ -4,8 +4,8 @@ import argparse
 import os
 import re
 import subprocess
-import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Callable
@@ -22,8 +22,9 @@ USB_PRODUCT_NAME = "ESP Vibe Text Keyboard"
 
 
 class MappingConfig:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, report: Callable[[str], None] = print):
         self.path = path
+        self.report = report
         self.buttons: dict[int, str] = {}
         self._observed_mtime_ns: int | None = None
 
@@ -31,7 +32,7 @@ class MappingConfig:
         try:
             mtime_ns = self.path.stat().st_mtime_ns
         except OSError as error:
-            print(f"config unavailable: {error}", file=sys.stderr)
+            self.report(f"config unavailable: {error}")
             return False
 
         if mtime_ns == self._observed_mtime_ns:
@@ -42,11 +43,11 @@ class MappingConfig:
             document = yaml.safe_load(self.path.read_text(encoding="utf-8"))
             buttons = self._validate(document)
         except (OSError, UnicodeError, yaml.YAMLError, ValueError) as error:
-            print(f"config reload failed: {error}", file=sys.stderr)
+            self.report(f"config reload failed: {error}")
             return False
 
         self.buttons = buttons
-        print(f"loaded {len(buttons)} button mapping(s) from {self.path}")
+        self.report(f"loaded {len(buttons)} button mapping(s) from {self.path}")
         return True
 
     @staticmethod
@@ -118,21 +119,26 @@ def find_device_port() -> str | None:
     return None
 
 
-def serve(config_path: Path) -> None:
-    config = MappingConfig(config_path)
+def serve(
+    config_path: Path,
+    report: Callable[[str], None] = print,
+    stop: threading.Event | None = None,
+) -> None:
+    stop = stop or threading.Event()
+    config = MappingConfig(config_path, report)
     config.reload_if_changed()
 
-    while True:
+    while not stop.is_set():
         port = find_device_port()
         if port is None:
             config.reload_if_changed()
-            time.sleep(0.5)
+            stop.wait(0.5)
             continue
 
-        print(f"connected to {port}")
+        report(f"connected to {port}")
         try:
             with serial.Serial(port, 115200, timeout=0.5, write_timeout=1) as device:
-                while True:
+                while not stop.is_set():
                     config.reload_if_changed()
                     raw_line = device.readline()
                     if not raw_line:
@@ -149,10 +155,10 @@ def serve(config_path: Path) -> None:
                     response = handle_press(event_id, gpio, config.buttons)
                     device.write(response.encode("ascii"))
                     device.flush()
-                    print(f"GPIO{gpio}: {response.strip()}")
+                    report(f"GPIO{gpio}: {response.strip()}")
         except (OSError, serial.SerialException, subprocess.SubprocessError) as error:
-            print(f"device disconnected: {error}", file=sys.stderr)
-            time.sleep(0.5)
+            report(f"device disconnected: {error}")
+            stop.wait(0.5)
 
 
 def main() -> None:

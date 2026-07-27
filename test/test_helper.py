@@ -1,6 +1,7 @@
 import io
 import os
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -14,6 +15,7 @@ from host.text_helper import (
     main,
     parse_press_line,
     save_mappings,
+    serve,
 )
 
 
@@ -123,6 +125,39 @@ class ProtocolTests(unittest.TestCase):
             "SKIP 2\n", handle_press(2, 6, {6: ""}, copied.append)
         )
         self.assertEqual([], copied)
+
+
+class SerialLoopTests(unittest.TestCase):
+    def test_reports_pressed_gpio_and_result(self):
+        stop = threading.Event()
+
+        class Device:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *arguments):
+                return False
+
+            def readline(self):
+                stop.set()
+                return b"PRESS 12 6\n"
+
+            def write(self, value):
+                self.written = value
+
+            def flush(self):
+                pass
+
+        reports = []
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yaml"
+            path.write_text("buttons:\n  6: hello\n", encoding="utf-8")
+            with patch("host.text_helper.find_device_port", return_value="fake"), patch(
+                "host.text_helper.serial.Serial", return_value=Device()
+            ), patch("host.text_helper.copy_to_clipboard"):
+                serve(path, reports.append, stop)
+
+        self.assertIn("GPIO6: PASTE 12", reports)
 
 
 class CliTests(unittest.TestCase):
