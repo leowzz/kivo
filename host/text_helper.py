@@ -351,6 +351,8 @@ def run_tui(screen: curses.window, config_path: Path) -> None:
             except curses.error:
                 continue
 
+            if key in (3, "\x03"):
+                return
             if editor is not None:
                 result = editor.handle(key)
                 if result == "cancel":

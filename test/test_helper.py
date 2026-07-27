@@ -194,7 +194,7 @@ class TuiTests(unittest.TestCase):
         class Screen:
             def __init__(self):
                 self.text = []
-                self.keys = iter(["\n", "x", "\x13", "q"])
+                self.keys = iter(["\n", "x", "\x13", "\x03"])
                 self.operations = []
                 self.refreshes = 0
                 self.editor_cursor_last = []
@@ -233,6 +233,9 @@ class TuiTests(unittest.TestCase):
             with patch("host.text_helper.threading.Thread") as thread, patch(
                 "host.text_helper.curses.curs_set"
             ), patch("host.text_helper.curses.raw") as raw:
+                thread.return_value.start.side_effect = lambda: thread.call_args.kwargs[
+                    "args"
+                ][1]("GPIO6: PASTE 12")
                 run_tui(screen, path)
             self.assertEqual(
                 "x", yaml.safe_load(path.read_text(encoding="utf-8"))["buttons"][1]
@@ -240,6 +243,7 @@ class TuiTests(unittest.TestCase):
 
         self.assertIn("GPIO mappings", screen.text)
         self.assertIn("Button log", screen.text)
+        self.assertTrue(any("GPIO6: PASTE 12" in value for value in screen.text))
         self.assertEqual([True, True], screen.editor_cursor_last)
         raw.assert_called_once_with()
         thread.return_value.start.assert_called_once_with()
