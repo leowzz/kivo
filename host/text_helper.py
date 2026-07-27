@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import curses
 import os
+import queue
 import re
 import subprocess
 import tempfile
 import threading
 import time
+import unicodedata
+from collections import deque
 from pathlib import Path
 from typing import Callable
 
@@ -19,6 +23,77 @@ SUPPORTED_GPIOS = frozenset((*range(1, 10), *range(12, 19)))
 PRESS_PATTERN = re.compile(r"PRESS ([0-9]+) ([0-9]+)")
 USB_VENDOR_ID = 0x303A
 USB_PRODUCT_NAME = "ESP Vibe Text Keyboard"
+
+
+def _display_width(text: str) -> int:
+    # ponytail: terminal-width approximation; use wcwidth if emoji editing matters.
+    return sum(
+        0
+        if unicodedata.combining(character)
+        else 2
+        if unicodedata.east_asian_width(character) in "WF"
+        else 1
+        for character in text
+    )
+
+
+class TextBuffer:
+    def __init__(self, text: str):
+        self.lines = text.split("\n")
+        self.row = 0
+        self.column = 0
+
+    def text(self) -> str:
+        return "\n".join(self.lines)
+
+    def handle(self, key: int | str) -> str | None:
+        if key in (27, "\x1b"):
+            return "cancel"
+        if key in (19, "\x13"):
+            return "save"
+        if key == curses.KEY_UP:
+            self.row = max(0, self.row - 1)
+            self.column = min(self.column, len(self.lines[self.row]))
+        elif key == curses.KEY_DOWN:
+            self.row = min(len(self.lines) - 1, self.row + 1)
+            self.column = min(self.column, len(self.lines[self.row]))
+        elif key == curses.KEY_LEFT:
+            if self.column:
+                self.column -= 1
+            elif self.row:
+                self.row -= 1
+                self.column = len(self.lines[self.row])
+        elif key == curses.KEY_RIGHT:
+            if self.column < len(self.lines[self.row]):
+                self.column += 1
+            elif self.row < len(self.lines) - 1:
+                self.row += 1
+                self.column = 0
+        elif key in (10, 13, "\n", "\r"):
+            line = self.lines[self.row]
+            self.lines[self.row : self.row + 1] = [
+                line[: self.column],
+                line[self.column :],
+            ]
+            self.row += 1
+            self.column = 0
+        elif key in (curses.KEY_BACKSPACE, 127, 8, "\x7f", "\b"):
+            if self.column:
+                line = self.lines[self.row]
+                self.lines[self.row] = (
+                    line[: self.column - 1] + line[self.column :]
+                )
+                self.column -= 1
+            elif self.row:
+                previous_length = len(self.lines[self.row - 1])
+                self.lines[self.row - 1] += self.lines.pop(self.row)
+                self.row -= 1
+                self.column = previous_length
+        elif isinstance(key, str) and key.isprintable():
+            line = self.lines[self.row]
+            self.lines[self.row] = line[: self.column] + key + line[self.column :]
+            self.column += len(key)
+        return None
 
 
 class MappingConfig:
@@ -161,6 +236,156 @@ def serve(
             stop.wait(0.5)
 
 
+def run_tui(screen: curses.window, config_path: Path) -> None:
+    reports: queue.Queue[str] = queue.Queue()
+    stop = threading.Event()
+    config = MappingConfig(config_path, reports.put)
+    config.reload_if_changed()
+    gpios = sorted(SUPPORTED_GPIOS)
+    buttons = {gpio: config.buttons.get(gpio, "") for gpio in gpios}
+    logs: deque[str] = deque(maxlen=200)
+    selected = 0
+    editor: TextBuffer | None = None
+    worker = threading.Thread(
+        target=serve, args=(config_path, reports.put, stop), daemon=True
+    )
+    worker.start()
+    screen.timeout(100)
+    curses.raw()
+
+    try:
+        while True:
+            while True:
+                try:
+                    logs.append(
+                        f"{time.strftime('%H:%M:%S')} {reports.get_nowait()}"
+                    )
+                except queue.Empty:
+                    break
+
+            height, width = screen.getmaxyx()
+            screen.erase()
+            if height < 20 or width < 70:
+                screen.addnstr(
+                    0, 0, "terminal too small (minimum 70x20)", max(0, width - 1)
+                )
+            else:
+                divider = width * 2 // 3
+                cursor_position: tuple[int, int] | None = None
+                screen.addnstr(0, 1, "GPIO mappings", divider - 2, curses.A_BOLD)
+                screen.vline(
+                    0, divider, getattr(curses, "ACS_VLINE", ord("|")), height - 1
+                )
+                screen.addnstr(
+                    0,
+                    divider + 2,
+                    "Button log",
+                    width - divider - 3,
+                    curses.A_BOLD,
+                )
+
+                if editor is None:
+                    for index, gpio in enumerate(gpios):
+                        preview = buttons[gpio].replace("\n", "\\n") or "<empty>"
+                        screen.addnstr(
+                            index + 2,
+                            1,
+                            f"GPIO{gpio:<2}  {preview}",
+                            divider - 2,
+                            curses.A_REVERSE
+                            if index == selected
+                            else curses.A_NORMAL,
+                        )
+                    keys = "Enter edit  Ctrl-S save  q quit"
+                    curses.curs_set(0)
+                else:
+                    screen.addnstr(
+                        2,
+                        1,
+                        f"Editing GPIO{gpios[selected]}",
+                        divider - 2,
+                        curses.A_BOLD,
+                    )
+                    visible_height = height - 6
+                    top = max(0, editor.row - visible_height + 1)
+                    for offset, line in enumerate(
+                        editor.lines[top : top + visible_height]
+                    ):
+                        screen.addnstr(offset + 3, 1, line, divider - 2)
+                    cursor_position = (
+                        editor.row - top + 3,
+                        min(
+                            _display_width(
+                                editor.lines[editor.row][: editor.column]
+                            )
+                            + 1,
+                            divider - 1,
+                        ),
+                    )
+                    keys = "Ctrl-S save  Esc cancel"
+                    curses.curs_set(1)
+
+                for row, message in enumerate(
+                    list(logs)[-(height - 3) :], start=2
+                ):
+                    screen.addnstr(
+                        row,
+                        divider + 2,
+                        message,
+                        width - divider - 3,
+                    )
+                status = logs[-1] if logs else "starting"
+                screen.addnstr(
+                    height - 1,
+                    1,
+                    f"{keys} | {status}",
+                    width - 2,
+                    curses.A_REVERSE,
+                )
+                if cursor_position is not None:
+                    screen.move(*cursor_position)
+            screen.refresh()
+
+            try:
+                key = screen.get_wch()
+            except curses.error:
+                continue
+
+            if editor is not None:
+                result = editor.handle(key)
+                if result == "cancel":
+                    editor = None
+                elif result == "save":
+                    buttons[gpios[selected]] = editor.text()
+                    try:
+                        save_mappings(config_path, buttons)
+                    except OSError as error:
+                        reports.put(f"save failed: {error}")
+                    else:
+                        reports.put(f"saved {config_path}")
+                        editor = None
+                continue
+
+            if key in ("q", "Q"):
+                return
+            if key in (curses.KEY_UP, "k"):
+                selected = max(0, selected - 1)
+            elif key in (curses.KEY_DOWN, "j"):
+                selected = min(len(gpios) - 1, selected + 1)
+            elif key in (10, 13, "\n", "\r"):
+                editor = TextBuffer(buttons[gpios[selected]])
+            elif key in (19, "\x13"):
+                try:
+                    save_mappings(config_path, buttons)
+                except OSError as error:
+                    reports.put(f"save failed: {error}")
+                else:
+                    reports.put(f"saved {config_path}")
+    finally:
+        stop.set()
+        worker.join(timeout=1)
+
+
 def main() -> None:
     project_root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description="ESP Vibe GPIO text helper")
@@ -169,7 +394,7 @@ def main() -> None:
     )
     arguments = parser.parse_args()
     try:
-        serve(arguments.config)
+        curses.wrapper(run_tui, arguments.config)
     except KeyboardInterrupt:
         print("helper stopped")
 

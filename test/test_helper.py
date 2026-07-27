@@ -1,3 +1,4 @@
+import curses
 import io
 import os
 import tempfile
@@ -11,9 +12,12 @@ import yaml
 
 from host.text_helper import (
     MappingConfig,
+    TextBuffer,
+    _display_width,
     handle_press,
     main,
     parse_press_line,
+    run_tui,
     save_mappings,
     serve,
 )
@@ -160,18 +164,102 @@ class SerialLoopTests(unittest.TestCase):
         self.assertIn("GPIO6: PASTE 12", reports)
 
 
+class TextBufferTests(unittest.TestCase):
+    def test_counts_terminal_columns_for_unicode(self):
+        self.assertEqual(4, _display_width("a你b"))
+        self.assertEqual(1, _display_width("e\N{COMBINING ACUTE ACCENT}"))
+
+    def test_edits_unicode_multiline_text(self):
+        editor = TextBuffer("ab\ncd")
+        editor.handle(curses.KEY_DOWN)
+        editor.handle(curses.KEY_RIGHT)
+        editor.handle("你")
+        editor.handle("\n")
+        editor.handle("好")
+
+        self.assertEqual("ab\nc你\n好d", editor.text())
+        self.assertEqual("save", editor.handle("\x13"))
+
+    def test_backspace_joins_lines_and_escape_cancels(self):
+        editor = TextBuffer("a\nb")
+        editor.handle(curses.KEY_DOWN)
+
+        self.assertIsNone(editor.handle(curses.KEY_BACKSPACE))
+        self.assertEqual("ab", editor.text())
+        self.assertEqual("cancel", editor.handle(27))
+
+
+class TuiTests(unittest.TestCase):
+    def test_draws_mapping_and_log_panes(self):
+        class Screen:
+            def __init__(self):
+                self.text = []
+                self.keys = iter(["\n", "x", "\x13", "q"])
+                self.operations = []
+                self.refreshes = 0
+                self.editor_cursor_last = []
+
+            def timeout(self, milliseconds):
+                pass
+
+            def getmaxyx(self):
+                return 24, 100
+
+            def erase(self):
+                self.operations.clear()
+
+            def addnstr(self, row, column, value, length, *attributes):
+                self.text.append(value)
+                self.operations.append("draw")
+
+            def vline(self, row, column, character, count):
+                self.operations.append("draw")
+
+            def refresh(self):
+                self.refreshes += 1
+                if self.refreshes in (2, 3):
+                    self.editor_cursor_last.append(self.operations[-1] == "move")
+
+            def move(self, row, column):
+                self.operations.append("move")
+
+            def get_wch(self):
+                return next(self.keys)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yaml"
+            path.write_text("buttons:\n  6: hello\n", encoding="utf-8")
+            screen = Screen()
+            with patch("host.text_helper.threading.Thread") as thread, patch(
+                "host.text_helper.curses.curs_set"
+            ), patch("host.text_helper.curses.raw") as raw:
+                run_tui(screen, path)
+            self.assertEqual(
+                "x", yaml.safe_load(path.read_text(encoding="utf-8"))["buttons"][1]
+            )
+
+        self.assertIn("GPIO mappings", screen.text)
+        self.assertIn("Button log", screen.text)
+        self.assertEqual([True, True], screen.editor_cursor_last)
+        raw.assert_called_once_with()
+        thread.return_value.start.assert_called_once_with()
+        thread.return_value.join.assert_called_once_with(timeout=1)
+
+
 class CliTests(unittest.TestCase):
     def test_keyboard_interrupt_exits_cleanly(self):
         output = io.StringIO()
 
-        with patch("host.text_helper.serve", side_effect=KeyboardInterrupt), patch(
-            "sys.argv", ["text-helper"]
-        ), redirect_stdout(output):
+        with patch(
+            "host.text_helper.curses.wrapper", side_effect=KeyboardInterrupt
+        ) as wrapper, patch("sys.argv", ["text-helper"]), redirect_stdout(output):
             try:
                 main()
             except KeyboardInterrupt:
                 self.fail("main() propagated KeyboardInterrupt")
 
+        wrapper.assert_called_once()
+        self.assertIs(run_tui, wrapper.call_args.args[0])
         self.assertEqual("helper stopped\n", output.getvalue())
 
 
