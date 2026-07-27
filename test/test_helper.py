@@ -6,7 +6,15 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from host.text_helper import MappingConfig, handle_press, main, parse_press_line
+import yaml
+
+from host.text_helper import (
+    MappingConfig,
+    handle_press,
+    main,
+    parse_press_line,
+    save_mappings,
+)
 
 
 class MappingConfigTests(unittest.TestCase):
@@ -62,6 +70,35 @@ class MappingConfigTests(unittest.TestCase):
 
         self.assertFalse(config.reload_if_changed())
         self.assertEqual({}, config.buttons)
+
+
+class SaveMappingsTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary_directory.cleanup)
+        self.path = Path(self.temporary_directory.name) / "config.yaml"
+
+    def test_replaces_config_with_unicode_multiline_mapping(self):
+        self.path.write_text("buttons:\n  1: old\n", encoding="utf-8")
+
+        save_mappings(self.path, {6: "你好\n第二行", 7: ""})
+
+        self.assertEqual(
+            {"buttons": {6: "你好\n第二行"}},
+            yaml.safe_load(self.path.read_text(encoding="utf-8")),
+        )
+
+    def test_replace_failure_keeps_original_config(self):
+        self.path.write_text("buttons:\n  1: old\n", encoding="utf-8")
+
+        with patch("host.text_helper.os.replace", side_effect=OSError("full")):
+            with self.assertRaisesRegex(OSError, "full"):
+                save_mappings(self.path, {6: "new"})
+
+        self.assertEqual(
+            "buttons:\n  1: old\n", self.path.read_text(encoding="utf-8")
+        )
+        self.assertEqual([self.path], list(self.path.parent.iterdir()))
 
 
 class ProtocolTests(unittest.TestCase):

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Callable
@@ -64,6 +66,22 @@ class MappingConfig:
                 raise ValueError(f"GPIO{gpio} value must be a string")
             buttons[gpio] = text
         return buttons
+
+
+def save_mappings(path: Path, buttons: dict[int, str]) -> None:
+    document = {"buttons": {gpio: text for gpio, text in buttons.items() if text}}
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", text=True
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as temporary_file:
+            yaml.safe_dump(
+                document, temporary_file, allow_unicode=True, sort_keys=True
+            )
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def parse_press_line(line: str) -> tuple[int, int] | None:
