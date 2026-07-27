@@ -107,3 +107,20 @@ test("unsubscribes from runtime events on unmount", async () => {
 
   await waitFor(() => expect(unlisten).toHaveBeenCalledOnce());
 });
+
+test("subscribes before loading the snapshot", async () => {
+  const calls: string[] = [];
+  vi.mocked(listen).mockImplementation(async () => {
+    calls.push("listen");
+    return unlisten;
+  });
+  vi.mocked(invoke).mockImplementation(async () => {
+    calls.push("invoke");
+    return snapshot;
+  });
+
+  render(<App />);
+  await screen.findByRole("textbox", { name: "GPIO0 mapping" });
+
+  expect(calls.slice(0, 2)).toEqual(["listen", "invoke"]);
+});

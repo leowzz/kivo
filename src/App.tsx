@@ -44,8 +44,19 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    invoke<AppSnapshot>("get_snapshot")
-      .then((snapshot) => {
+    let stopListening: (() => void) | undefined;
+    const initialize = async () => {
+      try {
+        stopListening = await listen<RuntimeEvent>("runtime-event", ({ payload }) => {
+          if (!active) return;
+          setConnection(payload.connection);
+          setEvents((current) => [...current, payload].slice(-200));
+        });
+        if (!active) {
+          stopListening();
+          return;
+        }
+        const snapshot = await invoke<AppSnapshot>("get_snapshot");
         if (!active) return;
         const loadedButtons = normalizeButtons(snapshot.buttons);
         setButtons(loadedButtons);
@@ -54,21 +65,17 @@ export default function App() {
         setConnection(snapshot.connection);
         setError(snapshot.configError);
         setLoaded(true);
-      })
-      .catch((loadError) => {
+      } catch (loadError) {
         if (!active) return;
         setError(errorMessage(loadError));
         setLoaded(true);
-      });
+      }
+    };
+    void initialize();
 
-    const unlisten = listen<RuntimeEvent>("runtime-event", ({ payload }) => {
-      if (!active) return;
-      setConnection(payload.connection);
-      setEvents((current) => [...current, payload].slice(-200));
-    });
     return () => {
       active = false;
-      void unlisten.then((stopListening) => stopListening());
+      stopListening?.();
     };
   }, []);
 
