@@ -19,7 +19,7 @@ interface KeypadProps {
   onCancel(): void;
 }
 
-const KEY_WIDTH = 76;
+const KEY_WIDTH = 84;
 const KEY_GAP = 8;
 const POPOVER_WIDTH = 240;
 const IO_POPOVER_HEIGHT = 180;
