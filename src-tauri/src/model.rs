@@ -26,6 +26,13 @@ impl ModelLayout {
         if self.id.trim().is_empty() || self.name.trim().is_empty() {
             return Err("model id and name are required".into());
         }
+        if !self
+            .id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err("model id must use ASCII letters, digits, hyphens, or underscores".into());
+        }
         let mut groups = BTreeSet::new();
         let mut buttons = BTreeSet::new();
         for group in &self.groups {
@@ -181,6 +188,17 @@ mod tests {
             }],
         };
         assert!(model.validate().unwrap_err().contains("duplicate button A"));
+    }
+
+    #[test]
+    fn rejects_separator_bearing_model_ids() {
+        let mut model: ModelLayout =
+            serde_json::from_str(include_str!("../../models/red-phone-v1.json")).unwrap();
+
+        for id in ["../escape", "/tmp/escape", r"folder\escape"] {
+            model.id = id.into();
+            assert!(model.validate().is_err(), "{id} must be rejected");
+        }
     }
 
     #[test]
