@@ -3,6 +3,8 @@ mod device;
 mod model;
 mod protocol;
 mod storage;
+#[cfg(target_os = "macos")]
+mod tray;
 
 use config::{ButtonAction, IoMaps, MappingConfig, SUPPORTED_GPIOS};
 use device::ConnectionStatus;
@@ -224,7 +226,10 @@ pub fn run() {
             let config_error = (!config_errors.is_empty()).then(|| config_errors.join("\n"));
             let mappings = Arc::new(RwLock::new(mappings));
             let models = Arc::new(RwLock::new(models));
-            let connection = Arc::new(RwLock::new(ConnectionStatus::searching()));
+            let initial_connection = ConnectionStatus::searching();
+            #[cfg(target_os = "macos")]
+            tray::setup(app, &initial_connection)?;
+            let connection = Arc::new(RwLock::new(initial_connection));
             let capture_next_gpio = Arc::new(AtomicBool::new(false));
             let stop = Arc::new(AtomicBool::new(false));
             let worker = {
