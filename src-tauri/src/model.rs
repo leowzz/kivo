@@ -96,6 +96,52 @@ pub fn load_all(directory: &Path) -> (Vec<ModelLayout>, Vec<String>) {
     (layouts, errors)
 }
 
+pub fn sync_bundled(source: &Path, destination: &Path) -> Vec<String> {
+    let entries = match fs::read_dir(source) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) => return vec![format!("read {}: {error}", source.display())],
+    };
+    let mut errors = Vec::new();
+    let mut paths = Vec::new();
+    for entry in entries {
+        match entry {
+            Ok(entry) => paths.push(entry.path()),
+            Err(error) => errors.push(format!("read {}: {error}", source.display())),
+        }
+    }
+    paths.sort();
+    for path in paths {
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let result = fs::read_to_string(&path)
+            .map_err(|error| error.to_string())
+            .and_then(|contents| {
+                serde_json::from_str::<ModelLayout>(&contents).map_err(|error| error.to_string())
+            })
+            .and_then(|layout| {
+                layout.validate()?;
+                let filename = path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("");
+                let expected = format!("{}.json", layout.id);
+                if filename != expected {
+                    return Err(format!(
+                        "filename {filename} must match model id {}",
+                        layout.id
+                    ));
+                }
+                save(destination, &layout)
+            });
+        if let Err(error) = result {
+            errors.push(format!("sync {}: {error}", path.display()));
+        }
+    }
+    errors
+}
+
 pub fn save(directory: &Path, layout: &ModelLayout) -> Result<(), String> {
     layout.validate()?;
     fs::create_dir_all(directory)
@@ -264,5 +310,91 @@ mod tests {
 
         assert!(default.contains("BACK_OUT"));
         assert_eq!(fs::read_to_string(path).unwrap(), "preserve this");
+    }
+
+    #[test]
+    fn bundled_models_overwrite_matching_files_and_preserve_runtime_only_models() {
+        let directory = TestDirectory::new();
+        let bundled = directory.0.join("bundled");
+        let runtime = directory.0.join("runtime");
+        fs::create_dir_all(&bundled).unwrap();
+        fs::create_dir_all(&runtime).unwrap();
+        fs::write(
+            bundled.join("phone.json"),
+            r#"{"id":"phone","name":"Packaged","groups":[{"id":"g","columns":1,"buttons":[{"id":"A","label":"New"}]}]}"#,
+        )
+        .unwrap();
+        fs::write(
+            runtime.join("phone.json"),
+            r#"{"id":"phone","name":"User edit","groups":[{"id":"g","columns":1,"buttons":[{"id":"A","label":"Old"}]}]}"#,
+        )
+        .unwrap();
+        fs::write(
+            runtime.join("custom.json"),
+            r#"{"id":"custom","name":"Custom","groups":[{"id":"g","columns":1,"buttons":[{"id":"C","label":"C"}]}]}"#,
+        )
+        .unwrap();
+
+        let errors = sync_bundled(&bundled, &runtime);
+
+        assert!(errors.is_empty());
+        let packaged: ModelLayout =
+            serde_json::from_slice(&fs::read(runtime.join("phone.json")).unwrap()).unwrap();
+        assert_eq!(packaged.name, "Packaged");
+        assert!(runtime.join("custom.json").exists());
+    }
+
+    #[test]
+    fn invalid_bundled_model_does_not_replace_runtime_and_other_models_continue() {
+        let directory = TestDirectory::new();
+        let bundled = directory.0.join("bundled");
+        let runtime = directory.0.join("runtime");
+        fs::create_dir_all(&bundled).unwrap();
+        fs::create_dir_all(&runtime).unwrap();
+        let existing = r#"{"id":"broken","name":"Existing","groups":[{"id":"g","columns":1,"buttons":[{"id":"A","label":"A"}]}]}"#;
+        fs::write(runtime.join("broken.json"), existing).unwrap();
+        fs::write(bundled.join("broken.json"), "not JSON").unwrap();
+        fs::write(
+            bundled.join("valid.json"),
+            r#"{"id":"valid","name":"Valid","groups":[{"id":"g","columns":1,"buttons":[{"id":"V","label":"V"}]}]}"#,
+        )
+        .unwrap();
+
+        let errors = sync_bundled(&bundled, &runtime);
+
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            fs::read_to_string(runtime.join("broken.json")).unwrap(),
+            existing
+        );
+        assert!(runtime.join("valid.json").exists());
+    }
+
+    #[test]
+    fn bundled_model_filename_must_match_its_id() {
+        let directory = TestDirectory::new();
+        let bundled = directory.0.join("bundled");
+        let runtime = directory.0.join("runtime");
+        fs::create_dir_all(&bundled).unwrap();
+        fs::write(
+            bundled.join("wrong.json"),
+            r#"{"id":"actual","name":"Actual","groups":[{"id":"g","columns":1,"buttons":[{"id":"A","label":"A"}]}]}"#,
+        )
+        .unwrap();
+
+        let errors = sync_bundled(&bundled, &runtime);
+
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("filename wrong.json must match model id actual"));
+        assert!(!runtime.join("actual.json").exists());
+    }
+
+    #[test]
+    fn missing_bundled_model_directory_is_a_noop() {
+        let directory = TestDirectory::new();
+
+        assert!(
+            sync_bundled(&directory.0.join("missing"), &directory.0.join("runtime")).is_empty()
+        );
     }
 }

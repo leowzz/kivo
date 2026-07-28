@@ -196,9 +196,11 @@ pub fn run() {
             fs::create_dir_all(&config_directory)?;
             let model_directory = config_directory.join("models");
             model::seed_default(&model_directory).map_err(std::io::Error::other)?;
+            let bundled_model_directory = app.path().resource_dir()?.join("models");
+            let mut config_errors = model::sync_bundled(&bundled_model_directory, &model_directory);
             let (models, model_errors) = model::load_all(&model_directory);
             let config_path = config_directory.join("config.yaml");
-            let mut config_errors = model_errors;
+            config_errors.extend(model_errors);
             if !config_path.exists() {
                 let legacy_path = std::env::current_dir()?.join("config.yaml");
                 if legacy_path.exists()
