@@ -3,6 +3,7 @@
 __pycache__/
 *.py[cod]
 .DS_Store
+.superpowers/
 node_modules/
 dist/
 src-tauri/target/

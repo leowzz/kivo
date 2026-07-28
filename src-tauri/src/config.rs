@@ -1,21 +1,36 @@
+use crate::model::ModelLayout;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::BTreeMap,
-    fs::{self, OpenOptions},
-    io::{ErrorKind, Write},
-    path::Path,
-};
+use std::{collections::BTreeMap, fs, io::ErrorKind, path::Path};
 
 pub const SUPPORTED_GPIOS: [u8; 17] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18];
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
-pub struct MappingConfig {
-    pub buttons: BTreeMap<u8, String>,
+pub type IoMaps = BTreeMap<String, BTreeMap<u8, String>>;
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ButtonAction {
+    Paste { text: String },
+    Hotkey { keys: Vec<String> },
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct MappingConfig {
+    pub active_model: String,
+    pub io_maps: IoMaps,
+    pub actions: BTreeMap<String, ButtonAction>,
+    #[serde(skip)]
+    pub legacy_buttons: BTreeMap<u8, String>,
+}
+
+#[derive(Default, Deserialize, Serialize)]
 struct ConfigDocument {
     #[serde(default)]
+    active_model: String,
+    #[serde(default)]
+    io_maps: IoMaps,
+    #[serde(default)]
+    actions: BTreeMap<String, ButtonAction>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     buttons: BTreeMap<u8, String>,
 }
 
@@ -24,7 +39,118 @@ impl MappingConfig {
         if let Some(gpio) = buttons.keys().find(|gpio| !SUPPORTED_GPIOS.contains(gpio)) {
             return Err(format!("unsupported GPIO{gpio}"));
         }
-        Ok(Self { buttons })
+        Ok(Self {
+            legacy_buttons: buttons,
+            ..Self::default()
+        })
+    }
+
+    pub fn resolved_button(&self, gpio: u8) -> Option<&str> {
+        self.io_maps
+            .get(&self.active_model)?
+            .get(&gpio)
+            .map(String::as_str)
+    }
+
+    pub fn resolved_action(&self, gpio: u8) -> Option<ButtonAction> {
+        self.resolved_button(gpio)
+            .and_then(|button| self.actions.get(button))
+            .cloned()
+            .or_else(|| {
+                self.legacy_buttons
+                    .get(&gpio)
+                    .filter(|text| !text.is_empty())
+                    .cloned()
+                    .map(|text| ButtonAction::Paste { text })
+            })
+    }
+
+    pub fn migrate_legacy(&mut self) {
+        let Some(io_map) = self.io_maps.get(&self.active_model) else {
+            return;
+        };
+        let migrations = self
+            .legacy_buttons
+            .iter()
+            .filter_map(|(gpio, text)| {
+                (!text.is_empty())
+                    .then(|| {
+                        io_map
+                            .get(gpio)
+                            .map(|button| (*gpio, button.clone(), text.clone()))
+                    })
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+        for (gpio, button, text) in migrations {
+            self.actions
+                .entry(button)
+                .or_insert(ButtonAction::Paste { text });
+            self.legacy_buttons.remove(&gpio);
+        }
+    }
+
+    fn validate_contents(&self) -> Result<(), String> {
+        if let Some(gpio) = self
+            .legacy_buttons
+            .keys()
+            .find(|gpio| !SUPPORTED_GPIOS.contains(gpio))
+        {
+            return Err(format!("unsupported GPIO{gpio}"));
+        }
+        for (button, action) in &self.actions {
+            match action {
+                ButtonAction::Paste { text } if text.trim().is_empty() => {
+                    return Err(format!("button {button} has empty paste text"));
+                }
+                ButtonAction::Hotkey { keys } => {
+                    crate::protocol::encode_hotkey(keys)
+                        .map_err(|error| format!("button {button} has invalid hotkey: {error}"))?;
+                }
+                ButtonAction::Paste { .. } => {}
+            }
+        }
+        for (model_id, io_map) in &self.io_maps {
+            let mut assigned = std::collections::BTreeSet::new();
+            for (gpio, button) in io_map {
+                if !SUPPORTED_GPIOS.contains(gpio) {
+                    return Err(format!("unsupported GPIO{gpio}"));
+                }
+                if !assigned.insert(button.as_str()) {
+                    return Err(format!("duplicate button {button} for model {model_id}"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate(&self, models: &[ModelLayout]) -> Result<(), String> {
+        self.validate_contents()?;
+        if self.active_model.trim().is_empty() {
+            return Err("active model is required".into());
+        }
+        if !models.iter().any(|model| model.id == self.active_model) {
+            return Err(format!("unknown active model {}", self.active_model));
+        }
+        for (model_id, io_map) in &self.io_maps {
+            let model = models
+                .iter()
+                .find(|model| model.id == *model_id)
+                .ok_or_else(|| format!("unknown model {model_id}"))?;
+            let buttons = model
+                .groups
+                .iter()
+                .flat_map(|group| &group.buttons)
+                .map(|button| button.id.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            if let Some(button) = io_map
+                .values()
+                .find(|button| !buttons.contains(button.as_str()))
+            {
+                return Err(format!("unknown button {button} for model {model_id}"));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -36,14 +162,27 @@ pub fn load(path: &Path) -> Result<MappingConfig, String> {
     };
     let document: ConfigDocument =
         serde_yaml_ng::from_str(&contents).map_err(|error| format!("invalid YAML: {error}"))?;
-    MappingConfig::from_buttons(document.buttons)
+    let mut config = MappingConfig {
+        active_model: document.active_model,
+        io_maps: document.io_maps,
+        actions: document.actions,
+        legacy_buttons: document.buttons,
+    };
+    config.migrate_legacy();
+    config.validate_contents()?;
+    Ok(config)
 }
 
 pub fn save(path: &Path, config: &MappingConfig) -> Result<(), String> {
-    MappingConfig::from_buttons(config.buttons.clone())?;
+    let mut config = config.clone();
+    config.migrate_legacy();
+    config.validate_contents()?;
     let document = ConfigDocument {
+        active_model: config.active_model,
+        io_maps: config.io_maps,
+        actions: config.actions,
         buttons: config
-            .buttons
+            .legacy_buttons
             .iter()
             .filter(|(_, text)| !text.is_empty())
             .map(|(gpio, text)| (*gpio, text.clone()))
@@ -53,32 +192,13 @@ pub fn save(path: &Path, config: &MappingConfig) -> Result<(), String> {
         .map_err(|error| format!("serialize mappings: {error}"))?;
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent).map_err(|error| format!("create {}: {error}", parent.display()))?;
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| "config path has no UTF-8 file name".to_owned())?;
-    let temporary_path = parent.join(format!(".{file_name}.tmp"));
-
-    let result = (|| -> Result<(), std::io::Error> {
-        let mut temporary = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&temporary_path)?;
-        temporary.write_all(yaml.as_bytes())?;
-        temporary.sync_all()?;
-        fs::rename(&temporary_path, path)
-    })();
-    if let Err(error) = result {
-        let _ = fs::remove_file(&temporary_path);
-        return Err(format!("save {}: {error}", path.display()));
-    }
-    Ok(())
+    crate::storage::atomic_write(path, yaml.as_bytes())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{ButtonDefinition, ButtonGroup, ModelLayout};
     use std::{
         collections::BTreeMap,
         fs,
@@ -118,81 +238,218 @@ mod tests {
         }
     }
 
-    fn buttons(values: &[(u8, &str)]) -> BTreeMap<u8, String> {
-        values
-            .iter()
-            .map(|(gpio, text)| (*gpio, (*text).to_owned()))
-            .collect()
+    fn model() -> ModelLayout {
+        ModelLayout {
+            id: "red-phone-v1".into(),
+            name: "Red Phone v1".into(),
+            groups: vec![ButtonGroup {
+                id: "digits".into(),
+                columns: 2,
+                buttons: vec![
+                    ButtonDefinition {
+                        id: "DIGIT_1".into(),
+                        label: "1".into(),
+                    },
+                    ButtonDefinition {
+                        id: "DIGIT_2".into(),
+                        label: "2".into(),
+                    },
+                ],
+            }],
+        }
     }
 
     #[test]
-    fn loads_unicode_and_multiline_mappings() {
+    fn resolves_model_gpio_to_global_action() {
+        let config = MappingConfig {
+            active_model: "red-phone-v1".into(),
+            io_maps: BTreeMap::from([(
+                "red-phone-v1".into(),
+                BTreeMap::from([(6, "DIGIT_2".into())]),
+            )]),
+            actions: BTreeMap::from([(
+                "DIGIT_2".into(),
+                ButtonAction::Hotkey {
+                    keys: vec!["cmd".into(), "shift".into(), "k".into()],
+                },
+            )]),
+            legacy_buttons: BTreeMap::new(),
+        };
+
+        assert!(matches!(
+            config.resolved_action(6),
+            Some(ButtonAction::Hotkey { .. })
+        ));
+    }
+
+    #[test]
+    fn explicit_global_action_wins_over_legacy_gpio_text() {
+        let config = MappingConfig {
+            active_model: "red-phone-v1".into(),
+            io_maps: BTreeMap::from([(
+                "red-phone-v1".into(),
+                BTreeMap::from([(6, "DIGIT_2".into())]),
+            )]),
+            actions: BTreeMap::from([(
+                "DIGIT_2".into(),
+                ButtonAction::Paste { text: "new".into() },
+            )]),
+            legacy_buttons: BTreeMap::from([(6, "old".into())]),
+        };
+
+        assert_eq!(
+            config.resolved_action(6),
+            Some(ButtonAction::Paste { text: "new".into() })
+        );
+    }
+
+    #[test]
+    fn migrates_only_legacy_gpio_entries_known_to_active_model() {
+        let mut config = MappingConfig {
+            active_model: "red-phone-v1".into(),
+            io_maps: BTreeMap::from([(
+                "red-phone-v1".into(),
+                BTreeMap::from([(6, "DIGIT_2".into())]),
+            )]),
+            actions: BTreeMap::new(),
+            legacy_buttons: BTreeMap::from([(6, "hello".into()), (7, "keep".into())]),
+        };
+
+        config.migrate_legacy();
+
+        assert_eq!(
+            config.actions["DIGIT_2"],
+            ButtonAction::Paste {
+                text: "hello".into()
+            }
+        );
+        assert_eq!(config.legacy_buttons, BTreeMap::from([(7, "keep".into())]));
+    }
+
+    #[test]
+    fn loading_hybrid_config_migrates_resolvable_legacy_entries() {
         let directory = TestDirectory::new();
         let path = directory.path("config.yaml");
         fs::write(
             &path,
-            "buttons:\n  0: GPIO0 文本\n  6: |-\n    你好\n    second\n",
+            "active_model: red-phone-v1\nio_maps:\n  red-phone-v1:\n    6: DIGIT_2\nbuttons:\n  6: hello\n  7: keep\n",
         )
         .unwrap();
 
         let config = load(&path).unwrap();
 
-        assert_eq!(config.buttons[&0], "GPIO0 文本");
-        assert_eq!(config.buttons[&6], "你好\nsecond");
+        assert_eq!(
+            config.actions.get("DIGIT_2"),
+            Some(&ButtonAction::Paste {
+                text: "hello".into()
+            })
+        );
+        assert_eq!(config.legacy_buttons, BTreeMap::from([(7, "keep".into())]));
+    }
+
+    #[test]
+    fn loading_hybrid_config_rejects_whitespace_only_migrated_paste() {
+        let directory = TestDirectory::new();
+        let path = directory.path("config.yaml");
+        fs::write(
+            &path,
+            "active_model: red-phone-v1\nio_maps:\n  red-phone-v1:\n    6: DIGIT_2\nbuttons:\n  6: \" \"\n",
+        )
+        .unwrap();
+
+        assert!(load(&path).is_err());
+    }
+
+    #[test]
+    fn unresolved_legacy_entries_survive_save_reload() {
+        let directory = TestDirectory::new();
+        let path = directory.path("config.yaml");
+        let config = MappingConfig {
+            active_model: "red-phone-v1".into(),
+            io_maps: BTreeMap::from([(
+                "red-phone-v1".into(),
+                BTreeMap::from([(6, "DIGIT_2".into())]),
+            )]),
+            actions: BTreeMap::new(),
+            legacy_buttons: BTreeMap::from([(7, "keep".into())]),
+        };
+
+        save(&path, &config).unwrap();
+
+        assert_eq!(load(&path).unwrap().legacy_buttons, config.legacy_buttons);
     }
 
     #[test]
     fn rejects_unsupported_gpio() {
-        let directory = TestDirectory::new();
-        let path = directory.path("config.yaml");
-        fs::write(&path, "buttons:\n  10: unsafe\n").unwrap();
+        let config = MappingConfig {
+            active_model: "red-phone-v1".into(),
+            io_maps: BTreeMap::from([(
+                "red-phone-v1".into(),
+                BTreeMap::from([(10, "DIGIT_2".into())]),
+            )]),
+            actions: BTreeMap::new(),
+            legacy_buttons: BTreeMap::new(),
+        };
 
-        assert!(load(&path).unwrap_err().contains("GPIO10"));
+        assert!(config.validate(&[model()]).unwrap_err().contains("GPIO10"));
     }
 
     #[test]
-    fn missing_file_loads_empty_mappings() {
-        let directory = TestDirectory::new();
+    fn rejects_duplicate_button_assignments_within_a_model() {
+        let config = MappingConfig {
+            active_model: "red-phone-v1".into(),
+            io_maps: BTreeMap::from([(
+                "red-phone-v1".into(),
+                BTreeMap::from([(6, "DIGIT_2".into()), (7, "DIGIT_2".into())]),
+            )]),
+            actions: BTreeMap::new(),
+            legacy_buttons: BTreeMap::new(),
+        };
 
-        assert_eq!(
-            load(&directory.path("missing.yaml")).unwrap(),
-            MappingConfig::default()
-        );
+        assert!(config.validate(&[model()]).unwrap_err().contains("DIGIT_2"));
     }
 
     #[test]
-    fn saves_unicode_and_omits_empty_values() {
-        let directory = TestDirectory::new();
-        let path = directory.path("config.yaml");
-        let config = MappingConfig::from_buttons(buttons(&[(6, "你好\nsecond"), (7, "")])).unwrap();
+    fn rejects_empty_paste_text() {
+        let config = MappingConfig {
+            active_model: "red-phone-v1".into(),
+            actions: BTreeMap::from([("DIGIT_2".into(), ButtonAction::Paste { text: " ".into() })]),
+            ..MappingConfig::default()
+        };
 
-        save(&path, &config).unwrap();
-
-        let saved = fs::read_to_string(&path).unwrap();
-        assert_eq!(
-            load(&path).unwrap().buttons,
-            buttons(&[(6, "你好\nsecond")])
-        );
-        assert!(!saved.contains("  7:"));
+        assert!(config.validate(&[model()]).unwrap_err().contains("paste"));
     }
 
     #[test]
-    fn failed_temporary_write_preserves_existing_file() {
-        let directory = TestDirectory::new();
-        let path = directory.path("config.yaml");
-        fs::write(&path, "buttons:\n  6: old\n").unwrap();
-        fs::create_dir(directory.path(".config.yaml.tmp")).unwrap();
-        let config = MappingConfig::from_buttons(buttons(&[(6, "new")])).unwrap();
+    fn rejects_malformed_hotkeys() {
+        let config = MappingConfig {
+            active_model: "red-phone-v1".into(),
+            actions: BTreeMap::from([(
+                "DIGIT_2".into(),
+                ButtonAction::Hotkey {
+                    keys: vec!["cmd".into(), "cmd".into(), "k".into()],
+                },
+            )]),
+            ..MappingConfig::default()
+        };
 
-        assert!(save(&path, &config).is_err());
-        assert_eq!(fs::read_to_string(&path).unwrap(), "buttons:\n  6: old\n");
+        assert!(config.validate(&[model()]).is_err());
     }
 
     #[test]
-    fn supported_gpio_set_matches_firmware() {
-        assert_eq!(
-            SUPPORTED_GPIOS,
-            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18]
-        );
+    fn rejects_empty_active_model() {
+        let error = MappingConfig::default().validate(&[model()]).unwrap_err();
+
+        assert!(error.contains("active model"));
+    }
+
+    #[test]
+    fn rejects_unknown_active_model() {
+        let config = MappingConfig {
+            active_model: "missing".into(),
+            ..MappingConfig::default()
+        };
+
+        assert!(config.validate(&[model()]).unwrap_err().contains("missing"));
     }
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -9,13 +10,28 @@
 
 enum class HelperResponseKind {
   Paste,
+  Hotkey,
   Skip,
 };
 
 struct HelperResponse {
   HelperResponseKind kind;
   std::uint32_t eventId;
+  std::uint8_t modifierMask = 0;
+  std::uint8_t keycode = 0;
 };
 
-std::string formatPressEvent(const PressEvent &event);
+class ResponseLineBuffer {
+ public:
+  explicit ResponseLineBuffer(std::size_t maxLength) : maxLength_(maxLength) {}
+
+  std::optional<std::string> push(char character);
+
+ private:
+  std::size_t maxLength_;
+  std::string line_;
+  bool discardUntilNewline_ = false;
+};
+
+std::string formatInputEvent(const InputEvent &event);
 std::optional<HelperResponse> parseHelperResponse(std::string_view line);

@@ -14,7 +14,7 @@ constexpr std::size_t kMaxResponseLineLength = 31;
 USBCDC usbSerial;
 USBHIDKeyboard keyboard;
 GpioTriggerController controller;
-std::string responseLine;
+ResponseLineBuffer responseLines(kMaxResponseLineLength);
 
 void pasteClipboard() {
   keyboard.press(KEY_LEFT_GUI);
@@ -23,17 +23,30 @@ void pasteClipboard() {
   keyboard.releaseAll();
 }
 
-void handleResponseLine() {
-  const auto response = parseHelperResponse(responseLine);
-  responseLine.clear();
+void sendHotkey(std::uint8_t modifierMask, std::uint8_t keycode) {
+  KeyReport report{};
+  report.modifiers = modifierMask;
+  report.keys[0] = keycode;
+  keyboard.sendReport(&report);
+  delay(10);
+  keyboard.releaseAll();
+}
+
+void handleResponseLine(std::string_view line) {
+  const auto response = parseHelperResponse(line);
   if (!response.has_value()) {
     return;
   }
 
-  const bool paste = response->kind == HelperResponseKind::Paste;
-  if (controller.handleResponse(response->eventId, paste) ==
-      ResponseAction::Paste) {
+  const bool execute = response->kind != HelperResponseKind::Skip;
+  if (controller.handleResponse(response->eventId, execute) !=
+      ResponseAction::Execute) {
+    return;
+  }
+  if (response->kind == HelperResponseKind::Paste) {
     pasteClipboard();
+  } else if (response->kind == HelperResponseKind::Hotkey) {
+    sendHotkey(response->modifierMask, response->keycode);
   }
 }
 
@@ -44,15 +57,8 @@ void readHelperResponses() {
       return;
     }
 
-    const char character = static_cast<char>(value);
-    if (character == '\n') {
-      responseLine.push_back(character);
-      handleResponseLine();
-    } else if (responseLine.size() < kMaxResponseLineLength) {
-      responseLine.push_back(character);
-    } else {
-      responseLine.clear();
-    }
+    const auto line = responseLines.push(static_cast<char>(value));
+    if (line.has_value()) handleResponseLine(*line);
   }
 }
 
@@ -64,7 +70,7 @@ void scanInputs(std::uint32_t nowMs) {
       continue;
     }
 
-    const std::string message = formatPressEvent(*event);
+    const std::string message = formatInputEvent(*event);
     usbSerial.write(message.c_str(), message.size());
     usbSerial.flush();
   }
