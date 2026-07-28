@@ -64,6 +64,16 @@ const snapshot = {
 let onRuntimeEvent: ((event: { payload: RuntimeEvent }) => void) | undefined;
 let unlisten: UnlistenFn;
 
+function deferred() {
+  let resolve!: () => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = () => resolvePromise();
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   onRuntimeEvent = undefined;
@@ -165,6 +175,128 @@ test("binds the selected button from only the next physical press", async () => 
     connection: { state: "connected", port: "/dev/cu.test" },
   } }));
   expect(screen.getByLabelText("GPIO for 2")).toHaveValue("7");
+});
+
+test("ignores GPIO until capture enable is acknowledged", async () => {
+  const user = userEvent.setup();
+  const enable = deferred();
+  vi.mocked(invoke).mockImplementation(async (command, arguments_) => {
+    if (command === "set_io_capture" && (arguments_ as { enabled: boolean }).enabled) {
+      return enable.promise;
+    }
+    return snapshot;
+  });
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Configure 2" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: true }),
+  );
+
+  act(() => onRuntimeEvent?.({ payload: {
+    timestampMs: 1,
+    level: "info",
+    message: "GPIO7: before acknowledgement",
+    gpio: 7,
+    connection: { state: "connected", port: "/dev/cu.test" },
+  } }));
+  expect(screen.getByLabelText("GPIO for 2")).toHaveValue("6");
+
+  await act(async () => enable.resolve());
+  act(() => onRuntimeEvent?.({ payload: {
+    timestampMs: 2,
+    level: "info",
+    message: "GPIO7: captured",
+    gpio: 7,
+    connection: { state: "connected", port: "/dev/cu.test" },
+  } }));
+  expect(screen.getByLabelText("GPIO for 2")).toHaveValue("7");
+});
+
+test("keeps capture inactive when enable fails", async () => {
+  const user = userEvent.setup();
+  const enable = deferred();
+  vi.mocked(invoke).mockImplementation(async (command, arguments_) => {
+    if (command === "set_io_capture" && (arguments_ as { enabled: boolean }).enabled) {
+      return enable.promise;
+    }
+    return snapshot;
+  });
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Configure 3" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: true }),
+  );
+
+  await act(async () => enable.reject(new Error("capture unavailable")));
+  expect(await screen.findByRole("alert")).toHaveTextContent("capture unavailable");
+  act(() => onRuntimeEvent?.({ payload: {
+    timestampMs: 1,
+    level: "info",
+    message: "GPIO5: normal press",
+    gpio: 5,
+    connection: { state: "connected", port: "/dev/cu.test" },
+  } }));
+  expect(screen.getByLabelText("GPIO for 3")).toHaveValue("");
+
+  await user.click(screen.getByRole("button", { name: "Cancel IO mapping" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: false }),
+  );
+});
+
+test("serializes rapid capture cancel and reselection", async () => {
+  const user = userEvent.setup();
+  const firstEnable = deferred();
+  const disable = deferred();
+  const secondEnable = deferred();
+  const captureCalls: boolean[] = [];
+  let enableCount = 0;
+  vi.mocked(invoke).mockImplementation(async (command, arguments_) => {
+    if (command !== "set_io_capture") return snapshot;
+    const enabled = (arguments_ as { enabled: boolean }).enabled;
+    captureCalls.push(enabled);
+    if (!enabled) return disable.promise;
+    enableCount += 1;
+    return enableCount === 1 ? firstEnable.promise : secondEnable.promise;
+  });
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Configure 2" }));
+  await waitFor(() => expect(captureCalls).toEqual([true]));
+  await user.click(screen.getByRole("button", { name: "Cancel IO mapping" }));
+  await user.click(screen.getByRole("button", { name: "Configure 3" }));
+
+  expect(captureCalls).toEqual([true]);
+  await act(async () => firstEnable.resolve());
+  await waitFor(() => expect(captureCalls).toEqual([true, false]));
+  act(() => onRuntimeEvent?.({ payload: {
+    timestampMs: 1,
+    level: "info",
+    message: "GPIO4: stale capture",
+    gpio: 4,
+    connection: { state: "connected", port: "/dev/cu.test" },
+  } }));
+  expect(screen.getByLabelText("GPIO for 3")).toHaveValue("");
+
+  await act(async () => disable.resolve());
+  await waitFor(() => expect(captureCalls).toEqual([true, false, true]));
+  act(() => onRuntimeEvent?.({ payload: {
+    timestampMs: 2,
+    level: "info",
+    message: "GPIO5: before second acknowledgement",
+    gpio: 5,
+    connection: { state: "connected", port: "/dev/cu.test" },
+  } }));
+  expect(screen.getByLabelText("GPIO for 3")).toHaveValue("");
+
+  await act(async () => secondEnable.resolve());
+  act(() => onRuntimeEvent?.({ payload: {
+    timestampMs: 3,
+    level: "info",
+    message: "GPIO5: captured",
+    gpio: 5,
+    connection: { state: "connected", port: "/dev/cu.test" },
+  } }));
+  expect(screen.getByLabelText("GPIO for 3")).toHaveValue("5");
 });
 
 test("rejects a GPIO already assigned to another button", async () => {

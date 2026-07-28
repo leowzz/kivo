@@ -41,6 +41,8 @@ export default function App() {
   const [selectedAnchor, setSelectedAnchor] = useState<DOMRect | null>(null);
   const [capturedGpio, setCapturedGpio] = useState<number | null>(null);
   const capturingButtonRef = useRef<string | null>(null);
+  const captureGenerationRef = useRef(0);
+  const ioCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [configPath, setConfigPath] = useState("");
   const [connection, setConnection] = useState<ConnectionStatus>(SEARCHING);
   const [events, setEvents] = useState<RuntimeEvent[]>([]);
@@ -99,17 +101,36 @@ export default function App() {
     };
   }, [applySnapshot]);
 
+  const enqueueIoCapture = useCallback((enabled: boolean) => {
+    const transition = ioCaptureQueueRef.current.then(async () => {
+      await invoke("set_io_capture", { enabled });
+    });
+    ioCaptureQueueRef.current = transition.catch(() => undefined);
+    return transition;
+  }, []);
+
   useEffect(() => {
     if (mode !== "io" || !selectedButtonId) return;
-    capturingButtonRef.current = selectedButtonId;
-    void invoke("set_io_capture", { enabled: true }).catch((captureError) => {
-      setError(errorMessage(captureError));
-    });
+    const generation = ++captureGenerationRef.current;
+    capturingButtonRef.current = null;
+    void enqueueIoCapture(true)
+      .then(() => {
+        if (captureGenerationRef.current === generation) {
+          capturingButtonRef.current = selectedButtonId;
+        }
+      })
+      .catch((captureError) => {
+        if (captureGenerationRef.current === generation) {
+          capturingButtonRef.current = null;
+          setError(errorMessage(captureError));
+        }
+      });
     return () => {
+      captureGenerationRef.current += 1;
       capturingButtonRef.current = null;
-      void invoke("set_io_capture", { enabled: false }).catch(() => undefined);
+      void enqueueIoCapture(false).catch(() => undefined);
     };
-  }, [mode, selectedButtonId]);
+  }, [enqueueIoCapture, mode, selectedButtonId]);
 
   const dirty = useMemo(
     () => JSON.stringify([models, activeModel, ioMaps, actions])
