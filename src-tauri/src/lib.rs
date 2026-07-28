@@ -43,7 +43,7 @@ fn snapshot(state: &AppState) -> Result<AppSnapshot, String> {
             .mappings
             .read()
             .map_err(|_| "mapping state is unavailable")?
-            .buttons
+            .legacy_buttons
             .clone(),
         config_path: state.config_path.display().to_string(),
         connection: state
@@ -211,7 +211,7 @@ mod tests {
         let saved = save_mappings_inner(&state, buttons.clone()).unwrap();
 
         assert_eq!(saved.buttons, buttons);
-        assert_eq!(config::load(&path).unwrap().buttons, buttons);
+        assert_eq!(config::load(&path).unwrap().legacy_buttons, buttons);
         assert_eq!(*state.config_error.lock().unwrap(), None);
         fs::remove_file(path).unwrap();
     }
@@ -231,6 +231,6 @@ mod tests {
         };
 
         assert!(save_mappings_inner(&state, BTreeMap::from([(10, "unsafe".to_owned())])).is_err());
-        assert_eq!(state.mappings.read().unwrap().buttons, original);
+        assert_eq!(state.mappings.read().unwrap().legacy_buttons, original);
     }
 }

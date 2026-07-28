@@ -141,7 +141,8 @@ pub fn run_worker(
                         .read()
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
                         .clone();
-                    let response = reply(press, &config, copy_to_clipboard);
+                    let response =
+                        reply(press, config.resolved_action(press.gpio), copy_to_clipboard);
                     if let Err(error) = device
                         .get_mut()
                         .write_all(response.line.as_bytes())
