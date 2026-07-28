@@ -14,7 +14,7 @@ constexpr std::size_t kMaxResponseLineLength = 31;
 USBCDC usbSerial;
 USBHIDKeyboard keyboard;
 GpioTriggerController controller;
-std::string responseLine;
+ResponseLineBuffer responseLines(kMaxResponseLineLength);
 
 void pasteClipboard() {
   keyboard.press(KEY_LEFT_GUI);
@@ -32,9 +32,8 @@ void sendHotkey(std::uint8_t modifierMask, std::uint8_t keycode) {
   keyboard.releaseAll();
 }
 
-void handleResponseLine() {
-  const auto response = parseHelperResponse(responseLine);
-  responseLine.clear();
+void handleResponseLine(std::string_view line) {
+  const auto response = parseHelperResponse(line);
   if (!response.has_value()) {
     return;
   }
@@ -58,15 +57,8 @@ void readHelperResponses() {
       return;
     }
 
-    const char character = static_cast<char>(value);
-    if (character == '\n') {
-      responseLine.push_back(character);
-      handleResponseLine();
-    } else if (responseLine.size() < kMaxResponseLineLength) {
-      responseLine.push_back(character);
-    } else {
-      responseLine.clear();
-    }
+    const auto line = responseLines.push(static_cast<char>(value));
+    if (line.has_value()) handleResponseLine(*line);
   }
 }
 

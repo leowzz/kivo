@@ -112,7 +112,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (mode !== "io" || !selectedButtonId) return;
+    if (mode !== "io" || !selectedButtonId || connection.state !== "connected") return;
     const generation = ++captureGenerationRef.current;
     capturingButtonRef.current = null;
     void enqueueIoCapture(true)
@@ -132,7 +132,7 @@ export default function App() {
       capturingButtonRef.current = null;
       void enqueueIoCapture(false).catch(() => undefined);
     };
-  }, [enqueueIoCapture, mode, selectedButtonId]);
+  }, [connection.state, enqueueIoCapture, mode, selectedButtonId]);
 
   const dirty = useMemo(
     () => JSON.stringify([models, activeModel, ioMaps, actions])

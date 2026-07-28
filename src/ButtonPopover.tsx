@@ -15,6 +15,7 @@ interface ButtonPopoverProps {
   onApplyIoMap(ioMap: Record<number, string>): void;
   onApplyAction(action: ButtonAction): void;
   onDeleteAction(): void;
+  onSelectConflict(buttonId: string): void;
   onCancel(): void;
 }
 
@@ -52,6 +53,7 @@ export function ButtonPopover({
   onApplyIoMap,
   onApplyAction,
   onDeleteAction,
+  onSelectConflict,
   onCancel,
 }: ButtonPopoverProps) {
   const currentGpio = Object.entries(ioMap).find(([, value]) => value === buttonId)?.[0];
@@ -197,7 +199,10 @@ export function ButtonPopover({
       </label>
       {conflict && (
         <p className="io-conflict" role="alert">
-          GPIO{gpio} is assigned to {buttonLabels[conflict] ?? conflict}
+          <span>GPIO{gpio} is assigned to {buttonLabels[conflict] ?? conflict}</span>
+          <button type="button" onClick={() => onSelectConflict(conflict)}>
+            Go to {buttonLabels[conflict] ?? conflict}
+          </button>
         </p>
       )}
       <div className="button-popover-actions">

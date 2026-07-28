@@ -56,14 +56,30 @@ fn prepare_loaded_mappings(
     }
     match mappings.validate(models) {
         Ok(()) => (mappings, None),
-        Err(error) => (
-            MappingConfig {
-                active_model: mappings.active_model,
-                legacy_buttons: mappings.legacy_buttons,
-                ..MappingConfig::default()
-            },
-            Some(error),
-        ),
+        Err(error) => {
+            let model_buttons = models
+                .iter()
+                .map(|model| {
+                    (
+                        model.id.as_str(),
+                        model
+                            .groups
+                            .iter()
+                            .flat_map(|group| &group.buttons)
+                            .map(|button| button.id.as_str())
+                            .collect::<std::collections::BTreeSet<_>>(),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
+            mappings.io_maps.retain(|model_id, io_map| {
+                let Some(buttons) = model_buttons.get(model_id.as_str()) else {
+                    return false;
+                };
+                io_map.retain(|_, button| buttons.contains(button.as_str()));
+                !io_map.is_empty()
+            });
+            (mappings, Some(error))
+        }
     }
 }
 
@@ -340,8 +356,77 @@ mod tests {
             BTreeMap::from([(7, "legacy".into())])
         );
         assert!(fallback.io_maps.is_empty());
-        assert!(fallback.actions.is_empty());
+        assert_eq!(
+            fallback.actions,
+            BTreeMap::from([(
+                "BUTTON".into(),
+                ButtonAction::Paste {
+                    text: "typed".into()
+                }
+            )])
+        );
         assert!(error.unwrap().contains("missing-model"));
+    }
+
+    #[test]
+    fn invalid_active_model_keeps_valid_catalog_data_for_recovery_save() {
+        let directory = std::env::temp_dir().join(format!(
+            "vibe-tool-recovery-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(directory.join("models")).unwrap();
+        let valid_model = model();
+        let button = valid_model.groups[0].buttons[0].id.clone();
+        let io_maps = BTreeMap::from([
+            (
+                valid_model.id.clone(),
+                BTreeMap::from([(6, button.clone())]),
+            ),
+            (
+                "missing-model".into(),
+                BTreeMap::from([(7, "MISSING_BUTTON".into())]),
+            ),
+        ]);
+        let actions = BTreeMap::from([(
+            button,
+            ButtonAction::Paste {
+                text: "keep".into(),
+            },
+        )]);
+        let loaded = MappingConfig {
+            active_model: "missing-model".into(),
+            io_maps,
+            actions: actions.clone(),
+            legacy_buttons: BTreeMap::new(),
+        };
+
+        let (prepared, error) = prepare_loaded_mappings(loaded, std::slice::from_ref(&valid_model));
+        assert!(error.unwrap().contains("missing-model"));
+        assert_eq!(
+            prepared.io_maps,
+            BTreeMap::from([(
+                valid_model.id.clone(),
+                BTreeMap::from([(6, valid_model.groups[0].buttons[0].id.clone())]),
+            )])
+        );
+        assert_eq!(prepared.actions, actions);
+
+        let state = state(&directory, prepared.clone(), vec![valid_model.clone()]);
+        let saved = save_workspace_inner(
+            &state,
+            valid_model.id.clone(),
+            prepared.io_maps,
+            prepared.actions,
+            vec![valid_model],
+        )
+        .unwrap();
+        assert_eq!(saved.io_maps.len(), 1);
+        assert_eq!(saved.actions, actions);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

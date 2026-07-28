@@ -57,7 +57,7 @@ const snapshot = {
   },
   supportedGpios: [0, 1, 2, 3, 4, 5, 6],
   configPath: "/tmp/vibe-tool/config.yaml",
-  connection: { state: "searching", port: null },
+  connection: { state: "connected", port: "/dev/cu.test" },
   configError: null,
 } satisfies AppSnapshot;
 
@@ -582,6 +582,63 @@ test("rejects a GPIO already assigned to another button", async () => {
   expect(screen.getByRole("button", { name: "Apply IO mapping" })).toBeDisabled();
   expect(document.getElementById(button.getAttribute("aria-describedby")!))
     .toHaveTextContent("Unmapped");
+});
+
+test("jumps from a GPIO conflict to the assigned button", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Configure 3" }));
+  await user.selectOptions(screen.getByLabelText("GPIO for 3"), "6");
+
+  await user.click(screen.getByRole("button", { name: "Go to 2" }));
+
+  expect(screen.getByRole("dialog", { name: "Configure IO for 2" })).toBeVisible();
+  expect(screen.getByLabelText("GPIO for 2")).toHaveValue("6");
+  await waitFor(() => {
+    const captureCalls = vi.mocked(invoke).mock.calls
+      .filter(([command]) => command === "set_io_capture")
+      .map(([, args]) => (args as { enabled: boolean }).enabled);
+    expect(captureCalls).toEqual([true, false, true]);
+  });
+});
+
+test("captures only while an IO popover is connected", async () => {
+  const user = userEvent.setup();
+  vi.mocked(invoke).mockResolvedValueOnce({
+    ...snapshot,
+    connection: { state: "searching", port: null },
+  });
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Configure 3" }));
+
+  expect(invoke).not.toHaveBeenCalledWith("set_io_capture", { enabled: true });
+  await user.selectOptions(screen.getByLabelText("GPIO for 3"), "5");
+  expect(screen.getByLabelText("GPIO for 3")).toHaveValue("5");
+
+  act(() => onRuntimeEvent?.({ payload: {
+    timestampMs: 1,
+    level: "info",
+    message: "connected",
+    gpio: null,
+    connection: { state: "connected", port: "/dev/cu.test" },
+  } }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: true }),
+  );
+
+  act(() => onRuntimeEvent?.({ payload: {
+    timestampMs: 2,
+    level: "warning",
+    message: "disconnected",
+    gpio: null,
+    connection: { state: "searching", port: null },
+  } }));
+  await waitFor(() => {
+    const captureCalls = vi.mocked(invoke).mock.calls
+      .filter(([command]) => command === "set_io_capture")
+      .map(([, args]) => (args as { enabled: boolean }).enabled);
+    expect(captureCalls).toEqual([true, false]);
+  });
 });
 
 test("rebinds manually and saves the staged IO map", async () => {

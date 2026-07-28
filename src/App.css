@@ -426,6 +426,24 @@ select:disabled {
   font-size: 11px;
 }
 
+.io-conflict {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.io-conflict button {
+  flex: none;
+  padding: 2px 5px;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: inherit;
+}
+
 .button-popover-actions {
   display: flex;
   justify-content: flex-end;

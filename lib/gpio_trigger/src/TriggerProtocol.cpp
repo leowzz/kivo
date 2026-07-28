@@ -27,6 +27,26 @@ std::optional<std::string_view> takeToken(std::string_view &line) {
 }
 }  // namespace
 
+std::optional<std::string> ResponseLineBuffer::push(char character) {
+  if (discardUntilNewline_) {
+    if (character == '\n') discardUntilNewline_ = false;
+    return std::nullopt;
+  }
+  if (character == '\n') {
+    line_.push_back(character);
+    std::string complete;
+    complete.swap(line_);
+    return complete;
+  }
+  if (line_.size() < maxLength_) {
+    line_.push_back(character);
+  } else {
+    line_.clear();
+    discardUntilNewline_ = true;
+  }
+  return std::nullopt;
+}
+
 std::string formatPressEvent(const PressEvent &event) {
   return "PRESS " + std::to_string(event.id) + " " +
          std::to_string(event.gpio) + "\n";

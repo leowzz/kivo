@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { ButtonPopover } from "./ButtonPopover";
 import { formatHotkey } from "./hotkey";
 import type { ButtonAction, ConfigMode, ModelLayout } from "./types";
@@ -71,6 +72,7 @@ export function Keypad({
   onDeleteAction,
   onCancel,
 }: KeypadProps) {
+  const buttonElements = useRef<Record<string, HTMLButtonElement | null>>({});
   const selectedButton = layout.groups
     .flatMap((group) => group.buttons)
     .find((button) => button.id === selectedButtonId);
@@ -100,6 +102,9 @@ export function Keypad({
               return (
                 <div className="key-shell" key={button.id}>
                   <button
+                    ref={(element) => {
+                      buttonElements.current[button.id] = element;
+                    }}
                     className={selectedButtonId === button.id ? "key is-selected" : "key"}
                     type="button"
                     aria-label={`Configure ${button.label}`}
@@ -139,6 +144,10 @@ export function Keypad({
           onApplyIoMap={onApplyIoMap}
           onApplyAction={(action) => onApplyAction(selectedButton.id, action)}
           onDeleteAction={() => onDeleteAction(selectedButton.id)}
+          onSelectConflict={(buttonId) => {
+            const button = buttonElements.current[buttonId];
+            if (button) onSelect(buttonId, button.getBoundingClientRect());
+          }}
           onCancel={onCancel}
         />
       )}

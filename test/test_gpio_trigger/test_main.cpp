@@ -125,6 +125,21 @@ void test_rejects_malformed_hotkey_response() {
   TEST_ASSERT_FALSE(parseHelperResponse("HOTKEY 42 10 165\n").has_value());
 }
 
+void test_discards_the_rest_of_an_overlong_physical_line() {
+  ResponseLineBuffer lines(10);
+
+  for (const char character : std::string("OVERLONG RESPONSEPASTE 42\n")) {
+    TEST_ASSERT_FALSE(lines.push(character).has_value());
+  }
+
+  std::optional<std::string> response;
+  for (const char character : std::string("PASTE 7\n")) {
+    response = lines.push(character);
+  }
+  TEST_ASSERT_TRUE(response.has_value());
+  TEST_ASSERT_EQUAL_STRING("PASTE 7\n", response->c_str());
+}
+
 void test_only_matching_paste_response_requests_keypress() {
   GpioTriggerController controller(0);
   controller.updatePin(6, false, 0);
@@ -172,6 +187,7 @@ int main(int, char **) {
   RUN_TEST(test_rejects_malformed_responses);
   RUN_TEST(test_parses_hotkey_response);
   RUN_TEST(test_rejects_malformed_hotkey_response);
+  RUN_TEST(test_discards_the_rest_of_an_overlong_physical_line);
   RUN_TEST(test_only_matching_paste_response_requests_keypress);
   RUN_TEST(test_matching_hotkey_response_requests_execution);
   RUN_TEST(test_matching_skip_response_clears_without_keypress);
