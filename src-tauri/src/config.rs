@@ -157,8 +157,8 @@ pub fn load(path: &Path) -> Result<MappingConfig, String> {
         actions: document.actions,
         legacy_buttons: document.buttons,
     };
-    config.validate(&[])?;
     config.migrate_legacy();
+    config.validate(&[])?;
     Ok(config)
 }
 
@@ -334,6 +334,19 @@ mod tests {
             })
         );
         assert_eq!(config.legacy_buttons, BTreeMap::from([(7, "keep".into())]));
+    }
+
+    #[test]
+    fn loading_hybrid_config_rejects_whitespace_only_migrated_paste() {
+        let directory = TestDirectory::new();
+        let path = directory.path("config.yaml");
+        fs::write(
+            &path,
+            "active_model: red-phone-v1\nio_maps:\n  red-phone-v1:\n    6: DIGIT_2\nbuttons:\n  6: \" \"\n",
+        )
+        .unwrap();
+
+        assert!(load(&path).is_err());
     }
 
     #[test]
