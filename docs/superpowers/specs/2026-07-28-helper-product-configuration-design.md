@@ -1,7 +1,7 @@
 # Kivo Product Configuration Design
 
 Date: 2026-07-28
-Status: Awaiting written spec review
+Status: Approved for implementation
 
 ## Context
 
@@ -332,15 +332,21 @@ successfully. An ordinary restore failure rolls back to the old directory.
 ## Runtime Hardware Configuration
 
 On connection, ESP32-S3 firmware reports protocol version, platform, and its
-board-specific safe GPIO allowlist. Kivo rejects a mismatched protocol,
-controller, or GPIO before activating input.
+board-specific safe GPIO allowlist:
+
+```text
+HELLO <protocol_version> esp32s3 <pin_count> <pins...>
+```
+
+Kivo rejects a mismatched protocol, controller, or GPIO before activating
+input.
 
 Kivo sends the selected model topology as a revisioned transaction:
 
 ```text
 CONFIG_BEGIN <revision> <debounce_ms>
 CONFIG_DIRECT <revision> <source_index> <pin_count> <pins...>
-CONFIG_MATRIX <revision> <source_index> <pin_count> <pins...>
+CONFIG_MATRIX <revision> <source_index> <row_count> <rows...> <column_count> <columns...>
 CONFIG_COMMIT <revision>
 CONFIG_OK <revision>
 CONFIG_ERROR <revision> <code>
@@ -382,6 +388,20 @@ line to ground becomes a direct binding; a stable unordered pair becomes a
 contact-matrix binding. The GUI shows the captured signature and conflicts
 before applying it. The flow repeats only when the developer selects another
 key.
+
+Learning uses this temporary, explicitly bounded protocol:
+
+```text
+LEARN_BEGIN <revision> <pin_count> <pins...>
+LEARN_OK <revision>
+LEARN_DIRECT <gpio> DOWN|UP
+LEARN_CONTACT <pin_a> <pin_b> DOWN|UP
+LEARN_END <revision>
+```
+
+Firmware accepts candidate pins only from its reported allowlist. `LEARN_END`
+restores the last committed runtime topology before acknowledging normal input
+again.
 
 Learning requires the keypad to be isolated from the original telephone ASIC
 and any external voltage. The UI presents this safety confirmation before it
