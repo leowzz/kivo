@@ -56,7 +56,7 @@ const snapshot = {
     DIGIT_2: { type: "paste", text: "six" },
   },
   supportedGpios: [0, 1, 2, 3, 4, 5, 6],
-  configPath: "/tmp/vibe-tool/config.yaml",
+  configPath: "/tmp/kivo/config.yaml",
   connection: { state: "connected", port: "/dev/cu.test" },
   configError: null,
 } satisfies AppSnapshot;
