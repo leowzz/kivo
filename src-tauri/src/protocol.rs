@@ -1,5 +1,11 @@
 use crate::config::ButtonAction;
 
+const PASTE_MODIFIER: u8 = if cfg!(target_os = "macos") {
+    0x08
+} else {
+    0x01
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Press {
     pub event_id: u64,
@@ -100,7 +106,7 @@ pub fn reply(
     match action {
         Some(ButtonAction::Paste { text }) => match copy(&text) {
             Ok(()) => Reply {
-                line: format!("PASTE {}\n", press.event_id),
+                line: format!("HOTKEY {} {PASTE_MODIFIER} 25\n", press.event_id),
                 message: format!("GPIO{}: PASTE {}", press.gpio, press.event_id),
             },
             Err(error) => Reply {
@@ -160,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn paste_action_copies_then_requests_paste() {
+    fn paste_action_copies_then_requests_platform_paste_hotkey() {
         let mut copied = String::new();
 
         let response = reply(
@@ -178,7 +184,8 @@ mod tests {
         );
 
         assert_eq!(copied, "中文\nsecond");
-        assert_eq!(response.line, "PASTE 12\n");
+        let modifier = if cfg!(target_os = "macos") { 8 } else { 1 };
+        assert_eq!(response.line, format!("HOTKEY 12 {modifier} 25\n"));
         assert_eq!(response.message, "GPIO6: PASTE 12");
     }
 

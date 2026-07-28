@@ -1,0 +1,65 @@
+name: Release Desktop
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            platform: windows-latest
+            args: --bundles nsis
+            rust_targets: ""
+          - name: macOS universal
+            platform: macos-latest
+            args: --target universal-apple-darwin --bundles dmg
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set app version from tag
+        run: |
+          node -e 'const fs = require("node:fs"); const tag = process.env.GITHUB_REF_NAME; if (!/^v\d+\.\d+\.\d+$/.test(tag)) throw new Error("Invalid release tag: " + tag); const path = "src-tauri/tauri.conf.json"; const config = JSON.parse(fs.readFileSync(path, "utf8")); config.version = tag.slice(1); fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n");'
+
+      - name: Build and publish release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Vibe Tool ${{ github.ref_name }}"
+          releaseBody: "macOS universal DMG and Windows x64 installer."
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
