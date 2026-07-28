@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Save, Trash2, Unplug, Usb } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Keypad } from "./Keypad";
 import type {
   AppSnapshot,
@@ -33,11 +33,14 @@ export default function App() {
   const [savedActiveModel, setSavedActiveModel] = useState("");
   const [ioMaps, setIoMaps] = useState<Record<string, Record<number, string>>>({});
   const [savedIoMaps, setSavedIoMaps] = useState<Record<string, Record<number, string>>>({});
+  const [supportedGpios, setSupportedGpios] = useState<number[]>([]);
   const [actions, setActions] = useState<Record<string, ButtonAction>>({});
   const [savedActions, setSavedActions] = useState<Record<string, ButtonAction>>({});
   const [mode, setMode] = useState<ConfigMode>("io");
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
-  const [, setSelectedAnchor] = useState<DOMRect | null>(null);
+  const [selectedAnchor, setSelectedAnchor] = useState<DOMRect | null>(null);
+  const [capturedGpio, setCapturedGpio] = useState<number | null>(null);
+  const capturingButtonRef = useRef<string | null>(null);
   const [configPath, setConfigPath] = useState("");
   const [connection, setConnection] = useState<ConnectionStatus>(SEARCHING);
   const [events, setEvents] = useState<RuntimeEvent[]>([]);
@@ -52,6 +55,7 @@ export default function App() {
     setSavedActiveModel(snapshot.activeModel);
     setIoMaps(snapshot.ioMaps);
     setSavedIoMaps(snapshot.ioMaps);
+    setSupportedGpios(snapshot.supportedGpios);
     setActions(snapshot.actions);
     setSavedActions(snapshot.actions);
     setConfigPath(snapshot.configPath);
@@ -68,6 +72,10 @@ export default function App() {
           if (!active) return;
           setConnection(payload.connection);
           setEvents((current) => [...current, payload].slice(-200));
+          if (capturingButtonRef.current && payload.gpio !== null) {
+            capturingButtonRef.current = null;
+            setCapturedGpio(payload.gpio);
+          }
         });
         if (!active) {
           stopListening();
@@ -90,6 +98,18 @@ export default function App() {
       stopListening?.();
     };
   }, [applySnapshot]);
+
+  useEffect(() => {
+    if (mode !== "io" || !selectedButtonId) return;
+    capturingButtonRef.current = selectedButtonId;
+    void invoke("set_io_capture", { enabled: true }).catch((captureError) => {
+      setError(errorMessage(captureError));
+    });
+    return () => {
+      capturingButtonRef.current = null;
+      void invoke("set_io_capture", { enabled: false }).catch(() => undefined);
+    };
+  }, [mode, selectedButtonId]);
 
   const dirty = useMemo(
     () => JSON.stringify([models, activeModel, ioMaps, actions])
@@ -146,6 +166,13 @@ export default function App() {
     setActiveModel(modelId);
     setSelectedButtonId(null);
     setSelectedAnchor(null);
+    setCapturedGpio(null);
+  };
+
+  const closePopover = () => {
+    setSelectedButtonId(null);
+    setSelectedAnchor(null);
+    setCapturedGpio(null);
   };
 
   return (
@@ -209,7 +236,10 @@ export default function App() {
                     aria-label={value === "io" ? "IO" : "Behavior"}
                     aria-pressed={mode === value}
                     key={value}
-                    onClick={() => setMode(value)}
+                    onClick={() => {
+                      setMode(value);
+                      if (value !== mode) closePopover();
+                    }}
                   >
                     {value === "io" ? "IO" : "Behavior"}
                   </button>
@@ -225,11 +255,20 @@ export default function App() {
                 mode={mode}
                 ioMap={ioMaps[activeModel] ?? {}}
                 actions={actions}
+                supportedGpios={supportedGpios}
                 selectedButtonId={selectedButtonId}
+                selectedAnchor={selectedAnchor}
+                capturedGpio={capturedGpio}
                 onSelect={(buttonId, anchor) => {
+                  setCapturedGpio(null);
                   setSelectedButtonId(buttonId);
                   setSelectedAnchor(anchor);
                 }}
+                onApplyIoMap={(ioMap) => {
+                  setIoMaps((current) => ({ ...current, [activeModel]: ioMap }));
+                  closePopover();
+                }}
+                onCancel={closePopover}
               />
             )}
           </div>

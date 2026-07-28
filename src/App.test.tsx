@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { beforeEach, expect, test, vi } from "vitest";
 import App from "./App";
+import * as KeypadModule from "./Keypad";
 import type { AppSnapshot, RuntimeEvent } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -32,6 +33,7 @@ const snapshot = {
           buttons: [
             { id: "DIGIT_1", label: "1" },
             { id: "DIGIT_2", label: "2" },
+            { id: "DIGIT_3", label: "3" },
           ],
         },
         {
@@ -64,6 +66,7 @@ let unlisten: UnlistenFn;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  onRuntimeEvent = undefined;
   unlisten = vi.fn();
   vi.mocked(invoke).mockImplementation(async (command, arguments_) => {
     if (command === "save_workspace") {
@@ -135,6 +138,136 @@ test("shows mode summaries and selects a key", async () => {
   expect(screen.getByRole("tooltip", { name: /This behavior preview.*\.\.\./ })).toBeInTheDocument();
   await user.click(digitTwo);
   expect(digitTwo).toHaveClass("is-selected");
+});
+
+test("binds the selected button from only the next physical press", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Configure 2" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: true }),
+  );
+
+  act(() => onRuntimeEvent?.({ payload: {
+    timestampMs: 1,
+    level: "info",
+    message: "GPIO7: captured",
+    gpio: 7,
+    connection: { state: "connected", port: "/dev/cu.test" },
+  } }));
+  expect(screen.getByLabelText("GPIO for 2")).toHaveValue("7");
+
+  act(() => onRuntimeEvent?.({ payload: {
+    timestampMs: 2,
+    level: "info",
+    message: "GPIO5: normal press",
+    gpio: 5,
+    connection: { state: "connected", port: "/dev/cu.test" },
+  } }));
+  expect(screen.getByLabelText("GPIO for 2")).toHaveValue("7");
+});
+
+test("rejects a GPIO already assigned to another button", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  const button = await screen.findByRole("button", { name: "Configure 3" });
+  await user.click(button);
+  await user.selectOptions(screen.getByLabelText("GPIO for 3"), "6");
+
+  expect(screen.getByRole("alert")).toHaveTextContent("GPIO6 is assigned to 2");
+  expect(screen.getByRole("button", { name: "Apply IO mapping" })).toBeDisabled();
+  expect(document.getElementById(button.getAttribute("aria-describedby")!))
+    .toHaveTextContent("Unmapped");
+});
+
+test("rebinds manually and saves the staged IO map", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Configure 2" }));
+  await user.selectOptions(screen.getByLabelText("GPIO for 2"), "5");
+  await user.click(screen.getByRole("button", { name: "Apply IO mapping" }));
+
+  expect(screen.getByRole("tooltip", { name: "GPIO 5" })).toBeInTheDocument();
+  expect(screen.queryByRole("tooltip", { name: "GPIO 6" })).not.toBeInTheDocument();
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: false }),
+  );
+
+  await user.click(screen.getByRole("button", { name: "Save workspace" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("save_workspace", {
+      activeModel: snapshot.activeModel,
+      ioMaps: { "red-phone-v1": { 5: "DIGIT_2" } },
+      actions: snapshot.actions,
+      models: snapshot.models,
+    }),
+  );
+});
+
+test("stops IO capture when the popover is cancelled", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Configure 2" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: true }),
+  );
+
+  await user.click(screen.getByRole("button", { name: "Cancel IO mapping" }));
+
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: false }),
+  );
+  expect(screen.queryByLabelText("GPIO for 2")).not.toBeInTheDocument();
+});
+
+test("restarts IO capture when the selected button changes", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Configure 2" }));
+  await user.click(screen.getByRole("button", { name: "Configure 3" }));
+
+  await waitFor(() => {
+    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: false });
+    expect(vi.mocked(invoke).mock.calls.filter(([command, args]) =>
+      command === "set_io_capture" && (args as { enabled: boolean }).enabled
+    )).toHaveLength(2);
+  });
+  expect(screen.getByLabelText("GPIO for 3")).toBeInTheDocument();
+});
+
+test("stops IO capture when the configuration mode changes", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Configure 2" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: true }),
+  );
+
+  await user.click(screen.getByRole("button", { name: "Behavior" }));
+
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: false }),
+  );
+  expect(screen.queryByLabelText("GPIO for 2")).not.toBeInTheDocument();
+});
+
+test("positions the IO popover beside its anchor and clamps both axes", () => {
+  type Position = (
+    anchor: Pick<DOMRect, "left" | "right" | "top">,
+    width: number,
+    height: number,
+    viewportWidth: number,
+    viewportHeight: number,
+  ) => { left: number; top: number };
+  const position = (KeypadModule as { popoverPosition?: Position }).popoverPosition;
+
+  expect(position).toBeTypeOf("function");
+  expect(position!({ left: 100, right: 150, top: 30 }, 200, 100, 500, 400))
+    .toEqual({ left: 162, top: 30 });
+  expect(position!({ left: 400, right: 450, top: 390 }, 200, 100, 500, 400))
+    .toEqual({ left: 188, top: 288 });
+  expect(position!({ left: 8, right: 190, top: -10 }, 180, 100, 200, 400))
+    .toEqual({ left: 12, top: 12 });
 });
 
 test("recovers an invalid active model and saves the selected catalog model", async () => {
@@ -227,6 +360,21 @@ test("unsubscribes from runtime events on unmount", async () => {
   view.unmount();
 
   await waitFor(() => expect(unlisten).toHaveBeenCalledOnce());
+});
+
+test("stops IO capture on unmount", async () => {
+  const user = userEvent.setup();
+  const view = render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Configure 2" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: true }),
+  );
+
+  view.unmount();
+
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: false }),
+  );
 });
 
 test("subscribes before loading the snapshot", async () => {
