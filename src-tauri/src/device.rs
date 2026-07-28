@@ -231,7 +231,7 @@ fn action_for_press(
 }
 
 fn copy_to_clipboard(text: &str) -> Result<(), String> {
-    let mut child = Command::new(CLIPBOARD_COMMAND)
+    let mut child = clipboard_command()
         .stdin(Stdio::piped())
         .spawn()
         .map_err(|error| format!("start clipboard command: {error}"))?;
@@ -249,6 +249,13 @@ fn copy_to_clipboard(text: &str) -> Result<(), String> {
     } else {
         Err(format!("clipboard command exited {status}"))
     }
+}
+
+fn clipboard_command() -> Command {
+    let mut command = Command::new(CLIPBOARD_COMMAND);
+    #[cfg(target_os = "macos")]
+    command.env("LC_CTYPE", "UTF-8");
+    command
 }
 
 fn set_connection(
@@ -382,5 +389,15 @@ mod tests {
             ..event
         };
         assert_eq!(serde_json::to_value(up).unwrap()["pressed"], false);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn clipboard_command_uses_utf8_locale() {
+        let command = clipboard_command();
+
+        assert!(command.get_envs().any(|(key, value)| {
+            key == "LC_CTYPE" && value == Some(std::ffi::OsStr::new("UTF-8"))
+        }));
     }
 }
