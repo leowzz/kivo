@@ -93,10 +93,10 @@ export function LayoutEditor({ layout, open, onCancel, onApply }: LayoutEditorPr
       name: draft.name,
       groups: draft.groups.map(({ isNew: _newGroup, ...group }) => ({
         ...group,
-        id: group.id.trim(),
+        id: group.id,
         buttons: group.buttons.map(({ isNew: _newButton, ...button }) => ({
           ...button,
-          id: button.id.trim(),
+          id: button.id,
           label: button.label.trim(),
         })),
       })),

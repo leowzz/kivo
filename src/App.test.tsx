@@ -146,6 +146,101 @@ test("rejects a duplicate normalized new button ID", async () => {
   expect(screen.getByRole("button", { name: "Apply layout" })).toBeDisabled();
 });
 
+test("removes deleted buttons only from the active model IO map", async () => {
+  const user = userEvent.setup();
+  const otherModel = {
+    id: "other-phone",
+    name: "Other Phone",
+    groups: [{
+      id: "keys",
+      columns: 1,
+      buttons: [{ id: "OTHER", label: "Other" }],
+    }],
+  };
+  const models = [...snapshot.models, otherModel];
+  const ioMaps = {
+    "red-phone-v1": { 5: "DIGIT_3", 6: "DIGIT_2" },
+    "other-phone": { 4: "OTHER" },
+  };
+  vi.mocked(invoke).mockResolvedValueOnce({ ...snapshot, models, ioMaps });
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Edit layout" }));
+  await user.click(screen.getByRole("button", { name: "Delete DIGIT_2" }));
+  await user.click(screen.getByRole("button", { name: "Apply layout" }));
+  await user.click(screen.getByRole("button", { name: "Save workspace" }));
+
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_workspace", {
+    activeModel: snapshot.activeModel,
+    ioMaps: {
+      "red-phone-v1": { 5: "DIGIT_3" },
+      "other-phone": { 4: "OTHER" },
+    },
+    actions: snapshot.actions,
+    models: [{
+      ...snapshot.models[0],
+      groups: snapshot.models[0].groups.map((group) => ({
+        ...group,
+        buttons: group.buttons.filter((button) => button.id !== "DIGIT_2"),
+      })),
+    }, otherModel],
+  }));
+});
+
+test("preserves existing layout IDs byte for byte", async () => {
+  const user = userEvent.setup();
+  const whitespaceLayout = {
+    ...snapshot.models[0],
+    groups: [{
+      id: " media ",
+      columns: 1,
+      buttons: [{ id: "PLAY PAUSE ", label: "PLAY/PAUSE" }],
+    }],
+  };
+  vi.mocked(invoke).mockResolvedValueOnce({
+    ...snapshot,
+    models: [whitespaceLayout],
+    ioMaps: { "red-phone-v1": { 6: "PLAY PAUSE " } },
+    actions: {},
+  });
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Edit layout" }));
+  const columns = screen.getByLabelText("Columns for media");
+  await user.clear(columns);
+  await user.type(columns, "2");
+  await user.click(screen.getByRole("button", { name: "Apply layout" }));
+  await user.click(screen.getByRole("button", { name: "Save workspace" }));
+
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_workspace", {
+    activeModel: snapshot.activeModel,
+    ioMaps: { "red-phone-v1": { 6: "PLAY PAUSE " } },
+    actions: {},
+    models: [{
+      ...whitespaceLayout,
+      groups: [{ ...whitespaceLayout.groups[0], columns: 2 }],
+    }],
+  }));
+});
+
+test("does not save or reset a local layout draft on Command+S", async () => {
+  const user = userEvent.setup();
+  vi.mocked(invoke).mockResolvedValueOnce({ ...snapshot, activeModel: "missing-model" });
+  render(<App />);
+  await user.selectOptions(
+    await screen.findByRole("combobox", { name: "Device model" }),
+    "red-phone-v1",
+  );
+  await user.click(screen.getByRole("button", { name: "Edit layout" }));
+  const label = screen.getByLabelText("Label for BACK_OUT");
+  await user.clear(label);
+  await user.type(label, "LOCAL DRAFT");
+
+  expect(screen.getByRole("button", { name: "Save workspace" })).toBeDisabled();
+  act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "s", metaKey: true })));
+
+  expect(invoke).not.toHaveBeenCalledWith("save_workspace", expect.anything());
+  expect(screen.getByLabelText("Label for BACK_OUT")).toHaveValue("LOCAL DRAFT");
+});
+
 test("renders the selected model as normalized groups", async () => {
   render(<App />);
   const backOut = await screen.findByRole("button", { name: "Configure BACK/OUT" });

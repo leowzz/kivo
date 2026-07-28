@@ -141,7 +141,7 @@ export default function App() {
   );
 
   const saveWorkspace = useCallback(async () => {
-    if (!loaded || !dirty || saving) return;
+    if (!loaded || !dirty || saving || layoutEditorOpen) return;
     setSaving(true);
     setError(null);
     try {
@@ -168,7 +168,18 @@ export default function App() {
     } finally {
       setSaving(false);
     }
-  }, [actions, activeModel, applySnapshot, connection, dirty, ioMaps, loaded, models, saving]);
+  }, [
+    actions,
+    activeModel,
+    applySnapshot,
+    connection,
+    dirty,
+    ioMaps,
+    layoutEditorOpen,
+    loaded,
+    models,
+    saving,
+  ]);
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
@@ -228,7 +239,7 @@ export default function App() {
             type="button"
             aria-label="Revert workspace"
             title="Revert workspace"
-            disabled={!loaded || !dirty || saving}
+            disabled={!loaded || !dirty || saving || layoutEditorOpen}
             onClick={revertWorkspace}
           >
             <RotateCcw size={17} />
@@ -237,7 +248,7 @@ export default function App() {
             className="save-button"
             type="button"
             aria-label="Save workspace"
-            disabled={!loaded || !dirty || saving}
+            disabled={!loaded || !dirty || saving || layoutEditorOpen}
             onClick={() => void saveWorkspace()}
           >
             <Save size={17} />
@@ -384,6 +395,19 @@ export default function App() {
         onCancel={() => setLayoutEditorOpen(false)}
         onApply={(layout) => {
           setModels((current) => current.map((model) => model.id === layout.id ? layout : model));
+          const buttonIds = new Set(
+            layout.groups.flatMap((group) => group.buttons.map((button) => button.id)),
+          );
+          setIoMaps((current) => {
+            const activeIoMap = current[layout.id];
+            if (!activeIoMap) return current;
+            return {
+              ...current,
+              [layout.id]: Object.fromEntries(
+                Object.entries(activeIoMap).filter(([, buttonId]) => buttonIds.has(buttonId)),
+              ),
+            };
+          });
           setLayoutEditorOpen(false);
           closePopover();
         }}
