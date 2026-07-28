@@ -23,12 +23,12 @@ pub fn setup(app: &mut App, initial: &ConnectionStatus) -> tauri::Result<()> {
 
     let label = status_label(initial);
     let status = MenuItem::with_id(app, "status", &label, false, None::<&str>)?;
-    let open = MenuItem::with_id(app, "open-main", "Open Vibe Tool", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open-main", "Open Kivo", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit-app", "Quit Vibe Tool", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit-app", "Quit Kivo", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&status, &separator, &open, &quit])?;
     let icon = Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
-    let tooltip = format!("Vibe Tool - {label}");
+    let tooltip = format!("Kivo - {label}");
     let tray = TrayIconBuilder::with_id("menu-bar")
         .icon(icon)
         .icon_as_template(true)
@@ -54,7 +54,7 @@ pub fn update_connection(app: &AppHandle, connection: &ConnectionStatus) {
             return;
         };
         let _ = state.status.set_text(&label);
-        let _ = state.tray.set_tooltip(Some(format!("Vibe Tool - {label}")));
+        let _ = state.tray.set_tooltip(Some(format!("Kivo - {label}")));
     });
 }
 

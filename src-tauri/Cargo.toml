@@ -1,11 +1,11 @@
 [package]
-name = "vibe-tool"
+name = "kivo"
 version = "0.1.0"
-description = "Desktop helper for the Vibe Tool GPIO keyboard"
+description = "Desktop helper for the Kivo GPIO keyboard"
 edition = "2024"
 
 [lib]
-name = "vibe_tool_lib"
+name = "kivo_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

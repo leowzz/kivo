@@ -357,12 +357,12 @@ mod tests {
         assert!(!is_target_port(&usb_port(
             0x303b,
             0x4002,
-            Some("ESP Vibe Text Keyboard")
+            Some("Kivo Keyboard")
         )));
         assert!(!is_target_port(&usb_port(
             0x303a,
             0x4003,
-            Some("ESP Vibe Text Keyboard")
+            Some("Kivo Keyboard")
         )));
         assert!(!is_target_port(&SerialPortInfo {
             port_name: "/dev/cu.Bluetooth".to_owned(),

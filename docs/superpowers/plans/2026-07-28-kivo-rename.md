@@ -2,31 +2,32 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Rename the packaged application and device branding from Vibe Tool to Kivo.
+**Goal:** Rename every current application, package, release, and firmware-facing `Vibe Tool` identity to `Kivo` without migrating old configuration.
 
-**Architecture:** Replace existing product metadata and visible strings in place. Keep the existing VID/PID device match so previously flashed firmware remains connectable; do not migrate the old application configuration directory.
+**Architecture:** This is one metadata-and-copy change. Existing behavior and storage code stay unchanged; Tauri derives the new configuration directory from `cn.wleo.kivo`, and generated lockfiles are refreshed with the repository's current package tools.
 
-**Tech Stack:** Tauri 2, Rust, React/TypeScript, PlatformIO/Arduino, GitHub Actions
+**Tech Stack:** Tauri 2, Rust, React/Vite, PlatformIO Arduino, npm, uv
 
 ## Global Constraints
 
 - User-visible product name: `Kivo`.
-- Package, crate, library, and executable names: `kivo` / `kivo_lib`.
+- Package, crate, and executable name: `kivo`.
 - Application identifier: `cn.wleo.kivo`.
-- Firmware manufacturer and product names: `Kivo` and `Kivo Keyboard`.
-- Do not migrate or read `com.leose.vibetool` configuration.
-- Keep USB matching based on VID `0x303a` and PID `0x4002`.
-- Do not rewrite historical design and implementation-plan documents.
+- Firmware USB manufacturer and product names: `Kivo` and `Kivo Keyboard`.
+- Do not migrate or read configuration from `com.leose.vibetool`.
+- Do not rewrite historical design and implementation documents that describe the former name.
 
 ---
 
-### Task 1: Rename Kivo Across Packaging and Runtime Surfaces
+### Task 1: Rename the product consistently
 
 **Files:**
+- Modify: `.github/workflows/release-windows.yml`
+- Modify: `index.html`
 - Modify: `package.json`
 - Modify: `package-lock.json`
-- Modify: `index.html`
-- Modify: `.github/workflows/release-windows.yml`
+- Modify: `pyproject.toml`
+- Modify: `uv.lock`
 - Modify: `src/App.tsx`
 - Modify: `src/App.test.tsx`
 - Modify: `src/main.cpp`
@@ -34,47 +35,67 @@
 - Modify: `src-tauri/Cargo.lock`
 - Modify: `src-tauri/tauri.conf.json`
 - Modify: `src-tauri/src/main.rs`
-- Modify: `src-tauri/src/lib.rs`
-- Modify: `src-tauri/src/tray.rs`
 - Modify: `src-tauri/src/config.rs`
+- Modify: `src-tauri/src/device.rs`
+- Modify: `src-tauri/src/lib.rs`
 - Modify: `src-tauri/src/model.rs`
+- Modify: `src-tauri/src/tray.rs`
 
 **Interfaces:**
-- Consumes: existing Tauri product metadata, Rust crate target, React headings, tray labels, firmware USB descriptors, and release workflow metadata.
-- Produces: a `Kivo` installer/application, `kivo` executable and package names, `kivo_lib` Rust library target, `cn.wleo.kivo` platform identity, and `Kivo Keyboard` USB display name.
+- Consumes: Tauri's existing `app.path().app_config_dir()` lookup.
+- Produces: application metadata `Kivo` / `kivo` / `cn.wleo.kivo` and USB identity `Kivo Keyboard`.
 
-- [ ] **Step 1: Rename package and application metadata**
-
-Set npm package names to `kivo`; Cargo package, library, and lockfile entries to `kivo` and `kivo_lib`; Tauri `productName`, `identifier`, and window title to `Kivo`, `cn.wleo.kivo`, and `Kivo`; and the Rust entry point to `kivo_lib::run()`.
-
-- [ ] **Step 2: Rename visible application and release text**
-
-Replace the HTML title, React heading, tray `Open`/`Quit` labels and tooltip, Rust startup error, and GitHub release name with `Kivo`. Rename test-only temporary prefixes and the frontend fixture path from `vibe-tool` to `kivo`.
-
-- [ ] **Step 3: Rename firmware USB descriptors**
-
-Set:
-
-```cpp
-USB.manufacturerName("Kivo");
-USB.productName("Kivo Keyboard");
-```
-
-Do not change `USB.vid(0x303A)` or `USB.pid(0x4002)`; existing firmware remains discoverable by the desktop app.
-
-- [ ] **Step 4: Verify no old branding remains in active source**
+- [x] **Step 1: Prove the old identity is present**
 
 Run:
 
 ```bash
-rtk proxy rg -n -i "vibe[_ -]?tool|vibetool|ESP Vibe" \
-  --glob '!docs/superpowers/**' --glob '!docs/rp2040-compatibility-assessment.md' \
-  --glob '!target/**' .
+rtk git grep -n -i -e 'Vibe Tool' -e 'vibe-tool' -e 'vibetool' -e 'ESP Vibe' -- ':!docs/**'
+```
+
+Expected: matches in application metadata, source, release workflow, lockfiles, and tests.
+
+- [x] **Step 2: Apply the minimal rename**
+
+Make these exact substitutions in current source and metadata:
+
+```text
+Vibe Tool                       -> Kivo
+vibe-tool                       -> kivo
+vibe_tool_lib                   -> kivo_lib
+com.leose.vibetool              -> cn.wleo.kivo
+ESP Vibe Text Keyboard          -> Kivo Keyboard
+ESP Vibe                        -> Kivo
+esp-vibe                        -> kivo
+```
+
+Do not add configuration migration logic. Keep historical files under
+`docs/superpowers/` unchanged except for the new Kivo spec and plan.
+
+- [x] **Step 3: Refresh generated lockfiles**
+
+Run:
+
+```bash
+rtk npm install --package-lock-only
+rtk uv lock
+rtk cargo check --manifest-path src-tauri/Cargo.toml
+```
+
+Expected: commands succeed; root entries in `package-lock.json`, `uv.lock`, and
+`src-tauri/Cargo.lock` use `kivo`.
+
+- [x] **Step 4: Verify no current identity was missed**
+
+Run:
+
+```bash
+rtk git grep -n -i -e 'Vibe Tool' -e 'vibe-tool' -e 'vibetool' -e 'ESP Vibe' -- ':!docs/**'
 ```
 
 Expected: no matches.
 
-- [ ] **Step 5: Run focused and full checks**
+- [x] **Step 5: Run focused and full checks**
 
 Run:
 
@@ -83,15 +104,28 @@ rtk npm test
 rtk npm run build
 rtk cargo test --manifest-path src-tauri/Cargo.toml
 rtk uv run pio test -e native
-rtk npm run tauri build -- --bundles app
 rtk git diff --check
 ```
 
-Expected: every command exits `0`; the bundle is named `Kivo.app` on macOS and uses `Kivo` as the Windows MSI product name.
+Expected: every command exits successfully.
 
-- [ ] **Step 6: Commit the implementation**
+- [ ] **Step 6: Build the Windows installer metadata path**
+
+Run on Windows CI or a Windows development host:
 
 ```bash
-rtk git add package.json package-lock.json index.html .github/workflows/release-windows.yml src src-tauri
-rtk git commit -m "refactor: rename app to Kivo"
+rtk npm run tauri build -- --bundles nsis
+```
+
+Expected: the generated installer and installation directory use `Kivo`, with
+no space in the product directory segment.
+
+Not run locally: this checkout is on macOS. The equivalent macOS bundle build
+produced `Kivo.app` with executable `kivo`.
+
+- [x] **Step 7: Commit the rename**
+
+```bash
+rtk git add .github/workflows/release-windows.yml index.html package.json package-lock.json pyproject.toml uv.lock src src-tauri docs/superpowers/plans/2026-07-28-kivo-rename.md
+rtk git commit -m "refactor: rename Vibe Tool to Kivo"
 ```
