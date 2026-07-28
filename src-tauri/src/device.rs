@@ -1,10 +1,13 @@
 use crate::{
-    config::{ButtonAction, MappingConfig},
-    protocol::{InputState, Press, parse_input, reply},
+    protocol::{
+        ActionSequence, DeviceMessage, InputState, PhysicalInput, parse_device, topology_commands,
+    },
+    workspace::{InputSource, ModelConfig},
 };
 use serde::Serialize;
 use serialport::{SerialPortInfo, SerialPortType};
 use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
     io::{BufRead, BufReader, ErrorKind, Write},
     process::{Command, Stdio},
     sync::{
@@ -12,17 +15,373 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter};
 
 const USB_VENDOR_ID: u16 = 0x303a;
 const USB_PRODUCT_ID: u16 = 0x4002;
+const ACTION_ACK_TIMEOUT: Duration = Duration::from_millis(1800);
 const CLIPBOARD_COMMAND: &str = if cfg!(target_os = "windows") {
     "clip.exe"
 } else {
     "/usr/bin/pbcopy"
 };
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeActivity {
+    pub code: String,
+    pub params: BTreeMap<String, String>,
+    pub detail: Option<String>,
+    pub input: Option<PhysicalInput>,
+    pub pressed: Option<bool>,
+}
+
+impl RuntimeActivity {
+    fn new(code: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            params: BTreeMap::new(),
+            detail: None,
+            input: None,
+            pressed: None,
+        }
+    }
+
+    fn with_param(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.params.insert(key.into(), value.into());
+        self
+    }
+
+    fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SessionOutput {
+    pub lines: Vec<String>,
+    pub activities: Vec<RuntimeActivity>,
+}
+
+pub struct DeviceSession {
+    model: Option<ModelConfig>,
+    hello: Option<(u16, String, Vec<u8>)>,
+    revision: u32,
+    configuring: Option<u32>,
+    ready: bool,
+    active: Option<ActionSequence>,
+    queue: VecDeque<(u64, PhysicalInput)>,
+}
+
+impl DeviceSession {
+    #[cfg(test)]
+    pub fn new(model: ModelConfig) -> Self {
+        Self {
+            model: Some(model),
+            hello: None,
+            revision: 0,
+            configuring: None,
+            ready: false,
+            active: None,
+            queue: VecDeque::new(),
+        }
+    }
+
+    pub fn without_model() -> Self {
+        Self {
+            model: None,
+            hello: None,
+            revision: 0,
+            configuring: None,
+            ready: false,
+            active: None,
+            queue: VecDeque::new(),
+        }
+    }
+
+    pub fn replace_model(&mut self, model: Option<ModelConfig>) -> SessionOutput {
+        let mut output = SessionOutput::default();
+        if let Some(sequence) = self.active.take() {
+            output.lines.push(format!("SKIP {}\n", sequence.event_id()));
+        }
+        self.queue.clear();
+        self.ready = false;
+        self.configuring = None;
+        self.model = model;
+        if let Some((protocol, platform, pins)) = self.hello.clone() {
+            self.configure_for_hello(protocol, platform, pins, &mut output);
+        }
+        output
+    }
+
+    pub fn is_awaiting_action(&self) -> bool {
+        self.active.as_ref().is_some_and(ActionSequence::is_waiting)
+    }
+
+    pub fn fail_active(
+        &mut self,
+        code: &str,
+        detail: Option<String>,
+        copy: &mut impl FnMut(&str) -> Result<(), String>,
+    ) -> SessionOutput {
+        let mut output = SessionOutput::default();
+        if let Some(mut sequence) = self.active.take() {
+            let event_id = sequence.event_id();
+            sequence.abort();
+            output.lines.push(format!("SKIP {event_id}\n"));
+            let mut activity = RuntimeActivity::new(code);
+            activity.detail = detail;
+            output.activities.push(activity);
+            self.start_next(&mut output, copy);
+        }
+        output
+    }
+
+    pub fn on_message(
+        &mut self,
+        message: DeviceMessage,
+        copy: &mut impl FnMut(&str) -> Result<(), String>,
+    ) -> SessionOutput {
+        let mut output = SessionOutput::default();
+        match message {
+            DeviceMessage::Hello {
+                protocol,
+                platform,
+                pins,
+            } => self.configure_for_hello(protocol, platform, pins, &mut output),
+            DeviceMessage::ConfigOk { revision } if self.configuring == Some(revision) => {
+                self.configuring = None;
+                self.ready = true;
+                output.activities.push(
+                    RuntimeActivity::new("topology_active")
+                        .with_param("revision", revision.to_string()),
+                );
+            }
+            DeviceMessage::ConfigError { revision, code } if self.configuring == Some(revision) => {
+                self.configuring = None;
+                self.ready = false;
+                output.activities.push(
+                    RuntimeActivity::new("topology_rejected")
+                        .with_param("revision", revision.to_string())
+                        .with_param("deviceCode", code),
+                );
+            }
+            DeviceMessage::State {
+                event_id,
+                input,
+                state,
+            } => {
+                output.activities.push(RuntimeActivity {
+                    input: Some(input),
+                    pressed: Some(state == InputState::Down),
+                    ..RuntimeActivity::new("input_state")
+                });
+                if state == InputState::Down {
+                    if self.ready {
+                        self.queue.push_back((event_id, input));
+                        self.start_next(&mut output, copy);
+                    } else {
+                        output.lines.push(format!("SKIP {event_id}\n"));
+                        output
+                            .activities
+                            .push(RuntimeActivity::new("input_before_configuration"));
+                    }
+                }
+            }
+            DeviceMessage::Done { event_id, step } => {
+                self.handle_done(event_id, step, &mut output, copy)
+            }
+            DeviceMessage::LearnOk { revision } => output.activities.push(
+                RuntimeActivity::new("learning_ready").with_param("revision", revision.to_string()),
+            ),
+            DeviceMessage::LearnDirect { gpio, state } => {
+                output.activities.push(RuntimeActivity {
+                    input: Some(PhysicalInput::Direct { gpio }),
+                    pressed: Some(state == InputState::Down),
+                    ..RuntimeActivity::new("learning_input")
+                });
+            }
+            DeviceMessage::LearnContact {
+                pin_a,
+                pin_b,
+                state,
+            } => output.activities.push(RuntimeActivity {
+                input: Some(PhysicalInput::Contact {
+                    source: 0,
+                    pin_a,
+                    pin_b,
+                }),
+                pressed: Some(state == InputState::Down),
+                ..RuntimeActivity::new("learning_input")
+            }),
+            DeviceMessage::ConfigOk { .. } | DeviceMessage::ConfigError { .. } => {}
+        }
+        output
+    }
+
+    fn configure_for_hello(
+        &mut self,
+        protocol: u16,
+        platform: String,
+        pins: Vec<u8>,
+        output: &mut SessionOutput,
+    ) {
+        self.hello = Some((protocol, platform.clone(), pins.clone()));
+        self.ready = false;
+        self.configuring = None;
+        self.active = None;
+        self.queue.clear();
+        if protocol != 2 {
+            output.activities.push(
+                RuntimeActivity::new("protocol_mismatch")
+                    .with_param("expected", "2")
+                    .with_param("actual", protocol.to_string()),
+            );
+            return;
+        }
+        let Some(model) = self.model.as_ref() else {
+            output
+                .activities
+                .push(RuntimeActivity::new("no_active_model"));
+            return;
+        };
+        if platform != model.hardware.controller {
+            output.activities.push(
+                RuntimeActivity::new("controller_mismatch")
+                    .with_param("expected", &model.hardware.controller)
+                    .with_param("actual", platform),
+            );
+            return;
+        }
+        let allowed = pins.into_iter().collect::<BTreeSet<_>>();
+        if let Some(gpio) = model_pins(model)
+            .into_iter()
+            .find(|gpio| !allowed.contains(gpio))
+        {
+            output.activities.push(
+                RuntimeActivity::new("unsupported_gpio").with_param("gpio", gpio.to_string()),
+            );
+            return;
+        }
+        self.revision = self.revision.wrapping_add(1).max(1);
+        match topology_commands(model, self.revision) {
+            Ok(lines) => {
+                self.configuring = Some(self.revision);
+                output.lines = lines;
+            }
+            Err(error) => output
+                .activities
+                .push(RuntimeActivity::new("invalid_topology").with_detail(error)),
+        }
+    }
+
+    fn handle_done(
+        &mut self,
+        event_id: u64,
+        step: u16,
+        output: &mut SessionOutput,
+        copy: &mut impl FnMut(&str) -> Result<(), String>,
+    ) {
+        let Some(sequence) = self.active.as_mut() else {
+            output
+                .activities
+                .push(RuntimeActivity::new("unexpected_action_acknowledgement"));
+            return;
+        };
+        if let Err(error) = sequence.acknowledge(event_id, step) {
+            let active_event = sequence.event_id();
+            output.lines.push(format!("SKIP {active_event}\n"));
+            output
+                .activities
+                .push(RuntimeActivity::new("invalid_action_acknowledgement").with_detail(error));
+            self.active = None;
+            self.start_next(output, copy);
+            return;
+        }
+        if sequence.is_complete() {
+            self.active = None;
+            self.start_next(output, copy);
+        } else {
+            self.emit_active_step(output, copy);
+        }
+    }
+
+    fn start_next(
+        &mut self,
+        output: &mut SessionOutput,
+        copy: &mut impl FnMut(&str) -> Result<(), String>,
+    ) {
+        while self.active.is_none() {
+            let Some((event_id, input)) = self.queue.pop_front() else {
+                return;
+            };
+            let Some(model) = self.model.as_ref() else {
+                output.lines.push(format!("SKIP {event_id}\n"));
+                continue;
+            };
+            let Some(button) = model.button_for(&input).map(str::to_owned) else {
+                output.lines.push(format!("SKIP {event_id}\n"));
+                output
+                    .activities
+                    .push(RuntimeActivity::new("unmapped_input"));
+                continue;
+            };
+            let actions = model.actions.get(&button).cloned().unwrap_or_default();
+            if actions.is_empty() {
+                output.lines.push(format!("SKIP {event_id}\n"));
+                output
+                    .activities
+                    .push(RuntimeActivity::new("empty_action_list").with_param("button", button));
+                continue;
+            }
+            self.active = Some(ActionSequence::new(event_id, button, actions));
+            self.emit_active_step(output, copy);
+        }
+    }
+
+    fn emit_active_step(
+        &mut self,
+        output: &mut SessionOutput,
+        copy: &mut impl FnMut(&str) -> Result<(), String>,
+    ) {
+        let Some(sequence) = self.active.as_mut() else {
+            return;
+        };
+        let Some(step) = sequence.next_step() else {
+            return;
+        };
+        match step.command(|text| copy(text)) {
+            Ok(line) => output.lines.push(line),
+            Err(error) => {
+                sequence.abort();
+                output.lines.push(format!("SKIP {}\n", step.event_id));
+                output.activities.push(
+                    RuntimeActivity::new("action_step_failed")
+                        .with_param("button", step.button)
+                        .with_param("step", step.step.to_string())
+                        .with_detail(error),
+                );
+                self.active = None;
+                self.start_next(output, copy);
+            }
+        }
+    }
+}
+
+fn model_pins(model: &ModelConfig) -> BTreeSet<u8> {
+    model
+        .hardware
+        .inputs
+        .iter()
+        .flat_map(|source| match source {
+            InputSource::Direct { keys, .. } => keys.values().copied().collect::<Vec<_>>(),
+            InputSource::ContactMatrix { pins, .. } => pins.clone(),
+        })
+        .collect()
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -67,10 +426,9 @@ pub enum EventLevel {
 pub struct RuntimeEvent {
     pub timestamp_ms: u64,
     pub level: EventLevel,
-    pub message: String,
     pub connection: ConnectionStatus,
-    pub gpio: Option<u8>,
-    pub pressed: Option<bool>,
+    #[serde(flatten)]
+    pub activity: RuntimeActivity,
 }
 
 pub fn is_target_port(port: &SerialPortInfo) -> bool {
@@ -84,61 +442,111 @@ pub fn is_target_port(port: &SerialPortInfo) -> bool {
 
 pub fn run_worker(
     app: AppHandle,
-    mappings: Arc<RwLock<MappingConfig>>,
+    active_model: Arc<RwLock<Option<ModelConfig>>>,
     connection: Arc<RwLock<ConnectionStatus>>,
-    capture_next_gpio: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
 ) {
     while !stop.load(Ordering::Relaxed) {
         let port = match serialport::available_ports() {
             Ok(ports) => ports.into_iter().find(is_target_port),
             Err(error) => {
-                emit(
+                emit_activity(
                     &app,
                     &connection,
                     EventLevel::Warning,
-                    format!("Serial scan failed: {error}"),
-                    None,
-                    None,
+                    RuntimeActivity::new("serial_scan_failed").with_detail(error.to_string()),
                 );
                 wait(&stop);
                 continue;
             }
         };
         let Some(port) = port else {
-            set_connection(&app, &connection, ConnectionStatus::searching(), None);
+            set_connection(
+                &app,
+                &connection,
+                ConnectionStatus::searching(),
+                Some("device_searching"),
+            );
             wait(&stop);
             continue;
         };
 
-        let device = match serialport::new(&port.port_name, 115_200)
+        let mut device = match serialport::new(&port.port_name, 115_200)
             .timeout(Duration::from_millis(500))
             .open()
         {
             Ok(device) => device,
             Err(error) => {
-                emit(
+                emit_activity(
                     &app,
                     &connection,
                     EventLevel::Warning,
-                    format!("Open {} failed: {error}", port.port_name),
-                    None,
-                    None,
+                    RuntimeActivity::new("serial_open_failed")
+                        .with_param("port", &port.port_name)
+                        .with_detail(error.to_string()),
                 );
                 wait(&stop);
                 continue;
             }
         };
+        if let Err(error) = device
+            .write_request_to_send(true)
+            .and_then(|()| device.write_data_terminal_ready(true))
+        {
+            emit_activity(
+                &app,
+                &connection,
+                EventLevel::Warning,
+                RuntimeActivity::new("serial_handshake_failed")
+                    .with_param("port", &port.port_name)
+                    .with_detail(error.to_string()),
+            );
+            wait(&stop);
+            continue;
+        }
 
         set_connection(
             &app,
             &connection,
             ConnectionStatus::connected(port.port_name.clone()),
-            Some(format!("Connected to {}", port.port_name)),
+            Some("device_connected"),
         );
         let mut device = BufReader::new(device);
+        let mut session = DeviceSession::without_model();
+        let mut loaded_model = None;
+        let mut action_deadline = None;
         let mut line = Vec::new();
         while !stop.load(Ordering::Relaxed) {
+            let next_model = active_model
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            if next_model != loaded_model {
+                loaded_model = next_model.clone();
+                let output = session.replace_model(next_model);
+                match write_output(&app, &connection, device.get_mut(), output) {
+                    Ok(sent_action) => {
+                        update_action_deadline(&mut action_deadline, &session, sent_action)
+                    }
+                    Err(error) => {
+                        emit_serial_write_error(&app, &connection, error);
+                        break;
+                    }
+                }
+            }
+            if action_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                let output =
+                    session.fail_active("action_ack_timeout", None, &mut copy_to_clipboard);
+                match write_output(&app, &connection, device.get_mut(), output) {
+                    Ok(sent_action) => {
+                        update_action_deadline(&mut action_deadline, &session, sent_action)
+                    }
+                    Err(error) => {
+                        emit_serial_write_error(&app, &connection, error);
+                        break;
+                    }
+                }
+            }
             line.clear();
             match device.read_until(b'\n', &mut line) {
                 Ok(0) => break,
@@ -146,88 +554,93 @@ pub fn run_worker(
                     let Ok(text) = std::str::from_utf8(&line) else {
                         continue;
                     };
-                    let Some(input) = parse_input(text) else {
+                    let Some(message) = parse_device(text) else {
                         continue;
                     };
-                    if input.state == InputState::Down {
-                        let action = mappings
-                            .read()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .resolved_action(input.gpio);
-                        let response = reply(
-                            Press {
-                                event_id: input.event_id,
-                                gpio: input.gpio,
-                            },
-                            action_for_press(&capture_next_gpio, action),
-                            copy_to_clipboard,
-                        );
-                        let level = if response.message.contains("(clipboard:") {
-                            EventLevel::Error
-                        } else {
-                            EventLevel::Info
-                        };
-                        emit(
-                            &app,
-                            &connection,
-                            level,
-                            response.message,
-                            Some(input.gpio),
-                            Some(true),
-                        );
-                        if let Err(error) = device
-                            .get_mut()
-                            .write_all(response.line.as_bytes())
-                            .and_then(|()| device.get_mut().flush())
-                        {
-                            emit(
-                                &app,
-                                &connection,
-                                EventLevel::Error,
-                                format!("Serial write failed: {error}"),
-                                None,
-                                None,
-                            );
+                    let output = session.on_message(message, &mut copy_to_clipboard);
+                    match write_output(&app, &connection, device.get_mut(), output) {
+                        Ok(sent_action) => {
+                            update_action_deadline(&mut action_deadline, &session, sent_action)
+                        }
+                        Err(error) => {
+                            emit_serial_write_error(&app, &connection, error);
                             break;
                         }
-                    } else {
-                        emit(
-                            &app,
-                            &connection,
-                            EventLevel::Info,
-                            format!("GPIO{}: UP {}", input.gpio, input.event_id),
-                            Some(input.gpio),
-                            Some(false),
-                        );
                     }
                 }
                 Err(error) if error.kind() == ErrorKind::TimedOut => continue,
                 Err(error) => {
-                    emit(
+                    emit_activity(
                         &app,
                         &connection,
                         EventLevel::Warning,
-                        format!("Device disconnected: {error}"),
-                        None,
-                        None,
+                        RuntimeActivity::new("device_disconnected").with_detail(error.to_string()),
                     );
                     break;
                 }
             }
         }
-        set_connection(&app, &connection, ConnectionStatus::searching(), None);
+        set_connection(
+            &app,
+            &connection,
+            ConnectionStatus::searching(),
+            Some("device_searching"),
+        );
     }
 }
 
-fn action_for_press(
-    capture_next_gpio: &AtomicBool,
-    configured: Option<ButtonAction>,
-) -> Option<ButtonAction> {
-    if capture_next_gpio.swap(false, Ordering::Relaxed) {
-        None
-    } else {
-        configured
+fn write_output<W: Write + ?Sized>(
+    app: &AppHandle,
+    connection: &RwLock<ConnectionStatus>,
+    writer: &mut W,
+    output: SessionOutput,
+) -> std::io::Result<bool> {
+    for activity in output.activities {
+        let level = if activity.code.ends_with("failed")
+            || activity.code.ends_with("timeout")
+            || activity.code.contains("mismatch")
+            || activity.code.contains("rejected")
+        {
+            EventLevel::Error
+        } else {
+            EventLevel::Info
+        };
+        emit_activity(app, connection, level, activity);
     }
+    let sent_action = output
+        .lines
+        .iter()
+        .any(|line| line.starts_with("PASTE ") || line.starts_with("HOTKEY "));
+    for line in output.lines {
+        writer.write_all(line.as_bytes())?;
+    }
+    writer.flush()?;
+    Ok(sent_action)
+}
+
+fn update_action_deadline(
+    deadline: &mut Option<Instant>,
+    session: &DeviceSession,
+    sent_action: bool,
+) {
+    if sent_action {
+        *deadline = Some(Instant::now() + ACTION_ACK_TIMEOUT);
+    } else if !session.is_awaiting_action() {
+        *deadline = None;
+    }
+}
+
+fn emit_serial_write_error(
+    app: &AppHandle,
+    connection: &RwLock<ConnectionStatus>,
+    error: std::io::Error,
+) {
+    emit_activity(
+        app,
+        connection,
+        EventLevel::Error,
+        RuntimeActivity::new("serial_write_failed").with_detail(error.to_string()),
+    );
 }
 
 fn copy_to_clipboard(text: &str) -> Result<(), String> {
@@ -266,7 +679,7 @@ fn set_connection(
     app: &AppHandle,
     connection: &RwLock<ConnectionStatus>,
     next: ConnectionStatus,
-    message: Option<String>,
+    code: Option<&str>,
 ) {
     let changed = {
         let mut current = connection
@@ -282,24 +695,20 @@ fn set_connection(
     if changed {
         #[cfg(target_os = "macos")]
         crate::tray::update_connection(app, &next);
-        emit(
+        emit_activity(
             app,
             connection,
             EventLevel::Info,
-            message.unwrap_or_else(|| "Waiting for device".to_owned()),
-            None,
-            None,
+            RuntimeActivity::new(code.unwrap_or("connection_changed")),
         );
     }
 }
 
-fn emit(
+fn emit_activity(
     app: &AppHandle,
     connection: &RwLock<ConnectionStatus>,
     level: EventLevel,
-    message: String,
-    gpio: Option<u8>,
-    pressed: Option<bool>,
+    activity: RuntimeActivity,
 ) {
     let payload = RuntimeEvent {
         timestamp_ms: SystemTime::now()
@@ -307,13 +716,11 @@ fn emit(
             .unwrap_or_default()
             .as_millis() as u64,
         level,
-        message,
         connection: connection
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone(),
-        gpio,
-        pressed,
+        activity,
     };
     let _ = app.emit("runtime-event", payload);
 }
@@ -330,8 +737,141 @@ fn wait(stop: &AtomicBool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ButtonAction;
+    use crate::{
+        config::ButtonAction,
+        model::{ButtonDefinition, ButtonGroup, ModelLayout},
+        protocol::{DeviceMessage, PhysicalInput},
+        workspace::{HardwareConfig, InputSource, MODEL_SCHEMA_VERSION, ModelConfig},
+    };
     use serialport::{SerialPortInfo, SerialPortType, UsbPortInfo};
+    use std::{cell::RefCell, collections::BTreeMap};
+
+    fn runtime_model() -> ModelConfig {
+        ModelConfig {
+            schema_version: MODEL_SCHEMA_VERSION,
+            model: ModelLayout {
+                id: "phone".into(),
+                name: "电话".into(),
+                groups: vec![ButtonGroup {
+                    id: "keys".into(),
+                    columns: 1,
+                    buttons: vec![ButtonDefinition {
+                        id: "A".into(),
+                        label: "甲".into(),
+                    }],
+                }],
+            },
+            hardware: HardwareConfig {
+                controller: "esp32s3".into(),
+                debounce_ms: 30,
+                inputs: vec![InputSource::Direct {
+                    id: "direct".into(),
+                    keys: BTreeMap::from([("A".into(), 6)]),
+                }],
+            },
+            actions: BTreeMap::from([(
+                "A".into(),
+                vec![
+                    ButtonAction::Paste {
+                        text: "第一步".into(),
+                    },
+                    ButtonAction::Paste {
+                        text: "第二步".into(),
+                    },
+                ],
+            )]),
+            legacy: None,
+        }
+    }
+
+    fn hello() -> DeviceMessage {
+        DeviceMessage::Hello {
+            protocol: 2,
+            platform: "esp32s3".into(),
+            pins: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18],
+        }
+    }
+
+    #[test]
+    fn serializes_actions_and_queues_presses_until_done() {
+        let mut session = DeviceSession::new(runtime_model());
+        let copied = RefCell::new(Vec::new());
+        let mut copy = |text: &str| {
+            copied.borrow_mut().push(text.to_owned());
+            Ok(())
+        };
+
+        let before_config = session.on_message(
+            DeviceMessage::State {
+                event_id: 8,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            &mut copy,
+        );
+        assert_eq!(before_config.lines, ["SKIP 8\n"]);
+
+        let configuring = session.on_message(hello(), &mut copy);
+        assert_eq!(configuring.lines[0], "CONFIG_BEGIN 1 30\n");
+        assert_eq!(configuring.lines.last().unwrap(), "CONFIG_COMMIT 1\n");
+        session.on_message(DeviceMessage::ConfigOk { revision: 1 }, &mut copy);
+
+        let first = session.on_message(
+            DeviceMessage::State {
+                event_id: 9,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            &mut copy,
+        );
+        assert_eq!(copied.borrow().as_slice(), ["第一步"]);
+        assert!(first.lines[0].contains(" 9 1 2"));
+        let queued = session.on_message(
+            DeviceMessage::State {
+                event_id: 10,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            &mut copy,
+        );
+        assert!(queued.lines.is_empty());
+
+        let second = session.on_message(
+            DeviceMessage::Done {
+                event_id: 9,
+                step: 1,
+            },
+            &mut copy,
+        );
+        assert_eq!(copied.borrow().as_slice(), ["第一步", "第二步"]);
+        assert!(second.lines[0].contains(" 9 2 2"));
+        let next_press = session.on_message(
+            DeviceMessage::Done {
+                event_id: 9,
+                step: 2,
+            },
+            &mut copy,
+        );
+        assert_eq!(copied.borrow().as_slice(), ["第一步", "第二步", "第一步"]);
+        assert!(next_press.lines[0].contains(" 10 1 2"));
+    }
+
+    #[test]
+    fn rejects_unsupported_hello_without_sending_topology() {
+        let mut session = DeviceSession::new(runtime_model());
+        let output = session.on_message(
+            DeviceMessage::Hello {
+                protocol: 2,
+                platform: "esp32s3".into(),
+                pins: vec![1, 2],
+            },
+            &mut |_| Ok(()),
+        );
+
+        assert!(output.lines.is_empty());
+        assert_eq!(output.activities[0].code, "unsupported_gpio");
+        assert_eq!(output.activities[0].params["gpio"], "6");
+    }
 
     fn usb_port(vid: u16, pid: u16, product: Option<&str>) -> SerialPortInfo {
         SerialPortInfo {
@@ -371,41 +911,29 @@ mod tests {
     }
 
     #[test]
-    fn capture_skips_action_and_clears_itself() {
-        let capture = AtomicBool::new(true);
-        let configured = Some(ButtonAction::Paste { text: "x".into() });
-
-        assert_eq!(action_for_press(&capture, configured.clone()), None);
-        assert!(!capture.load(Ordering::Relaxed));
-        assert_eq!(action_for_press(&capture, configured.clone()), configured);
-    }
-
-    #[test]
     fn runtime_events_serialize_input_state_or_null() {
         let event = RuntimeEvent {
             timestamp_ms: 1,
             level: EventLevel::Info,
-            message: "Waiting for device".into(),
             connection: ConnectionStatus::searching(),
-            gpio: None,
-            pressed: None,
+            activity: RuntimeActivity::new("device_searching"),
         };
         let value = serde_json::to_value(&event).unwrap();
-        assert!(value["gpio"].is_null());
+        assert_eq!(value["code"], "device_searching");
+        assert!(value["input"].is_null());
         assert!(value["pressed"].is_null());
 
         let down = RuntimeEvent {
-            gpio: Some(6),
-            pressed: Some(true),
+            activity: RuntimeActivity {
+                input: Some(PhysicalInput::Direct { gpio: 6 }),
+                pressed: Some(true),
+                ..RuntimeActivity::new("input_state")
+            },
             ..event.clone()
         };
-        assert_eq!(serde_json::to_value(down).unwrap()["pressed"], true);
-        let up = RuntimeEvent {
-            gpio: Some(6),
-            pressed: Some(false),
-            ..event
-        };
-        assert_eq!(serde_json::to_value(up).unwrap()["pressed"], false);
+        let value = serde_json::to_value(down).unwrap();
+        assert_eq!(value["pressed"], true);
+        assert_eq!(value["input"]["gpio"], 6);
     }
 
     #[cfg(target_os = "macos")]
