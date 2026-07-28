@@ -1,10 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::BTreeMap,
-    fs::{self, OpenOptions},
-    io::{ErrorKind, Write},
-    path::Path,
-};
+use std::{collections::BTreeMap, fs, io::ErrorKind, path::Path};
 
 pub const SUPPORTED_GPIOS: [u8; 17] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18];
 
@@ -53,27 +48,7 @@ pub fn save(path: &Path, config: &MappingConfig) -> Result<(), String> {
         .map_err(|error| format!("serialize mappings: {error}"))?;
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent).map_err(|error| format!("create {}: {error}", parent.display()))?;
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| "config path has no UTF-8 file name".to_owned())?;
-    let temporary_path = parent.join(format!(".{file_name}.tmp"));
-
-    let result = (|| -> Result<(), std::io::Error> {
-        let mut temporary = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&temporary_path)?;
-        temporary.write_all(yaml.as_bytes())?;
-        temporary.sync_all()?;
-        fs::rename(&temporary_path, path)
-    })();
-    if let Err(error) = result {
-        let _ = fs::remove_file(&temporary_path);
-        return Err(format!("save {}: {error}", path.display()));
-    }
-    Ok(())
+    crate::storage::atomic_write(path, yaml.as_bytes())
 }
 
 #[cfg(test)]

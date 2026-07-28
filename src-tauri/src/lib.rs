@@ -1,6 +1,8 @@
 mod config;
 mod device;
+mod model;
 mod protocol;
+mod storage;
 
 use config::MappingConfig;
 use device::ConnectionStatus;
