@@ -3,6 +3,7 @@ mod device;
 mod model;
 mod protocol;
 mod storage;
+mod tray;
 
 use config::{ButtonAction, IoMaps, MappingConfig, SUPPORTED_GPIOS};
 use device::ConnectionStatus;
