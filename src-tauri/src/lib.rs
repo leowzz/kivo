@@ -5,6 +5,7 @@ mod protocol;
 mod storage;
 #[cfg(target_os = "macos")]
 mod tray;
+mod workspace;
 
 use config::{ButtonAction, IoMaps, MappingConfig, SUPPORTED_GPIOS};
 use device::ConnectionStatus;
