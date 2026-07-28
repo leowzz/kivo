@@ -274,6 +274,7 @@ pub fn run() {
                 let _ = window.hide();
             }
         }
+        #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen {
             has_visible_windows: false,
             ..
