@@ -151,13 +151,14 @@ pub fn load(path: &Path) -> Result<MappingConfig, String> {
     };
     let document: ConfigDocument =
         serde_yaml_ng::from_str(&contents).map_err(|error| format!("invalid YAML: {error}"))?;
-    let config = MappingConfig {
+    let mut config = MappingConfig {
         active_model: document.active_model,
         io_maps: document.io_maps,
         actions: document.actions,
         legacy_buttons: document.buttons,
     };
     config.validate(&[])?;
+    config.migrate_legacy();
     Ok(config)
 }
 
@@ -310,6 +311,27 @@ mod tests {
             ButtonAction::Paste {
                 text: "hello".into()
             }
+        );
+        assert_eq!(config.legacy_buttons, BTreeMap::from([(7, "keep".into())]));
+    }
+
+    #[test]
+    fn loading_hybrid_config_migrates_resolvable_legacy_entries() {
+        let directory = TestDirectory::new();
+        let path = directory.path("config.yaml");
+        fs::write(
+            &path,
+            "active_model: red-phone-v1\nio_maps:\n  red-phone-v1:\n    6: DIGIT_2\nbuttons:\n  6: hello\n  7: keep\n",
+        )
+        .unwrap();
+
+        let config = load(&path).unwrap();
+
+        assert_eq!(
+            config.actions.get("DIGIT_2"),
+            Some(&ButtonAction::Paste {
+                text: "hello".into()
+            })
         );
         assert_eq!(config.legacy_buttons, BTreeMap::from([(7, "keep".into())]));
     }

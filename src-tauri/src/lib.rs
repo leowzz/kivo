@@ -63,7 +63,13 @@ fn save_mappings_inner(
     state: &AppState,
     buttons: BTreeMap<u8, String>,
 ) -> Result<AppSnapshot, String> {
-    let config = MappingConfig::from_buttons(buttons)?;
+    MappingConfig::from_buttons(buttons.clone())?;
+    let mut config = state
+        .mappings
+        .read()
+        .map_err(|_| "mapping state is unavailable")?
+        .clone();
+    config.legacy_buttons = buttons;
     config::save(&state.config_path, &config)?;
     *state
         .mappings
@@ -213,6 +219,55 @@ mod tests {
         assert_eq!(saved.buttons, buttons);
         assert_eq!(config::load(&path).unwrap().legacy_buttons, buttons);
         assert_eq!(*state.config_error.lock().unwrap(), None);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn save_mappings_preserves_typed_fields() {
+        let path = std::env::temp_dir().join(format!(
+            "vibe-tool-state-{}-{}.yaml",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let typed = config::MappingConfig {
+            active_model: "red-phone-v1".into(),
+            io_maps: BTreeMap::from([(
+                "red-phone-v1".into(),
+                BTreeMap::from([(6, "DIGIT_2".into())]),
+            )]),
+            actions: BTreeMap::from([(
+                "DIGIT_2".into(),
+                config::ButtonAction::Hotkey {
+                    keys: vec!["cmd".into(), "shift".into(), "k".into()],
+                },
+            )]),
+            legacy_buttons: BTreeMap::new(),
+        };
+        let state = AppState {
+            mappings: Arc::new(RwLock::new(typed.clone())),
+            config_path: path.clone(),
+            connection: Arc::new(RwLock::new(device::ConnectionStatus::searching())),
+            config_error: Mutex::new(None),
+            stop: Arc::new(AtomicBool::new(false)),
+            worker: Mutex::new(None),
+        };
+        let buttons = BTreeMap::from([(7, "legacy".to_owned())]);
+
+        save_mappings_inner(&state, buttons.clone()).unwrap();
+
+        let saved = state.mappings.read().unwrap().clone();
+        assert_eq!(saved.active_model, typed.active_model);
+        assert_eq!(saved.io_maps, typed.io_maps);
+        assert_eq!(saved.actions, typed.actions);
+        assert_eq!(saved.legacy_buttons, buttons);
+        let persisted = config::load(&path).unwrap();
+        assert_eq!(persisted.active_model, typed.active_model);
+        assert_eq!(persisted.io_maps, typed.io_maps);
+        assert_eq!(persisted.actions, typed.actions);
+        assert_eq!(persisted.legacy_buttons, buttons);
         fs::remove_file(path).unwrap();
     }
 
