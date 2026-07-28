@@ -6,20 +6,42 @@ pub struct Press {
     pub gpio: u8,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InputState {
+    Down,
+    Up,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InputEvent {
+    pub event_id: u64,
+    pub gpio: u8,
+    pub state: InputState,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub struct Reply {
     pub line: String,
     pub message: String,
 }
 
-pub fn parse_press(line: &str) -> Option<Press> {
+pub fn parse_input(line: &str) -> Option<InputEvent> {
     let mut parts = line.split_whitespace();
-    if parts.next()? != "PRESS" {
+    if parts.next()? != "STATE" {
         return None;
     }
     let event_id = parts.next()?.parse().ok()?;
     let gpio = parts.next()?.parse().ok()?;
-    (parts.next().is_none()).then_some(Press { event_id, gpio })
+    let state = match parts.next()? {
+        "DOWN" => InputState::Down,
+        "UP" => InputState::Up,
+        _ => return None,
+    };
+    parts.next().is_none().then_some(InputEvent {
+        event_id,
+        gpio,
+        state,
+    })
 }
 
 pub fn encode_hotkey(keys: &[String]) -> Result<(u8, u8), String> {
@@ -114,17 +136,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_only_complete_press_lines() {
+    fn parses_only_complete_input_state_lines() {
         assert_eq!(
-            parse_press("PRESS 12 6\n"),
-            Some(Press {
+            parse_input("STATE 12 6 DOWN\n"),
+            Some(InputEvent {
                 event_id: 12,
-                gpio: 6
+                gpio: 6,
+                state: InputState::Down,
             })
         );
-        assert_eq!(parse_press("PRESS nope 6\n"), None);
-        assert_eq!(parse_press("OTHER 12 6\n"), None);
-        assert_eq!(parse_press("PRESS 12 6 extra\n"), None);
+        assert_eq!(
+            parse_input("STATE 13 6 UP\n"),
+            Some(InputEvent {
+                event_id: 13,
+                gpio: 6,
+                state: InputState::Up,
+            })
+        );
+        assert_eq!(parse_input("STATE nope 6 DOWN\n"), None);
+        assert_eq!(parse_input("STATE 12 6 HELD\n"), None);
+        assert_eq!(parse_input("STATE 12 6 DOWN extra\n"), None);
+        assert_eq!(parse_input("PRESS 12 6\n"), None);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use crate::{
     config::{ButtonAction, MappingConfig},
-    protocol::{parse_press, reply},
+    protocol::{InputState, Press, parse_input, reply},
 };
 use serde::Serialize;
 use serialport::{SerialPortInfo, SerialPortType};
@@ -65,6 +65,7 @@ pub struct RuntimeEvent {
     pub message: String,
     pub connection: ConnectionStatus,
     pub gpio: Option<u8>,
+    pub pressed: Option<bool>,
 }
 
 pub fn is_target_port(port: &SerialPortInfo) -> bool {
@@ -93,6 +94,7 @@ pub fn run_worker(
                     EventLevel::Warning,
                     format!("Serial scan failed: {error}"),
                     None,
+                    None,
                 );
                 wait(&stop);
                 continue;
@@ -116,6 +118,7 @@ pub fn run_worker(
                     EventLevel::Warning,
                     format!("Open {} failed: {error}", port.port_name),
                     None,
+                    None,
                 );
                 wait(&stop);
                 continue;
@@ -138,37 +141,59 @@ pub fn run_worker(
                     let Ok(text) = std::str::from_utf8(&line) else {
                         continue;
                     };
-                    let Some(press) = parse_press(text) else {
+                    let Some(input) = parse_input(text) else {
                         continue;
                     };
-                    let action = mappings
-                        .read()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .resolved_action(press.gpio);
-                    let response = reply(
-                        press,
-                        action_for_press(&capture_next_gpio, action),
-                        copy_to_clipboard,
-                    );
-                    let level = if response.message.contains("(clipboard:") {
-                        EventLevel::Error
-                    } else {
-                        EventLevel::Info
-                    };
-                    emit(&app, &connection, level, response.message, Some(press.gpio));
-                    if let Err(error) = device
-                        .get_mut()
-                        .write_all(response.line.as_bytes())
-                        .and_then(|()| device.get_mut().flush())
-                    {
+                    if input.state == InputState::Down {
+                        let action = mappings
+                            .read()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .resolved_action(input.gpio);
+                        let response = reply(
+                            Press {
+                                event_id: input.event_id,
+                                gpio: input.gpio,
+                            },
+                            action_for_press(&capture_next_gpio, action),
+                            copy_to_clipboard,
+                        );
+                        let level = if response.message.contains("(clipboard:") {
+                            EventLevel::Error
+                        } else {
+                            EventLevel::Info
+                        };
                         emit(
                             &app,
                             &connection,
-                            EventLevel::Error,
-                            format!("Serial write failed: {error}"),
-                            None,
+                            level,
+                            response.message,
+                            Some(input.gpio),
+                            Some(true),
                         );
-                        break;
+                        if let Err(error) = device
+                            .get_mut()
+                            .write_all(response.line.as_bytes())
+                            .and_then(|()| device.get_mut().flush())
+                        {
+                            emit(
+                                &app,
+                                &connection,
+                                EventLevel::Error,
+                                format!("Serial write failed: {error}"),
+                                None,
+                                None,
+                            );
+                            break;
+                        }
+                    } else {
+                        emit(
+                            &app,
+                            &connection,
+                            EventLevel::Info,
+                            format!("GPIO{}: UP {}", input.gpio, input.event_id),
+                            Some(input.gpio),
+                            Some(false),
+                        );
                     }
                 }
                 Err(error) if error.kind() == ErrorKind::TimedOut => continue,
@@ -178,6 +203,7 @@ pub fn run_worker(
                         &connection,
                         EventLevel::Warning,
                         format!("Device disconnected: {error}"),
+                        None,
                         None,
                     );
                     break;
@@ -244,6 +270,7 @@ fn set_connection(
             EventLevel::Info,
             message.unwrap_or_else(|| "Waiting for device".to_owned()),
             None,
+            None,
         );
     }
 }
@@ -254,6 +281,7 @@ fn emit(
     level: EventLevel,
     message: String,
     gpio: Option<u8>,
+    pressed: Option<bool>,
 ) {
     let payload = RuntimeEvent {
         timestamp_ms: SystemTime::now()
@@ -267,6 +295,7 @@ fn emit(
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone(),
         gpio,
+        pressed,
     };
     let _ = app.emit("runtime-event", payload);
 }
@@ -321,20 +350,30 @@ mod tests {
     }
 
     #[test]
-    fn runtime_events_serialize_gpio_or_null() {
+    fn runtime_events_serialize_input_state_or_null() {
         let event = RuntimeEvent {
             timestamp_ms: 1,
             level: EventLevel::Info,
             message: "Waiting for device".into(),
             connection: ConnectionStatus::searching(),
             gpio: None,
+            pressed: None,
         };
-        assert!(serde_json::to_value(&event).unwrap()["gpio"].is_null());
+        let value = serde_json::to_value(&event).unwrap();
+        assert!(value["gpio"].is_null());
+        assert!(value["pressed"].is_null());
 
-        let event = RuntimeEvent {
+        let down = RuntimeEvent {
             gpio: Some(6),
+            pressed: Some(true),
+            ..event.clone()
+        };
+        assert_eq!(serde_json::to_value(down).unwrap()["pressed"], true);
+        let up = RuntimeEvent {
+            gpio: Some(6),
+            pressed: Some(false),
             ..event
         };
-        assert_eq!(serde_json::to_value(event).unwrap()["gpio"], 6);
+        assert_eq!(serde_json::to_value(up).unwrap()["pressed"], false);
     }
 }
