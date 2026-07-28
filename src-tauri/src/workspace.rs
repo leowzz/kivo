@@ -123,6 +123,42 @@ pub struct ModelConfig {
 }
 
 impl ModelConfig {
+    pub fn button_for(&self, input: &crate::protocol::PhysicalInput) -> Option<&str> {
+        let mut runtime_source = 0u8;
+        for source in &self.hardware.inputs {
+            match source {
+                InputSource::Direct { keys, .. } if !keys.is_empty() => {
+                    if let crate::protocol::PhysicalInput::Direct { gpio } = input
+                        && let Some((button, _)) = keys.iter().find(|(_, pin)| *pin == gpio)
+                    {
+                        return Some(button);
+                    }
+                    runtime_source = runtime_source.checked_add(1)?;
+                }
+                InputSource::ContactMatrix { keys, .. } if !keys.is_empty() => {
+                    if let crate::protocol::PhysicalInput::Contact {
+                        source,
+                        pin_a,
+                        pin_b,
+                    } = input
+                        && *source == runtime_source
+                    {
+                        let pair = normalized_pair(*pin_a, *pin_b);
+                        if let Some((button, _)) = keys
+                            .iter()
+                            .find(|(_, pins)| normalized_pair(pins[0], pins[1]) == pair)
+                        {
+                            return Some(button);
+                        }
+                    }
+                    runtime_source = runtime_source.checked_add(1)?;
+                }
+                InputSource::Direct { .. } | InputSource::ContactMatrix { .. } => {}
+            }
+        }
+        None
+    }
+
     pub fn validate(&self) -> Result<(), AppError> {
         if self.schema_version != MODEL_SCHEMA_VERSION {
             return Err(AppError::new("unsupported_model_schema"));

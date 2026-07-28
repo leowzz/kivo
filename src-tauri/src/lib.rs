@@ -29,6 +29,7 @@ struct AppState {
     model_directory: PathBuf,
     config_path: PathBuf,
     connection: Arc<RwLock<ConnectionStatus>>,
+    active_runtime_model: Arc<RwLock<Option<workspace::ModelConfig>>>,
     config_error: Mutex<Option<String>>,
     capture_next_gpio: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
@@ -151,6 +152,14 @@ fn save_workspace_inner(
         }
     }
     config::save(&state.config_path, &config)?;
+    let runtime_snapshot =
+        workspace::migrate_legacy(models.clone(), config.clone()).map_err(|error| error.code)?;
+    let runtime_model = runtime_snapshot
+        .settings
+        .active_model
+        .as_ref()
+        .and_then(|id| runtime_snapshot.models.get(id))
+        .cloned();
     let mut mappings_state = state
         .mappings
         .write()
@@ -161,6 +170,10 @@ fn save_workspace_inner(
         .map_err(|_| "model state is unavailable")?;
     *mappings_state = config;
     *models_state = models;
+    *state
+        .active_runtime_model
+        .write()
+        .map_err(|_| "runtime model state is unavailable")? = runtime_model;
     drop(models_state);
     drop(mappings_state);
     *state
@@ -225,8 +238,19 @@ pub fn run() {
                 config_errors.push(error);
             }
             let config_error = (!config_errors.is_empty()).then(|| config_errors.join("\n"));
+            let runtime_model = workspace::migrate_legacy(models.clone(), mappings.clone())
+                .ok()
+                .and_then(|snapshot| {
+                    snapshot
+                        .settings
+                        .active_model
+                        .as_ref()
+                        .and_then(|id| snapshot.models.get(id))
+                        .cloned()
+                });
             let mappings = Arc::new(RwLock::new(mappings));
             let models = Arc::new(RwLock::new(models));
+            let active_runtime_model = Arc::new(RwLock::new(runtime_model));
             let initial_connection = ConnectionStatus::searching();
             #[cfg(target_os = "macos")]
             tray::setup(app, &initial_connection)?;
@@ -235,12 +259,11 @@ pub fn run() {
             let stop = Arc::new(AtomicBool::new(false));
             let worker = {
                 let app_handle = app.handle().clone();
-                let mappings = Arc::clone(&mappings);
+                let active_runtime_model = Arc::clone(&active_runtime_model);
                 let connection = Arc::clone(&connection);
-                let capture_next_gpio = Arc::clone(&capture_next_gpio);
                 let stop = Arc::clone(&stop);
                 thread::spawn(move || {
-                    device::run_worker(app_handle, mappings, connection, capture_next_gpio, stop)
+                    device::run_worker(app_handle, active_runtime_model, connection, stop)
                 })
             };
             app.manage(AppState {
@@ -249,6 +272,7 @@ pub fn run() {
                 model_directory,
                 config_path,
                 connection,
+                active_runtime_model,
                 config_error: Mutex::new(config_error),
                 capture_next_gpio,
                 stop,
@@ -333,6 +357,7 @@ mod tests {
             model_directory: directory.join("models"),
             config_path: directory.join("config.yaml"),
             connection: Arc::new(RwLock::new(device::ConnectionStatus::searching())),
+            active_runtime_model: Arc::new(RwLock::new(None)),
             config_error: Mutex::new(Some("old error".to_owned())),
             capture_next_gpio: Arc::new(AtomicBool::new(false)),
             stop: Arc::new(AtomicBool::new(false)),

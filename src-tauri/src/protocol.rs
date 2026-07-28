@@ -1,47 +1,337 @@
-use crate::config::ButtonAction;
+use crate::{
+    config::ButtonAction,
+    workspace::{InputSource, ModelConfig},
+};
+use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Press {
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum PhysicalInput {
+    Direct { gpio: u8 },
+    Contact { source: u8, pin_a: u8, pin_b: u8 },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DeviceMessage {
+    Hello {
+        protocol: u16,
+        platform: String,
+        pins: Vec<u8>,
+    },
+    ConfigOk {
+        revision: u32,
+    },
+    ConfigError {
+        revision: u32,
+        code: String,
+    },
+    State {
+        event_id: u64,
+        input: PhysicalInput,
+        state: InputState,
+    },
+    Done {
+        event_id: u64,
+        step: u16,
+    },
+    LearnOk {
+        revision: u32,
+    },
+    LearnDirect {
+        gpio: u8,
+        state: InputState,
+    },
+    LearnContact {
+        pin_a: u8,
+        pin_b: u8,
+        state: InputState,
+    },
+}
+
+pub fn parse_device(line: &str) -> Option<DeviceMessage> {
+    if line.len() > 255 {
+        return None;
+    }
+    let parts = line.split_whitespace().collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["HELLO", protocol, platform, count, pins @ ..] => {
+            let protocol = protocol.parse().ok()?;
+            let count = count.parse::<usize>().ok()?;
+            let pins = pins
+                .iter()
+                .map(|pin| pin.parse::<u8>())
+                .collect::<Result<Vec<_>, _>>()
+                .ok()?;
+            (count == pins.len() && pins.iter().copied().collect::<BTreeSet<_>>().len() == count)
+                .then(|| DeviceMessage::Hello {
+                    protocol,
+                    platform: (*platform).to_owned(),
+                    pins,
+                })
+        }
+        ["CONFIG_OK", revision] => Some(DeviceMessage::ConfigOk {
+            revision: revision.parse().ok()?,
+        }),
+        ["CONFIG_ERROR", revision, code] => Some(DeviceMessage::ConfigError {
+            revision: revision.parse().ok()?,
+            code: (*code).to_owned(),
+        }),
+        ["STATE", event_id, "DIRECT", gpio, state] => {
+            let event_id = event_id.parse().ok()?;
+            (event_id > 0).then_some(DeviceMessage::State {
+                event_id,
+                input: PhysicalInput::Direct {
+                    gpio: gpio.parse().ok()?,
+                },
+                state: parse_state(state)?,
+            })
+        }
+        ["STATE", event_id, "CONTACT", source, pin_a, pin_b, state] => {
+            let event_id = event_id.parse().ok()?;
+            let (pin_a, pin_b) = normalized_pair(pin_a.parse().ok()?, pin_b.parse().ok()?);
+            if event_id == 0 || pin_a == pin_b {
+                return None;
+            }
+            Some(DeviceMessage::State {
+                event_id,
+                input: PhysicalInput::Contact {
+                    source: source.parse().ok()?,
+                    pin_a,
+                    pin_b,
+                },
+                state: parse_state(state)?,
+            })
+        }
+        ["DONE", event_id, step] => {
+            let event_id = event_id.parse().ok()?;
+            let step = step.parse().ok()?;
+            (event_id > 0 && step > 0).then_some(DeviceMessage::Done { event_id, step })
+        }
+        ["LEARN_OK", revision] => Some(DeviceMessage::LearnOk {
+            revision: revision.parse().ok()?,
+        }),
+        ["LEARN_DIRECT", gpio, state] => Some(DeviceMessage::LearnDirect {
+            gpio: gpio.parse().ok()?,
+            state: parse_state(state)?,
+        }),
+        ["LEARN_CONTACT", pin_a, pin_b, state] => {
+            let (pin_a, pin_b) = normalized_pair(pin_a.parse().ok()?, pin_b.parse().ok()?);
+            Some(DeviceMessage::LearnContact {
+                pin_a,
+                pin_b,
+                state: parse_state(state)?,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn parse_state(value: &str) -> Option<InputState> {
+    match value {
+        "DOWN" => Some(InputState::Down),
+        "UP" => Some(InputState::Up),
+        _ => None,
+    }
+}
+
+fn normalized_pair(left: u8, right: u8) -> (u8, u8) {
+    if left < right {
+        (left, right)
+    } else {
+        (right, left)
+    }
+}
+
+pub fn topology_commands(model: &ModelConfig, revision: u32) -> Result<Vec<String>, String> {
+    model.validate().map_err(|error| error.code)?;
+    let mut lines = vec![format!(
+        "CONFIG_BEGIN {revision} {}\n",
+        model.hardware.debounce_ms
+    )];
+    let mut source_index = 0u8;
+    for input in &model.hardware.inputs {
+        match input {
+            InputSource::Direct { keys, .. } if !keys.is_empty() => {
+                let pins = keys.values().copied().collect::<BTreeSet<_>>();
+                lines.push(format!(
+                    "CONFIG_DIRECT {revision} {source_index} {} {}\n",
+                    pins.len(),
+                    join_pins(pins.iter().copied())
+                ));
+                source_index = source_index
+                    .checked_add(1)
+                    .ok_or_else(|| "too_many_input_sources".to_owned())?;
+            }
+            InputSource::ContactMatrix { keys, .. } if !keys.is_empty() => {
+                let (rows, columns) = matrix_partitions(keys.values().copied());
+                lines.push(format!(
+                    "CONFIG_MATRIX {revision} {source_index} {} {} {} {}\n",
+                    rows.len(),
+                    join_pins(rows.iter().copied()),
+                    columns.len(),
+                    join_pins(columns.iter().copied())
+                ));
+                source_index = source_index
+                    .checked_add(1)
+                    .ok_or_else(|| "too_many_input_sources".to_owned())?;
+            }
+            InputSource::Direct { .. } | InputSource::ContactMatrix { .. } => {}
+        }
+    }
+    lines.push(format!("CONFIG_COMMIT {revision}\n"));
+    Ok(lines)
+}
+
+fn matrix_partitions(pairs: impl IntoIterator<Item = [u8; 2]>) -> (Vec<u8>, Vec<u8>) {
+    let mut neighbors: BTreeMap<u8, Vec<u8>> = BTreeMap::new();
+    for [left, right] in pairs {
+        neighbors.entry(left).or_default().push(right);
+        neighbors.entry(right).or_default().push(left);
+    }
+    let mut colors = BTreeMap::new();
+    for &start in neighbors.keys() {
+        if colors.contains_key(&start) {
+            continue;
+        }
+        colors.insert(start, false);
+        let mut queue = VecDeque::from([start]);
+        while let Some(pin) = queue.pop_front() {
+            let color = colors[&pin];
+            for &neighbor in &neighbors[&pin] {
+                if let std::collections::btree_map::Entry::Vacant(entry) = colors.entry(neighbor) {
+                    entry.insert(!color);
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+    }
+    colors.into_iter().fold(
+        (Vec::new(), Vec::new()),
+        |(mut rows, mut columns), (pin, column)| {
+            if column {
+                columns.push(pin);
+            } else {
+                rows.push(pin);
+            }
+            (rows, columns)
+        },
+    )
+}
+
+fn join_pins(pins: impl Iterator<Item = u8>) -> String {
+    pins.map(|pin| pin.to_string())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActionStep {
     pub event_id: u64,
-    pub gpio: u8,
+    pub button: String,
+    pub step: u16,
+    pub total: u16,
+    pub action: ButtonAction,
+}
+
+impl ActionStep {
+    pub fn command(&self, copy: impl FnOnce(&str) -> Result<(), String>) -> Result<String, String> {
+        match &self.action {
+            ButtonAction::Paste { text } => {
+                copy(text)?;
+                if cfg!(target_os = "macos") {
+                    Ok(format!(
+                        "PASTE {} {} {}\n",
+                        self.event_id, self.step, self.total
+                    ))
+                } else {
+                    Ok(format!(
+                        "HOTKEY {} {} {} 1 25\n",
+                        self.event_id, self.step, self.total
+                    ))
+                }
+            }
+            ButtonAction::Hotkey { keys } => {
+                let (modifiers, keycode) = encode_hotkey(keys)?;
+                Ok(format!(
+                    "HOTKEY {} {} {} {modifiers} {keycode}\n",
+                    self.event_id, self.step, self.total
+                ))
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ActionSequence {
+    event_id: u64,
+    button: String,
+    actions: Vec<ButtonAction>,
+    next: usize,
+    awaiting: Option<u16>,
+    failed: bool,
+}
+
+impl ActionSequence {
+    pub fn new(event_id: u64, button: String, actions: Vec<ButtonAction>) -> Self {
+        Self {
+            event_id,
+            button,
+            actions,
+            next: 0,
+            awaiting: None,
+            failed: false,
+        }
+    }
+
+    pub fn next_step(&mut self) -> Option<ActionStep> {
+        if self.failed || self.awaiting.is_some() || self.next >= self.actions.len() {
+            return None;
+        }
+        let step = u16::try_from(self.next + 1).ok()?;
+        let total = u16::try_from(self.actions.len()).ok()?;
+        self.awaiting = Some(step);
+        Some(ActionStep {
+            event_id: self.event_id,
+            button: self.button.clone(),
+            step,
+            total,
+            action: self.actions[self.next].clone(),
+        })
+    }
+
+    pub fn acknowledge(&mut self, event_id: u64, step: u16) -> Result<(), String> {
+        if event_id != self.event_id || self.awaiting != Some(step) {
+            self.failed = true;
+            return Err("invalid_action_acknowledgement".into());
+        }
+        self.awaiting = None;
+        self.next += 1;
+        Ok(())
+    }
+
+    pub fn abort(&mut self) {
+        self.failed = true;
+        self.awaiting = None;
+    }
+
+    pub fn event_id(&self) -> u64 {
+        self.event_id
+    }
+
+    pub fn is_complete(&self) -> bool {
+        !self.failed && self.next == self.actions.len() && self.awaiting.is_none()
+    }
+
+    pub fn is_waiting(&self) -> bool {
+        self.awaiting.is_some() && !self.failed
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InputState {
     Down,
     Up,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct InputEvent {
-    pub event_id: u64,
-    pub gpio: u8,
-    pub state: InputState,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub struct Reply {
-    pub line: String,
-    pub message: String,
-}
-
-pub fn parse_input(line: &str) -> Option<InputEvent> {
-    let mut parts = line.split_whitespace();
-    if parts.next()? != "STATE" {
-        return None;
-    }
-    let event_id = parts.next()?.parse().ok()?;
-    let gpio = parts.next()?.parse().ok()?;
-    let state = match parts.next()? {
-        "DOWN" => InputState::Down,
-        "UP" => InputState::Up,
-        _ => return None,
-    };
-    parts.next().is_none().then_some(InputEvent {
-        event_id,
-        gpio,
-        state,
-    })
 }
 
 pub fn encode_hotkey(keys: &[String]) -> Result<(u8, u8), String> {
@@ -92,137 +382,123 @@ pub fn encode_hotkey(keys: &[String]) -> Result<(u8, u8), String> {
         .ok_or_else(|| "hotkey must have exactly one ordinary key".into())
 }
 
-pub fn reply(
-    press: Press,
-    action: Option<ButtonAction>,
-    copy: impl FnOnce(&str) -> Result<(), String>,
-) -> Reply {
-    match action {
-        Some(ButtonAction::Paste { text }) => match copy(&text) {
-            Ok(()) => Reply {
-                line: if cfg!(target_os = "macos") {
-                    format!("PASTE {}\n", press.event_id)
-                } else {
-                    format!("HOTKEY {} 1 25\n", press.event_id)
-                },
-                message: format!("GPIO{}: PASTE {}", press.gpio, press.event_id),
-            },
-            Err(error) => Reply {
-                line: format!("SKIP {}\n", press.event_id),
-                message: format!(
-                    "GPIO{}: SKIP {} (clipboard: {error})",
-                    press.gpio, press.event_id
-                ),
-            },
-        },
-        Some(ButtonAction::Hotkey { keys }) => match encode_hotkey(&keys) {
-            Ok((modifiers, keycode)) => Reply {
-                line: format!("HOTKEY {} {modifiers} {keycode}\n", press.event_id),
-                message: format!("GPIO{}: HOTKEY {}", press.gpio, press.event_id),
-            },
-            Err(error) => Reply {
-                line: format!("SKIP {}\n", press.event_id),
-                message: format!(
-                    "GPIO{}: SKIP {} (hotkey: {error})",
-                    press.gpio, press.event_id
-                ),
-            },
-        },
-        None => Reply {
-            line: format!("SKIP {}\n", press.event_id),
-            message: format!("GPIO{}: SKIP {}", press.gpio, press.event_id),
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        model::{ButtonDefinition, ButtonGroup, ModelLayout},
+        workspace::{HardwareConfig, InputSource, MODEL_SCHEMA_VERSION, ModelConfig},
+    };
+    use std::collections::BTreeMap;
+
+    fn model_config() -> ModelConfig {
+        ModelConfig {
+            schema_version: MODEL_SCHEMA_VERSION,
+            model: ModelLayout {
+                id: "phone".into(),
+                name: "电话".into(),
+                groups: vec![ButtonGroup {
+                    id: "keys".into(),
+                    columns: 2,
+                    buttons: vec![
+                        ButtonDefinition {
+                            id: "A".into(),
+                            label: "甲".into(),
+                        },
+                        ButtonDefinition {
+                            id: "B".into(),
+                            label: "乙".into(),
+                        },
+                    ],
+                }],
+            },
+            hardware: HardwareConfig {
+                controller: "esp32s3".into(),
+                debounce_ms: 30,
+                inputs: vec![InputSource::ContactMatrix {
+                    id: "matrix".into(),
+                    pins: vec![1, 2, 12, 13],
+                    keys: BTreeMap::from([("A".into(), [1, 12]), ("B".into(), [2, 13])]),
+                }],
+            },
+            actions: BTreeMap::from([(
+                "A".into(),
+                vec![
+                    ButtonAction::Paste {
+                        text: "第一步".into(),
+                    },
+                    ButtonAction::Paste {
+                        text: "第二步".into(),
+                    },
+                ],
+            )]),
+            legacy: None,
+        }
+    }
 
     #[test]
-    fn parses_only_complete_input_state_lines() {
+    fn parses_contact_state_and_done() {
         assert_eq!(
-            parse_input("STATE 12 6 DOWN\n"),
-            Some(InputEvent {
-                event_id: 12,
-                gpio: 6,
+            parse_device("STATE 9 CONTACT 0 12 1 DOWN\n"),
+            Some(DeviceMessage::State {
+                event_id: 9,
+                input: PhysicalInput::Contact {
+                    source: 0,
+                    pin_a: 1,
+                    pin_b: 12,
+                },
                 state: InputState::Down,
             })
         );
         assert_eq!(
-            parse_input("STATE 13 6 UP\n"),
-            Some(InputEvent {
-                event_id: 13,
-                gpio: 6,
-                state: InputState::Up,
+            parse_device("DONE 9 2\n"),
+            Some(DeviceMessage::Done {
+                event_id: 9,
+                step: 2,
             })
         );
-        assert_eq!(parse_input("STATE nope 6 DOWN\n"), None);
-        assert_eq!(parse_input("STATE 12 6 HELD\n"), None);
-        assert_eq!(parse_input("STATE 12 6 DOWN extra\n"), None);
-        assert_eq!(parse_input("PRESS 12 6\n"), None);
     }
 
     #[test]
-    fn paste_action_uses_native_device_paste_on_macos() {
-        let mut copied = String::new();
-
-        let response = reply(
-            Press {
-                event_id: 12,
-                gpio: 6,
-            },
-            Some(ButtonAction::Paste {
-                text: "中文\nsecond".into(),
-            }),
-            |text| {
-                copied = text.to_owned();
-                Ok(())
-            },
-        );
-
-        assert_eq!(copied, "中文\nsecond");
-        let line = if cfg!(target_os = "macos") {
-            "PASTE 12\n"
-        } else {
-            "HOTKEY 12 1 25\n"
-        };
-        assert_eq!(response.line, line);
-        assert_eq!(response.message, "GPIO6: PASTE 12");
+    fn rejects_malformed_device_lines() {
+        assert!(parse_device("HELLO 2 esp32s3 2 1\n").is_none());
+        assert!(parse_device("HELLO 2 esp32s3 2 1 1\n").is_none());
+        assert!(parse_device("STATE 9 DIRECT 6 DOWN trailing\n").is_none());
+        assert!(parse_device("STATE 9 CONTACT 0 1 1 DOWN\n").is_none());
+        assert!(parse_device("DONE 9 0\n").is_none());
+        assert!(parse_device(&"x".repeat(256)).is_none());
     }
 
     #[test]
-    fn unmapped_press_is_skipped_without_clipboard_access() {
-        let response = reply(
-            Press {
-                event_id: 12,
-                gpio: 7,
-            },
-            None,
-            |_| panic!("clipboard must not be called"),
-        );
+    fn waits_for_done_before_returning_the_next_action() {
+        let model = model_config();
+        let actions = model.actions["A"].clone();
+        let mut sequence = ActionSequence::new(9, "A".into(), actions);
 
-        assert_eq!(response.line, "SKIP 12\n");
-        assert_eq!(response.message, "GPIO7: SKIP 12");
+        assert_eq!(sequence.next_step().unwrap().step, 1);
+        assert!(sequence.next_step().is_none());
+        sequence.acknowledge(9, 1).unwrap();
+        assert_eq!(sequence.next_step().unwrap().step, 2);
     }
 
     #[test]
-    fn clipboard_failure_is_skipped() {
-        let response = reply(
-            Press {
-                event_id: 12,
-                gpio: 6,
-            },
-            Some(ButtonAction::Paste {
-                text: "hello".into(),
-            }),
-            |_| Err("pbcopy exited 1".to_owned()),
-        );
-
-        assert_eq!(response.line, "SKIP 12\n");
+    fn builds_matrix_topology_and_resolves_normalized_contact() {
+        let model = model_config();
         assert_eq!(
-            response.message,
-            "GPIO6: SKIP 12 (clipboard: pbcopy exited 1)"
+            topology_commands(&model, 7).unwrap(),
+            vec![
+                "CONFIG_BEGIN 7 30\n",
+                "CONFIG_MATRIX 7 0 2 1 2 2 12 13\n",
+                "CONFIG_COMMIT 7\n",
+            ]
+        );
+        assert_eq!(
+            model.button_for(&PhysicalInput::Contact {
+                source: 0,
+                pin_a: 12,
+                pin_b: 1,
+            }),
+            Some("A")
         );
     }
 
@@ -249,25 +525,5 @@ mod tests {
                 "{keys:?} must be rejected"
             );
         }
-    }
-
-    #[test]
-    fn hotkey_action_requests_hardware_shortcut() {
-        let hotkey = Some(ButtonAction::Hotkey {
-            keys: vec!["cmd".into(), "shift".into(), "k".into()],
-        });
-
-        assert_eq!(
-            reply(
-                Press {
-                    event_id: 12,
-                    gpio: 6
-                },
-                hotkey,
-                |_| Ok(())
-            )
-            .line,
-            "HOTKEY 12 10 14\n"
-        );
     }
 }
