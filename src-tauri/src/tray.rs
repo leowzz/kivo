@@ -47,12 +47,16 @@ pub fn setup(app: &mut App, initial: &ConnectionStatus) -> tauri::Result<()> {
 }
 
 pub fn update_connection(app: &AppHandle, connection: &ConnectionStatus) {
-    let Some(state) = app.try_state::<TrayState>() else {
-        return;
-    };
     let label = status_label(connection);
-    let _ = state.status.set_text(&label);
-    let _ = state.tray.set_tooltip(Some(format!("Vibe Tool - {label}")));
+    let app = app.clone();
+    let state_app = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let Some(state) = state_app.try_state::<TrayState>() else {
+            return;
+        };
+        let _ = state.status.set_text(&label);
+        let _ = state.tray.set_tooltip(Some(format!("Vibe Tool - {label}")));
+    });
 }
 
 fn handle_action(app: &AppHandle, action: TrayAction) {
