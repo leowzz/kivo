@@ -1,5 +1,5 @@
 use crate::{
-    config::MappingConfig,
+    config::{ButtonAction, MappingConfig},
     protocol::{parse_press, reply},
 };
 use serde::Serialize;
@@ -64,6 +64,7 @@ pub struct RuntimeEvent {
     pub level: EventLevel,
     pub message: String,
     pub connection: ConnectionStatus,
+    pub gpio: Option<u8>,
 }
 
 pub fn is_target_port(port: &SerialPortInfo) -> bool {
@@ -79,6 +80,7 @@ pub fn run_worker(
     app: AppHandle,
     mappings: Arc<RwLock<MappingConfig>>,
     connection: Arc<RwLock<ConnectionStatus>>,
+    capture_next_gpio: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
 ) {
     while !stop.load(Ordering::Relaxed) {
@@ -90,6 +92,7 @@ pub fn run_worker(
                     &connection,
                     EventLevel::Warning,
                     format!("Serial scan failed: {error}"),
+                    None,
                 );
                 wait(&stop);
                 continue;
@@ -112,6 +115,7 @@ pub fn run_worker(
                     &connection,
                     EventLevel::Warning,
                     format!("Open {} failed: {error}", port.port_name),
+                    None,
                 );
                 wait(&stop);
                 continue;
@@ -141,7 +145,17 @@ pub fn run_worker(
                         .read()
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
                         .resolved_action(press.gpio);
-                    let response = reply(press, action, copy_to_clipboard);
+                    let response = reply(
+                        press,
+                        action_for_press(&capture_next_gpio, action),
+                        copy_to_clipboard,
+                    );
+                    let level = if response.message.contains("(clipboard:") {
+                        EventLevel::Error
+                    } else {
+                        EventLevel::Info
+                    };
+                    emit(&app, &connection, level, response.message, Some(press.gpio));
                     if let Err(error) = device
                         .get_mut()
                         .write_all(response.line.as_bytes())
@@ -152,15 +166,10 @@ pub fn run_worker(
                             &connection,
                             EventLevel::Error,
                             format!("Serial write failed: {error}"),
+                            None,
                         );
                         break;
                     }
-                    let level = if response.message.contains("(clipboard:") {
-                        EventLevel::Error
-                    } else {
-                        EventLevel::Info
-                    };
-                    emit(&app, &connection, level, response.message);
                 }
                 Err(error) if error.kind() == ErrorKind::TimedOut => continue,
                 Err(error) => {
@@ -169,12 +178,24 @@ pub fn run_worker(
                         &connection,
                         EventLevel::Warning,
                         format!("Device disconnected: {error}"),
+                        None,
                     );
                     break;
                 }
             }
         }
         set_connection(&app, &connection, ConnectionStatus::searching(), None);
+    }
+}
+
+fn action_for_press(
+    capture_next_gpio: &AtomicBool,
+    configured: Option<ButtonAction>,
+) -> Option<ButtonAction> {
+    if capture_next_gpio.swap(false, Ordering::Relaxed) {
+        None
+    } else {
+        configured
     }
 }
 
@@ -222,6 +243,7 @@ fn set_connection(
             connection,
             EventLevel::Info,
             message.unwrap_or_else(|| "Waiting for device".to_owned()),
+            None,
         );
     }
 }
@@ -231,6 +253,7 @@ fn emit(
     connection: &RwLock<ConnectionStatus>,
     level: EventLevel,
     message: String,
+    gpio: Option<u8>,
 ) {
     let payload = RuntimeEvent {
         timestamp_ms: SystemTime::now()
@@ -243,6 +266,7 @@ fn emit(
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone(),
+        gpio,
     };
     let _ = app.emit("runtime-event", payload);
 }
@@ -259,6 +283,7 @@ fn wait(stop: &AtomicBool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ButtonAction;
     use serialport::{SerialPortInfo, SerialPortType, UsbPortInfo};
 
     fn usb_port(vid: u16, product: &str) -> SerialPortInfo {
@@ -283,5 +308,33 @@ mod tests {
             port_name: "/dev/cu.Bluetooth".to_owned(),
             port_type: SerialPortType::BluetoothPort,
         }));
+    }
+
+    #[test]
+    fn capture_skips_action_and_clears_itself() {
+        let capture = AtomicBool::new(true);
+        let configured = Some(ButtonAction::Paste { text: "x".into() });
+
+        assert_eq!(action_for_press(&capture, configured.clone()), None);
+        assert!(!capture.load(Ordering::Relaxed));
+        assert_eq!(action_for_press(&capture, configured.clone()), configured);
+    }
+
+    #[test]
+    fn runtime_events_serialize_gpio_or_null() {
+        let event = RuntimeEvent {
+            timestamp_ms: 1,
+            level: EventLevel::Info,
+            message: "Waiting for device".into(),
+            connection: ConnectionStatus::searching(),
+            gpio: None,
+        };
+        assert!(serde_json::to_value(&event).unwrap()["gpio"].is_null());
+
+        let event = RuntimeEvent {
+            gpio: Some(6),
+            ..event
+        };
+        assert_eq!(serde_json::to_value(event).unwrap()["gpio"], 6);
     }
 }
