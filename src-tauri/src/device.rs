@@ -11,7 +11,7 @@ use std::{
     io::{BufRead, BufReader, ErrorKind, Write},
     process::{Command, Stdio},
     sync::{
-        Arc, RwLock,
+        Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -397,6 +397,21 @@ pub struct ConnectionStatus {
     pub port: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceCapabilities {
+    pub protocol: u16,
+    pub platform: String,
+    pub pins: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LearningSession {
+    pub revision: u32,
+    pub pins: Vec<u8>,
+}
+
 impl ConnectionStatus {
     pub fn searching() -> Self {
         Self {
@@ -413,12 +428,23 @@ impl ConnectionStatus {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EventLevel {
     Info,
     Warning,
     Error,
+}
+
+#[derive(Clone)]
+pub struct WorkerState {
+    pub active_model: Arc<RwLock<Option<ModelConfig>>>,
+    pub connection: Arc<RwLock<ConnectionStatus>>,
+    pub capabilities: Arc<RwLock<Option<DeviceCapabilities>>>,
+    pub runtime_error: Arc<RwLock<Option<RuntimeActivity>>>,
+    pub learning: Arc<RwLock<Option<LearningSession>>>,
+    pub controls: Arc<Mutex<VecDeque<String>>>,
+    pub stop: Arc<AtomicBool>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -440,12 +466,16 @@ pub fn is_target_port(port: &SerialPortInfo) -> bool {
     )
 }
 
-pub fn run_worker(
-    app: AppHandle,
-    active_model: Arc<RwLock<Option<ModelConfig>>>,
-    connection: Arc<RwLock<ConnectionStatus>>,
-    stop: Arc<AtomicBool>,
-) {
+pub fn run_worker(app: AppHandle, state: WorkerState) {
+    let WorkerState {
+        active_model,
+        connection,
+        capabilities,
+        runtime_error,
+        learning,
+        controls,
+        stop,
+    } = state;
     while !stop.load(Ordering::Relaxed) {
         let port = match serialport::available_ports() {
             Ok(ports) => ports.into_iter().find(is_target_port),
@@ -461,6 +491,7 @@ pub fn run_worker(
             }
         };
         let Some(port) = port else {
+            clear_device_state(&capabilities, &learning, &controls);
             set_connection(
                 &app,
                 &connection,
@@ -524,7 +555,7 @@ pub fn run_worker(
             if next_model != loaded_model {
                 loaded_model = next_model.clone();
                 let output = session.replace_model(next_model);
-                match write_output(&app, &connection, device.get_mut(), output) {
+                match write_output(&app, &connection, &runtime_error, device.get_mut(), output) {
                     Ok(sent_action) => {
                         update_action_deadline(&mut action_deadline, &session, sent_action)
                     }
@@ -537,10 +568,33 @@ pub fn run_worker(
             if action_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 let output =
                     session.fail_active("action_ack_timeout", None, &mut copy_to_clipboard);
-                match write_output(&app, &connection, device.get_mut(), output) {
+                match write_output(&app, &connection, &runtime_error, device.get_mut(), output) {
                     Ok(sent_action) => {
                         update_action_deadline(&mut action_deadline, &session, sent_action)
                     }
+                    Err(error) => {
+                        emit_serial_write_error(&app, &connection, error);
+                        break;
+                    }
+                }
+            }
+            let control_lines = controls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .drain(..)
+                .collect::<Vec<_>>();
+            if !control_lines.is_empty() {
+                match write_output(
+                    &app,
+                    &connection,
+                    &runtime_error,
+                    device.get_mut(),
+                    SessionOutput {
+                        lines: control_lines,
+                        activities: Vec::new(),
+                    },
+                ) {
+                    Ok(_) => {}
                     Err(error) => {
                         emit_serial_write_error(&app, &connection, error);
                         break;
@@ -557,8 +611,24 @@ pub fn run_worker(
                     let Some(message) = parse_device(text) else {
                         continue;
                     };
+                    if let DeviceMessage::Hello {
+                        protocol,
+                        platform,
+                        pins,
+                    } = &message
+                    {
+                        *capabilities
+                            .write()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                            Some(DeviceCapabilities {
+                                protocol: *protocol,
+                                platform: platform.clone(),
+                                pins: pins.clone(),
+                            });
+                    }
                     let output = session.on_message(message, &mut copy_to_clipboard);
-                    match write_output(&app, &connection, device.get_mut(), output) {
+                    match write_output(&app, &connection, &runtime_error, device.get_mut(), output)
+                    {
                         Ok(sent_action) => {
                             update_action_deadline(&mut action_deadline, &session, sent_action)
                         }
@@ -580,6 +650,7 @@ pub fn run_worker(
                 }
             }
         }
+        clear_device_state(&capabilities, &learning, &controls);
         set_connection(
             &app,
             &connection,
@@ -592,19 +663,21 @@ pub fn run_worker(
 fn write_output<W: Write + ?Sized>(
     app: &AppHandle,
     connection: &RwLock<ConnectionStatus>,
+    runtime_error: &RwLock<Option<RuntimeActivity>>,
     writer: &mut W,
     output: SessionOutput,
 ) -> std::io::Result<bool> {
     for activity in output.activities {
-        let level = if activity.code.ends_with("failed")
-            || activity.code.ends_with("timeout")
-            || activity.code.contains("mismatch")
-            || activity.code.contains("rejected")
-        {
-            EventLevel::Error
-        } else {
-            EventLevel::Info
-        };
+        let level = activity_level(&activity.code);
+        if level == EventLevel::Error {
+            *runtime_error
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(activity.clone());
+        } else if activity.code == "topology_active" {
+            *runtime_error
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        }
         emit_activity(app, connection, level, activity);
     }
     let sent_action = output
@@ -616,6 +689,37 @@ fn write_output<W: Write + ?Sized>(
     }
     writer.flush()?;
     Ok(sent_action)
+}
+
+fn activity_level(code: &str) -> EventLevel {
+    match code {
+        "topology_active" | "input_state" | "learning_ready" | "learning_input" => {
+            EventLevel::Info
+        }
+        "input_before_configuration"
+        | "unexpected_action_acknowledgement"
+        | "unmapped_input"
+        | "empty_action_list"
+        | "no_active_model" => EventLevel::Warning,
+        _ => EventLevel::Error,
+    }
+}
+
+fn clear_device_state(
+    capabilities: &RwLock<Option<DeviceCapabilities>>,
+    learning: &RwLock<Option<LearningSession>>,
+    controls: &Mutex<VecDeque<String>>,
+) {
+    *capabilities
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    *learning
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    controls
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clear();
 }
 
 fn update_action_deadline(

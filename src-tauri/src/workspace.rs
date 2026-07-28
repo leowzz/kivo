@@ -24,8 +24,20 @@ pub struct AppError {
     pub detail: Option<String>,
 }
 
+impl std::fmt::Display for AppError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(detail) = &self.detail {
+            write!(formatter, "{}: {detail}", self.code)
+        } else {
+            formatter.write_str(&self.code)
+        }
+    }
+}
+
+impl std::error::Error for AppError {}
+
 impl AppError {
-    fn new(code: impl Into<String>) -> Self {
+    pub(crate) fn new(code: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             params: BTreeMap::new(),
@@ -33,12 +45,12 @@ impl AppError {
         }
     }
 
-    fn with_param(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+    pub(crate) fn with_param(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.params.insert(key.into(), value.into());
         self
     }
 
-    fn with_detail(mut self, detail: impl Into<String>) -> Self {
+    pub(crate) fn with_detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
         self
     }
@@ -397,11 +409,7 @@ impl Workspace {
                 return Err(AppError::new("load_legacy_models").with_detail(errors.join("; ")));
             }
             let snapshot = migrate_legacy(layouts, legacy_config)?;
-            write_data_directory(
-                &config_directory.join("data"),
-                &snapshot.settings,
-                &snapshot.models,
-            )?;
+            write_new_data_directory(config_directory, &snapshot.settings, &snapshot.models)?;
             return Ok(Self {
                 config_directory: config_directory.to_owned(),
                 settings: snapshot.settings,
@@ -425,7 +433,7 @@ impl Workspace {
             active_model: models.keys().next().cloned(),
             ..SettingsDocument::default()
         };
-        write_data_directory(&config_directory.join("data"), &settings, &models)?;
+        write_new_data_directory(config_directory, &settings, &models)?;
         Ok(Self {
             config_directory: config_directory.to_owned(),
             settings,
@@ -481,6 +489,21 @@ impl Workspace {
         let path = self
             .model_directory()
             .join(format!("{}.yaml", model.model.id));
+        if self.models.is_empty() {
+            write_yaml(&path, &model)?;
+            let settings = SettingsDocument {
+                active_model: Some(model.model.id.clone()),
+                ..self.settings.clone()
+            };
+            if let Err(error) = write_yaml(&self.data_directory().join("settings.yaml"), &settings)
+            {
+                let _ = fs::remove_file(path);
+                return Err(error);
+            }
+            self.settings = settings;
+            self.models.insert(model.model.id.clone(), model);
+            return Ok(());
+        }
         write_yaml(&path, &model)?;
         self.models.insert(model.model.id.clone(), model);
         Ok(())
@@ -509,25 +532,7 @@ impl Workspace {
     pub fn import_model(&mut self, path: &Path) -> Result<(), AppError> {
         let model: ModelConfig = read_yaml_limited(path)?;
         model.validate()?;
-        if !self.models.is_empty() {
-            return self.save_model(model);
-        }
-
-        let model_path = self
-            .model_directory()
-            .join(format!("{}.yaml", model.model.id));
-        write_yaml(&model_path, &model)?;
-        let settings = SettingsDocument {
-            active_model: Some(model.model.id.clone()),
-            ..self.settings.clone()
-        };
-        if let Err(error) = write_yaml(&self.data_directory().join("settings.yaml"), &settings) {
-            let _ = fs::remove_file(model_path);
-            return Err(error);
-        }
-        self.models.insert(model.model.id.clone(), model);
-        self.settings = settings;
-        Ok(())
+        self.save_model(model)
     }
 
     pub fn export_model(&self, id: &str, path: &Path) -> Result<(), AppError> {
@@ -783,6 +788,19 @@ fn write_data_directory(
         )?;
     }
     write_yaml(&data_directory.join("settings.yaml"), settings)
+}
+
+fn write_new_data_directory(
+    config_directory: &Path,
+    settings: &SettingsDocument,
+    models: &BTreeMap<String, ModelConfig>,
+) -> Result<(), AppError> {
+    let next_directory = config_directory.join("data.next");
+    remove_directory_if_exists(&next_directory)?;
+    write_data_directory(&next_directory, settings, models)?;
+    let data_directory = config_directory.join("data");
+    fs::rename(&next_directory, &data_directory)
+        .map_err(|error| io_error("activate_data", &data_directory, error))
 }
 
 fn read_yaml<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, AppError> {
