@@ -3,6 +3,7 @@ mod device;
 mod model;
 mod protocol;
 mod storage;
+#[cfg(target_os = "macos")]
 mod tray;
 
 use config::{ButtonAction, IoMaps, MappingConfig, SUPPORTED_GPIOS};
@@ -226,6 +227,7 @@ pub fn run() {
             let mappings = Arc::new(RwLock::new(mappings));
             let models = Arc::new(RwLock::new(models));
             let initial_connection = ConnectionStatus::searching();
+            #[cfg(target_os = "macos")]
             tray::setup(app, &initial_connection)?;
             let connection = Arc::new(RwLock::new(initial_connection));
             let capture_next_gpio = Arc::new(AtomicBool::new(false));

@@ -264,6 +264,7 @@ fn set_connection(
         }
     };
     if changed {
+        #[cfg(target_os = "macos")]
         crate::tray::update_connection(app, &next);
         emit(
             app,

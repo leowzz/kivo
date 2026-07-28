@@ -48,7 +48,6 @@ pub fn setup(app: &mut App, initial: &ConnectionStatus) -> tauri::Result<()> {
 
 pub fn update_connection(app: &AppHandle, connection: &ConnectionStatus) {
     let label = status_label(connection);
-    let app = app.clone();
     let state_app = app.clone();
     let _ = app.run_on_main_thread(move || {
         let Some(state) = state_app.try_state::<TrayState>() else {
