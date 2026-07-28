@@ -3,6 +3,8 @@ mod device;
 mod model;
 mod protocol;
 mod storage;
+#[cfg(target_os = "macos")]
+mod tray;
 
 use config::{ButtonAction, IoMaps, MappingConfig, SUPPORTED_GPIOS};
 use device::ConnectionStatus;
@@ -224,7 +226,10 @@ pub fn run() {
             let config_error = (!config_errors.is_empty()).then(|| config_errors.join("\n"));
             let mappings = Arc::new(RwLock::new(mappings));
             let models = Arc::new(RwLock::new(models));
-            let connection = Arc::new(RwLock::new(ConnectionStatus::searching()));
+            let initial_connection = ConnectionStatus::searching();
+            #[cfg(target_os = "macos")]
+            tray::setup(app, &initial_connection)?;
+            let connection = Arc::new(RwLock::new(initial_connection));
             let capture_next_gpio = Arc::new(AtomicBool::new(false));
             let stop = Arc::new(AtomicBool::new(false));
             let worker = {
@@ -256,7 +261,7 @@ pub fn run() {
             set_io_capture
         ])
         .build(tauri::generate_context!())
-        .expect("error while building Vibe Tool");
+        .expect("error while building Kivo");
 
     app.run(|app_handle, event| match event {
         tauri::RunEvent::WindowEvent {
@@ -269,6 +274,7 @@ pub fn run() {
                 let _ = window.hide();
             }
         }
+        #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen {
             has_visible_windows: false,
             ..
@@ -373,7 +379,7 @@ mod tests {
     #[test]
     fn invalid_active_model_keeps_valid_catalog_data_for_recovery_save() {
         let directory = std::env::temp_dir().join(format!(
-            "vibe-tool-recovery-{}-{}",
+            "kivo-recovery-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -434,7 +440,7 @@ mod tests {
     #[test]
     fn save_workspace_persists_files_before_replacing_runtime_state() {
         let directory = std::env::temp_dir().join(format!(
-            "vibe-tool-workspace-{}-{}",
+            "kivo-workspace-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -489,7 +495,7 @@ mod tests {
     #[test]
     fn failed_yaml_save_keeps_runtime_workspace_unchanged() {
         let directory = std::env::temp_dir().join(format!(
-            "vibe-tool-workspace-failure-{}-{}",
+            "kivo-workspace-failure-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)

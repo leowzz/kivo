@@ -178,7 +178,7 @@ mod tests {
     impl TestDirectory {
         fn new() -> Self {
             let name = format!(
-                "vibe-tool-model-{}-{}-{}",
+                "kivo-model-{}-{}-{}",
                 std::process::id(),
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
