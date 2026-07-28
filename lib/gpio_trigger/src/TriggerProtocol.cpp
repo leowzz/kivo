@@ -47,9 +47,10 @@ std::optional<std::string> ResponseLineBuffer::push(char character) {
   return std::nullopt;
 }
 
-std::string formatPressEvent(const PressEvent &event) {
-  return "PRESS " + std::to_string(event.id) + " " +
-         std::to_string(event.gpio) + "\n";
+std::string formatInputEvent(const InputEvent &event) {
+  return "STATE " + std::to_string(event.id) + " " +
+         std::to_string(event.gpio) + " " +
+         (event.state == InputState::Down ? "DOWN\n" : "UP\n");
 }
 
 std::optional<HelperResponse> parseHelperResponse(std::string_view line) {

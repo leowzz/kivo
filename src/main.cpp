@@ -70,7 +70,7 @@ void scanInputs(std::uint32_t nowMs) {
       continue;
     }
 
-    const std::string message = formatPressEvent(*event);
+    const std::string message = formatInputEvent(*event);
     usbSerial.write(message.c_str(), message.size());
     usbSerial.flush();
   }

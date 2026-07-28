@@ -33,5 +33,5 @@ class ResponseLineBuffer {
   bool discardUntilNewline_ = false;
 };
 
-std::string formatPressEvent(const PressEvent &event);
+std::string formatInputEvent(const InputEvent &event);
 std::optional<HelperResponse> parseHelperResponse(std::string_view line);

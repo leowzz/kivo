@@ -21,7 +21,7 @@ std::optional<std::size_t> GpioTriggerController::pinIndex(std::uint8_t gpio) {
   return static_cast<std::size_t>(found - kSupportedPins.begin());
 }
 
-std::optional<PressEvent> GpioTriggerController::updatePin(
+std::optional<InputEvent> GpioTriggerController::updatePin(
     std::uint8_t gpio, bool inputHigh, std::uint32_t nowMs) {
   expire(nowMs);
 
@@ -42,32 +42,40 @@ std::optional<PressEvent> GpioTriggerController::updatePin(
   }
 
   state.stableHigh = state.rawHigh;
-  if (state.stableHigh || pendingEvent_.has_value()) {
-    return std::nullopt;
+  const InputState inputState = state.stableHigh ? InputState::Up
+                                                 : InputState::Down;
+  const InputEvent event{nextEventId_++, gpio, inputState};
+  if (inputState == InputState::Down) {
+    pendingEvents_[*index] = PendingEvent{event.id, nowMs};
   }
-
-  pendingEvent_ = PressEvent{nextEventId_++, gpio};
-  pendingStartedMs_ = nowMs;
-  return pendingEvent_;
+  return event;
 }
 
 ResponseAction GpioTriggerController::handleResponse(std::uint32_t eventId,
                                                      bool execute) {
-  if (!pendingEvent_.has_value() || pendingEvent_->id != eventId) {
+  const auto pending =
+      std::find_if(pendingEvents_.begin(), pendingEvents_.end(),
+                   [eventId](const auto &entry) {
+                     return entry.has_value() && entry->id == eventId;
+                   });
+  if (pending == pendingEvents_.end()) {
     return ResponseAction::Ignored;
   }
 
-  pendingEvent_.reset();
+  pending->reset();
   return execute ? ResponseAction::Execute : ResponseAction::Cleared;
 }
 
 void GpioTriggerController::expire(std::uint32_t nowMs) {
-  if (pendingEvent_.has_value() &&
-      nowMs - pendingStartedMs_ >= kResponseTimeoutMs) {
-    pendingEvent_.reset();
+  for (auto &entry : pendingEvents_) {
+    if (entry.has_value() &&
+        nowMs - entry->startedMs >= kResponseTimeoutMs) {
+      entry.reset();
+    }
   }
 }
 
 bool GpioTriggerController::hasPendingEvent() const {
-  return pendingEvent_.has_value();
+  return std::any_of(pendingEvents_.begin(), pendingEvents_.end(),
+                     [](const auto &entry) { return entry.has_value(); });
 }
