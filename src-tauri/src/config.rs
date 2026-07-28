@@ -90,7 +90,7 @@ impl MappingConfig {
         }
     }
 
-    pub fn validate(&self, models: &[ModelLayout]) -> Result<(), String> {
+    fn validate_contents(&self) -> Result<(), String> {
         if let Some(gpio) = self
             .legacy_buttons
             .keys()
@@ -120,12 +120,23 @@ impl MappingConfig {
                     return Err(format!("duplicate button {button} for model {model_id}"));
                 }
             }
-            let Some(model) = models.iter().find(|model| model.id == *model_id) else {
-                if models.is_empty() {
-                    continue;
-                }
-                return Err(format!("unknown model {model_id}"));
-            };
+        }
+        Ok(())
+    }
+
+    pub fn validate(&self, models: &[ModelLayout]) -> Result<(), String> {
+        self.validate_contents()?;
+        if self.active_model.trim().is_empty() {
+            return Err("active model is required".into());
+        }
+        if !models.iter().any(|model| model.id == self.active_model) {
+            return Err(format!("unknown active model {}", self.active_model));
+        }
+        for (model_id, io_map) in &self.io_maps {
+            let model = models
+                .iter()
+                .find(|model| model.id == *model_id)
+                .ok_or_else(|| format!("unknown model {model_id}"))?;
             let buttons = model
                 .groups
                 .iter()
@@ -158,14 +169,14 @@ pub fn load(path: &Path) -> Result<MappingConfig, String> {
         legacy_buttons: document.buttons,
     };
     config.migrate_legacy();
-    config.validate(&[])?;
+    config.validate_contents()?;
     Ok(config)
 }
 
 pub fn save(path: &Path, config: &MappingConfig) -> Result<(), String> {
     let mut config = config.clone();
     config.migrate_legacy();
-    config.validate(&[])?;
+    config.validate_contents()?;
     let document = ConfigDocument {
         active_model: config.active_model,
         io_maps: config.io_maps,
@@ -401,6 +412,7 @@ mod tests {
     #[test]
     fn rejects_empty_paste_text() {
         let config = MappingConfig {
+            active_model: "red-phone-v1".into(),
             actions: BTreeMap::from([("DIGIT_2".into(), ButtonAction::Paste { text: " ".into() })]),
             ..MappingConfig::default()
         };
@@ -411,6 +423,7 @@ mod tests {
     #[test]
     fn rejects_malformed_hotkeys() {
         let config = MappingConfig {
+            active_model: "red-phone-v1".into(),
             actions: BTreeMap::from([(
                 "DIGIT_2".into(),
                 ButtonAction::Hotkey {
@@ -421,5 +434,22 @@ mod tests {
         };
 
         assert!(config.validate(&[model()]).is_err());
+    }
+
+    #[test]
+    fn rejects_empty_active_model() {
+        let error = MappingConfig::default().validate(&[model()]).unwrap_err();
+
+        assert!(error.contains("active model"));
+    }
+
+    #[test]
+    fn rejects_unknown_active_model() {
+        let config = MappingConfig {
+            active_model: "missing".into(),
+            ..MappingConfig::default()
+        };
+
+        assert!(config.validate(&[model()]).unwrap_err().contains("missing"));
     }
 }

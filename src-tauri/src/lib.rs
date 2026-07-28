@@ -45,6 +45,28 @@ struct AppSnapshot {
     config_error: Option<String>,
 }
 
+fn prepare_loaded_mappings(
+    mut mappings: MappingConfig,
+    models: &[ModelLayout],
+) -> (MappingConfig, Option<String>) {
+    if mappings.active_model.is_empty()
+        && let Some(model) = models.first()
+    {
+        mappings.active_model = model.id.clone();
+    }
+    match mappings.validate(models) {
+        Ok(()) => (mappings, None),
+        Err(error) => (
+            MappingConfig {
+                active_model: mappings.active_model,
+                legacy_buttons: mappings.legacy_buttons,
+                ..MappingConfig::default()
+            },
+            Some(error),
+        ),
+    }
+}
+
 fn snapshot(state: &AppState) -> Result<AppSnapshot, String> {
     let mappings = state
         .mappings
@@ -176,17 +198,10 @@ pub fn run() {
                     MappingConfig::default()
                 }
             };
-            if mappings.active_model.is_empty()
-                && let Some(model) = models.first()
-            {
-                mappings.active_model = model.id.clone();
-            }
-            if let Err(error) = mappings.validate(&models) {
+            let (prepared_mappings, validation_error) = prepare_loaded_mappings(mappings, &models);
+            mappings = prepared_mappings;
+            if let Some(error) = validation_error {
                 config_errors.push(error);
-                mappings = MappingConfig::default();
-                if let Some(model) = models.first() {
-                    mappings.active_model = model.id.clone();
-                }
             }
             let config_error = (!config_errors.is_empty()).then(|| config_errors.join("\n"));
             let mappings = Arc::new(RwLock::new(mappings));
@@ -278,6 +293,57 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
+    fn model() -> ModelLayout {
+        serde_json::from_str(include_str!("../../models/red-phone-v1.json")).unwrap()
+    }
+
+    fn state(
+        directory: &std::path::Path,
+        mappings: MappingConfig,
+        models: Vec<ModelLayout>,
+    ) -> AppState {
+        AppState {
+            mappings: Arc::new(RwLock::new(mappings)),
+            models: Arc::new(RwLock::new(models)),
+            model_directory: directory.join("models"),
+            config_path: directory.join("config.yaml"),
+            connection: Arc::new(RwLock::new(device::ConnectionStatus::searching())),
+            config_error: Mutex::new(Some("old error".to_owned())),
+            capture_next_gpio: Arc::new(AtomicBool::new(false)),
+            stop: Arc::new(AtomicBool::new(false)),
+            worker: Mutex::new(None),
+        }
+    }
+
+    #[test]
+    fn catalog_fallback_preserves_active_model_and_unresolved_legacy_entries() {
+        let loaded = MappingConfig {
+            active_model: "missing-model".into(),
+            io_maps: BTreeMap::from([(
+                "missing-model".into(),
+                BTreeMap::from([(6, "BUTTON".into())]),
+            )]),
+            actions: BTreeMap::from([(
+                "BUTTON".into(),
+                ButtonAction::Paste {
+                    text: "typed".into(),
+                },
+            )]),
+            legacy_buttons: BTreeMap::from([(7, "legacy".into())]),
+        };
+
+        let (fallback, error) = prepare_loaded_mappings(loaded, &[model()]);
+
+        assert_eq!(fallback.active_model, "missing-model");
+        assert_eq!(
+            fallback.legacy_buttons,
+            BTreeMap::from([(7, "legacy".into())])
+        );
+        assert!(fallback.io_maps.is_empty());
+        assert!(fallback.actions.is_empty());
+        assert!(error.unwrap().contains("missing-model"));
+    }
+
     #[test]
     fn save_workspace_persists_files_before_replacing_runtime_state() {
         let directory = std::env::temp_dir().join(format!(
@@ -291,20 +357,13 @@ mod tests {
         let model_directory = directory.join("models");
         fs::create_dir_all(&model_directory).unwrap();
         let config_path = directory.join("config.yaml");
-        let original_model: ModelLayout =
-            serde_json::from_str(include_str!("../../models/red-phone-v1.json")).unwrap();
+        let original_model = model();
         model::save(&model_directory, &original_model).unwrap();
-        let state = AppState {
-            mappings: Arc::new(RwLock::new(config::MappingConfig::default())),
-            models: Arc::new(RwLock::new(vec![original_model.clone()])),
-            model_directory: model_directory.clone(),
-            config_path: config_path.clone(),
-            connection: Arc::new(RwLock::new(device::ConnectionStatus::searching())),
-            config_error: Mutex::new(Some("old error".to_owned())),
-            capture_next_gpio: Arc::new(AtomicBool::new(false)),
-            stop: Arc::new(AtomicBool::new(false)),
-            worker: Mutex::new(None),
-        };
+        let state = state(
+            &directory,
+            config::MappingConfig::default(),
+            vec![original_model.clone()],
+        );
         let mut updated_model = original_model.clone();
         updated_model.groups[0].buttons[0].label = "One".into();
         let io_maps = BTreeMap::from([(
@@ -337,6 +396,59 @@ mod tests {
         assert_eq!(state.models.read().unwrap().as_slice(), &[persisted_model]);
         assert_eq!(saved.active_model, "red-phone-v1");
         assert_eq!(*state.config_error.lock().unwrap(), None);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn failed_yaml_save_keeps_runtime_workspace_unchanged() {
+        let directory = std::env::temp_dir().join(format!(
+            "vibe-tool-workspace-failure-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let model_directory = directory.join("models");
+        fs::create_dir_all(&model_directory).unwrap();
+        fs::create_dir(directory.join(".config.yaml.tmp")).unwrap();
+        let original_model = model();
+        model::save(&model_directory, &original_model).unwrap();
+        let original_mappings = MappingConfig {
+            active_model: original_model.id.clone(),
+            ..MappingConfig::default()
+        };
+        let state = state(
+            &directory,
+            original_mappings.clone(),
+            vec![original_model.clone()],
+        );
+        let mut updated_model = original_model.clone();
+        updated_model.groups[0].buttons[0].label = "Changed".into();
+        let button = updated_model.groups[0].buttons[0].id.clone();
+        let io_maps = BTreeMap::from([(
+            updated_model.id.clone(),
+            BTreeMap::from([(6, button.clone())]),
+        )]);
+        let actions = BTreeMap::from([(button, ButtonAction::Paste { text: "x".into() })]);
+
+        assert!(
+            save_workspace_inner(
+                &state,
+                updated_model.id.clone(),
+                io_maps,
+                actions,
+                vec![updated_model.clone()],
+            )
+            .is_err()
+        );
+
+        assert_eq!(*state.mappings.read().unwrap(), original_mappings);
+        assert_eq!(state.models.read().unwrap().as_slice(), &[original_model]);
+        let persisted_model: ModelLayout =
+            serde_json::from_slice(&fs::read(model_directory.join("red-phone-v1.json")).unwrap())
+                .unwrap();
+        assert_eq!(persisted_model, updated_model);
         fs::remove_dir_all(directory).unwrap();
     }
 }
