@@ -49,6 +49,7 @@ const snapshot = {
   ioMaps: { "red-phone-v1": { 6: "DIGIT_2" } },
   actions: {
     UP: { type: "hotkey", keys: ["cmd", "shift", "k"] },
+    DOWN: { type: "hotkey", keys: ["option", "page_up"] },
     BACK_OUT: { type: "paste", text: "This behavior preview is intentionally long" },
     DIGIT_2: { type: "paste", text: "six" },
   },
@@ -78,7 +79,8 @@ beforeEach(() => {
 
 test("renders the selected model as normalized groups", async () => {
   render(<App />);
-  expect(await screen.findByRole("button", { name: "Configure BACK/OUT" })).toBeVisible();
+  const backOut = await screen.findByRole("button", { name: "Configure BACK/OUT" });
+  expect(backOut).toBeVisible();
   expect(screen.queryByRole("button", { name: "Configure BACK" })).not.toBeInTheDocument();
   expect(screen.getByTestId("group-top")).toHaveStyle({
     gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
@@ -86,6 +88,15 @@ test("renders the selected model as normalized groups", async () => {
   expect(screen.getByTestId("group-digits")).toHaveStyle({
     gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
   });
+});
+
+test("associates a keypad button with its summary tooltip", async () => {
+  render(<App />);
+  const backOut = await screen.findByRole("button", { name: "Configure BACK/OUT" });
+  const tooltipId = backOut.getAttribute("aria-describedby");
+
+  expect(tooltipId).toBe("key-summary-red-phone-v1-BACK_OUT");
+  expect(document.getElementById(tooltipId!)).toHaveAttribute("role", "tooltip");
 });
 
 test("shows mode summaries and selects a key", async () => {
@@ -97,6 +108,7 @@ test("shows mode summaries and selects a key", async () => {
   await user.click(screen.getByRole("button", { name: "Behavior" }));
   expect(screen.getByRole("tooltip", { name: "six" })).toBeInTheDocument();
   expect(screen.getByRole("tooltip", { name: "Command + Shift + K" })).toBeInTheDocument();
+  expect(screen.getByRole("tooltip", { name: "Option + Page Up" })).toBeInTheDocument();
   expect(screen.getByRole("tooltip", { name: /This behavior preview.*\.\.\./ })).toBeInTheDocument();
   await user.click(digitTwo);
   expect(digitTwo).toHaveClass("is-selected");
