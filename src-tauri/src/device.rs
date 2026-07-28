@@ -17,7 +17,7 @@ use std::{
 use tauri::{AppHandle, Emitter};
 
 const USB_VENDOR_ID: u16 = 0x303a;
-const USB_PRODUCT_NAME: &str = "ESP Vibe Text Keyboard";
+const USB_PRODUCT_ID: u16 = 0x4002;
 const CLIPBOARD_COMMAND: &str = if cfg!(target_os = "windows") {
     "clip.exe"
 } else {
@@ -78,7 +78,7 @@ pub fn is_target_port(port: &SerialPortInfo) -> bool {
         &port.port_type,
         SerialPortType::UsbPort(info)
             if info.vid == USB_VENDOR_ID
-                && info.product.as_deref() == Some(USB_PRODUCT_NAME)
+                && info.pid == USB_PRODUCT_ID
     )
 }
 
@@ -252,9 +252,13 @@ fn copy_to_clipboard(text: &str) -> Result<(), String> {
 }
 
 fn clipboard_command() -> Command {
-    let mut command = Command::new(CLIPBOARD_COMMAND);
+    let command = Command::new(CLIPBOARD_COMMAND);
     #[cfg(target_os = "macos")]
-    command.env("LC_CTYPE", "UTF-8");
+    let command = {
+        let mut command = command;
+        command.env("LC_CTYPE", "UTF-8");
+        command
+    };
     command
 }
 
@@ -329,24 +333,37 @@ mod tests {
     use crate::config::ButtonAction;
     use serialport::{SerialPortInfo, SerialPortType, UsbPortInfo};
 
-    fn usb_port(vid: u16, product: &str) -> SerialPortInfo {
+    fn usb_port(vid: u16, pid: u16, product: Option<&str>) -> SerialPortInfo {
         SerialPortInfo {
             port_name: "/dev/cu.test".to_owned(),
             port_type: SerialPortType::UsbPort(UsbPortInfo {
                 vid,
-                pid: 0x4002,
+                pid,
                 serial_number: None,
                 manufacturer: None,
-                product: Some(product.to_owned()),
+                product: product.map(str::to_owned),
             }),
         }
     }
 
     #[test]
     fn identifies_only_the_expected_usb_device() {
-        assert!(is_target_port(&usb_port(0x303a, "ESP Vibe Text Keyboard")));
-        assert!(!is_target_port(&usb_port(0x303b, "ESP Vibe Text Keyboard")));
-        assert!(!is_target_port(&usb_port(0x303a, "Other device")));
+        assert!(is_target_port(&usb_port(
+            0x303a,
+            0x4002,
+            Some("USB Serial Device (COM3)")
+        )));
+        assert!(is_target_port(&usb_port(0x303a, 0x4002, None)));
+        assert!(!is_target_port(&usb_port(
+            0x303b,
+            0x4002,
+            Some("ESP Vibe Text Keyboard")
+        )));
+        assert!(!is_target_port(&usb_port(
+            0x303a,
+            0x4003,
+            Some("ESP Vibe Text Keyboard")
+        )));
         assert!(!is_target_port(&SerialPortInfo {
             port_name: "/dev/cu.Bluetooth".to_owned(),
             port_type: SerialPortType::BluetoothPort,
