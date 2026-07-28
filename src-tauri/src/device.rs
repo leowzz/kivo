@@ -18,6 +18,11 @@ use tauri::{AppHandle, Emitter};
 
 const USB_VENDOR_ID: u16 = 0x303a;
 const USB_PRODUCT_NAME: &str = "ESP Vibe Text Keyboard";
+const CLIPBOARD_COMMAND: &str = if cfg!(target_os = "windows") {
+    "clip.exe"
+} else {
+    "/usr/bin/pbcopy"
+};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -226,23 +231,23 @@ fn action_for_press(
 }
 
 fn copy_to_clipboard(text: &str) -> Result<(), String> {
-    let mut child = Command::new("/usr/bin/pbcopy")
+    let mut child = Command::new(CLIPBOARD_COMMAND)
         .stdin(Stdio::piped())
         .spawn()
-        .map_err(|error| format!("start pbcopy: {error}"))?;
+        .map_err(|error| format!("start clipboard command: {error}"))?;
     child
         .stdin
         .take()
-        .ok_or_else(|| "open pbcopy stdin".to_owned())?
+        .ok_or_else(|| "open clipboard command stdin".to_owned())?
         .write_all(text.as_bytes())
-        .map_err(|error| format!("write pbcopy: {error}"))?;
+        .map_err(|error| format!("write clipboard command: {error}"))?;
     let status = child
         .wait()
-        .map_err(|error| format!("wait for pbcopy: {error}"))?;
+        .map_err(|error| format!("wait for clipboard command: {error}"))?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("pbcopy exited {status}"))
+        Err(format!("clipboard command exited {status}"))
     }
 }
 

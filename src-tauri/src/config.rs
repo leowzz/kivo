@@ -35,16 +35,6 @@ struct ConfigDocument {
 }
 
 impl MappingConfig {
-    pub fn from_buttons(buttons: BTreeMap<u8, String>) -> Result<Self, String> {
-        if let Some(gpio) = buttons.keys().find(|gpio| !SUPPORTED_GPIOS.contains(gpio)) {
-            return Err(format!("unsupported GPIO{gpio}"));
-        }
-        Ok(Self {
-            legacy_buttons: buttons,
-            ..Self::default()
-        })
-    }
-
     pub fn resolved_button(&self, gpio: u8) -> Option<&str> {
         self.io_maps
             .get(&self.active_model)?
