@@ -1,0 +1,4 @@
+interface:
+  display_name: "Generate Keypad Layout"
+  short_description: "Create model keypad JSON from a device image"
+  default_prompt: "Use $generating-keypad-layout to generate a keypad layout from this device image."

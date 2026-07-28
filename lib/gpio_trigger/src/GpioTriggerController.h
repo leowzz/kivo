@@ -4,15 +4,21 @@
 #include <cstdint>
 #include <optional>
 
-struct PressEvent {
+enum class InputState {
+  Down,
+  Up,
+};
+
+struct InputEvent {
   std::uint32_t id;
   std::uint8_t gpio;
+  InputState state;
 };
 
 enum class ResponseAction {
   Ignored,
   Cleared,
-  Paste,
+  Execute,
 };
 
 class GpioTriggerController {
@@ -25,9 +31,9 @@ class GpioTriggerController {
   explicit GpioTriggerController(std::uint32_t startMs = 0);
 
   static bool isSupportedPin(std::uint8_t gpio);
-  std::optional<PressEvent> updatePin(std::uint8_t gpio, bool inputHigh,
+  std::optional<InputEvent> updatePin(std::uint8_t gpio, bool inputHigh,
                                       std::uint32_t nowMs);
-  ResponseAction handleResponse(std::uint32_t eventId, bool paste);
+  ResponseAction handleResponse(std::uint32_t eventId, bool execute);
   void expire(std::uint32_t nowMs);
   bool hasPendingEvent() const;
 
@@ -38,10 +44,15 @@ class GpioTriggerController {
     std::uint32_t rawChangedMs = 0;
   };
 
+  struct PendingEvent {
+    std::uint32_t id;
+    std::uint32_t startedMs;
+  };
+
   static std::optional<std::size_t> pinIndex(std::uint8_t gpio);
 
   std::array<PinState, kSupportedPins.size()> pinStates_{};
   std::uint32_t nextEventId_ = 1;
-  std::optional<PressEvent> pendingEvent_;
-  std::uint32_t pendingStartedMs_ = 0;
+  std::array<std::optional<PendingEvent>, kSupportedPins.size()>
+      pendingEvents_{};
 };
