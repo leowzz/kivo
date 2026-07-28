@@ -1,8 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Save, Trash2, Unplug, Usb } from "lucide-react";
+import { Pencil, RotateCcw, Save, Trash2, Unplug, Usb } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Keypad } from "./Keypad";
+import { LayoutEditor } from "./LayoutEditor";
 import type {
   AppSnapshot,
   ButtonAction,
@@ -49,6 +50,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [layoutEditorOpen, setLayoutEditorOpen] = useState(false);
 
   const applySnapshot = useCallback((snapshot: AppSnapshot) => {
     setModels(snapshot.models);
@@ -196,6 +198,15 @@ export default function App() {
     setCapturedGpio(null);
   };
 
+  const revertWorkspace = () => {
+    setModels(savedModels);
+    setActiveModel(savedActiveModel);
+    setIoMaps(savedIoMaps);
+    setActions(savedActions);
+    setLayoutEditorOpen(false);
+    closePopover();
+  };
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -211,16 +222,28 @@ export default function App() {
         <div className="config-location" title={configPath}>
           {configPath || "Loading configuration..."}
         </div>
-        <button
-          className="save-button"
-          type="button"
-          aria-label="Save workspace"
-          disabled={!loaded || !dirty || saving}
-          onClick={() => void saveWorkspace()}
-        >
-          <Save size={17} />
-          {saving ? "Saving" : "Save"}
-        </button>
+        <div className="save-controls">
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Revert workspace"
+            title="Revert workspace"
+            disabled={!loaded || !dirty || saving}
+            onClick={revertWorkspace}
+          >
+            <RotateCcw size={17} />
+          </button>
+          <button
+            className="save-button"
+            type="button"
+            aria-label="Save workspace"
+            disabled={!loaded || !dirty || saving}
+            onClick={() => void saveWorkspace()}
+          >
+            <Save size={17} />
+            {saving ? "Saving" : "Save"}
+          </button>
+        </div>
       </header>
 
       {error && <div className="error-banner" role="alert">{error}</div>}
@@ -233,6 +256,19 @@ export default function App() {
               <h2 id="keypad-heading">Keypad</h2>
             </div>
             <div className="workspace-controls">
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="Edit layout"
+                title="Edit layout"
+                disabled={!loaded || saving || !activeLayout}
+                onClick={() => {
+                  closePopover();
+                  setLayoutEditorOpen(true);
+                }}
+              >
+                <Pencil size={16} />
+              </button>
               <label className="model-picker">
                 <span>Model</span>
                 <select
@@ -342,6 +378,16 @@ export default function App() {
           </div>
         </section>
       </div>
+      <LayoutEditor
+        layout={activeLayout ?? null}
+        open={layoutEditorOpen}
+        onCancel={() => setLayoutEditorOpen(false)}
+        onApply={(layout) => {
+          setModels((current) => current.map((model) => model.id === layout.id ? layout : model));
+          setLayoutEditorOpen(false);
+          closePopover();
+        }}
+      />
     </main>
   );
 }

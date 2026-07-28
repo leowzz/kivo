@@ -76,6 +76,12 @@ function deferred() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  HTMLDialogElement.prototype.showModal = function showModal() {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close = function close() {
+    this.removeAttribute("open");
+  };
   onRuntimeEvent = undefined;
   unlisten = vi.fn();
   vi.mocked(invoke).mockImplementation(async (command, arguments_) => {
@@ -88,6 +94,56 @@ beforeEach(() => {
     onRuntimeEvent = handler as (event: { payload: RuntimeEvent }) => void;
     return unlisten;
   });
+});
+
+test("edits the active layout and saves the staged models", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Edit layout" }));
+
+  const columns = screen.getByLabelText("Columns for top");
+  await user.clear(columns);
+  await user.type(columns, "5");
+  expect(screen.getByLabelText("Button ID BACK_OUT")).toHaveValue("BACK_OUT");
+  expect(screen.getByLabelText("Button ID BACK_OUT")).toHaveAttribute("readonly");
+  const label = screen.getByLabelText("Label for BACK_OUT");
+  await user.clear(label);
+  await user.type(label, "GO BACK");
+  await user.click(screen.getByRole("button", { name: "Move BACK_OUT up" }));
+  await user.click(screen.getByRole("button", { name: "Apply layout" }));
+
+  expect(screen.getByRole("button", { name: "Configure GO BACK" })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Save workspace" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_workspace", {
+    activeModel: snapshot.activeModel,
+    ioMaps: snapshot.ioMaps,
+    actions: snapshot.actions,
+    models: [{
+      ...snapshot.models[0],
+      groups: [{
+        ...snapshot.models[0].groups[0],
+        columns: 5,
+        buttons: [
+          snapshot.models[0].groups[0].buttons[0],
+          { id: "BACK_OUT", label: "GO BACK" },
+          snapshot.models[0].groups[0].buttons[1],
+          snapshot.models[0].groups[0].buttons[3],
+        ],
+      }, ...snapshot.models[0].groups.slice(1)],
+    }],
+  }));
+});
+
+test("rejects a duplicate normalized new button ID", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Edit layout" }));
+  await user.click(screen.getByRole("button", { name: "Add button to top" }));
+  await user.type(screen.getByLabelText("New button ID"), "back out");
+  await user.type(screen.getByLabelText("Label for new button"), "Duplicate");
+
+  expect(screen.getByRole("alert")).toHaveTextContent("Button IDs must be unique");
+  expect(screen.getByRole("button", { name: "Apply layout" })).toBeDisabled();
 });
 
 test("renders the selected model as normalized groups", async () => {
