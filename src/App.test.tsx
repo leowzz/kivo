@@ -95,8 +95,31 @@ test("associates a keypad button with its summary tooltip", async () => {
   const backOut = await screen.findByRole("button", { name: "Configure BACK/OUT" });
   const tooltipId = backOut.getAttribute("aria-describedby");
 
-  expect(tooltipId).toBe("key-summary-red-phone-v1-BACK_OUT");
+  expect(tooltipId).toBe("key-summary-red-phone-v1-0-2");
   expect(document.getElementById(tooltipId!)).toHaveAttribute("role", "tooltip");
+});
+
+test("uses a DOM-safe tooltip ID when the button ID contains whitespace", async () => {
+  vi.mocked(invoke).mockResolvedValueOnce({
+    ...snapshot,
+    models: [{
+      ...snapshot.models[0],
+      groups: [{
+        id: "media",
+        columns: 1,
+        buttons: [{ id: "PLAY PAUSE", label: "PLAY/PAUSE" }],
+      }],
+    }],
+    ioMaps: { "red-phone-v1": {} },
+    actions: {},
+  });
+  render(<App />);
+  const button = await screen.findByRole("button", { name: "Configure PLAY/PAUSE" });
+  const tooltip = screen.getByRole("tooltip");
+
+  expect(button).toHaveAttribute("aria-describedby", tooltip.id);
+  expect(tooltip.id).toBe("key-summary-red-phone-v1-0-0");
+  expect(tooltip.id).not.toMatch(/\s/);
 });
 
 test("shows mode summaries and selects a key", async () => {

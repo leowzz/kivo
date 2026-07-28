@@ -65,7 +65,7 @@ export function Keypad({
 }: KeypadProps) {
   return (
     <div className="keypad" aria-label={`${layout.name} keypad`}>
-      {layout.groups.map((group) => (
+      {layout.groups.map((group, groupIndex) => (
         <div
           className="key-group"
           data-testid={`group-${group.id}`}
@@ -75,9 +75,9 @@ export function Keypad({
             maxWidth: group.columns * KEY_WIDTH + (group.columns - 1) * KEY_GAP,
           }}
         >
-          {group.buttons.map((button) => {
+          {group.buttons.map((button, buttonIndex) => {
             const gpio = gpioForButton(ioMap, button.id);
-            const summaryId = `key-summary-${layout.id}-${button.id}`;
+            const summaryId = `key-summary-${layout.id}-${groupIndex}-${buttonIndex}`;
             const summary = mode === "io"
               ? gpio === null ? "Unmapped" : `GPIO ${gpio}`
               : behaviorSummary(actions[button.id]);
