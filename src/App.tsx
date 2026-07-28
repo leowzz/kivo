@@ -289,6 +289,16 @@ export default function App() {
                   setIoMaps((current) => ({ ...current, [activeModel]: ioMap }));
                   closePopover();
                 }}
+                onApplyAction={(buttonId, action) => {
+                  setActions((current) => ({ ...current, [buttonId]: action }));
+                  closePopover();
+                }}
+                onDeleteAction={(buttonId) => {
+                  setActions((current) => Object.fromEntries(
+                    Object.entries(current).filter(([id]) => id !== buttonId),
+                  ));
+                  closePopover();
+                }}
                 onCancel={closePopover}
               />
             )}

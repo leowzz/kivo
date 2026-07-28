@@ -150,6 +150,127 @@ test("shows mode summaries and selects a key", async () => {
   expect(digitTwo).toHaveClass("is-selected");
 });
 
+test("configures multiline paste text and saves the staged action", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Behavior" }));
+  await user.click(screen.getByRole("button", { name: "Configure 2" }));
+  await user.selectOptions(screen.getByLabelText("Action type for 2"), "paste");
+  const text = screen.getByLabelText("Paste text for 2");
+  await user.clear(text);
+  await user.type(text, "你好{enter}second line");
+  await user.click(screen.getByRole("button", { name: "Apply behavior" }));
+
+  expect(screen.getByRole("tooltip", { name: "你好 second line" })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Save workspace" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_workspace", {
+    activeModel: snapshot.activeModel,
+    ioMaps: snapshot.ioMaps,
+    actions: {
+      ...snapshot.actions,
+      DIGIT_2: { type: "paste", text: "你好\nsecond line" },
+    },
+    models: snapshot.models,
+  }));
+});
+
+test("records a shortcut and saves backend-compatible keys", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Behavior" }));
+  const digitTwo = screen.getByRole("button", { name: "Configure 2" });
+  await user.click(digitTwo);
+  await user.selectOptions(screen.getByLabelText("Action type for 2"), "hotkey");
+  await user.click(screen.getByRole("button", { name: "Record shortcut" }));
+
+  act(() => window.dispatchEvent(new KeyboardEvent("keydown", {
+    code: "MetaLeft",
+    key: "Meta",
+    metaKey: true,
+  })));
+  expect(screen.getByLabelText("Shortcut for 2")).toHaveTextContent("Press shortcut");
+  act(() => window.dispatchEvent(new KeyboardEvent("keydown", {
+    code: "KeyK",
+    key: "k",
+    metaKey: true,
+    shiftKey: true,
+  })));
+
+  expect(screen.getByLabelText("Shortcut for 2")).toHaveTextContent("Command + Shift + K");
+  await user.click(screen.getByRole("button", { name: "Apply behavior" }));
+  expect(document.getElementById(digitTwo.getAttribute("aria-describedby")!))
+    .toHaveTextContent("Command + Shift + K");
+  await user.click(screen.getByRole("button", { name: "Save workspace" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_workspace", {
+    activeModel: snapshot.activeModel,
+    ioMaps: snapshot.ioMaps,
+    actions: {
+      ...snapshot.actions,
+      DIGIT_2: { type: "hotkey", keys: ["cmd", "shift", "k"] },
+    },
+    models: snapshot.models,
+  }));
+});
+
+test("rejects an unsupported recorded shortcut", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Behavior" }));
+  await user.click(screen.getByRole("button", { name: "Configure 3" }));
+  await user.selectOptions(screen.getByLabelText("Action type for 3"), "hotkey");
+  await user.click(screen.getByRole("button", { name: "Record shortcut" }));
+  act(() => window.dispatchEvent(new KeyboardEvent("keydown", { code: "NumpadAdd" })));
+
+  expect(screen.getByRole("alert")).toHaveTextContent("Unsupported shortcut key: NumpadAdd");
+  expect(screen.getByRole("button", { name: "Apply behavior" })).toBeDisabled();
+});
+
+test("deletes only the selected button action", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Behavior" }));
+  const digitTwo = screen.getByRole("button", { name: "Configure 2" });
+  await user.click(digitTwo);
+  await user.click(screen.getByRole("button", { name: "Delete behavior" }));
+  expect(document.getElementById(digitTwo.getAttribute("aria-describedby")!))
+    .toHaveTextContent("No action");
+
+  await user.click(screen.getByRole("button", { name: "Save workspace" }));
+  const { DIGIT_2: _deleted, ...remainingActions } = snapshot.actions;
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_workspace", {
+    activeModel: snapshot.activeModel,
+    ioMaps: snapshot.ioMaps,
+    actions: remainingActions,
+    models: snapshot.models,
+  }));
+});
+
+test("shortcut recording captures Command+S and cleans up on cancel", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Behavior" }));
+  await user.click(screen.getByRole("button", { name: "Configure 2" }));
+  const text = screen.getByLabelText("Paste text for 2");
+  await user.clear(text);
+  await user.type(text, "dirty");
+  await user.click(screen.getByRole("button", { name: "Apply behavior" }));
+  await user.click(screen.getByRole("button", { name: "Configure 3" }));
+  await user.selectOptions(screen.getByLabelText("Action type for 3"), "hotkey");
+  await user.click(screen.getByRole("button", { name: "Record shortcut" }));
+  act(() => window.dispatchEvent(new KeyboardEvent("keydown", {
+    code: "KeyS",
+    key: "s",
+    metaKey: true,
+  })));
+
+  expect(screen.getByLabelText("Shortcut for 3")).toHaveTextContent("Command + S");
+  expect(invoke).not.toHaveBeenCalledWith("save_workspace", expect.anything());
+  await user.click(screen.getByRole("button", { name: "Record shortcut" }));
+  await user.click(screen.getByRole("button", { name: "Cancel behavior" }));
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyS", key: "s", metaKey: true }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_workspace", expect.anything()));
+});
+
 test("binds the selected button from only the next physical press", async () => {
   const user = userEvent.setup();
   render(<App />);

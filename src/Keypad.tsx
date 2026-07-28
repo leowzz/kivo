@@ -1,4 +1,5 @@
 import { ButtonPopover } from "./ButtonPopover";
+import { formatHotkey } from "./hotkey";
 import type { ButtonAction, ConfigMode, ModelLayout } from "./types";
 
 interface KeypadProps {
@@ -12,42 +13,17 @@ interface KeypadProps {
   capturedGpio: number | null;
   onSelect(buttonId: string, anchor: DOMRect): void;
   onApplyIoMap(ioMap: Record<number, string>): void;
+  onApplyAction(buttonId: string, action: ButtonAction): void;
+  onDeleteAction(buttonId: string): void;
   onCancel(): void;
 }
 
 const KEY_WIDTH = 76;
 const KEY_GAP = 8;
 const POPOVER_WIDTH = 240;
-const POPOVER_HEIGHT = 180;
+const IO_POPOVER_HEIGHT = 180;
+const BEHAVIOR_POPOVER_HEIGHT = 280;
 const POPOVER_GAP = 12;
-const HOTKEY_LABELS: Record<string, string> = {
-  alt: "Option",
-  option: "Option",
-  cmd: "Command",
-  ctrl: "Control",
-  shift: "Shift",
-  enter: "Enter",
-  escape: "Escape",
-  backspace: "Backspace",
-  tab: "Tab",
-  space: "Space",
-  arrow_up: "Arrow Up",
-  arrow_down: "Arrow Down",
-  arrow_left: "Arrow Left",
-  arrow_right: "Arrow Right",
-  up: "Arrow Up",
-  down: "Arrow Down",
-  left: "Arrow Left",
-  right: "Arrow Right",
-  delete: "Delete",
-  home: "Home",
-  end: "End",
-  pageup: "Page Up",
-  page_up: "Page Up",
-  pagedown: "Page Down",
-  page_down: "Page Down",
-};
-
 export function gpioForButton(ioMap: Record<number, string>, buttonId: string) {
   const entry = Object.entries(ioMap).find(([, value]) => value === buttonId);
   return entry ? Number(entry[0]) : null;
@@ -74,9 +50,7 @@ export function popoverPosition(
 function behaviorSummary(action: ButtonAction | undefined) {
   if (!action) return "No action";
   if (action.type === "hotkey") {
-    return action.keys
-      .map((key) => HOTKEY_LABELS[key.toLowerCase()] ?? key.toUpperCase())
-      .join(" + ");
+    return formatHotkey(action.keys);
   }
   const text = action.text.replace(/\s+/g, " ").trim();
   return text.length > 32 ? `${text.slice(0, 29)}...` : text;
@@ -93,6 +67,8 @@ export function Keypad({
   capturedGpio,
   onSelect,
   onApplyIoMap,
+  onApplyAction,
+  onDeleteAction,
   onCancel,
 }: KeypadProps) {
   const selectedButton = layout.groups
@@ -142,23 +118,27 @@ export function Keypad({
           </div>
         ))}
       </div>
-      {mode === "io" && selectedButton && selectedAnchor && (
+      {selectedButton && selectedAnchor && (
         <ButtonPopover
           key={selectedButton.id}
+          mode={mode}
           buttonId={selectedButton.id}
           buttonLabel={selectedButton.label}
           buttonLabels={buttonLabels}
           ioMap={ioMap}
           supportedGpios={supportedGpios}
           capturedGpio={capturedGpio}
+          action={actions[selectedButton.id]}
           position={popoverPosition(
-            selectedAnchor,
-            POPOVER_WIDTH,
-            POPOVER_HEIGHT,
+              selectedAnchor,
+              POPOVER_WIDTH,
+              mode === "io" ? IO_POPOVER_HEIGHT : BEHAVIOR_POPOVER_HEIGHT,
             window.innerWidth,
             window.innerHeight,
           )}
-          onApply={onApplyIoMap}
+          onApplyIoMap={onApplyIoMap}
+          onApplyAction={(action) => onApplyAction(selectedButton.id, action)}
+          onDeleteAction={() => onDeleteAction(selectedButton.id)}
           onCancel={onCancel}
         />
       )}
