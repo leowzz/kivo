@@ -84,8 +84,8 @@ void setup() {
 
   USB.VID(0x303A);
   USB.PID(0x4002);
-  USB.manufacturerName("ESP Vibe");
-  USB.productName("ESP Vibe Text Keyboard");
+  USB.manufacturerName("Kivo");
+  USB.productName("Kivo Keyboard");
 
   usbSerial.begin(115200);
   keyboard.begin();

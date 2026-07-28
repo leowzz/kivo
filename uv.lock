@@ -120,25 +120,6 @@ wheels = [
 ]
 
 [[package]]
-name = "esp-vibe"
-version = "0.1.0"
-source = { virtual = "." }
-
-[package.dev-dependencies]
-dev = [
-    { name = "pip" },
-    { name = "platformio" },
-]
-
-[package.metadata]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pip", specifier = ">=25,<26" },
-    { name = "platformio", specifier = ">=6.1,<7" },
-]
-
-[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://mirrors.bfsu.edu.cn/pypi/web/simple" }
@@ -154,6 +135,25 @@ source = { registry = "https://mirrors.bfsu.edu.cn/pypi/web/simple" }
 sdist = { url = "https://mirrors.bfsu.edu.cn/pypi/web/packages/cd/63/9496c57188a2ee585e0f1db071d75089a11e98aa86eb99d9d7618fc1edce/idna-3.18.tar.gz", hash = "sha256:ffb385a7e039654cef1ab9ef32c6fafe283c0c0467bba1d9029738ce4a14a848", size = 196711, upload-time = "2026-06-02T14:34:07.794Z" }
 wheels = [
     { url = "https://mirrors.bfsu.edu.cn/pypi/web/packages/1e/5e/d4e9f1a599fb8e573b7b87160658329fbf28d19eac2718f51fc3def3aa5a/idna-3.18-py3-none-any.whl", hash = "sha256:7f952cbe720b688055e3f87de14f5c3e5fdaa8bc3928985c4077ca689de849a2", size = 65455, upload-time = "2026-06-02T14:34:06.319Z" },
+]
+
+[[package]]
+name = "kivo"
+version = "0.1.0"
+source = { virtual = "." }
+
+[package.dev-dependencies]
+dev = [
+    { name = "pip" },
+    { name = "platformio" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pip", specifier = ">=25,<26" },
+    { name = "platformio", specifier = ">=6.1,<7" },
 ]
 
 [[package]]

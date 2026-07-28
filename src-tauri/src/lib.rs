@@ -261,7 +261,7 @@ pub fn run() {
             set_io_capture
         ])
         .build(tauri::generate_context!())
-        .expect("error while building Vibe Tool");
+        .expect("error while building Kivo");
 
     app.run(|app_handle, event| match event {
         tauri::RunEvent::WindowEvent {
@@ -379,7 +379,7 @@ mod tests {
     #[test]
     fn invalid_active_model_keeps_valid_catalog_data_for_recovery_save() {
         let directory = std::env::temp_dir().join(format!(
-            "vibe-tool-recovery-{}-{}",
+            "kivo-recovery-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -440,7 +440,7 @@ mod tests {
     #[test]
     fn save_workspace_persists_files_before_replacing_runtime_state() {
         let directory = std::env::temp_dir().join(format!(
-            "vibe-tool-workspace-{}-{}",
+            "kivo-workspace-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -495,7 +495,7 @@ mod tests {
     #[test]
     fn failed_yaml_save_keeps_runtime_workspace_unchanged() {
         let directory = std::env::temp_dir().join(format!(
-            "vibe-tool-workspace-failure-{}-{}",
+            "kivo-workspace-failure-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)

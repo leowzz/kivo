@@ -246,7 +246,7 @@ export default function App() {
       <header className="topbar">
         <div className="brand">
           <span className="brand-mark"><Usb size={20} strokeWidth={2} /></span>
-          <h1>Vibe Tool</h1>
+          <h1>Kivo</h1>
         </div>
         <div className={`connection ${connected ? "is-connected" : ""}`}>
           {connected ? <Usb size={16} /> : <Unplug size={16} />}
