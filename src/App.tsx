@@ -1,23 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import {
-  AlertTriangle,
-  Save,
-  Trash2,
-  Unplug,
-  Usb,
-} from "lucide-react";
+import { Save, Trash2, Unplug, Usb } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AppSnapshot, ConnectionStatus, RuntimeEvent } from "./types";
+import { Keypad } from "./Keypad";
+import type {
+  AppSnapshot,
+  ButtonAction,
+  ConfigMode,
+  ConnectionStatus,
+  ModelLayout,
+  RuntimeEvent,
+} from "./types";
 
-const SUPPORTED_GPIOS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18];
 const SEARCHING: ConnectionStatus = { state: "searching", port: null };
-
-function normalizeButtons(buttons: Record<number, string>) {
-  return Object.fromEntries(
-    SUPPORTED_GPIOS.map((gpio) => [gpio, buttons[gpio] ?? ""]),
-  ) as Record<number, string>;
-}
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -32,15 +27,37 @@ function eventTime(timestampMs: number) {
 }
 
 export default function App() {
-  const [buttons, setButtons] = useState<Record<number, string>>(() => normalizeButtons({}));
-  const [savedButtons, setSavedButtons] = useState<Record<number, string>>(() => normalizeButtons({}));
-  const [selectedGpio, setSelectedGpio] = useState(0);
+  const [models, setModels] = useState<ModelLayout[]>([]);
+  const [savedModels, setSavedModels] = useState<ModelLayout[]>([]);
+  const [activeModel, setActiveModel] = useState("");
+  const [savedActiveModel, setSavedActiveModel] = useState("");
+  const [ioMaps, setIoMaps] = useState<Record<string, Record<number, string>>>({});
+  const [savedIoMaps, setSavedIoMaps] = useState<Record<string, Record<number, string>>>({});
+  const [actions, setActions] = useState<Record<string, ButtonAction>>({});
+  const [savedActions, setSavedActions] = useState<Record<string, ButtonAction>>({});
+  const [mode, setMode] = useState<ConfigMode>("io");
+  const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
+  const [, setSelectedAnchor] = useState<DOMRect | null>(null);
   const [configPath, setConfigPath] = useState("");
   const [connection, setConnection] = useState<ConnectionStatus>(SEARCHING);
   const [events, setEvents] = useState<RuntimeEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  const applySnapshot = useCallback((snapshot: AppSnapshot) => {
+    setModels(snapshot.models);
+    setSavedModels(snapshot.models);
+    setActiveModel(snapshot.activeModel);
+    setSavedActiveModel(snapshot.activeModel);
+    setIoMaps(snapshot.ioMaps);
+    setSavedIoMaps(snapshot.ioMaps);
+    setActions(snapshot.actions);
+    setSavedActions(snapshot.actions);
+    setConfigPath(snapshot.configPath);
+    setConnection(snapshot.connection);
+    setError(snapshot.configError);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -58,17 +75,12 @@ export default function App() {
         }
         const snapshot = await invoke<AppSnapshot>("get_snapshot");
         if (!active) return;
-        const loadedButtons = normalizeButtons(snapshot.buttons);
-        setButtons(loadedButtons);
-        setSavedButtons(loadedButtons);
-        setConfigPath(snapshot.configPath);
-        setConnection(snapshot.connection);
-        setError(snapshot.configError);
-        setLoaded(true);
+        applySnapshot(snapshot);
       } catch (loadError) {
         if (!active) return;
         setError(errorMessage(loadError));
-        setLoaded(true);
+      } finally {
+        if (active) setLoaded(true);
       }
     };
     void initialize();
@@ -77,29 +89,26 @@ export default function App() {
       active = false;
       stopListening?.();
     };
-  }, []);
+  }, [applySnapshot]);
 
   const dirty = useMemo(
-    () =>
-      SUPPORTED_GPIOS.some(
-        (gpio) => buttons[gpio] !== savedButtons[gpio],
-      ),
-    [buttons, savedButtons],
+    () => JSON.stringify([models, activeModel, ioMaps, actions])
+      !== JSON.stringify([savedModels, savedActiveModel, savedIoMaps, savedActions]),
+    [actions, activeModel, ioMaps, models, savedActions, savedActiveModel, savedIoMaps, savedModels],
   );
 
-  const saveMappings = useCallback(async () => {
+  const saveWorkspace = useCallback(async () => {
     if (!loaded || !dirty || saving) return;
     setSaving(true);
     setError(null);
-    const submitted = { ...buttons };
     try {
-      const snapshot = await invoke<AppSnapshot>("save_mappings", {
-        buttons: submitted,
+      const snapshot = await invoke<AppSnapshot>("save_workspace", {
+        activeModel,
+        ioMaps,
+        actions,
+        models,
       });
-      setSavedButtons(normalizeButtons(snapshot.buttons));
-      setConfigPath(snapshot.configPath);
-      setConnection(snapshot.connection);
-      setError(snapshot.configError);
+      applySnapshot(snapshot);
     } catch (saveError) {
       const message = errorMessage(saveError);
       setError(message);
@@ -110,26 +119,34 @@ export default function App() {
           level: "error" as const,
           message: `Save failed: ${message}`,
           connection,
+          gpio: null,
         },
       ].slice(-200));
     } finally {
       setSaving(false);
     }
-  }, [buttons, connection, dirty, loaded, saving]);
+  }, [actions, activeModel, applySnapshot, connection, dirty, ioMaps, loaded, models, saving]);
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
       if (event.metaKey && event.key.toLowerCase() === "s") {
         event.preventDefault();
-        void saveMappings();
+        void saveWorkspace();
       }
     };
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [saveMappings]);
+  }, [saveWorkspace]);
 
+  const activeLayout = models.find((model) => model.id === activeModel);
+  const missingActiveModel = loaded && !activeLayout;
   const connected = connection.state === "connected";
-  const selectedText = buttons[selectedGpio] ?? "";
+
+  const selectModel = (modelId: string) => {
+    setActiveModel(modelId);
+    setSelectedButtonId(null);
+    setSelectedAnchor(null);
+  };
 
   return (
     <main className="app-shell">
@@ -149,9 +166,9 @@ export default function App() {
         <button
           className="save-button"
           type="button"
-          aria-label="Save mappings"
+          aria-label="Save workspace"
           disabled={!loaded || !dirty || saving}
-          onClick={() => void saveMappings()}
+          onClick={() => void saveWorkspace()}
         >
           <Save size={17} />
           {saving ? "Saving" : "Save"}
@@ -161,69 +178,60 @@ export default function App() {
       {error && <div className="error-banner" role="alert">{error}</div>}
 
       <div className="workspace">
-        <section className="mapping-section" aria-labelledby="mappings-heading">
-          <div className="section-heading">
+        <section className="mapping-section" aria-labelledby="keypad-heading">
+          <div className="section-heading workspace-heading">
             <div>
               <p className="eyebrow">Configuration</p>
-              <h2 id="mappings-heading">GPIO mappings</h2>
+              <h2 id="keypad-heading">Keypad</h2>
             </div>
-            <span className="mapping-count">{SUPPORTED_GPIOS.length} pins</span>
+            <div className="workspace-controls">
+              <label className="model-picker">
+                <span>Model</span>
+                <select
+                  aria-label="Device model"
+                  value={activeModel}
+                  disabled={!loaded || saving || dirty}
+                  onChange={(event) => selectModel(event.target.value)}
+                >
+                  {missingActiveModel && (
+                    <option value={activeModel} disabled>Missing: {activeModel}</option>
+                  )}
+                  {models.map((model) => (
+                    <option value={model.id} key={model.id}>{model.name}</option>
+                  ))}
+                </select>
+              </label>
+              <div className="mode-switch" role="group" aria-label="Configuration mode">
+                {(["io", "behavior"] as const).map((value) => (
+                  <button
+                    className={mode === value ? "is-active" : ""}
+                    type="button"
+                    aria-label={value === "io" ? "IO" : "Behavior"}
+                    aria-pressed={mode === value}
+                    key={value}
+                    onClick={() => setMode(value)}
+                  >
+                    {value === "io" ? "IO" : "Behavior"}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
-          <div className="mapping-workspace">
-            <div className="mapping-list" role="listbox" aria-label="GPIO mappings">
-              {SUPPORTED_GPIOS.map((gpio) => {
-                const text = buttons[gpio];
-                return (
-                  <button
-                    key={gpio}
-                    className={`mapping-row ${selectedGpio === gpio ? "is-selected" : ""}`}
-                    type="button"
-                    role="option"
-                    aria-selected={selectedGpio === gpio}
-                    onClick={() => setSelectedGpio(gpio)}
-                  >
-                    <span className="gpio-label">GPIO{gpio}</span>
-                    <span className={`mapping-preview ${text ? "" : "is-empty"}`}>
-                      {text ? text.replaceAll("\n", " ↵ ") : "No text"}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="mapping-editor">
-              <div className="editor-heading">
-                <div>
-                  <p className="eyebrow">Selected pin</p>
-                  <h3>GPIO{selectedGpio}</h3>
-                </div>
-                {selectedGpio === 0 && (
-                  <div className="gpio-warning">
-                    <AlertTriangle size={16} />
-                    <span>GPIO0 enters download mode when held during startup.</span>
-                  </div>
-                )}
-              </div>
-              <label className="editor-label" htmlFor="mapping-text">Pasted text</label>
-              <textarea
-                id="mapping-text"
-                aria-label={`GPIO${selectedGpio} mapping`}
-                value={selectedText}
-                onChange={(event) =>
-                  setButtons((current) => ({
-                    ...current,
-                    [selectedGpio]: event.target.value,
-                  }))
-                }
-                placeholder="No text assigned"
-                spellCheck={false}
+          <div className="keypad-workspace">
+            {activeLayout && (
+              <Keypad
+                layout={activeLayout}
+                mode={mode}
+                ioMap={ioMaps[activeModel] ?? {}}
+                actions={actions}
+                selectedButtonId={selectedButtonId}
+                onSelect={(buttonId, anchor) => {
+                  setSelectedButtonId(buttonId);
+                  setSelectedAnchor(anchor);
+                }}
               />
-              <div className="editor-meta">
-                <span>{selectedText.length} characters</span>
-                {dirty && <span className="unsaved-indicator">Unsaved changes</span>}
-              </div>
-            </div>
+            )}
           </div>
         </section>
 
