@@ -435,6 +435,7 @@ test("binds the selected button from only the next physical press", async () => 
     level: "info",
     message: "GPIO7: captured",
     gpio: 7,
+    pressed: true,
     connection: { state: "connected", port: "/dev/cu.test" },
   } }));
   expect(screen.getByLabelText("GPIO for 2")).toHaveValue("7");
@@ -444,6 +445,7 @@ test("binds the selected button from only the next physical press", async () => 
     level: "info",
     message: "GPIO5: normal press",
     gpio: 5,
+    pressed: true,
     connection: { state: "connected", port: "/dev/cu.test" },
   } }));
   expect(screen.getByLabelText("GPIO for 2")).toHaveValue("7");
@@ -469,6 +471,7 @@ test("ignores GPIO until capture enable is acknowledged", async () => {
     level: "info",
     message: "GPIO7: before acknowledgement",
     gpio: 7,
+    pressed: true,
     connection: { state: "connected", port: "/dev/cu.test" },
   } }));
   expect(screen.getByLabelText("GPIO for 2")).toHaveValue("6");
@@ -479,6 +482,7 @@ test("ignores GPIO until capture enable is acknowledged", async () => {
     level: "info",
     message: "GPIO7: captured",
     gpio: 7,
+    pressed: true,
     connection: { state: "connected", port: "/dev/cu.test" },
   } }));
   expect(screen.getByLabelText("GPIO for 2")).toHaveValue("7");
@@ -506,6 +510,7 @@ test("keeps capture inactive when enable fails", async () => {
     level: "info",
     message: "GPIO5: normal press",
     gpio: 5,
+    pressed: true,
     connection: { state: "connected", port: "/dev/cu.test" },
   } }));
   expect(screen.getByLabelText("GPIO for 3")).toHaveValue("");
@@ -545,6 +550,7 @@ test("serializes rapid capture cancel and reselection", async () => {
     level: "info",
     message: "GPIO4: stale capture",
     gpio: 4,
+    pressed: true,
     connection: { state: "connected", port: "/dev/cu.test" },
   } }));
   expect(screen.getByLabelText("GPIO for 3")).toHaveValue("");
@@ -556,6 +562,7 @@ test("serializes rapid capture cancel and reselection", async () => {
     level: "info",
     message: "GPIO5: before second acknowledgement",
     gpio: 5,
+    pressed: true,
     connection: { state: "connected", port: "/dev/cu.test" },
   } }));
   expect(screen.getByLabelText("GPIO for 3")).toHaveValue("");
@@ -566,6 +573,7 @@ test("serializes rapid capture cancel and reselection", async () => {
     level: "info",
     message: "GPIO5: captured",
     gpio: 5,
+    pressed: true,
     connection: { state: "connected", port: "/dev/cu.test" },
   } }));
   expect(screen.getByLabelText("GPIO for 3")).toHaveValue("5");
@@ -620,6 +628,7 @@ test("captures only while an IO popover is connected", async () => {
     level: "info",
     message: "connected",
     gpio: null,
+    pressed: null,
     connection: { state: "connected", port: "/dev/cu.test" },
   } }));
   await waitFor(() =>
@@ -631,6 +640,7 @@ test("captures only while an IO popover is connected", async () => {
     level: "warning",
     message: "disconnected",
     gpio: null,
+    pressed: null,
     connection: { state: "searching", port: null },
   } }));
   await waitFor(() => {
@@ -794,6 +804,56 @@ test("keeps the selected model when saving fails", async () => {
   expect(screen.getByRole("button", { name: "Save workspace" })).toBeEnabled();
 });
 
+test("shows a mapped key as pressed until its physical input is released", async () => {
+  render(<App />);
+  const key = await screen.findByRole("button", { name: "Configure 2" });
+
+  act(() => onRuntimeEvent?.({ payload: {
+    timestampMs: 1,
+    level: "info",
+    message: "GPIO6: PASTE 1",
+    connection: { state: "connected", port: "/dev/cu.test" },
+    gpio: 6,
+    pressed: true,
+  } }));
+  expect(key).toHaveClass("is-physically-pressed");
+
+  act(() => onRuntimeEvent?.({ payload: {
+    timestampMs: 2,
+    level: "info",
+    message: "GPIO6: UP 2",
+    connection: { state: "connected", port: "/dev/cu.test" },
+    gpio: 6,
+    pressed: false,
+  } }));
+  expect(key).not.toHaveClass("is-physically-pressed");
+});
+
+test("clears physical press feedback when the device disconnects", async () => {
+  render(<App />);
+  const key = await screen.findByRole("button", { name: "Configure 2" });
+
+  act(() => onRuntimeEvent?.({ payload: {
+    timestampMs: 1,
+    level: "info",
+    message: "GPIO6: PASTE 1",
+    connection: { state: "connected", port: "/dev/cu.test" },
+    gpio: 6,
+    pressed: true,
+  } }));
+  expect(key).toHaveClass("is-physically-pressed");
+
+  act(() => onRuntimeEvent?.({ payload: {
+    timestampMs: 2,
+    level: "warning",
+    message: "Waiting for device",
+    connection: { state: "searching", port: null },
+    gpio: null,
+    pressed: null,
+  } }));
+  expect(key).not.toHaveClass("is-physically-pressed");
+});
+
 test("shows runtime events and current connection", async () => {
   render(<App />);
   await screen.findByRole("button", { name: "Configure 2" });
@@ -806,6 +866,7 @@ test("shows runtime events and current connection", async () => {
         message: "GPIO6: PASTE 12",
         connection: { state: "connected", port: "/dev/cu.usbmodem" },
         gpio: 6,
+        pressed: true,
       },
     });
   });

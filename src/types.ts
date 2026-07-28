@@ -46,4 +46,5 @@ export interface RuntimeEvent {
   message: string;
   connection: ConnectionStatus;
   gpio: number | null;
+  pressed: boolean | null;
 }

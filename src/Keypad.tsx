@@ -9,6 +9,7 @@ interface KeypadProps {
   ioMap: Record<number, string>;
   actions: Record<string, ButtonAction>;
   supportedGpios: number[];
+  pressedButtonIds: ReadonlySet<string>;
   selectedButtonId: string | null;
   selectedAnchor: DOMRect | null;
   capturedGpio: number | null;
@@ -63,6 +64,7 @@ export function Keypad({
   ioMap,
   actions,
   supportedGpios,
+  pressedButtonIds,
   selectedButtonId,
   selectedAnchor,
   capturedGpio,
@@ -105,7 +107,11 @@ export function Keypad({
                     ref={(element) => {
                       buttonElements.current[button.id] = element;
                     }}
-                    className={selectedButtonId === button.id ? "key is-selected" : "key"}
+                    className={[
+                      "key",
+                      selectedButtonId === button.id && "is-selected",
+                      pressedButtonIds.has(button.id) && "is-physically-pressed",
+                    ].filter(Boolean).join(" ")}
                     type="button"
                     aria-label={`Configure ${button.label}`}
                     aria-describedby={summaryId}

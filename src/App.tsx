@@ -41,6 +41,7 @@ export default function App() {
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
   const [selectedAnchor, setSelectedAnchor] = useState<DOMRect | null>(null);
   const [capturedGpio, setCapturedGpio] = useState<number | null>(null);
+  const [pressedGpios, setPressedGpios] = useState<Set<number>>(() => new Set());
   const capturingButtonRef = useRef<string | null>(null);
   const captureGenerationRef = useRef(0);
   const ioCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -76,7 +77,19 @@ export default function App() {
           if (!active) return;
           setConnection(payload.connection);
           setEvents((current) => [...current, payload].slice(-200));
-          if (capturingButtonRef.current && payload.gpio !== null) {
+          if (payload.connection.state !== "connected") {
+            setPressedGpios(new Set());
+          } else if (payload.gpio !== null && payload.pressed !== null) {
+            const gpio = payload.gpio;
+            const pressed = payload.pressed;
+            setPressedGpios((current) => {
+              const next = new Set(current);
+              if (pressed) next.add(gpio);
+              else next.delete(gpio);
+              return next;
+            });
+          }
+          if (capturingButtonRef.current && payload.gpio !== null && payload.pressed) {
             capturingButtonRef.current = null;
             setCapturedGpio(payload.gpio);
           }
@@ -163,6 +176,7 @@ export default function App() {
           message: `Save failed: ${message}`,
           connection,
           gpio: null,
+          pressed: null,
         },
       ].slice(-200));
     } finally {
@@ -192,7 +206,16 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleShortcut);
   }, [saveWorkspace]);
 
+  useEffect(() => {
+    setPressedGpios(new Set());
+  }, [activeModel]);
+
   const activeLayout = models.find((model) => model.id === activeModel);
+  const pressedButtonIds = useMemo(() => new Set(
+    Object.entries(ioMaps[activeModel] ?? {})
+      .filter(([gpio]) => pressedGpios.has(Number(gpio)))
+      .map(([, buttonId]) => buttonId),
+  ), [activeModel, ioMaps, pressedGpios]);
   const missingActiveModel = loaded && !activeLayout;
   const connected = connection.state === "connected";
 
@@ -324,6 +347,7 @@ export default function App() {
                 ioMap={ioMaps[activeModel] ?? {}}
                 actions={actions}
                 supportedGpios={supportedGpios}
+                pressedButtonIds={pressedButtonIds}
                 selectedButtonId={selectedButtonId}
                 selectedAnchor={selectedAnchor}
                 capturedGpio={capturedGpio}
