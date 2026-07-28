@@ -225,7 +225,9 @@ pub fn run() {
             let config_error = (!config_errors.is_empty()).then(|| config_errors.join("\n"));
             let mappings = Arc::new(RwLock::new(mappings));
             let models = Arc::new(RwLock::new(models));
-            let connection = Arc::new(RwLock::new(ConnectionStatus::searching()));
+            let initial_connection = ConnectionStatus::searching();
+            tray::setup(app, &initial_connection)?;
+            let connection = Arc::new(RwLock::new(initial_connection));
             let capture_next_gpio = Arc::new(AtomicBool::new(false));
             let stop = Arc::new(AtomicBool::new(false));
             let worker = {

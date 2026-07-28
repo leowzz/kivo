@@ -1,9 +1,70 @@
 use crate::device::{ConnectionState, ConnectionStatus};
+use tauri::{
+    App, AppHandle, Manager,
+    image::Image,
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{TrayIcon, TrayIconBuilder},
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TrayAction {
     Open,
     Quit,
+}
+
+struct TrayState {
+    status: MenuItem<tauri::Wry>,
+    tray: TrayIcon<tauri::Wry>,
+}
+
+pub fn setup(app: &mut App, initial: &ConnectionStatus) -> tauri::Result<()> {
+    #[cfg(target_os = "macos")]
+    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+    let label = status_label(initial);
+    let status = MenuItem::with_id(app, "status", &label, false, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open-main", "Open Vibe Tool", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let quit = MenuItem::with_id(app, "quit-app", "Quit Vibe Tool", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&status, &separator, &open, &quit])?;
+    let icon = Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
+    let tooltip = format!("Vibe Tool - {label}");
+    let tray = TrayIconBuilder::with_id("menu-bar")
+        .icon(icon)
+        .icon_as_template(true)
+        .tooltip(&tooltip)
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| {
+            if let Some(action) = action_for(event.id().as_ref()) {
+                handle_action(app, action);
+            }
+        })
+        .build(app)?;
+
+    app.manage(TrayState { status, tray });
+    Ok(())
+}
+
+pub fn update_connection(app: &AppHandle, connection: &ConnectionStatus) {
+    let Some(state) = app.try_state::<TrayState>() else {
+        return;
+    };
+    let label = status_label(connection);
+    let _ = state.status.set_text(&label);
+    let _ = state.tray.set_tooltip(Some(format!("Vibe Tool - {label}")));
+}
+
+fn handle_action(app: &AppHandle, action: TrayAction) {
+    match action {
+        TrayAction::Open => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+        TrayAction::Quit => app.exit(0),
+    }
 }
 
 fn action_for(id: &str) -> Option<TrayAction> {

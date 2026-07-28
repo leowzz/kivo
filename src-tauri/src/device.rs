@@ -259,11 +259,12 @@ fn set_connection(
         if *current == next {
             false
         } else {
-            *current = next;
+            *current = next.clone();
             true
         }
     };
     if changed {
+        crate::tray::update_connection(app, &next);
         emit(
             app,
             connection,
