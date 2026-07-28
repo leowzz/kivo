@@ -12,7 +12,7 @@ struct PressEvent {
 enum class ResponseAction {
   Ignored,
   Cleared,
-  Paste,
+  Execute,
 };
 
 class GpioTriggerController {
@@ -27,7 +27,7 @@ class GpioTriggerController {
   static bool isSupportedPin(std::uint8_t gpio);
   std::optional<PressEvent> updatePin(std::uint8_t gpio, bool inputHigh,
                                       std::uint32_t nowMs);
-  ResponseAction handleResponse(std::uint32_t eventId, bool paste);
+  ResponseAction handleResponse(std::uint32_t eventId, bool execute);
   void expire(std::uint32_t nowMs);
   bool hasPendingEvent() const;
 

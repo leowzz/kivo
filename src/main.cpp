@@ -23,6 +23,15 @@ void pasteClipboard() {
   keyboard.releaseAll();
 }
 
+void sendHotkey(std::uint8_t modifierMask, std::uint8_t keycode) {
+  KeyReport report{};
+  report.modifiers = modifierMask;
+  report.keys[0] = keycode;
+  keyboard.sendReport(&report);
+  delay(10);
+  keyboard.releaseAll();
+}
+
 void handleResponseLine() {
   const auto response = parseHelperResponse(responseLine);
   responseLine.clear();
@@ -30,10 +39,15 @@ void handleResponseLine() {
     return;
   }
 
-  const bool paste = response->kind == HelperResponseKind::Paste;
-  if (controller.handleResponse(response->eventId, paste) ==
-      ResponseAction::Paste) {
+  const bool execute = response->kind != HelperResponseKind::Skip;
+  if (controller.handleResponse(response->eventId, execute) !=
+      ResponseAction::Execute) {
+    return;
+  }
+  if (response->kind == HelperResponseKind::Paste) {
     pasteClipboard();
+  } else if (response->kind == HelperResponseKind::Hotkey) {
+    sendHotkey(response->modifierMask, response->keycode);
   }
 }
 

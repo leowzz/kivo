@@ -52,13 +52,13 @@ std::optional<PressEvent> GpioTriggerController::updatePin(
 }
 
 ResponseAction GpioTriggerController::handleResponse(std::uint32_t eventId,
-                                                     bool paste) {
+                                                     bool execute) {
   if (!pendingEvent_.has_value() || pendingEvent_->id != eventId) {
     return ResponseAction::Ignored;
   }
 
   pendingEvent_.reset();
-  return paste ? ResponseAction::Paste : ResponseAction::Cleared;
+  return execute ? ResponseAction::Execute : ResponseAction::Cleared;
 }
 
 void GpioTriggerController::expire(std::uint32_t nowMs) {

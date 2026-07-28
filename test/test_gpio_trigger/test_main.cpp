@@ -109,6 +109,22 @@ void test_rejects_malformed_responses() {
   TEST_ASSERT_FALSE(parseHelperResponse("OTHER 1\n").has_value());
 }
 
+void test_parses_hotkey_response() {
+  const auto response = parseHelperResponse("HOTKEY 42 10 14\n");
+  TEST_ASSERT_TRUE(response.has_value());
+  TEST_ASSERT_EQUAL(HelperResponseKind::Hotkey, response->kind);
+  TEST_ASSERT_EQUAL_UINT32(42, response->eventId);
+  TEST_ASSERT_EQUAL_UINT8(10, response->modifierMask);
+  TEST_ASSERT_EQUAL_UINT8(14, response->keycode);
+}
+
+void test_rejects_malformed_hotkey_response() {
+  TEST_ASSERT_FALSE(parseHelperResponse("HOTKEY 42 10\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperResponse("HOTKEY 42 256 14\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperResponse("HOTKEY 42 10 0\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperResponse("HOTKEY 42 10 165\n").has_value());
+}
+
 void test_only_matching_paste_response_requests_keypress() {
   GpioTriggerController controller(0);
   controller.updatePin(6, false, 0);
@@ -118,7 +134,17 @@ void test_only_matching_paste_response_requests_keypress() {
   TEST_ASSERT_EQUAL(ResponseAction::Ignored,
                     controller.handleResponse(event->id + 1, true));
   TEST_ASSERT_TRUE(controller.hasPendingEvent());
-  TEST_ASSERT_EQUAL(ResponseAction::Paste,
+  TEST_ASSERT_EQUAL(ResponseAction::Execute,
+                    controller.handleResponse(event->id, true));
+  TEST_ASSERT_FALSE(controller.hasPendingEvent());
+}
+
+void test_matching_hotkey_response_requests_execution() {
+  GpioTriggerController controller(0);
+  controller.updatePin(6, false, 0);
+  const auto event = controller.updatePin(6, false, 30);
+  TEST_ASSERT_TRUE(event.has_value());
+  TEST_ASSERT_EQUAL(ResponseAction::Execute,
                     controller.handleResponse(event->id, true));
   TEST_ASSERT_FALSE(controller.hasPendingEvent());
 }
@@ -144,7 +170,10 @@ int main(int, char **) {
   RUN_TEST(test_serializes_press_event);
   RUN_TEST(test_parses_paste_and_skip_responses);
   RUN_TEST(test_rejects_malformed_responses);
+  RUN_TEST(test_parses_hotkey_response);
+  RUN_TEST(test_rejects_malformed_hotkey_response);
   RUN_TEST(test_only_matching_paste_response_requests_keypress);
+  RUN_TEST(test_matching_hotkey_response_requests_execution);
   RUN_TEST(test_matching_skip_response_clears_without_keypress);
   return UNITY_END();
 }
