@@ -132,6 +132,25 @@ test("records a shortcut from the application window", async () => {
   expect(within(editor).getByText("Command + Shift + K")).toBeInTheDocument();
 });
 
+test("manually selects a multi-modifier shortcut", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  const editor = await screen.findByRole("complementary", { name: "2" });
+
+  await user.click(screen.getByRole("button", { name: "按下按键" }));
+  await user.click(within(editor).getByRole("checkbox", { name: "Cmd" }));
+  await user.click(within(editor).getByRole("checkbox", { name: "Ctrl" }));
+  await user.click(within(editor).getByRole("checkbox", { name: "Shift" }));
+  await user.selectOptions(within(editor).getByRole("combobox", { name: "按键" }), "k");
+
+  expect(within(editor).getByText("Command + Control + Shift + K")).toBeInTheDocument();
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_model", {
+    model: expect.objectContaining({
+      actions: { DIGIT_2: [{ type: "hotkey", keys: ["cmd", "ctrl", "shift", "k"] }] },
+    }),
+  }), { timeout: 1600 });
+});
+
 test("reorders actions from the right editor", async () => {
   const user = userEvent.setup();
   currentSnapshot.models[0].actions.DIGIT_2 = [

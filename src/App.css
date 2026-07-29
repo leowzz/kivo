@@ -74,6 +74,11 @@ select:focus, input:focus, textarea:focus, button:focus-visible { border-color: 
 .hotkey-field { display: grid; grid-template-columns: 1fr auto; gap: 7px 10px; align-items: center; padding: 11px; }
 .hotkey-field > span { color: #626d69; font-size: 11px; }
 .hotkey-field output { grid-column: 1 / -1; min-height: 34px; display: flex; align-items: center; border: 1px solid #d4dbd8; border-radius: 5px; padding: 0 9px; color: #25302c; background: #f6f8f7; font-size: 12px; }
+.hotkey-manual { grid-column: 1 / -1; display: grid; gap: 7px; }
+.hotkey-modifiers { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.hotkey-modifiers label { min-height: 30px; display: flex; align-items: center; justify-content: center; gap: 4px; border: 1px solid #d4dbd8; border-radius: 5px; color: #48524f; font-size: 11px; }
+.hotkey-modifiers input { margin: 0; }
+.hotkey-manual select { width: 100%; min-width: 0; height: 32px; padding: 0 7px; }
 .record-button { grid-column: 1 / -1; min-height: 32px; display: flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid #cbd3d0; border-radius: 5px; background: #fff; font-size: 12px; }
 .record-button.is-recording { border-color: #c28a1b; color: #80590c; background: #fff9e9; }
 .add-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px; border-top: 1px solid #e1e6e3; background: #f8faf9; }
