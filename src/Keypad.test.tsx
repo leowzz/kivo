@@ -1,0 +1,38 @@
+import { render } from "@testing-library/react";
+import { expect, test, vi } from "vitest";
+import { Keypad } from "./Keypad";
+import type { ModelLayout } from "./types";
+
+test("sizes keypad groups by their row and column counts", () => {
+  const layout: ModelLayout = {
+    id: "test",
+    name: "Test",
+    groups: [
+      { id: "top", columns: 5, buttons: [{ id: "UP", label: "UP" }] },
+      {
+        id: "digits",
+        columns: 3,
+        buttons: Array.from({ length: 12 }, (_, index) => ({
+          id: String(index),
+          label: String(index),
+        })),
+      },
+    ],
+  };
+  const { container } = render(
+    <Keypad
+      layout={layout}
+      actions={{}}
+      selectedButtonId={null}
+      pressedButtonIds={new Set()}
+      actionCountLabel={(count) => `${count}`}
+      onSelect={vi.fn()}
+    />,
+  );
+  const groups = container.querySelectorAll<HTMLElement>(".key-group");
+
+  expect(groups[0].style.gridTemplateRows).toBe("repeat(1, minmax(0, 1fr))");
+  expect(groups[0].style.flexGrow).toBe("0.2");
+  expect(groups[1].style.gridTemplateRows).toBe("repeat(4, minmax(0, 1fr))");
+  expect(groups[1].style.flexGrow).toBe(String(4 / 3));
+});
