@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -101,6 +101,7 @@ test("builds an ordered action list and autosaves it", async () => {
   const user = userEvent.setup();
   render(<App />);
   await screen.findByRole("button", { name: "2，0 项行为" });
+  await screen.findByRole("complementary", { name: "2" });
 
   await user.click(screen.getByRole("button", { name: "粘贴文本" }));
   await user.type(screen.getByRole("textbox", { name: "文本" }), "你好");
@@ -117,6 +118,18 @@ test("builds an ordered action list and autosaves it", async () => {
     }),
   }), { timeout: 1600 });
   expect(screen.getByRole("button", { name: "2，2 项行为" })).toBeInTheDocument();
+});
+
+test("records a shortcut from the application window", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  const editor = await screen.findByRole("complementary", { name: "2" });
+
+  await user.click(screen.getByRole("button", { name: "按下按键" }));
+  await user.click(within(editor).getByRole("button", { name: "录入按键" }));
+  fireEvent.keyDown(window, { code: "KeyK", key: "k", metaKey: true, shiftKey: true });
+
+  expect(within(editor).getByText("Command + Shift + K")).toBeInTheDocument();
 });
 
 test("reorders actions from the right editor", async () => {
