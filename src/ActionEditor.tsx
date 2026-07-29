@@ -1,5 +1,5 @@
 import { ArrowDown, ArrowUp, Keyboard, Plus, TextCursorInput, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { formatHotkey, normalizeHotkey } from "./hotkey";
 import { t } from "./i18n";
 import type { ButtonAction, Language, ModelButton } from "./types";
@@ -19,6 +19,26 @@ function move(actions: ButtonAction[], index: number, offset: -1 | 1) {
 
 export function ActionEditor({ language, button, actions, onChange }: ActionEditorProps) {
   const [recording, setRecording] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (recording === null) return;
+    const handler = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      try {
+        const keys = normalizeHotkey(event);
+        if (!keys) return;
+        onChange(actions.map((item, index) => index === recording
+          ? { type: "hotkey", keys }
+          : item));
+        setRecording(null);
+      } catch {
+        // Keep recording until a supported key is pressed.
+      }
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [actions, onChange, recording]);
 
   if (!button) {
     return (
@@ -103,21 +123,8 @@ export function ActionEditor({ language, button, actions, onChange }: ActionEdit
                   className={recording === index ? "record-button is-recording" : "record-button"}
                   type="button"
                   aria-label={t(language, "behavior.record")}
-                  onClick={() => setRecording(index)}
+                  onClick={() => setRecording((current) => current === index ? null : index)}
                   onBlur={() => setRecording(null)}
-                  onKeyDown={(event) => {
-                    if (recording !== index) return;
-                    event.preventDefault();
-                    try {
-                      const keys = normalizeHotkey(event.nativeEvent);
-                      if (keys) {
-                        replace(index, { type: "hotkey", keys });
-                        setRecording(null);
-                      }
-                    } catch {
-                      // Keep recording until a supported key is pressed.
-                    }
-                  }}
                 >
                   <Keyboard size={16} />
                   {t(language, "behavior.record")}
