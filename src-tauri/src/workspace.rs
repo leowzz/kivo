@@ -377,6 +377,7 @@ pub struct LegacyPaths<'a> {
 }
 
 impl LegacyPaths<'_> {
+    #[cfg(test)]
     pub fn none() -> Self {
         Self::default()
     }
@@ -475,13 +476,6 @@ impl Workspace {
             settings,
             models,
         })
-    }
-
-    pub fn snapshot(&self) -> WorkspaceSnapshot {
-        WorkspaceSnapshot {
-            settings: self.settings.clone(),
-            models: self.models.clone(),
-        }
     }
 
     pub fn save_model(&mut self, model: ModelConfig) -> Result<(), AppError> {
