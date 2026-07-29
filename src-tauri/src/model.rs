@@ -96,6 +96,7 @@ pub fn load_all(directory: &Path) -> (Vec<ModelLayout>, Vec<String>) {
     (layouts, errors)
 }
 
+#[cfg(test)]
 pub fn sync_bundled(source: &Path, destination: &Path) -> Vec<String> {
     let entries = match fs::read_dir(source) {
         Ok(entries) => entries,
@@ -142,6 +143,7 @@ pub fn sync_bundled(source: &Path, destination: &Path) -> Vec<String> {
     errors
 }
 
+#[cfg(test)]
 pub fn save(directory: &Path, layout: &ModelLayout) -> Result<(), String> {
     layout.validate()?;
     fs::create_dir_all(directory)
@@ -151,6 +153,7 @@ pub fn save(directory: &Path, layout: &ModelLayout) -> Result<(), String> {
     crate::storage::atomic_write(&directory.join(format!("{}.json", layout.id)), &contents)
 }
 
+#[cfg(test)]
 pub fn seed_default(directory: &Path) -> Result<(), String> {
     fs::create_dir_all(directory)
         .map_err(|error| format!("create {}: {error}", directory.display()))?;

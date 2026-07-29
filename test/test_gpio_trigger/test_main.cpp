@@ -1,10 +1,174 @@
 #include <unity.h>
 
 #include "GpioTriggerController.h"
+#include "InputTopology.h"
 #include "TriggerProtocol.h"
 
 void setUp() {}
 void tearDown() {}
+
+GpioTriggerController directController(std::uint32_t startMs) {
+  TopologyBuilder builder;
+  builder.begin(1, 30);
+  builder.addDirect(1, 0, {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16,
+                           17, 18});
+  GpioTriggerController controller;
+  controller.configure(*builder.commit(1), startMs);
+  return controller;
+}
+
+void test_commits_complete_matrix_topology_atomically() {
+  TopologyBuilder builder;
+  TEST_ASSERT_TRUE(builder.begin(7, 30));
+  TEST_ASSERT_TRUE(builder.addMatrix(7, 0, {1, 2}, {12, 13}));
+
+  const auto topology = builder.commit(7);
+
+  TEST_ASSERT_TRUE(topology.has_value());
+  TEST_ASSERT_EQUAL_UINT32(7, topology->revision);
+  TEST_ASSERT_EQUAL_UINT8(2, topology->matrices[0].rows.size());
+}
+
+void test_contact_edge_reports_unordered_pair_once_after_debounce() {
+  TopologyBuilder builder;
+  TEST_ASSERT_TRUE(builder.begin(7, 30));
+  TEST_ASSERT_TRUE(builder.addMatrix(7, 0, {1, 2}, {12, 13}));
+  GpioTriggerController controller;
+  controller.configure(*builder.commit(7), 0);
+
+  TEST_ASSERT_FALSE(controller.updateContact(0, 1, 12, true, 10).has_value());
+  const auto event = controller.updateContact(0, 12, 1, true, 40);
+
+  TEST_ASSERT_TRUE(event.has_value());
+  TEST_ASSERT_EQUAL_UINT8(1, event->input.pinA);
+  TEST_ASSERT_EQUAL_UINT8(12, event->input.pinB);
+  TEST_ASSERT_FALSE(controller.updateContact(0, 1, 12, true, 80).has_value());
+}
+
+void test_parses_runtime_configuration_commands() {
+  const auto hello = parseHelperCommand("HELLO\n");
+  TEST_ASSERT_TRUE(hello.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::Hello, hello->kind);
+
+  const auto begin = parseHelperCommand("CONFIG_BEGIN 3 30\n");
+  TEST_ASSERT_TRUE(begin.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::ConfigBegin, begin->kind);
+  TEST_ASSERT_EQUAL_UINT32(3, begin->revision);
+  TEST_ASSERT_EQUAL_UINT16(30, begin->debounceMs);
+
+  const auto direct = parseHelperCommand("CONFIG_DIRECT 3 0 2 6 7\n");
+  TEST_ASSERT_TRUE(direct.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::ConfigDirect, direct->kind);
+  TEST_ASSERT_EQUAL_UINT8(0, direct->sourceIndex);
+  TEST_ASSERT_EQUAL_UINT8(2, direct->pins.size());
+
+  const auto matrix =
+      parseHelperCommand("CONFIG_MATRIX 3 1 2 1 2 2 12 13\n");
+  TEST_ASSERT_TRUE(matrix.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::ConfigMatrix, matrix->kind);
+  TEST_ASSERT_EQUAL_UINT8(2, matrix->rows.size());
+  TEST_ASSERT_EQUAL_UINT8(2, matrix->columns.size());
+
+  const auto commit = parseHelperCommand("CONFIG_COMMIT 3\n");
+  TEST_ASSERT_TRUE(commit.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::ConfigCommit, commit->kind);
+}
+
+void test_parses_learning_and_ordered_action_commands() {
+  const auto begin = parseHelperCommand("LEARN_BEGIN 4 4 1 2 12 13\n");
+  TEST_ASSERT_TRUE(begin.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::LearnBegin, begin->kind);
+  TEST_ASSERT_EQUAL_UINT8(4, begin->pins.size());
+
+  const auto end = parseHelperCommand("LEARN_END 4\n");
+  TEST_ASSERT_TRUE(end.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::LearnEnd, end->kind);
+
+  const auto paste = parseHelperCommand("PASTE 9 1 2\n");
+  TEST_ASSERT_TRUE(paste.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::Paste, paste->kind);
+  TEST_ASSERT_EQUAL_UINT16(1, paste->step);
+  TEST_ASSERT_EQUAL_UINT16(2, paste->total);
+
+  const auto hotkey = parseHelperCommand("HOTKEY 9 2 2 0 40\n");
+  TEST_ASSERT_TRUE(hotkey.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::Hotkey, hotkey->kind);
+  TEST_ASSERT_EQUAL_UINT8(40, hotkey->keycode);
+
+  const auto skip = parseHelperCommand("SKIP 9\n");
+  TEST_ASSERT_TRUE(skip.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::Skip, skip->kind);
+}
+
+void test_rejects_malformed_runtime_commands() {
+  TEST_ASSERT_FALSE(
+      parseHelperCommand("CONFIG_DIRECT 3 0 2 6\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand(
+                        "CONFIG_MATRIX 3 1 2 1 1 2 12 13\n")
+                        .has_value());
+  TEST_ASSERT_FALSE(
+      parseHelperCommand("LEARN_BEGIN 4 2 1 1\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("PASTE 9 0 2\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("HOTKEY 9 2 1 0 40\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand(std::string(256, 'x')).has_value());
+}
+
+void test_action_steps_are_strictly_ordered() {
+  auto controller = directController(0);
+  controller.updatePin(6, false, 0);
+  const auto event = controller.updatePin(6, false, 30);
+  TEST_ASSERT_TRUE(event.has_value());
+
+  TEST_ASSERT_EQUAL(ResponseAction::Ignored,
+                    controller.acceptStep(event->id, 2, 2, true, 40));
+  TEST_ASSERT_EQUAL(ResponseAction::Execute,
+                    controller.acceptStep(event->id, 1, 2, true, 40));
+  TEST_ASSERT_TRUE(controller.hasPendingEvent());
+  controller.expire(2039);
+  TEST_ASSERT_TRUE(controller.hasPendingEvent());
+  TEST_ASSERT_EQUAL(ResponseAction::Execute,
+                    controller.acceptStep(event->id, 2, 2, true, 2039));
+  TEST_ASSERT_FALSE(controller.hasPendingEvent());
+}
+
+void test_learning_reports_contact_and_restores_runtime_topology() {
+  TopologyBuilder builder;
+  builder.begin(7, 30);
+  builder.addDirect(7, 0, {6});
+  GpioTriggerController controller;
+  controller.configure(*builder.commit(7), 0);
+
+  TEST_ASSERT_FALSE(controller.beginLearning(4, {1, 10, 12}, 0));
+  TEST_ASSERT_TRUE(controller.beginLearning(4, {1, 12}, 0));
+  TEST_ASSERT_FALSE(
+      controller.updateLearningContact(12, 1, true, 10).has_value());
+  const auto event = controller.updateLearningContact(1, 12, true, 40);
+
+  TEST_ASSERT_TRUE(event.has_value());
+  TEST_ASSERT_EQUAL_STRING("LEARN_CONTACT 1 12 DOWN\n",
+                           formatLearningEvent(*event).c_str());
+  TEST_ASSERT_FALSE(controller.endLearning(5, 50));
+  TEST_ASSERT_TRUE(controller.endLearning(4, 50));
+  TEST_ASSERT_EQUAL_UINT32(7, controller.topology().revision);
+}
+
+void test_suppresses_new_contact_that_closes_a_ghost_cycle() {
+  TopologyBuilder builder;
+  builder.begin(1, 1);
+  builder.addMatrix(1, 0, {1, 2}, {12, 13});
+  GpioTriggerController controller;
+  controller.configure(*builder.commit(1), 0);
+
+  for (const auto pair :
+       {std::pair<std::uint8_t, std::uint8_t>{1, 12}, {1, 13}, {2, 12}}) {
+    controller.updateContact(0, pair.first, pair.second, true, 0);
+    TEST_ASSERT_TRUE(
+        controller.updateContact(0, pair.first, pair.second, true, 1)
+            .has_value());
+  }
+  controller.updateContact(0, 2, 13, true, 2);
+  TEST_ASSERT_FALSE(controller.updateContact(0, 2, 13, true, 3).has_value());
+}
 
 void test_exposes_supported_gpio_inputs() {
   TEST_ASSERT_TRUE(GpioTriggerController::isSupportedPin(0));
@@ -18,7 +182,7 @@ void test_exposes_supported_gpio_inputs() {
 }
 
 void test_stable_edges_emit_once_after_debounce() {
-  GpioTriggerController controller(0);
+  auto controller = directController(0);
 
   TEST_ASSERT_FALSE(controller.updatePin(6, false, 1000).has_value());
   TEST_ASSERT_FALSE(controller.updatePin(6, true, 1010).has_value());
@@ -46,13 +210,13 @@ void test_stable_edges_emit_once_after_debounce() {
 }
 
 void test_release_rearms_pin_for_a_later_press() {
-  GpioTriggerController controller(0);
+  auto controller = directController(0);
 
   controller.updatePin(6, false, 0);
   const auto first = controller.updatePin(6, false, 30);
   TEST_ASSERT_TRUE(first.has_value());
   TEST_ASSERT_EQUAL(ResponseAction::Cleared,
-                    controller.handleResponse(first->id, false));
+                    controller.acceptStep(first->id, 0, 0, false, 31));
 
   controller.updatePin(6, true, 40);
   controller.updatePin(6, true, 70);
@@ -64,7 +228,7 @@ void test_release_rearms_pin_for_a_later_press() {
 }
 
 void test_tracks_pending_responses_per_gpio() {
-  GpioTriggerController controller(0);
+  auto controller = directController(0);
 
   controller.updatePin(6, false, 0);
   const auto first = controller.updatePin(6, false, 30);
@@ -76,15 +240,15 @@ void test_tracks_pending_responses_per_gpio() {
   TEST_ASSERT_EQUAL_UINT32(1, first->id);
   TEST_ASSERT_EQUAL_UINT32(2, second->id);
   TEST_ASSERT_EQUAL(ResponseAction::Execute,
-                    controller.handleResponse(second->id, true));
+                    controller.acceptStep(second->id, 1, 1, true, 71));
   TEST_ASSERT_TRUE(controller.hasPendingEvent());
   TEST_ASSERT_EQUAL(ResponseAction::Cleared,
-                    controller.handleResponse(first->id, false));
+                    controller.acceptStep(first->id, 0, 0, false, 72));
   TEST_ASSERT_FALSE(controller.hasPendingEvent());
 }
 
 void test_pending_responses_expire() {
-  GpioTriggerController controller(0);
+  auto controller = directController(0);
 
   controller.updatePin(6, false, 0);
   TEST_ASSERT_TRUE(controller.updatePin(6, false, 30).has_value());
@@ -96,7 +260,7 @@ void test_pending_responses_expire() {
 
 void test_debounce_survives_millisecond_clock_rollover() {
   constexpr std::uint32_t kBeforeRollover = 0xFFFFFFF5U;
-  GpioTriggerController controller(kBeforeRollover);
+  auto controller = directController(kBeforeRollover);
 
   TEST_ASSERT_FALSE(
       controller.updatePin(6, false, kBeforeRollover).has_value());
@@ -109,100 +273,113 @@ void test_debounce_survives_millisecond_clock_rollover() {
 
 void test_serializes_input_state_events() {
   TEST_ASSERT_EQUAL_STRING(
-      "STATE 42 6 DOWN\n",
+      "STATE 42 DIRECT 6 DOWN\n",
       formatInputEvent(InputEvent{42, 6, InputState::Down}).c_str());
   TEST_ASSERT_EQUAL_STRING(
-      "STATE 43 6 UP\n",
-      formatInputEvent(InputEvent{43, 6, InputState::Up}).c_str());
+      "STATE 43 CONTACT 1 6 12 UP\n",
+      formatInputEvent(InputEvent{43, PhysicalInput::contact(1, 12, 6),
+                                  InputState::Up})
+          .c_str());
+  TEST_ASSERT_EQUAL_STRING(
+      "DONE 43 2\n",
+      formatDone(43, 2).c_str());
 }
 
 void test_parses_paste_and_skip_responses() {
-  const auto paste = parseHelperResponse("PASTE 42\n");
+  const auto paste = parseHelperCommand("PASTE 42 1 1\n");
   TEST_ASSERT_TRUE(paste.has_value());
-  TEST_ASSERT_EQUAL(HelperResponseKind::Paste, paste->kind);
+  TEST_ASSERT_EQUAL(HelperCommandKind::Paste, paste->kind);
   TEST_ASSERT_EQUAL_UINT32(42, paste->eventId);
 
-  const auto skip = parseHelperResponse("SKIP 7\r\n");
+  const auto skip = parseHelperCommand("SKIP 7\r\n");
   TEST_ASSERT_TRUE(skip.has_value());
-  TEST_ASSERT_EQUAL(HelperResponseKind::Skip, skip->kind);
+  TEST_ASSERT_EQUAL(HelperCommandKind::Skip, skip->kind);
   TEST_ASSERT_EQUAL_UINT32(7, skip->eventId);
 }
 
 void test_rejects_malformed_responses() {
-  TEST_ASSERT_FALSE(parseHelperResponse("PASTE\n").has_value());
-  TEST_ASSERT_FALSE(parseHelperResponse("PASTE nope\n").has_value());
-  TEST_ASSERT_FALSE(parseHelperResponse("PASTE 1 trailing\n").has_value());
-  TEST_ASSERT_FALSE(parseHelperResponse("OTHER 1\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("PASTE\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("PASTE nope 1 1\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("PASTE 1 1 1 trailing\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("OTHER 1\n").has_value());
 }
 
 void test_parses_hotkey_response() {
-  const auto response = parseHelperResponse("HOTKEY 42 10 14\n");
+  const auto response = parseHelperCommand("HOTKEY 42 1 1 10 14\n");
   TEST_ASSERT_TRUE(response.has_value());
-  TEST_ASSERT_EQUAL(HelperResponseKind::Hotkey, response->kind);
+  TEST_ASSERT_EQUAL(HelperCommandKind::Hotkey, response->kind);
   TEST_ASSERT_EQUAL_UINT32(42, response->eventId);
   TEST_ASSERT_EQUAL_UINT8(10, response->modifierMask);
   TEST_ASSERT_EQUAL_UINT8(14, response->keycode);
 }
 
 void test_rejects_malformed_hotkey_response() {
-  TEST_ASSERT_FALSE(parseHelperResponse("HOTKEY 42 10\n").has_value());
-  TEST_ASSERT_FALSE(parseHelperResponse("HOTKEY 42 256 14\n").has_value());
-  TEST_ASSERT_FALSE(parseHelperResponse("HOTKEY 42 10 0\n").has_value());
-  TEST_ASSERT_FALSE(parseHelperResponse("HOTKEY 42 10 165\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("HOTKEY 42 1 1 10\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("HOTKEY 42 1 1 256 14\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("HOTKEY 42 1 1 10 0\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("HOTKEY 42 1 1 10 165\n").has_value());
 }
 
 void test_discards_the_rest_of_an_overlong_physical_line() {
-  ResponseLineBuffer lines(10);
+  ResponseLineBuffer lines(16);
 
-  for (const char character : std::string("OVERLONG RESPONSEPASTE 42\n")) {
+  for (const char character : std::string("OVERLONG RESPONSE PASTE 42 1 1\n")) {
     TEST_ASSERT_FALSE(lines.push(character).has_value());
   }
 
   std::optional<std::string> response;
-  for (const char character : std::string("PASTE 7\n")) {
+  for (const char character : std::string("PASTE 7 1 1\n")) {
     response = lines.push(character);
   }
   TEST_ASSERT_TRUE(response.has_value());
-  TEST_ASSERT_EQUAL_STRING("PASTE 7\n", response->c_str());
+  TEST_ASSERT_EQUAL_STRING("PASTE 7 1 1\n", response->c_str());
 }
 
 void test_only_matching_paste_response_requests_keypress() {
-  GpioTriggerController controller(0);
+  auto controller = directController(0);
   controller.updatePin(6, false, 0);
   const auto event = controller.updatePin(6, false, 30);
   TEST_ASSERT_TRUE(event.has_value());
 
   TEST_ASSERT_EQUAL(ResponseAction::Ignored,
-                    controller.handleResponse(event->id + 1, true));
+                    controller.acceptStep(event->id + 1, 1, 1, true, 31));
   TEST_ASSERT_TRUE(controller.hasPendingEvent());
   TEST_ASSERT_EQUAL(ResponseAction::Execute,
-                    controller.handleResponse(event->id, true));
+                    controller.acceptStep(event->id, 1, 1, true, 31));
   TEST_ASSERT_FALSE(controller.hasPendingEvent());
 }
 
 void test_matching_hotkey_response_requests_execution() {
-  GpioTriggerController controller(0);
+  auto controller = directController(0);
   controller.updatePin(6, false, 0);
   const auto event = controller.updatePin(6, false, 30);
   TEST_ASSERT_TRUE(event.has_value());
   TEST_ASSERT_EQUAL(ResponseAction::Execute,
-                    controller.handleResponse(event->id, true));
+                    controller.acceptStep(event->id, 1, 1, true, 31));
   TEST_ASSERT_FALSE(controller.hasPendingEvent());
 }
 
 void test_matching_skip_response_clears_without_keypress() {
-  GpioTriggerController controller(0);
+  auto controller = directController(0);
   controller.updatePin(6, false, 0);
   const auto event = controller.updatePin(6, false, 30);
   TEST_ASSERT_TRUE(event.has_value());
 
   TEST_ASSERT_EQUAL(ResponseAction::Cleared,
-                    controller.handleResponse(event->id, false));
+                    controller.acceptStep(event->id, 0, 0, false, 31));
   TEST_ASSERT_FALSE(controller.hasPendingEvent());
 }
 
 int main(int, char **) {
   UNITY_BEGIN();
+  RUN_TEST(test_commits_complete_matrix_topology_atomically);
+  RUN_TEST(test_contact_edge_reports_unordered_pair_once_after_debounce);
+  RUN_TEST(test_parses_runtime_configuration_commands);
+  RUN_TEST(test_parses_learning_and_ordered_action_commands);
+  RUN_TEST(test_rejects_malformed_runtime_commands);
+  RUN_TEST(test_action_steps_are_strictly_ordered);
+  RUN_TEST(test_learning_reports_contact_and_restores_runtime_topology);
+  RUN_TEST(test_suppresses_new_contact_that_closes_a_ghost_cycle);
   RUN_TEST(test_exposes_supported_gpio_inputs);
   RUN_TEST(test_stable_edges_emit_once_after_debounce);
   RUN_TEST(test_release_rearms_pin_for_a_later_press);

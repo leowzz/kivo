@@ -1,917 +1,263 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { UnlistenFn } from "@tauri-apps/api/event";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { beforeEach, expect, test, vi } from "vitest";
 import App from "./App";
-import * as KeypadModule from "./Keypad";
-import type { AppSnapshot, RuntimeEvent } from "./types";
+import type { AppSnapshot, ModelConfig } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 
-const snapshot = {
-  models: [
-    {
-      id: "red-phone-v1",
-      name: "Red Phone v1",
-      groups: [
-        {
-          id: "top",
-          columns: 4,
-          buttons: [
-            { id: "UP", label: "UP" },
-            { id: "DOWN", label: "DOWN" },
-            { id: "BACK_OUT", label: "BACK/OUT" },
-            { id: "DEL", label: "DEL" },
-          ],
-        },
-        {
-          id: "digits",
-          columns: 3,
-          buttons: [
-            { id: "DIGIT_1", label: "1" },
-            { id: "DIGIT_2", label: "2" },
-            { id: "DIGIT_3", label: "3" },
-          ],
-        },
-        {
-          id: "bottom",
-          columns: 5,
-          buttons: [
-            { id: "R", label: "R" },
-            { id: "VOL", label: "VOL" },
-          ],
-        },
+const model: ModelConfig = {
+  schema_version: 1,
+  model: {
+    id: "tel-carbon-v1",
+    name: "碳膜电话键盘",
+    groups: [{
+      id: "digits",
+      columns: 2,
+      buttons: [
+        { id: "DIGIT_2", label: "2" },
+        { id: "ENTER", label: "确认" },
       ],
-    },
-  ],
-  activeModel: "red-phone-v1",
-  ioMaps: { "red-phone-v1": { 6: "DIGIT_2" } },
-  actions: {
-    UP: { type: "hotkey", keys: ["cmd", "shift", "k"] },
-    DOWN: { type: "hotkey", keys: ["option", "page_up"] },
-    BACK_OUT: { type: "paste", text: "This behavior preview is intentionally long" },
-    DIGIT_2: { type: "paste", text: "six" },
+    }],
   },
-  supportedGpios: [0, 1, 2, 3, 4, 5, 6],
-  configPath: "/tmp/kivo/config.yaml",
+  hardware: {
+    controller: "esp32s3",
+    debounce_ms: 30,
+    inputs: [
+      { type: "direct", id: "side", keys: { ENTER: 6 } },
+      { type: "contact_matrix", id: "carbon", pins: [1, 2, 12, 13], keys: { DIGIT_2: [1, 12] } },
+    ],
+  },
+  actions: {},
+};
+
+const baseSnapshot: AppSnapshot = {
+  models: [model],
+  activeModel: model.model.id,
+  language: "zh-CN",
+  supportedGpios: [1, 2, 6, 12, 13],
   connection: { state: "connected", port: "/dev/cu.test" },
-  configError: null,
-} satisfies AppSnapshot;
+  runtimeError: null,
+  learning: null,
+};
 
-let onRuntimeEvent: ((event: { payload: RuntimeEvent }) => void) | undefined;
-let unlisten: UnlistenFn;
-
-function deferred() {
-  let resolve!: () => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
-    resolve = () => resolvePromise();
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
+let currentSnapshot: AppSnapshot;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  HTMLDialogElement.prototype.showModal = function showModal() {
-    this.setAttribute("open", "");
-  };
-  HTMLDialogElement.prototype.close = function close() {
-    this.removeAttribute("open");
-  };
-  onRuntimeEvent = undefined;
-  unlisten = vi.fn();
-  vi.mocked(invoke).mockImplementation(async (command, arguments_) => {
-    if (command === "save_workspace") {
-      return { ...snapshot, ...(arguments_ as Partial<AppSnapshot>) };
+  currentSnapshot = structuredClone(baseSnapshot);
+  HTMLDialogElement.prototype.showModal = function showModal() { this.setAttribute("open", ""); };
+  HTMLDialogElement.prototype.close = function close() { this.removeAttribute("open"); };
+  vi.mocked(listen).mockResolvedValue(vi.fn());
+  vi.mocked(open).mockResolvedValue(null);
+  vi.mocked(save).mockResolvedValue(null);
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "save_model") {
+      const saved = (args as { model: ModelConfig }).model;
+      currentSnapshot.models = currentSnapshot.models.map((item) => item.model.id === saved.model.id ? saved : item);
     }
-    return snapshot;
-  });
-  vi.mocked(listen).mockImplementation(async (_event, handler) => {
-    onRuntimeEvent = handler as (event: { payload: RuntimeEvent }) => void;
-    return unlisten;
+    if (command === "save_settings") {
+      const settings = (args as { settings: { active_model: string | null; language: AppSnapshot["language"] } }).settings;
+      currentSnapshot.activeModel = settings.active_model;
+      currentSnapshot.language = settings.language;
+    }
+    if (command === "delete_model") {
+      currentSnapshot = { ...currentSnapshot, models: [], activeModel: null };
+    }
+    return structuredClone(currentSnapshot);
   });
 });
 
-test("edits the active layout and saves the staged models", async () => {
+test("uses Chinese by default with behavior first and no global save button", async () => {
+  render(<App />);
+
+  expect(await screen.findByRole("heading", { name: "按键行为" })).toBeInTheDocument();
+  expect(screen.getByRole("navigation", { name: "配置" })).toBeInTheDocument();
+  expect(screen.getByLabelText("设备型号")).toHaveValue("tel-carbon-v1");
+  expect(screen.queryByRole("button", { name: /^保存$/ })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "2，0 项行为" })).toBeInTheDocument();
+});
+
+test("switches the complete interface to English", async () => {
   const user = userEvent.setup();
   render(<App />);
-  await user.click(await screen.findByRole("button", { name: "Edit layout" }));
+  await screen.findByText("配置文件");
 
-  const columns = screen.getByLabelText("Columns for top");
-  await user.clear(columns);
-  await user.type(columns, "5");
-  expect(screen.getByLabelText("Button ID BACK_OUT")).toHaveValue("BACK_OUT");
-  expect(screen.getByLabelText("Button ID BACK_OUT")).toHaveAttribute("readonly");
-  const label = screen.getByLabelText("Label for BACK_OUT");
-  await user.clear(label);
-  await user.type(label, "GO BACK");
-  await user.click(screen.getByRole("button", { name: "Move BACK_OUT up" }));
-  await user.click(screen.getByRole("button", { name: "Apply layout" }));
+  await user.selectOptions(screen.getByLabelText("语言"), "en-US");
 
-  expect(screen.getByRole("button", { name: "Configure GO BACK" })).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Save workspace" }));
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_workspace", {
-    activeModel: snapshot.activeModel,
-    ioMaps: snapshot.ioMaps,
-    actions: snapshot.actions,
-    models: [{
-      ...snapshot.models[0],
-      groups: [{
-        ...snapshot.models[0].groups[0],
-        columns: 5,
-        buttons: [
-          snapshot.models[0].groups[0].buttons[0],
-          { id: "BACK_OUT", label: "GO BACK" },
-          snapshot.models[0].groups[0].buttons[1],
-          snapshot.models[0].groups[0].buttons[3],
+  expect(await screen.findByText("Configuration files")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Button behavior" })).toBeInTheDocument();
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_settings", {
+    settings: { schema_version: 1, active_model: "tel-carbon-v1", language: "en-US" },
+  }));
+});
+
+test("builds an ordered action list and autosaves it", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByRole("button", { name: "2，0 项行为" });
+  await screen.findByRole("complementary", { name: "2" });
+
+  await user.click(screen.getByRole("button", { name: "粘贴文本" }));
+  await user.type(screen.getByRole("textbox", { name: "文本" }), "你好");
+  await user.click(screen.getByRole("button", { name: "按下按键" }));
+
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_model", {
+    model: expect.objectContaining({
+      actions: {
+        DIGIT_2: [
+          { type: "paste", text: "你好" },
+          { type: "hotkey", keys: ["enter"] },
         ],
-      }, ...snapshot.models[0].groups.slice(1)],
-    }],
-  }));
-});
-
-test("rejects a duplicate normalized new button ID", async () => {
-  const user = userEvent.setup();
-  render(<App />);
-  await user.click(await screen.findByRole("button", { name: "Edit layout" }));
-  await user.click(screen.getByRole("button", { name: "Add button to top" }));
-  await user.type(screen.getByLabelText("New button ID"), "back out");
-  await user.type(screen.getByLabelText("Label for new button"), "Duplicate");
-
-  expect(screen.getByRole("alert")).toHaveTextContent("Button IDs must be unique");
-  expect(screen.getByRole("button", { name: "Apply layout" })).toBeDisabled();
-});
-
-test("removes deleted buttons only from the active model IO map", async () => {
-  const user = userEvent.setup();
-  const otherModel = {
-    id: "other-phone",
-    name: "Other Phone",
-    groups: [{
-      id: "keys",
-      columns: 1,
-      buttons: [{ id: "OTHER", label: "Other" }],
-    }],
-  };
-  const models = [...snapshot.models, otherModel];
-  const ioMaps = {
-    "red-phone-v1": { 5: "DIGIT_3", 6: "DIGIT_2" },
-    "other-phone": { 4: "OTHER" },
-  };
-  vi.mocked(invoke).mockResolvedValueOnce({ ...snapshot, models, ioMaps });
-  render(<App />);
-  await user.click(await screen.findByRole("button", { name: "Edit layout" }));
-  await user.click(screen.getByRole("button", { name: "Delete DIGIT_2" }));
-  await user.click(screen.getByRole("button", { name: "Apply layout" }));
-  await user.click(screen.getByRole("button", { name: "Save workspace" }));
-
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_workspace", {
-    activeModel: snapshot.activeModel,
-    ioMaps: {
-      "red-phone-v1": { 5: "DIGIT_3" },
-      "other-phone": { 4: "OTHER" },
-    },
-    actions: snapshot.actions,
-    models: [{
-      ...snapshot.models[0],
-      groups: snapshot.models[0].groups.map((group) => ({
-        ...group,
-        buttons: group.buttons.filter((button) => button.id !== "DIGIT_2"),
-      })),
-    }, otherModel],
-  }));
-});
-
-test("preserves existing layout IDs byte for byte", async () => {
-  const user = userEvent.setup();
-  const whitespaceLayout = {
-    ...snapshot.models[0],
-    groups: [{
-      id: " media ",
-      columns: 1,
-      buttons: [{ id: "PLAY PAUSE ", label: "PLAY/PAUSE" }],
-    }],
-  };
-  vi.mocked(invoke).mockResolvedValueOnce({
-    ...snapshot,
-    models: [whitespaceLayout],
-    ioMaps: { "red-phone-v1": { 6: "PLAY PAUSE " } },
-    actions: {},
-  });
-  render(<App />);
-  await user.click(await screen.findByRole("button", { name: "Edit layout" }));
-  const columns = screen.getByLabelText("Columns for media");
-  await user.clear(columns);
-  await user.type(columns, "2");
-  await user.click(screen.getByRole("button", { name: "Apply layout" }));
-  await user.click(screen.getByRole("button", { name: "Save workspace" }));
-
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_workspace", {
-    activeModel: snapshot.activeModel,
-    ioMaps: { "red-phone-v1": { 6: "PLAY PAUSE " } },
-    actions: {},
-    models: [{
-      ...whitespaceLayout,
-      groups: [{ ...whitespaceLayout.groups[0], columns: 2 }],
-    }],
-  }));
-});
-
-test("does not save or reset a local layout draft on Command+S", async () => {
-  const user = userEvent.setup();
-  vi.mocked(invoke).mockResolvedValueOnce({ ...snapshot, activeModel: "missing-model" });
-  render(<App />);
-  await user.selectOptions(
-    await screen.findByRole("combobox", { name: "Device model" }),
-    "red-phone-v1",
-  );
-  await user.click(screen.getByRole("button", { name: "Edit layout" }));
-  const label = screen.getByLabelText("Label for BACK_OUT");
-  await user.clear(label);
-  await user.type(label, "LOCAL DRAFT");
-
-  expect(screen.getByRole("button", { name: "Save workspace" })).toBeDisabled();
-  act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "s", metaKey: true })));
-
-  expect(invoke).not.toHaveBeenCalledWith("save_workspace", expect.anything());
-  expect(screen.getByLabelText("Label for BACK_OUT")).toHaveValue("LOCAL DRAFT");
-});
-
-test("renders the selected model as normalized groups", async () => {
-  render(<App />);
-  const backOut = await screen.findByRole("button", { name: "Configure BACK/OUT" });
-  expect(backOut).toBeVisible();
-  expect(screen.queryByRole("button", { name: "Configure BACK" })).not.toBeInTheDocument();
-  expect(screen.getByTestId("group-top")).toHaveStyle({
-    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-  });
-  expect(screen.getByTestId("group-digits")).toHaveStyle({
-    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-  });
-});
-
-test("associates a keypad button with its summary tooltip", async () => {
-  render(<App />);
-  const backOut = await screen.findByRole("button", { name: "Configure BACK/OUT" });
-  const tooltipId = backOut.getAttribute("aria-describedby");
-
-  expect(tooltipId).toBe("key-summary-red-phone-v1-0-2");
-  expect(document.getElementById(tooltipId!)).toHaveAttribute("role", "tooltip");
-});
-
-test("uses a DOM-safe tooltip ID when the button ID contains whitespace", async () => {
-  vi.mocked(invoke).mockResolvedValueOnce({
-    ...snapshot,
-    models: [{
-      ...snapshot.models[0],
-      groups: [{
-        id: "media",
-        columns: 1,
-        buttons: [{ id: "PLAY PAUSE", label: "PLAY/PAUSE" }],
-      }],
-    }],
-    ioMaps: { "red-phone-v1": {} },
-    actions: {},
-  });
-  render(<App />);
-  const button = await screen.findByRole("button", { name: "Configure PLAY/PAUSE" });
-  const tooltip = screen.getByRole("tooltip");
-
-  expect(button).toHaveAttribute("aria-describedby", tooltip.id);
-  expect(tooltip.id).toBe("key-summary-red-phone-v1-0-0");
-  expect(tooltip.id).not.toMatch(/\s/);
-});
-
-test("shows mode summaries and selects a key", async () => {
-  const user = userEvent.setup();
-  render(<App />);
-
-  const digitTwo = await screen.findByRole("button", { name: "Configure 2" });
-  expect(screen.getByRole("tooltip", { name: "GPIO 6" })).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "Behavior" }));
-  expect(screen.getByRole("tooltip", { name: "six" })).toBeInTheDocument();
-  expect(screen.getByRole("tooltip", { name: "Command + Shift + K" })).toBeInTheDocument();
-  expect(screen.getByRole("tooltip", { name: "Option + Page Up" })).toBeInTheDocument();
-  expect(screen.getByRole("tooltip", { name: /This behavior preview.*\.\.\./ })).toBeInTheDocument();
-  await user.click(digitTwo);
-  expect(digitTwo).toHaveClass("is-selected");
-});
-
-test("configures multiline paste text and saves the staged action", async () => {
-  const user = userEvent.setup();
-  render(<App />);
-  await user.click(await screen.findByRole("button", { name: "Behavior" }));
-  await user.click(screen.getByRole("button", { name: "Configure 2" }));
-  await user.selectOptions(screen.getByLabelText("Action type for 2"), "paste");
-  const text = screen.getByLabelText("Paste text for 2");
-  await user.clear(text);
-  await user.type(text, "你好{enter}second line");
-  await user.click(screen.getByRole("button", { name: "Apply behavior" }));
-
-  expect(screen.getByRole("tooltip", { name: "你好 second line" })).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "Save workspace" }));
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_workspace", {
-    activeModel: snapshot.activeModel,
-    ioMaps: snapshot.ioMaps,
-    actions: {
-      ...snapshot.actions,
-      DIGIT_2: { type: "paste", text: "你好\nsecond line" },
-    },
-    models: snapshot.models,
-  }));
-});
-
-test("records a shortcut and saves backend-compatible keys", async () => {
-  const user = userEvent.setup();
-  render(<App />);
-  await user.click(await screen.findByRole("button", { name: "Behavior" }));
-  const digitTwo = screen.getByRole("button", { name: "Configure 2" });
-  await user.click(digitTwo);
-  await user.selectOptions(screen.getByLabelText("Action type for 2"), "hotkey");
-  await user.click(screen.getByRole("button", { name: "Record shortcut" }));
-
-  act(() => window.dispatchEvent(new KeyboardEvent("keydown", {
-    code: "MetaLeft",
-    key: "Meta",
-    metaKey: true,
-  })));
-  expect(screen.getByLabelText("Shortcut for 2")).toHaveTextContent("Press shortcut");
-  act(() => window.dispatchEvent(new KeyboardEvent("keydown", {
-    code: "KeyK",
-    key: "k",
-    metaKey: true,
-    shiftKey: true,
-  })));
-
-  expect(screen.getByLabelText("Shortcut for 2")).toHaveTextContent("Command + Shift + K");
-  await user.click(screen.getByRole("button", { name: "Apply behavior" }));
-  expect(document.getElementById(digitTwo.getAttribute("aria-describedby")!))
-    .toHaveTextContent("Command + Shift + K");
-  await user.click(screen.getByRole("button", { name: "Save workspace" }));
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_workspace", {
-    activeModel: snapshot.activeModel,
-    ioMaps: snapshot.ioMaps,
-    actions: {
-      ...snapshot.actions,
-      DIGIT_2: { type: "hotkey", keys: ["cmd", "shift", "k"] },
-    },
-    models: snapshot.models,
-  }));
-});
-
-test("rejects an unsupported recorded shortcut", async () => {
-  const user = userEvent.setup();
-  render(<App />);
-  await user.click(await screen.findByRole("button", { name: "Behavior" }));
-  await user.click(screen.getByRole("button", { name: "Configure 3" }));
-  await user.selectOptions(screen.getByLabelText("Action type for 3"), "hotkey");
-  await user.click(screen.getByRole("button", { name: "Record shortcut" }));
-  act(() => window.dispatchEvent(new KeyboardEvent("keydown", { code: "NumpadAdd" })));
-
-  expect(screen.getByRole("alert")).toHaveTextContent("Unsupported shortcut key: NumpadAdd");
-  expect(screen.getByRole("button", { name: "Apply behavior" })).toBeDisabled();
-});
-
-test("deletes only the selected button action", async () => {
-  const user = userEvent.setup();
-  render(<App />);
-  await user.click(await screen.findByRole("button", { name: "Behavior" }));
-  const digitTwo = screen.getByRole("button", { name: "Configure 2" });
-  await user.click(digitTwo);
-  await user.click(screen.getByRole("button", { name: "Delete behavior" }));
-  expect(document.getElementById(digitTwo.getAttribute("aria-describedby")!))
-    .toHaveTextContent("No action");
-
-  await user.click(screen.getByRole("button", { name: "Save workspace" }));
-  const { DIGIT_2: _deleted, ...remainingActions } = snapshot.actions;
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_workspace", {
-    activeModel: snapshot.activeModel,
-    ioMaps: snapshot.ioMaps,
-    actions: remainingActions,
-    models: snapshot.models,
-  }));
-});
-
-test("shortcut recording captures Command+S and cleans up on cancel", async () => {
-  const user = userEvent.setup();
-  render(<App />);
-  await user.click(await screen.findByRole("button", { name: "Behavior" }));
-  await user.click(screen.getByRole("button", { name: "Configure 2" }));
-  const text = screen.getByLabelText("Paste text for 2");
-  await user.clear(text);
-  await user.type(text, "dirty");
-  await user.click(screen.getByRole("button", { name: "Apply behavior" }));
-  await user.click(screen.getByRole("button", { name: "Configure 3" }));
-  await user.selectOptions(screen.getByLabelText("Action type for 3"), "hotkey");
-  await user.click(screen.getByRole("button", { name: "Record shortcut" }));
-  act(() => window.dispatchEvent(new KeyboardEvent("keydown", {
-    code: "KeyS",
-    key: "s",
-    metaKey: true,
-  })));
-
-  expect(screen.getByLabelText("Shortcut for 3")).toHaveTextContent("Command + S");
-  expect(invoke).not.toHaveBeenCalledWith("save_workspace", expect.anything());
-  await user.click(screen.getByRole("button", { name: "Record shortcut" }));
-  await user.click(screen.getByRole("button", { name: "Cancel behavior" }));
-  window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyS", key: "s", metaKey: true }));
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_workspace", expect.anything()));
-});
-
-test("binds the selected button from only the next physical press", async () => {
-  const user = userEvent.setup();
-  render(<App />);
-  await user.click(await screen.findByRole("button", { name: "Configure 2" }));
-  await waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: true }),
-  );
-
-  act(() => onRuntimeEvent?.({ payload: {
-    timestampMs: 1,
-    level: "info",
-    message: "GPIO7: captured",
-    gpio: 7,
-    pressed: true,
-    connection: { state: "connected", port: "/dev/cu.test" },
-  } }));
-  expect(screen.getByLabelText("GPIO for 2")).toHaveValue("7");
-
-  act(() => onRuntimeEvent?.({ payload: {
-    timestampMs: 2,
-    level: "info",
-    message: "GPIO5: normal press",
-    gpio: 5,
-    pressed: true,
-    connection: { state: "connected", port: "/dev/cu.test" },
-  } }));
-  expect(screen.getByLabelText("GPIO for 2")).toHaveValue("7");
-});
-
-test("ignores GPIO until capture enable is acknowledged", async () => {
-  const user = userEvent.setup();
-  const enable = deferred();
-  vi.mocked(invoke).mockImplementation(async (command, arguments_) => {
-    if (command === "set_io_capture" && (arguments_ as { enabled: boolean }).enabled) {
-      return enable.promise;
-    }
-    return snapshot;
-  });
-  render(<App />);
-  await user.click(await screen.findByRole("button", { name: "Configure 2" }));
-  await waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: true }),
-  );
-
-  act(() => onRuntimeEvent?.({ payload: {
-    timestampMs: 1,
-    level: "info",
-    message: "GPIO7: before acknowledgement",
-    gpio: 7,
-    pressed: true,
-    connection: { state: "connected", port: "/dev/cu.test" },
-  } }));
-  expect(screen.getByLabelText("GPIO for 2")).toHaveValue("6");
-
-  await act(async () => enable.resolve());
-  act(() => onRuntimeEvent?.({ payload: {
-    timestampMs: 2,
-    level: "info",
-    message: "GPIO7: captured",
-    gpio: 7,
-    pressed: true,
-    connection: { state: "connected", port: "/dev/cu.test" },
-  } }));
-  expect(screen.getByLabelText("GPIO for 2")).toHaveValue("7");
-});
-
-test("keeps capture inactive when enable fails", async () => {
-  const user = userEvent.setup();
-  const enable = deferred();
-  vi.mocked(invoke).mockImplementation(async (command, arguments_) => {
-    if (command === "set_io_capture" && (arguments_ as { enabled: boolean }).enabled) {
-      return enable.promise;
-    }
-    return snapshot;
-  });
-  render(<App />);
-  await user.click(await screen.findByRole("button", { name: "Configure 3" }));
-  await waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: true }),
-  );
-
-  await act(async () => enable.reject(new Error("capture unavailable")));
-  expect(await screen.findByRole("alert")).toHaveTextContent("capture unavailable");
-  act(() => onRuntimeEvent?.({ payload: {
-    timestampMs: 1,
-    level: "info",
-    message: "GPIO5: normal press",
-    gpio: 5,
-    pressed: true,
-    connection: { state: "connected", port: "/dev/cu.test" },
-  } }));
-  expect(screen.getByLabelText("GPIO for 3")).toHaveValue("");
-
-  await user.click(screen.getByRole("button", { name: "Cancel IO mapping" }));
-  await waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: false }),
-  );
-});
-
-test("serializes rapid capture cancel and reselection", async () => {
-  const user = userEvent.setup();
-  const firstEnable = deferred();
-  const disable = deferred();
-  const secondEnable = deferred();
-  const captureCalls: boolean[] = [];
-  let enableCount = 0;
-  vi.mocked(invoke).mockImplementation(async (command, arguments_) => {
-    if (command !== "set_io_capture") return snapshot;
-    const enabled = (arguments_ as { enabled: boolean }).enabled;
-    captureCalls.push(enabled);
-    if (!enabled) return disable.promise;
-    enableCount += 1;
-    return enableCount === 1 ? firstEnable.promise : secondEnable.promise;
-  });
-  render(<App />);
-  await user.click(await screen.findByRole("button", { name: "Configure 2" }));
-  await waitFor(() => expect(captureCalls).toEqual([true]));
-  await user.click(screen.getByRole("button", { name: "Cancel IO mapping" }));
-  await user.click(screen.getByRole("button", { name: "Configure 3" }));
-
-  expect(captureCalls).toEqual([true]);
-  await act(async () => firstEnable.resolve());
-  await waitFor(() => expect(captureCalls).toEqual([true, false]));
-  act(() => onRuntimeEvent?.({ payload: {
-    timestampMs: 1,
-    level: "info",
-    message: "GPIO4: stale capture",
-    gpio: 4,
-    pressed: true,
-    connection: { state: "connected", port: "/dev/cu.test" },
-  } }));
-  expect(screen.getByLabelText("GPIO for 3")).toHaveValue("");
-
-  await act(async () => disable.resolve());
-  await waitFor(() => expect(captureCalls).toEqual([true, false, true]));
-  act(() => onRuntimeEvent?.({ payload: {
-    timestampMs: 2,
-    level: "info",
-    message: "GPIO5: before second acknowledgement",
-    gpio: 5,
-    pressed: true,
-    connection: { state: "connected", port: "/dev/cu.test" },
-  } }));
-  expect(screen.getByLabelText("GPIO for 3")).toHaveValue("");
-
-  await act(async () => secondEnable.resolve());
-  act(() => onRuntimeEvent?.({ payload: {
-    timestampMs: 3,
-    level: "info",
-    message: "GPIO5: captured",
-    gpio: 5,
-    pressed: true,
-    connection: { state: "connected", port: "/dev/cu.test" },
-  } }));
-  expect(screen.getByLabelText("GPIO for 3")).toHaveValue("5");
-});
-
-test("rejects a GPIO already assigned to another button", async () => {
-  const user = userEvent.setup();
-  render(<App />);
-  const button = await screen.findByRole("button", { name: "Configure 3" });
-  await user.click(button);
-  await user.selectOptions(screen.getByLabelText("GPIO for 3"), "6");
-
-  expect(screen.getByRole("alert")).toHaveTextContent("GPIO6 is assigned to 2");
-  expect(screen.getByRole("button", { name: "Apply IO mapping" })).toBeDisabled();
-  expect(document.getElementById(button.getAttribute("aria-describedby")!))
-    .toHaveTextContent("Unmapped");
-});
-
-test("jumps from a GPIO conflict to the assigned button", async () => {
-  const user = userEvent.setup();
-  render(<App />);
-  await user.click(await screen.findByRole("button", { name: "Configure 3" }));
-  await user.selectOptions(screen.getByLabelText("GPIO for 3"), "6");
-
-  await user.click(screen.getByRole("button", { name: "Go to 2" }));
-
-  expect(screen.getByRole("dialog", { name: "Configure IO for 2" })).toBeVisible();
-  expect(screen.getByLabelText("GPIO for 2")).toHaveValue("6");
-  await waitFor(() => {
-    const captureCalls = vi.mocked(invoke).mock.calls
-      .filter(([command]) => command === "set_io_capture")
-      .map(([, args]) => (args as { enabled: boolean }).enabled);
-    expect(captureCalls).toEqual([true, false, true]);
-  });
-});
-
-test("captures only while an IO popover is connected", async () => {
-  const user = userEvent.setup();
-  vi.mocked(invoke).mockResolvedValueOnce({
-    ...snapshot,
-    connection: { state: "searching", port: null },
-  });
-  render(<App />);
-  await user.click(await screen.findByRole("button", { name: "Configure 3" }));
-
-  expect(invoke).not.toHaveBeenCalledWith("set_io_capture", { enabled: true });
-  await user.selectOptions(screen.getByLabelText("GPIO for 3"), "5");
-  expect(screen.getByLabelText("GPIO for 3")).toHaveValue("5");
-
-  act(() => onRuntimeEvent?.({ payload: {
-    timestampMs: 1,
-    level: "info",
-    message: "connected",
-    gpio: null,
-    pressed: null,
-    connection: { state: "connected", port: "/dev/cu.test" },
-  } }));
-  await waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: true }),
-  );
-
-  act(() => onRuntimeEvent?.({ payload: {
-    timestampMs: 2,
-    level: "warning",
-    message: "disconnected",
-    gpio: null,
-    pressed: null,
-    connection: { state: "searching", port: null },
-  } }));
-  await waitFor(() => {
-    const captureCalls = vi.mocked(invoke).mock.calls
-      .filter(([command]) => command === "set_io_capture")
-      .map(([, args]) => (args as { enabled: boolean }).enabled);
-    expect(captureCalls).toEqual([true, false]);
-  });
-});
-
-test("rebinds manually and saves the staged IO map", async () => {
-  const user = userEvent.setup();
-  render(<App />);
-  await user.click(await screen.findByRole("button", { name: "Configure 2" }));
-  await user.selectOptions(screen.getByLabelText("GPIO for 2"), "5");
-  await user.click(screen.getByRole("button", { name: "Apply IO mapping" }));
-
-  expect(screen.getByRole("tooltip", { name: "GPIO 5" })).toBeInTheDocument();
-  expect(screen.queryByRole("tooltip", { name: "GPIO 6" })).not.toBeInTheDocument();
-  await waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: false }),
-  );
-
-  await user.click(screen.getByRole("button", { name: "Save workspace" }));
-  await waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith("save_workspace", {
-      activeModel: snapshot.activeModel,
-      ioMaps: { "red-phone-v1": { 5: "DIGIT_2" } },
-      actions: snapshot.actions,
-      models: snapshot.models,
-    }),
-  );
-});
-
-test("stops IO capture when the popover is cancelled", async () => {
-  const user = userEvent.setup();
-  render(<App />);
-  await user.click(await screen.findByRole("button", { name: "Configure 2" }));
-  await waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: true }),
-  );
-
-  await user.click(screen.getByRole("button", { name: "Cancel IO mapping" }));
-
-  await waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: false }),
-  );
-  expect(screen.queryByLabelText("GPIO for 2")).not.toBeInTheDocument();
-});
-
-test("restarts IO capture when the selected button changes", async () => {
-  const user = userEvent.setup();
-  render(<App />);
-  await user.click(await screen.findByRole("button", { name: "Configure 2" }));
-  await user.click(screen.getByRole("button", { name: "Configure 3" }));
-
-  await waitFor(() => {
-    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: false });
-    expect(vi.mocked(invoke).mock.calls.filter(([command, args]) =>
-      command === "set_io_capture" && (args as { enabled: boolean }).enabled
-    )).toHaveLength(2);
-  });
-  expect(screen.getByLabelText("GPIO for 3")).toBeInTheDocument();
-});
-
-test("stops IO capture when the configuration mode changes", async () => {
-  const user = userEvent.setup();
-  render(<App />);
-  await user.click(await screen.findByRole("button", { name: "Configure 2" }));
-  await waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: true }),
-  );
-
-  await user.click(screen.getByRole("button", { name: "Behavior" }));
-
-  await waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: false }),
-  );
-  expect(screen.queryByLabelText("GPIO for 2")).not.toBeInTheDocument();
-});
-
-test("positions the IO popover beside its anchor and clamps both axes", () => {
-  type Position = (
-    anchor: Pick<DOMRect, "left" | "right" | "top">,
-    width: number,
-    height: number,
-    viewportWidth: number,
-    viewportHeight: number,
-  ) => { left: number; top: number };
-  const position = (KeypadModule as { popoverPosition?: Position }).popoverPosition;
-
-  expect(position).toBeTypeOf("function");
-  expect(position!({ left: 100, right: 150, top: 30 }, 200, 100, 500, 400))
-    .toEqual({ left: 162, top: 30 });
-  expect(position!({ left: 400, right: 450, top: 390 }, 200, 100, 500, 400))
-    .toEqual({ left: 188, top: 288 });
-  expect(position!({ left: 8, right: 190, top: -10 }, 180, 100, 200, 400))
-    .toEqual({ left: 12, top: 12 });
-});
-
-test("recovers an invalid active model and saves the selected catalog model", async () => {
-  const user = userEvent.setup();
-  vi.mocked(invoke).mockResolvedValueOnce({
-    ...snapshot,
-    activeModel: "missing-model",
-    configError: "unknown active model missing-model",
-  });
-  render(<App />);
-
-  const selector = await screen.findByRole("combobox", { name: "Device model" });
-  expect(selector).toHaveValue("missing-model");
-  expect(screen.getByRole("option", { name: "Missing: missing-model" })).toBeDisabled();
-  expect(screen.getByRole("alert")).toHaveTextContent("unknown active model missing-model");
-  expect(screen.queryByRole("button", { name: "Configure 2" })).not.toBeInTheDocument();
-
-  await user.selectOptions(selector, "red-phone-v1");
-  expect(await screen.findByRole("button", { name: "Configure 2" })).toBeVisible();
-  expect(selector).toBeDisabled();
-  await user.click(screen.getByRole("button", { name: "Save workspace" }));
-
-  await waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith("save_workspace", {
-      activeModel: "red-phone-v1",
-      ioMaps: snapshot.ioMaps,
-      actions: snapshot.actions,
-      models: snapshot.models,
-    }),
-  );
-});
-
-test("uses Command+S to save a dirty workspace", async () => {
-  const user = userEvent.setup();
-  vi.mocked(invoke).mockResolvedValueOnce({ ...snapshot, activeModel: "missing-model" });
-  render(<App />);
-  await user.selectOptions(
-    await screen.findByRole("combobox", { name: "Device model" }),
-    "red-phone-v1",
-  );
-
-  window.dispatchEvent(new KeyboardEvent("keydown", { key: "s", metaKey: true }));
-
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_workspace", expect.anything()));
-});
-
-test("keeps the selected model when saving fails", async () => {
-  const user = userEvent.setup();
-  vi.mocked(invoke).mockImplementation(async (command) => {
-    if (command === "save_workspace") throw new Error("disk full");
-    return { ...snapshot, activeModel: "missing-model" };
-  });
-  render(<App />);
-  await user.selectOptions(
-    await screen.findByRole("combobox", { name: "Device model" }),
-    "red-phone-v1",
-  );
-
-  await user.click(screen.getByRole("button", { name: "Save workspace" }));
-
-  expect(await screen.findByRole("alert")).toHaveTextContent("disk full");
-  expect(screen.getByRole("button", { name: "Configure 2" })).toBeVisible();
-  expect(screen.getByRole("button", { name: "Save workspace" })).toBeEnabled();
-});
-
-test("shows a mapped key as pressed until its physical input is released", async () => {
-  render(<App />);
-  const key = await screen.findByRole("button", { name: "Configure 2" });
-
-  act(() => onRuntimeEvent?.({ payload: {
-    timestampMs: 1,
-    level: "info",
-    message: "GPIO6: PASTE 1",
-    connection: { state: "connected", port: "/dev/cu.test" },
-    gpio: 6,
-    pressed: true,
-  } }));
-  expect(key).toHaveClass("is-physically-pressed");
-
-  act(() => onRuntimeEvent?.({ payload: {
-    timestampMs: 2,
-    level: "info",
-    message: "GPIO6: UP 2",
-    connection: { state: "connected", port: "/dev/cu.test" },
-    gpio: 6,
-    pressed: false,
-  } }));
-  expect(key).not.toHaveClass("is-physically-pressed");
-});
-
-test("clears physical press feedback when the device disconnects", async () => {
-  render(<App />);
-  const key = await screen.findByRole("button", { name: "Configure 2" });
-
-  act(() => onRuntimeEvent?.({ payload: {
-    timestampMs: 1,
-    level: "info",
-    message: "GPIO6: PASTE 1",
-    connection: { state: "connected", port: "/dev/cu.test" },
-    gpio: 6,
-    pressed: true,
-  } }));
-  expect(key).toHaveClass("is-physically-pressed");
-
-  act(() => onRuntimeEvent?.({ payload: {
-    timestampMs: 2,
-    level: "warning",
-    message: "Waiting for device",
-    connection: { state: "searching", port: null },
-    gpio: null,
-    pressed: null,
-  } }));
-  expect(key).not.toHaveClass("is-physically-pressed");
-});
-
-test("shows runtime events and current connection", async () => {
-  render(<App />);
-  await screen.findByRole("button", { name: "Configure 2" });
-
-  act(() => {
-    onRuntimeEvent?.({
-      payload: {
-        timestampMs: 1_722_222_222_000,
-        level: "info",
-        message: "GPIO6: PASTE 12",
-        connection: { state: "connected", port: "/dev/cu.usbmodem" },
-        gpio: 6,
-        pressed: true,
       },
-    });
-  });
-
-  expect(screen.getByText("GPIO6: PASTE 12")).toBeInTheDocument();
-  expect(screen.getByText("Connected")).toBeInTheDocument();
-  expect(screen.getByText("/dev/cu.usbmodem")).toBeInTheDocument();
+    }),
+  }), { timeout: 1600 });
+  expect(screen.getByRole("button", { name: "2，2 项行为" })).toBeInTheDocument();
 });
 
-test("unsubscribes from runtime events on unmount", async () => {
-  const view = render(<App />);
-  await screen.findByRole("button", { name: "Configure 2" });
-  view.unmount();
-
-  await waitFor(() => expect(unlisten).toHaveBeenCalledOnce());
-});
-
-test("stops IO capture on unmount", async () => {
+test("records a shortcut from the application window", async () => {
   const user = userEvent.setup();
-  const view = render(<App />);
-  await user.click(await screen.findByRole("button", { name: "Configure 2" }));
-  await waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: true }),
-  );
+  render(<App />);
+  const editor = await screen.findByRole("complementary", { name: "2" });
 
-  view.unmount();
+  await user.click(screen.getByRole("button", { name: "按下按键" }));
+  await user.click(within(editor).getByRole("button", { name: "录入按键" }));
+  fireEvent.keyDown(window, { code: "KeyK", key: "k", metaKey: true, shiftKey: true });
 
-  await waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith("set_io_capture", { enabled: false }),
-  );
+  expect(within(editor).getByText("Command + Shift + K")).toBeInTheDocument();
 });
 
-test("subscribes before loading the snapshot", async () => {
-  const calls: string[] = [];
-  vi.mocked(listen).mockImplementation(async () => {
-    calls.push("listen");
-    return unlisten;
-  });
-  vi.mocked(invoke).mockImplementation(async () => {
-    calls.push("invoke");
-    return snapshot;
-  });
-
+test("manually selects a multi-modifier shortcut", async () => {
+  const user = userEvent.setup();
   render(<App />);
-  await screen.findByRole("button", { name: "Configure 2" });
+  const editor = await screen.findByRole("complementary", { name: "2" });
 
-  expect(calls.slice(0, 2)).toEqual(["listen", "invoke"]);
+  await user.click(screen.getByRole("button", { name: "按下按键" }));
+  await user.click(within(editor).getByRole("checkbox", { name: "Cmd" }));
+  await user.click(within(editor).getByRole("checkbox", { name: "Ctrl" }));
+  await user.click(within(editor).getByRole("checkbox", { name: "Shift" }));
+  await user.selectOptions(within(editor).getByRole("combobox", { name: "按键" }), "k");
+
+  expect(within(editor).getByText("Command + Control + Shift + K")).toBeInTheDocument();
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_model", {
+    model: expect.objectContaining({
+      actions: { DIGIT_2: [{ type: "hotkey", keys: ["cmd", "ctrl", "shift", "k"] }] },
+    }),
+  }), { timeout: 1600 });
+});
+
+test("reorders actions from the right editor", async () => {
+  const user = userEvent.setup();
+  currentSnapshot.models[0].actions.DIGIT_2 = [
+    { type: "paste", text: "先粘贴" },
+    { type: "hotkey", keys: ["enter"] },
+  ];
+  render(<App />);
+  const editor = await screen.findByRole("complementary", { name: "2" });
+
+  await user.click(within(editor).getAllByRole("button", { name: "上移" })[1]);
+
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_model", {
+    model: expect.objectContaining({
+      actions: { DIGIT_2: [{ type: "hotkey", keys: ["enter"] }, { type: "paste", text: "先粘贴" }] },
+    }),
+  }), { timeout: 1600 });
+});
+
+test("keeps a failed autosave and exposes retry", async () => {
+  const user = userEvent.setup();
+  let saveAttempts = 0;
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "save_model" && saveAttempts++ === 0) throw new Error("disk full");
+    return structuredClone(currentSnapshot);
+  });
+  render(<App />);
+  const key = await screen.findByRole("button", { name: "2，0 项行为" });
+
+  await user.click(key);
+  await user.click(screen.getByRole("button", { name: "按下按键" }));
+  expect(await screen.findByText("保存失败", {}, { timeout: 1600 })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "重试" }));
+
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "save_model")).toHaveLength(2));
+});
+
+test("previews a model before importing it", async () => {
+  const user = userEvent.setup();
+  vi.mocked(open).mockResolvedValue("/tmp/model.yaml");
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "preview_model_import") return {
+      modelId: "tel-carbon-v1",
+      modelName: "碳膜电话键盘",
+      buttonCount: 22,
+      hardwareBindingCount: 22,
+      actionCount: 8,
+      replacesExisting: true,
+    };
+    return structuredClone(currentSnapshot);
+  });
+  render(<App />);
+  const dataMenu = (await screen.findByText("配置文件")).closest(".data-menu");
+  expect(dataMenu).not.toBeNull();
+
+  await user.click(within(dataMenu as HTMLElement).getByRole("button", { name: "导入型号" }));
+  const dialog = await screen.findByRole("dialog", { name: "替换现有型号" });
+  expect(within(dialog).getByText("22 个按键，22 项硬件映射，8 项行为")).toBeInTheDocument();
+  await user.click(within(dialog).getByRole("button", { name: "确认" }));
+
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("import_model", { path: "/tmp/model.yaml" }));
+});
+
+test("previews a full backup before restoring it", async () => {
+  const user = userEvent.setup();
+  vi.mocked(open).mockResolvedValue("/tmp/backup.yaml");
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "preview_backup") return {
+      modelCount: 3,
+      buttonCount: 44,
+      hardwareBindingCount: 40,
+      actionCount: 19,
+    };
+    return structuredClone(currentSnapshot);
+  });
+  render(<App />);
+  await screen.findByText("配置文件");
+
+  await user.click(screen.getByRole("button", { name: "恢复备份" }));
+  const dialog = await screen.findByRole("dialog", { name: "恢复全量备份" });
+  expect(within(dialog).getByText("3 个型号，44 个按键，40 项硬件映射，19 项行为")).toBeInTheDocument();
+  await user.click(within(dialog).getByRole("button", { name: "确认" }));
+
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("restore_backup", { path: "/tmp/backup.yaml" }));
+});
+
+test("deletes the last model and keeps import and restore available", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByText("配置文件");
+
+  await user.click(screen.getByRole("button", { name: "删除型号" }));
+  const dialog = await screen.findByRole("dialog", { name: "删除型号" });
+  await user.click(within(dialog).getByRole("button", { name: "确认" }));
+
+  expect(await screen.findByRole("heading", { name: "还没有设备型号" })).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "导入型号" }).length).toBeGreaterThan(0);
+  expect(screen.getAllByRole("button", { name: "恢复备份" }).length).toBeGreaterThan(0);
+});
+
+test("keeps key learning secondary and collapsed by default", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByText("配置文件");
+
+  await user.click(screen.getByRole("button", { name: "硬件映射" }));
+
+  expect(screen.getByText("直连 GPIO")).toBeInTheDocument();
+  expect(screen.getByText("接触矩阵")).toBeInTheDocument();
+  expect(screen.getByText("适配新设备").closest("details")).not.toHaveAttribute("open");
 });

@@ -27,7 +27,7 @@
     "active": true,
     "targets": ["app"],
     "resources": {
-      "../models/prod/*.json": "models/"
+      "../models/prod/*": "models/"
     },
     "icon": [
       "icons/32x32.png",
