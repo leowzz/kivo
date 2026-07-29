@@ -19,11 +19,16 @@ export function Keypad({
 }: KeypadProps) {
   return (
     <div className="keypad" aria-label={layout.name}>
-      {layout.groups.map((group) => (
-        <div
+      {layout.groups.map((group) => {
+        const rows = Math.ceil(group.buttons.length / group.columns);
+        return <div
           className="key-group"
           key={group.id}
-          style={{ gridTemplateColumns: `repeat(${group.columns}, minmax(0, 1fr))` }}
+          style={{
+            flexGrow: rows / group.columns,
+            gridTemplateColumns: `repeat(${group.columns}, minmax(0, 1fr))`,
+            gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
+          }}
         >
           {group.buttons.map((button) => {
             const count = actions[button.id]?.length ?? 0;
@@ -45,8 +50,8 @@ export function Keypad({
               </button>
             );
           })}
-        </div>
-      ))}
+        </div>;
+      })}
     </div>
   );
 }
