@@ -14,7 +14,7 @@ interface ActionEditorProps {
 const HOTKEY_MODIFIERS = [
   { value: "cmd", label: "Cmd" },
   { value: "ctrl", label: "Ctrl" },
-  { value: "alt", label: "Alt" },
+  { value: "alt", label: "Option" },
   { value: "shift", label: "Shift" },
 ] as const;
 
