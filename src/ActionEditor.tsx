@@ -11,6 +11,30 @@ interface ActionEditorProps {
   onChange(actions: ButtonAction[]): void;
 }
 
+const HOTKEY_MODIFIERS = [
+  { value: "cmd", label: "Cmd" },
+  { value: "ctrl", label: "Ctrl" },
+  { value: "alt", label: "Alt" },
+  { value: "shift", label: "Shift" },
+] as const;
+
+const HOTKEY_KEYS = [
+  ..."abcdefghijklmnopqrstuvwxyz",
+  ..."0123456789",
+  "enter", "escape", "backspace", "tab", "space", "delete",
+  "up", "down", "left", "right", "home", "end", "page_up", "page_down",
+];
+
+function setHotkeyModifier(keys: string[], modifier: string, enabled: boolean) {
+  const ordinaryKey = keys.at(-1) ?? "enter";
+  return [
+    ...HOTKEY_MODIFIERS
+      .filter(({ value }) => value === modifier ? enabled : keys.includes(value))
+      .map(({ value }) => value),
+    ordinaryKey,
+  ];
+}
+
 function move(actions: ButtonAction[], index: number, offset: -1 | 1) {
   const next = [...actions];
   [next[index], next[index + offset]] = [next[index + offset], next[index]];
@@ -119,6 +143,35 @@ export function ActionEditor({ language, button, actions, onChange }: ActionEdit
               <div className="hotkey-field">
                 <span>{t(language, "behavior.shortcut")}</span>
                 <output>{action.keys.length ? formatHotkey(action.keys) : "-"}</output>
+                <div className="hotkey-manual">
+                  <div className="hotkey-modifiers">
+                    {HOTKEY_MODIFIERS.map((modifier) => (
+                      <label key={modifier.value}>
+                        <input
+                          type="checkbox"
+                          checked={action.keys.includes(modifier.value)}
+                          onChange={(event) => replace(index, {
+                            type: "hotkey",
+                            keys: setHotkeyModifier(action.keys, modifier.value, event.target.checked),
+                          })}
+                        />
+                        <span>{modifier.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <select
+                    aria-label={t(language, "behavior.shortcut")}
+                    value={action.keys.at(-1) ?? "enter"}
+                    onChange={(event) => replace(index, {
+                      type: "hotkey",
+                      keys: [...action.keys.slice(0, -1), event.target.value],
+                    })}
+                  >
+                    {HOTKEY_KEYS.map((key) => (
+                      <option value={key} key={key}>{formatHotkey([key])}</option>
+                    ))}
+                  </select>
+                </div>
                 <button
                   className={recording === index ? "record-button is-recording" : "record-button"}
                   type="button"
