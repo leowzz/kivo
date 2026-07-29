@@ -520,17 +520,24 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
                 continue;
             }
         };
-        if let Err(error) = device
-            .write_request_to_send(true)
-            .and_then(|()| device.write_data_terminal_ready(true))
-        {
+        let handshake = device
+            .write_data_terminal_ready(true)
+            .and_then(|()| device.write_request_to_send(true))
+            .map_err(|error| error.to_string())
+            .and_then(|()| {
+                device
+                    .write_all(b"HELLO\n")
+                    .and_then(|()| device.flush())
+                    .map_err(|error| error.to_string())
+            });
+        if let Err(error) = handshake {
             emit_activity(
                 &app,
                 &connection,
                 EventLevel::Warning,
                 RuntimeActivity::new("serial_handshake_failed")
                     .with_param("port", &port.port_name)
-                    .with_detail(error.to_string()),
+                    .with_detail(error),
             );
             wait(&stop);
             continue;
