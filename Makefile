@@ -1,4 +1,4 @@
-.PHONY: all build download-mode upload test helper helper-build release
+.PHONY: all build download-mode upload test helper helper-kill helper-build release
 
 all: helper
 
@@ -20,6 +20,9 @@ test:
 
 helper:
 	npm run tauri dev
+
+helper-kill:
+	@pids="$$(pgrep kivo || true)"; [ -z "$$pids" ] || kill $$pids
 
 helper-build:
 	npm run tauri build -- --bundles app
