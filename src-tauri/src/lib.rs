@@ -5,15 +5,14 @@ mod protocol;
 mod storage;
 #[cfg(target_os = "macos")]
 mod tray;
+mod workspace;
 
-use config::{ButtonAction, IoMaps, MappingConfig, SUPPORTED_GPIOS};
-use device::ConnectionStatus;
-use model::ModelLayout;
+use device::{ConnectionStatus, DeviceCapabilities, LearningSession, RuntimeActivity};
 use serde::Serialize;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeSet, VecDeque},
     fs,
-    path::PathBuf,
+    path::Path,
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
@@ -21,15 +20,20 @@ use std::{
     thread::{self, JoinHandle},
 };
 use tauri::Manager;
+use workspace::{
+    AppError, BackupPreview, ImportPreview, Language, LegacyPaths, ModelConfig, SettingsDocument,
+    Workspace,
+};
 
 struct AppState {
-    mappings: Arc<RwLock<MappingConfig>>,
-    models: Arc<RwLock<Vec<ModelLayout>>>,
-    model_directory: PathBuf,
-    config_path: PathBuf,
+    workspace: Arc<RwLock<Workspace>>,
+    active_runtime_model: Arc<RwLock<Option<ModelConfig>>>,
     connection: Arc<RwLock<ConnectionStatus>>,
-    config_error: Mutex<Option<String>>,
-    capture_next_gpio: Arc<AtomicBool>,
+    capabilities: Arc<RwLock<Option<DeviceCapabilities>>>,
+    runtime_error: Arc<RwLock<Option<RuntimeActivity>>>,
+    learning: Arc<RwLock<Option<LearningSession>>>,
+    next_learning_revision: Mutex<u32>,
+    device_controls: Arc<Mutex<VecDeque<String>>>,
     stop: Arc<AtomicBool>,
     worker: Mutex<Option<JoinHandle<()>>>,
 }
@@ -37,219 +41,360 @@ struct AppState {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AppSnapshot {
-    models: Vec<ModelLayout>,
-    active_model: String,
-    io_maps: IoMaps,
-    actions: BTreeMap<String, ButtonAction>,
+    models: Vec<ModelConfig>,
+    active_model: Option<String>,
+    language: Language,
     supported_gpios: Vec<u8>,
-    config_path: String,
     connection: ConnectionStatus,
-    config_error: Option<String>,
+    runtime_error: Option<RuntimeActivity>,
+    learning: Option<LearningSession>,
 }
 
-fn prepare_loaded_mappings(
-    mut mappings: MappingConfig,
-    models: &[ModelLayout],
-) -> (MappingConfig, Option<String>) {
-    if mappings.active_model.is_empty()
-        && let Some(model) = models.first()
-    {
-        mappings.active_model = model.id.clone();
-    }
-    match mappings.validate(models) {
-        Ok(()) => (mappings, None),
-        Err(error) => {
-            let model_buttons = models
-                .iter()
-                .map(|model| {
-                    (
-                        model.id.as_str(),
-                        model
-                            .groups
-                            .iter()
-                            .flat_map(|group| &group.buttons)
-                            .map(|button| button.id.as_str())
-                            .collect::<std::collections::BTreeSet<_>>(),
-                    )
-                })
-                .collect::<BTreeMap<_, _>>();
-            mappings.io_maps.retain(|model_id, io_map| {
-                let Some(buttons) = model_buttons.get(model_id.as_str()) else {
-                    return false;
-                };
-                io_map.retain(|_, button| buttons.contains(button.as_str()));
-                !io_map.is_empty()
-            });
-            (mappings, Some(error))
-        }
-    }
+fn state_error(code: &str) -> AppError {
+    AppError::new(code)
 }
 
-fn snapshot(state: &AppState) -> Result<AppSnapshot, String> {
-    let mappings = state
-        .mappings
+fn active_model(workspace: &Workspace) -> Option<ModelConfig> {
+    workspace
+        .settings
+        .active_model
+        .as_ref()
+        .and_then(|id| workspace.models.get(id))
+        .cloned()
+}
+
+fn sync_runtime(state: &AppState, workspace: &Workspace) -> Result<(), AppError> {
+    *state
+        .active_runtime_model
+        .write()
+        .map_err(|_| state_error("runtime_model_unavailable"))? = active_model(workspace);
+    Ok(())
+}
+
+fn snapshot(state: &AppState) -> Result<AppSnapshot, AppError> {
+    let workspace = state
+        .workspace
         .read()
-        .map_err(|_| "mapping state is unavailable")?;
+        .map_err(|_| state_error("workspace_unavailable"))?;
+    let mut models = workspace.models.values().cloned().collect::<Vec<_>>();
+    models.sort_by(|left, right| left.model.name.cmp(&right.model.name));
     Ok(AppSnapshot {
-        models: state
-            .models
+        models,
+        active_model: workspace.settings.active_model.clone(),
+        language: workspace.settings.language,
+        supported_gpios: state
+            .capabilities
             .read()
-            .map_err(|_| "model state is unavailable")?
-            .clone(),
-        active_model: mappings.active_model.clone(),
-        io_maps: mappings.io_maps.clone(),
-        actions: mappings.actions.clone(),
-        supported_gpios: SUPPORTED_GPIOS.to_vec(),
-        config_path: state.config_path.display().to_string(),
+            .map_err(|_| state_error("device_capabilities_unavailable"))?
+            .as_ref()
+            .map(|capabilities| capabilities.pins.clone())
+            .unwrap_or_default(),
         connection: state
             .connection
             .read()
-            .map_err(|_| "connection state is unavailable")?
+            .map_err(|_| state_error("connection_unavailable"))?
             .clone(),
-        config_error: state
-            .config_error
-            .lock()
-            .map_err(|_| "configuration state is unavailable")?
+        runtime_error: state
+            .runtime_error
+            .read()
+            .map_err(|_| state_error("runtime_error_unavailable"))?
+            .clone(),
+        learning: state
+            .learning
+            .read()
+            .map_err(|_| state_error("learning_state_unavailable"))?
             .clone(),
     })
 }
 
-fn save_workspace_inner(
-    state: &AppState,
-    active_model: String,
-    io_maps: IoMaps,
-    actions: BTreeMap<String, ButtonAction>,
-    models: Vec<ModelLayout>,
-) -> Result<AppSnapshot, String> {
-    for model in &models {
-        model.validate()?;
-    }
-    let current_models = state
-        .models
-        .read()
-        .map_err(|_| "model state is unavailable")?
-        .clone();
-    let legacy_buttons = state
-        .mappings
-        .read()
-        .map_err(|_| "mapping state is unavailable")?
-        .legacy_buttons
-        .clone();
-    let mut config = MappingConfig {
-        active_model,
-        io_maps,
-        actions,
-        legacy_buttons,
-    };
-    config.migrate_legacy();
-    config.validate(&models)?;
+fn save_model_inner(state: &AppState, model: ModelConfig) -> Result<AppSnapshot, AppError> {
+    let mut workspace = state
+        .workspace
+        .write()
+        .map_err(|_| state_error("workspace_unavailable"))?;
+    workspace.save_model(model)?;
+    sync_runtime(state, &workspace)?;
+    drop(workspace);
+    snapshot(state)
+}
 
-    for model in &models {
-        if current_models.iter().find(|current| current.id == model.id) != Some(model) {
-            model::save(&state.model_directory, model)?;
-        }
+fn save_settings_inner(
+    state: &AppState,
+    settings: SettingsDocument,
+) -> Result<AppSnapshot, AppError> {
+    let mut workspace = state
+        .workspace
+        .write()
+        .map_err(|_| state_error("workspace_unavailable"))?;
+    workspace.save_settings(settings)?;
+    sync_runtime(state, &workspace)?;
+    drop(workspace);
+    snapshot(state)
+}
+
+fn import_model_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, AppError> {
+    let mut workspace = state
+        .workspace
+        .write()
+        .map_err(|_| state_error("workspace_unavailable"))?;
+    workspace.import_model(path)?;
+    sync_runtime(state, &workspace)?;
+    drop(workspace);
+    snapshot(state)
+}
+
+fn delete_model_inner(state: &AppState, id: &str) -> Result<AppSnapshot, AppError> {
+    let mut workspace = state
+        .workspace
+        .write()
+        .map_err(|_| state_error("workspace_unavailable"))?;
+    workspace.delete_model(id)?;
+    sync_runtime(state, &workspace)?;
+    drop(workspace);
+    snapshot(state)
+}
+
+fn restore_backup_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, AppError> {
+    let mut workspace = state
+        .workspace
+        .write()
+        .map_err(|_| state_error("workspace_unavailable"))?;
+    workspace.restore_backup(path)?;
+    sync_runtime(state, &workspace)?;
+    drop(workspace);
+    snapshot(state)
+}
+
+fn begin_learning_inner(state: &AppState, mut pins: Vec<u8>) -> Result<AppSnapshot, AppError> {
+    if pins.is_empty() || pins.iter().copied().collect::<BTreeSet<_>>().len() != pins.len() {
+        return Err(state_error("invalid_learning_pins"));
     }
-    config::save(&state.config_path, &config)?;
-    let mut mappings_state = state
-        .mappings
+    let capabilities = state
+        .capabilities
+        .read()
+        .map_err(|_| state_error("device_capabilities_unavailable"))?
+        .clone()
+        .ok_or_else(|| state_error("device_not_connected"))?;
+    if capabilities.protocol != 2 {
+        return Err(state_error("protocol_mismatch"));
+    }
+    if capabilities.platform != "esp32s3" {
+        return Err(state_error("unsupported_controller"));
+    }
+    if let Some(gpio) = pins.iter().find(|gpio| !capabilities.pins.contains(gpio)) {
+        return Err(AppError::new("unsupported_gpio").with_param("gpio", gpio.to_string()));
+    }
+    let mut learning = state
+        .learning
         .write()
-        .map_err(|_| "mapping state is unavailable")?;
-    let mut models_state = state
-        .models
-        .write()
-        .map_err(|_| "model state is unavailable")?;
-    *mappings_state = config;
-    *models_state = models;
-    drop(models_state);
-    drop(mappings_state);
-    *state
-        .config_error
+        .map_err(|_| state_error("learning_state_unavailable"))?;
+    if learning.is_some() {
+        return Err(state_error("learning_already_active"));
+    }
+    pins.sort_unstable();
+    let mut revision = state
+        .next_learning_revision
         .lock()
-        .map_err(|_| "configuration state is unavailable")? = None;
+        .map_err(|_| state_error("learning_revision_unavailable"))?;
+    *revision = revision.wrapping_add(1).max(1);
+    let session = LearningSession {
+        revision: *revision,
+        pins: pins.clone(),
+    };
+    state
+        .device_controls
+        .lock()
+        .map_err(|_| state_error("device_control_unavailable"))?
+        .push_back(format!(
+            "LEARN_BEGIN {} {} {}\n",
+            session.revision,
+            pins.len(),
+            pins.iter().map(u8::to_string).collect::<Vec<_>>().join(" ")
+        ));
+    *learning = Some(session);
+    drop(learning);
+    snapshot(state)
+}
+
+fn end_learning_inner(state: &AppState) -> Result<AppSnapshot, AppError> {
+    let mut learning = state
+        .learning
+        .write()
+        .map_err(|_| state_error("learning_state_unavailable"))?;
+    let session = learning
+        .take()
+        .ok_or_else(|| state_error("learning_not_active"))?;
+    state
+        .device_controls
+        .lock()
+        .map_err(|_| state_error("device_control_unavailable"))?
+        .push_back(format!("LEARN_END {}\n", session.revision));
+    drop(learning);
     snapshot(state)
 }
 
 #[tauri::command]
-fn get_snapshot(state: tauri::State<'_, AppState>) -> Result<AppSnapshot, String> {
+fn get_snapshot(state: tauri::State<'_, AppState>) -> Result<AppSnapshot, AppError> {
     snapshot(&state)
 }
 
 #[tauri::command]
-fn save_workspace(
+fn save_model(
     state: tauri::State<'_, AppState>,
-    active_model: String,
-    io_maps: IoMaps,
-    actions: BTreeMap<String, ButtonAction>,
-    models: Vec<ModelLayout>,
-) -> Result<AppSnapshot, String> {
-    save_workspace_inner(&state, active_model, io_maps, actions, models)
+    model: ModelConfig,
+) -> Result<AppSnapshot, AppError> {
+    save_model_inner(&state, model)
 }
 
 #[tauri::command]
-fn set_io_capture(state: tauri::State<'_, AppState>, enabled: bool) {
-    state.capture_next_gpio.store(enabled, Ordering::Relaxed);
+fn save_settings(
+    state: tauri::State<'_, AppState>,
+    settings: SettingsDocument,
+) -> Result<AppSnapshot, AppError> {
+    save_settings_inner(&state, settings)
+}
+
+#[tauri::command]
+fn preview_model_import(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<ImportPreview, AppError> {
+    state
+        .workspace
+        .read()
+        .map_err(|_| state_error("workspace_unavailable"))?
+        .preview_model(Path::new(&path))
+}
+
+#[tauri::command]
+fn import_model(state: tauri::State<'_, AppState>, path: String) -> Result<AppSnapshot, AppError> {
+    import_model_inner(&state, Path::new(&path))
+}
+
+#[tauri::command]
+fn export_model(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    path: String,
+) -> Result<AppSnapshot, AppError> {
+    state
+        .workspace
+        .read()
+        .map_err(|_| state_error("workspace_unavailable"))?
+        .export_model(&id, Path::new(&path))?;
+    snapshot(&state)
+}
+
+#[tauri::command]
+fn delete_model(state: tauri::State<'_, AppState>, id: String) -> Result<AppSnapshot, AppError> {
+    delete_model_inner(&state, &id)
+}
+
+#[tauri::command]
+fn preview_backup(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<BackupPreview, AppError> {
+    state
+        .workspace
+        .read()
+        .map_err(|_| state_error("workspace_unavailable"))?
+        .preview_backup(Path::new(&path))
+}
+
+#[tauri::command]
+fn export_backup(state: tauri::State<'_, AppState>, path: String) -> Result<AppSnapshot, AppError> {
+    state
+        .workspace
+        .read()
+        .map_err(|_| state_error("workspace_unavailable"))?
+        .export_backup(Path::new(&path))?;
+    snapshot(&state)
+}
+
+#[tauri::command]
+fn restore_backup(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<AppSnapshot, AppError> {
+    restore_backup_inner(&state, Path::new(&path))
+}
+
+#[tauri::command]
+fn begin_learning(
+    state: tauri::State<'_, AppState>,
+    pins: Vec<u8>,
+) -> Result<AppSnapshot, AppError> {
+    begin_learning_inner(&state, pins)
+}
+
+#[tauri::command]
+fn end_learning(state: tauri::State<'_, AppState>) -> Result<AppSnapshot, AppError> {
+    end_learning_inner(&state)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let config_directory = app.path().app_config_dir()?;
             fs::create_dir_all(&config_directory)?;
-            let model_directory = config_directory.join("models");
-            model::seed_default(&model_directory).map_err(std::io::Error::other)?;
-            let bundled_model_directory = app.path().resource_dir()?.join("models");
-            let mut config_errors = model::sync_bundled(&bundled_model_directory, &model_directory);
-            let (models, model_errors) = model::load_all(&model_directory);
-            let config_path = config_directory.join("config.yaml");
-            config_errors.extend(model_errors);
-            if !config_path.exists() {
-                let legacy_path = std::env::current_dir()?.join("config.yaml");
-                if legacy_path.exists()
-                    && let Err(error) = fs::copy(&legacy_path, &config_path)
-                {
-                    config_errors.push(format!("import {}: {error}", legacy_path.display()));
-                }
-            }
-            let mut mappings = match config::load(&config_path) {
-                Ok(config) => config,
-                Err(error) => {
-                    config_errors.push(error);
-                    MappingConfig::default()
-                }
-            };
-            let (prepared_mappings, validation_error) = prepare_loaded_mappings(mappings, &models);
-            mappings = prepared_mappings;
-            if let Some(error) = validation_error {
-                config_errors.push(error);
-            }
-            let config_error = (!config_errors.is_empty()).then(|| config_errors.join("\n"));
-            let mappings = Arc::new(RwLock::new(mappings));
-            let models = Arc::new(RwLock::new(models));
+            let bundled_models = app.path().resource_dir()?.join("models");
+            let legacy_config = config_directory.join("config.yaml");
+            let legacy_models = config_directory.join("models");
+            let workspace = Workspace::load(
+                &config_directory,
+                &bundled_models,
+                LegacyPaths {
+                    config: Some(&legacy_config),
+                    models: Some(&legacy_models),
+                },
+            )?;
+            let active_runtime_model = Arc::new(RwLock::new(active_model(&workspace)));
+            let workspace = Arc::new(RwLock::new(workspace));
             let initial_connection = ConnectionStatus::searching();
             #[cfg(target_os = "macos")]
             tray::setup(app, &initial_connection)?;
             let connection = Arc::new(RwLock::new(initial_connection));
-            let capture_next_gpio = Arc::new(AtomicBool::new(false));
+            let capabilities = Arc::new(RwLock::new(None));
+            let runtime_error = Arc::new(RwLock::new(None));
+            let learning = Arc::new(RwLock::new(None));
+            let device_controls = Arc::new(Mutex::new(VecDeque::new()));
             let stop = Arc::new(AtomicBool::new(false));
             let worker = {
                 let app_handle = app.handle().clone();
-                let mappings = Arc::clone(&mappings);
+                let active_runtime_model = Arc::clone(&active_runtime_model);
                 let connection = Arc::clone(&connection);
-                let capture_next_gpio = Arc::clone(&capture_next_gpio);
+                let capabilities = Arc::clone(&capabilities);
+                let runtime_error = Arc::clone(&runtime_error);
+                let learning = Arc::clone(&learning);
+                let device_controls = Arc::clone(&device_controls);
                 let stop = Arc::clone(&stop);
                 thread::spawn(move || {
-                    device::run_worker(app_handle, mappings, connection, capture_next_gpio, stop)
+                    device::run_worker(
+                        app_handle,
+                        device::WorkerState {
+                            active_model: active_runtime_model,
+                            connection,
+                            capabilities,
+                            runtime_error,
+                            learning,
+                            controls: device_controls,
+                            stop,
+                        },
+                    )
                 })
             };
             app.manage(AppState {
-                mappings,
-                models,
-                model_directory,
-                config_path,
+                workspace,
+                active_runtime_model,
                 connection,
-                config_error: Mutex::new(config_error),
-                capture_next_gpio,
+                capabilities,
+                runtime_error,
+                learning,
+                next_learning_revision: Mutex::new(0),
+                device_controls,
                 stop,
                 worker: Mutex::new(Some(worker)),
             });
@@ -257,8 +402,17 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_snapshot,
-            save_workspace,
-            set_io_capture
+            save_model,
+            save_settings,
+            preview_model_import,
+            import_model,
+            export_model,
+            delete_model,
+            preview_backup,
+            export_backup,
+            restore_backup,
+            begin_learning,
+            end_learning,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Kivo");
@@ -309,239 +463,172 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use model::ModelLayout;
+    use crate::{
+        config::ButtonAction,
+        workspace::{HardwareConfig, InputSource, MODEL_SCHEMA_VERSION},
+    };
     use std::{
         collections::BTreeMap,
-        fs,
-        sync::{Arc, Mutex, RwLock, atomic::AtomicBool},
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    fn model() -> ModelLayout {
-        serde_json::from_str(include_str!("../../models/red-phone-v1.json")).unwrap()
+    static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "kivo-command-{}-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos(),
+                NEXT_DIRECTORY.fetch_add(1, AtomicOrdering::Relaxed)
+            ));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn path(&self, name: &str) -> PathBuf {
+            self.0.join(name)
+        }
     }
 
-    fn state(
-        directory: &std::path::Path,
-        mappings: MappingConfig,
-        models: Vec<ModelLayout>,
-    ) -> AppState {
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    fn product_model() -> ModelConfig {
+        let layout = serde_json::from_str(include_str!("../../models/red-phone-v1.json")).unwrap();
+        ModelConfig {
+            schema_version: MODEL_SCHEMA_VERSION,
+            model: layout,
+            hardware: HardwareConfig {
+                controller: "esp32s3".into(),
+                debounce_ms: 30,
+                inputs: vec![InputSource::Direct {
+                    id: "direct".into(),
+                    keys: BTreeMap::from([("UP".into(), 6)]),
+                }],
+            },
+            actions: BTreeMap::new(),
+            legacy: None,
+        }
+    }
+
+    fn product_state(directory: &Path, models: Vec<ModelConfig>) -> AppState {
+        let workspace = Workspace::create(directory, models).unwrap();
+        let runtime = active_model(&workspace);
         AppState {
-            mappings: Arc::new(RwLock::new(mappings)),
-            models: Arc::new(RwLock::new(models)),
-            model_directory: directory.join("models"),
-            config_path: directory.join("config.yaml"),
-            connection: Arc::new(RwLock::new(device::ConnectionStatus::searching())),
-            config_error: Mutex::new(Some("old error".to_owned())),
-            capture_next_gpio: Arc::new(AtomicBool::new(false)),
+            workspace: Arc::new(RwLock::new(workspace)),
+            active_runtime_model: Arc::new(RwLock::new(runtime)),
+            connection: Arc::new(RwLock::new(ConnectionStatus::searching())),
+            capabilities: Arc::new(RwLock::new(None)),
+            runtime_error: Arc::new(RwLock::new(None)),
+            learning: Arc::new(RwLock::new(None)),
+            next_learning_revision: Mutex::new(0),
+            device_controls: Arc::new(Mutex::new(VecDeque::new())),
             stop: Arc::new(AtomicBool::new(false)),
             worker: Mutex::new(None),
         }
     }
 
     #[test]
-    fn catalog_fallback_preserves_active_model_and_unresolved_legacy_entries() {
-        let loaded = MappingConfig {
-            active_model: "missing-model".into(),
-            io_maps: BTreeMap::from([(
-                "missing-model".into(),
-                BTreeMap::from([(6, "BUTTON".into())]),
-            )]),
-            actions: BTreeMap::from([(
-                "BUTTON".into(),
-                ButtonAction::Paste {
-                    text: "typed".into(),
-                },
-            )]),
-            legacy_buttons: BTreeMap::from([(7, "legacy".into())]),
-        };
-
-        let (fallback, error) = prepare_loaded_mappings(loaded, &[model()]);
-
-        assert_eq!(fallback.active_model, "missing-model");
-        assert_eq!(
-            fallback.legacy_buttons,
-            BTreeMap::from([(7, "legacy".into())])
+    fn workspace_command_saves_offline_and_updates_runtime_model() {
+        let directory = TestDirectory::new();
+        let state = product_state(&directory.0, vec![product_model()]);
+        let mut updated = product_model();
+        updated.actions.insert(
+            "UP".into(),
+            vec![ButtonAction::Paste {
+                text: "离线保存".into(),
+            }],
         );
-        assert!(fallback.io_maps.is_empty());
+
+        let snapshot = save_model_inner(&state, updated.clone()).unwrap();
+
+        assert_eq!(snapshot.models, vec![updated.clone()]);
         assert_eq!(
-            fallback.actions,
-            BTreeMap::from([(
-                "BUTTON".into(),
-                ButtonAction::Paste {
-                    text: "typed".into()
-                }
-            )])
+            state.active_runtime_model.read().unwrap().as_ref(),
+            Some(&updated)
         );
-        assert!(error.unwrap().contains("missing-model"));
+        assert!(directory.path("data/models/red-phone-v1.yaml").exists());
     }
 
     #[test]
-    fn invalid_active_model_keeps_valid_catalog_data_for_recovery_save() {
-        let directory = std::env::temp_dir().join(format!(
-            "kivo-recovery-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(directory.join("models")).unwrap();
-        let valid_model = model();
-        let button = valid_model.groups[0].buttons[0].id.clone();
-        let io_maps = BTreeMap::from([
-            (
-                valid_model.id.clone(),
-                BTreeMap::from([(6, button.clone())]),
-            ),
-            (
-                "missing-model".into(),
-                BTreeMap::from([(7, "MISSING_BUTTON".into())]),
-            ),
-        ]);
-        let actions = BTreeMap::from([(
-            button,
-            ButtonAction::Paste {
-                text: "keep".into(),
-            },
-        )]);
-        let loaded = MappingConfig {
-            active_model: "missing-model".into(),
-            io_maps,
-            actions: actions.clone(),
-            legacy_buttons: BTreeMap::new(),
-        };
+    fn workspace_command_deletes_last_model_and_clears_runtime() {
+        let directory = TestDirectory::new();
+        let state = product_state(&directory.0, vec![product_model()]);
 
-        let (prepared, error) = prepare_loaded_mappings(loaded, std::slice::from_ref(&valid_model));
-        assert!(error.unwrap().contains("missing-model"));
-        assert_eq!(
-            prepared.io_maps,
-            BTreeMap::from([(
-                valid_model.id.clone(),
-                BTreeMap::from([(6, valid_model.groups[0].buttons[0].id.clone())]),
-            )])
-        );
-        assert_eq!(prepared.actions, actions);
+        let snapshot = delete_model_inner(&state, "red-phone-v1").unwrap();
 
-        let state = state(&directory, prepared.clone(), vec![valid_model.clone()]);
-        let saved = save_workspace_inner(
-            &state,
-            valid_model.id.clone(),
-            prepared.io_maps,
-            prepared.actions,
-            vec![valid_model],
-        )
-        .unwrap();
-        assert_eq!(saved.io_maps.len(), 1);
-        assert_eq!(saved.actions, actions);
-        fs::remove_dir_all(directory).unwrap();
+        assert!(snapshot.models.is_empty());
+        assert_eq!(snapshot.active_model, None);
+        assert!(state.active_runtime_model.read().unwrap().is_none());
     }
 
     #[test]
-    fn save_workspace_persists_files_before_replacing_runtime_state() {
-        let directory = std::env::temp_dir().join(format!(
-            "kivo-workspace-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let model_directory = directory.join("models");
-        fs::create_dir_all(&model_directory).unwrap();
-        let config_path = directory.join("config.yaml");
-        let original_model = model();
-        model::save(&model_directory, &original_model).unwrap();
-        let state = state(
-            &directory,
-            config::MappingConfig::default(),
-            vec![original_model.clone()],
-        );
-        let mut updated_model = original_model.clone();
-        updated_model.groups[0].buttons[0].label = "One".into();
-        let io_maps = BTreeMap::from([(
-            updated_model.id.clone(),
-            BTreeMap::from([(6, updated_model.groups[0].buttons[0].id.clone())]),
-        )]);
-        let actions = BTreeMap::from([(
-            updated_model.groups[0].buttons[0].id.clone(),
-            config::ButtonAction::Paste { text: "x".into() },
-        )]);
+    fn workspace_command_restore_replaces_runtime_snapshot() {
+        let directory = TestDirectory::new();
+        let state = product_state(&directory.0, vec![product_model()]);
+        let backup = directory.path("backup.yaml");
+        state
+            .workspace
+            .read()
+            .unwrap()
+            .export_backup(&backup)
+            .unwrap();
+        delete_model_inner(&state, "red-phone-v1").unwrap();
 
-        let saved = save_workspace_inner(
-            &state,
-            updated_model.id.clone(),
-            io_maps.clone(),
-            actions.clone(),
-            vec![updated_model.clone()],
-        )
-        .unwrap();
+        let snapshot = restore_backup_inner(&state, &backup).unwrap();
 
-        let persisted_config = config::load(&config_path).unwrap();
-        let persisted_model: ModelLayout =
-            serde_json::from_slice(&fs::read(model_directory.join("red-phone-v1.json")).unwrap())
-                .unwrap();
-        assert_eq!(persisted_config.active_model, updated_model.id);
-        assert_eq!(persisted_config.io_maps, io_maps);
-        assert_eq!(persisted_config.actions, actions);
-        assert_eq!(persisted_model, updated_model);
-        assert_eq!(state.mappings.read().unwrap().clone(), persisted_config);
-        assert_eq!(state.models.read().unwrap().as_slice(), &[persisted_model]);
-        assert_eq!(saved.active_model, "red-phone-v1");
-        assert_eq!(*state.config_error.lock().unwrap(), None);
-        fs::remove_dir_all(directory).unwrap();
+        assert_eq!(snapshot.active_model.as_deref(), Some("red-phone-v1"));
+        assert!(state.active_runtime_model.read().unwrap().is_some());
     }
 
     #[test]
-    fn failed_yaml_save_keeps_runtime_workspace_unchanged() {
-        let directory = std::env::temp_dir().join(format!(
-            "kivo-workspace-failure-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let model_directory = directory.join("models");
-        fs::create_dir_all(&model_directory).unwrap();
-        fs::create_dir(directory.join(".config.yaml.tmp")).unwrap();
-        let original_model = model();
-        model::save(&model_directory, &original_model).unwrap();
-        let original_mappings = MappingConfig {
-            active_model: original_model.id.clone(),
-            ..MappingConfig::default()
-        };
-        let state = state(
-            &directory,
-            original_mappings.clone(),
-            vec![original_model.clone()],
-        );
-        let mut updated_model = original_model.clone();
-        updated_model.groups[0].buttons[0].label = "Changed".into();
-        let button = updated_model.groups[0].buttons[0].id.clone();
-        let io_maps = BTreeMap::from([(
-            updated_model.id.clone(),
-            BTreeMap::from([(6, button.clone())]),
-        )]);
-        let actions = BTreeMap::from([(button, ButtonAction::Paste { text: "x".into() })]);
+    fn workspace_command_import_replaces_same_id() {
+        let directory = TestDirectory::new();
+        let state = product_state(&directory.0, vec![product_model()]);
+        let mut replacement = product_model();
+        replacement.model.name = "替换型号".into();
+        let path = directory.path("replacement.yaml");
+        fs::write(&path, serde_yaml_ng::to_string(&replacement).unwrap()).unwrap();
 
+        let snapshot = import_model_inner(&state, &path).unwrap();
+
+        assert_eq!(snapshot.models, vec![replacement]);
+    }
+
+    #[test]
+    fn workspace_command_rejects_learning_pin_outside_device_allowlist() {
+        let directory = TestDirectory::new();
+        let state = product_state(&directory.0, vec![product_model()]);
+        *state.capabilities.write().unwrap() = Some(DeviceCapabilities {
+            protocol: 2,
+            platform: "esp32s3".into(),
+            pins: vec![1, 2],
+        });
+
+        let error = begin_learning_inner(&state, vec![1, 6]).unwrap_err();
+
+        assert_eq!(error.code, "unsupported_gpio");
+        assert!(state.device_controls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn settings_reject_unknown_language() {
         assert!(
-            save_workspace_inner(
-                &state,
-                updated_model.id.clone(),
-                io_maps,
-                actions,
-                vec![updated_model.clone()],
+            serde_yaml_ng::from_str::<SettingsDocument>(
+                "schema_version: 1\nactive_model: null\nlanguage: fr-FR\n"
             )
             .is_err()
         );
-
-        assert_eq!(*state.mappings.read().unwrap(), original_mappings);
-        assert_eq!(state.models.read().unwrap().as_slice(), &[original_model]);
-        let persisted_model: ModelLayout =
-            serde_json::from_slice(&fs::read(model_directory.join("red-phone-v1.json")).unwrap())
-                .unwrap();
-        assert_eq!(persisted_model, updated_model);
-        fs::remove_dir_all(directory).unwrap();
     }
 }

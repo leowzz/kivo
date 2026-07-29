@@ -1,441 +1,484 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Pencil, RotateCcw, Save, Trash2, Unplug, Usb } from "lucide-react";
+import { open, save as saveFile } from "@tauri-apps/plugin-dialog";
+import {
+  ArchiveRestore,
+  Cable,
+  DatabaseBackup,
+  Download,
+  FileInput,
+  Keyboard,
+  LayoutGrid,
+  Trash2,
+  Unplug,
+  Upload,
+  Usb,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActionEditor } from "./ActionEditor";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { HardwareMapping } from "./HardwareMapping";
 import { Keypad } from "./Keypad";
 import { LayoutEditor } from "./LayoutEditor";
+import { t } from "./i18n";
 import type {
   AppSnapshot,
+  BackupPreview,
   ButtonAction,
-  ConfigMode,
-  ConnectionStatus,
-  ModelLayout,
+  ImportPreview,
+  InputSource,
+  Language,
+  ModelConfig,
+  PhysicalInput,
   RuntimeEvent,
 } from "./types";
+import { SerializedSaveQueue, useAutosave } from "./useAutosave";
 
-const SEARCHING: ConnectionStatus = { state: "searching", port: null };
+type View = "behavior" | "hardware" | "layout";
+type Confirmation =
+  | { kind: "import"; path: string; preview: ImportPreview }
+  | { kind: "restore"; path: string; preview: BackupPreview }
+  | { kind: "delete"; model: ModelConfig };
+
+const PREVIEW_MODE = import.meta.env.DEV && new URLSearchParams(window.location.search).has("preview");
 
 function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error && "code" in error) return String(error.code);
+  return String(error);
 }
 
-function eventTime(timestampMs: number) {
-  return new Date(timestampMs).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+function allButtons(model: ModelConfig | undefined) {
+  return model?.model.groups.flatMap((group) => group.buttons) ?? [];
+}
+
+function isValidDraft(model: ModelConfig | undefined) {
+  return Boolean(model && Object.values(model.actions).every((actions) => actions.every((action) =>
+    action.type === "paste" ? action.text.length > 0 : action.keys.length > 0
+  )));
+}
+
+function resolveButton(model: ModelConfig, input: PhysicalInput) {
+  let runtimeSource = 0;
+  for (const source of model.hardware.inputs) {
+    if (Object.keys(source.keys).length === 0) continue;
+    if (source.type === "direct" && input.type === "direct") {
+      const match = Object.entries(source.keys).find(([, gpio]) => gpio === input.gpio);
+      if (match) return match[0];
+    }
+    if (source.type === "contact_matrix" && input.type === "contact" && input.source === runtimeSource) {
+      const pair = [Math.min(input.pin_a, input.pin_b), Math.max(input.pin_a, input.pin_b)];
+      const match = Object.entries(source.keys).find(([, pins]) => pins[0] === pair[0] && pins[1] === pair[1]);
+      if (match) return match[0];
+    }
+    runtimeSource += 1;
+  }
+  return null;
+}
+
+function learnInput(model: ModelConfig, buttonId: string, input: PhysicalInput): ModelConfig {
+  const inputs = model.hardware.inputs.map((source): InputSource => ({
+    ...source,
+    keys: Object.fromEntries(Object.entries(source.keys).filter(([id]) => id !== buttonId)),
+  })) as InputSource[];
+
+  if (input.type === "direct") {
+    let index = inputs.findIndex((source) => source.type === "direct");
+    if (index < 0) {
+      inputs.push({ type: "direct", id: "direct", keys: {} });
+      index = inputs.length - 1;
+    }
+    const source = inputs[index];
+    if (source.type === "direct") {
+      source.keys = Object.fromEntries(Object.entries(source.keys).filter(([, gpio]) => gpio !== input.gpio));
+      source.keys[buttonId] = input.gpio;
+    }
+  } else {
+    let index = inputs.findIndex((source) => source.type === "contact_matrix");
+    if (index < 0) {
+      inputs.push({ type: "contact_matrix", id: "matrix", pins: [], keys: {} });
+      index = inputs.length - 1;
+    }
+    const source = inputs[index];
+    if (source.type === "contact_matrix") {
+      const pair: [number, number] = [Math.min(input.pin_a, input.pin_b), Math.max(input.pin_a, input.pin_b)];
+      source.pins = [...new Set([...source.pins, ...pair])].sort((left, right) => left - right);
+      source.keys = Object.fromEntries(Object.entries(source.keys).filter(([, pins]) =>
+        pins[0] !== pair[0] || pins[1] !== pair[1]
+      ));
+      source.keys[buttonId] = pair;
+    }
+  }
+
+  return { ...model, hardware: { ...model.hardware, inputs } };
 }
 
 export default function App() {
-  const [models, setModels] = useState<ModelLayout[]>([]);
-  const [savedModels, setSavedModels] = useState<ModelLayout[]>([]);
-  const [activeModel, setActiveModel] = useState("");
-  const [savedActiveModel, setSavedActiveModel] = useState("");
-  const [ioMaps, setIoMaps] = useState<Record<string, Record<number, string>>>({});
-  const [savedIoMaps, setSavedIoMaps] = useState<Record<string, Record<number, string>>>({});
+  const queue = useRef(new SerializedSaveQueue()).current;
+  const [models, setModels] = useState<ModelConfig[]>([]);
+  const [savedModels, setSavedModels] = useState<Record<string, string>>({});
+  const [activeModel, setActiveModel] = useState<string | null>(null);
+  const [language, setLanguage] = useState<Language>("zh-CN");
   const [supportedGpios, setSupportedGpios] = useState<number[]>([]);
-  const [actions, setActions] = useState<Record<string, ButtonAction>>({});
-  const [savedActions, setSavedActions] = useState<Record<string, ButtonAction>>({});
-  const [mode, setMode] = useState<ConfigMode>("io");
+  const [connection, setConnection] = useState<AppSnapshot["connection"]>({ state: "searching", port: null });
+  const [learning, setLearning] = useState<AppSnapshot["learning"]>(null);
+  const [runtimeError, setRuntimeError] = useState<AppSnapshot["runtimeError"]>(null);
+  const [view, setView] = useState<View>("behavior");
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
-  const [selectedAnchor, setSelectedAnchor] = useState<DOMRect | null>(null);
-  const [capturedGpio, setCapturedGpio] = useState<number | null>(null);
-  const [pressedGpios, setPressedGpios] = useState<Set<number>>(() => new Set());
-  const capturingButtonRef = useRef<string | null>(null);
-  const captureGenerationRef = useRef(0);
-  const ioCaptureQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const [configPath, setConfigPath] = useState("");
-  const [connection, setConnection] = useState<ConnectionStatus>(SEARCHING);
-  const [events, setEvents] = useState<RuntimeEvent[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [pressedButtonIds, setPressedButtonIds] = useState<Set<string>>(() => new Set());
   const [loaded, setLoaded] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [layoutEditorOpen, setLayoutEditorOpen] = useState(false);
+
+  const activeConfig = useMemo(
+    () => models.find((model) => model.model.id === activeModel),
+    [activeModel, models],
+  );
+  const dirty = Boolean(activeConfig && savedModels[activeConfig.model.id] !== JSON.stringify(activeConfig));
 
   const applySnapshot = useCallback((snapshot: AppSnapshot) => {
     setModels(snapshot.models);
-    setSavedModels(snapshot.models);
+    setSavedModels(Object.fromEntries(snapshot.models.map((model) => [model.model.id, JSON.stringify(model)])));
     setActiveModel(snapshot.activeModel);
-    setSavedActiveModel(snapshot.activeModel);
-    setIoMaps(snapshot.ioMaps);
-    setSavedIoMaps(snapshot.ioMaps);
+    setLanguage(snapshot.language);
     setSupportedGpios(snapshot.supportedGpios);
-    setActions(snapshot.actions);
-    setSavedActions(snapshot.actions);
-    setConfigPath(snapshot.configPath);
     setConnection(snapshot.connection);
-    setError(snapshot.configError);
+    setRuntimeError(snapshot.runtimeError);
+    setLearning(snapshot.learning);
+    setPressedButtonIds(new Set());
   }, []);
+
+  const saveActiveModel = useCallback(async (model: ModelConfig | undefined) => {
+    if (!model) return;
+    if (!PREVIEW_MODE) await invoke("save_model", { model });
+    setSavedModels((current) => ({ ...current, [model.model.id]: JSON.stringify(model) }));
+  }, []);
+
+  const autosave = useAutosave({
+    value: activeConfig,
+    valid: dirty && isValidDraft(activeConfig),
+    save: saveActiveModel,
+    queue,
+  });
+
+  const modelRef = useRef(activeConfig);
+  const selectedRef = useRef(selectedButtonId);
+  const learningRef = useRef(learning);
+  const viewRef = useRef(view);
+  modelRef.current = activeConfig;
+  selectedRef.current = selectedButtonId;
+  learningRef.current = learning;
+  viewRef.current = view;
 
   useEffect(() => {
     let active = true;
-    let stopListening: (() => void) | undefined;
-    const initialize = async () => {
+    let unlisten: (() => void) | undefined;
+    void (async () => {
       try {
-        stopListening = await listen<RuntimeEvent>("runtime-event", ({ payload }) => {
-          if (!active) return;
-          setConnection(payload.connection);
-          setEvents((current) => [...current, payload].slice(-200));
-          if (payload.connection.state !== "connected") {
-            setPressedGpios(new Set());
-          } else if (payload.gpio !== null && payload.pressed !== null) {
-            const gpio = payload.gpio;
-            const pressed = payload.pressed;
-            setPressedGpios((current) => {
-              const next = new Set(current);
-              if (pressed) next.add(gpio);
-              else next.delete(gpio);
-              return next;
-            });
-          }
-          if (capturingButtonRef.current && payload.gpio !== null && payload.pressed) {
-            capturingButtonRef.current = null;
-            setCapturedGpio(payload.gpio);
-          }
-        });
-        if (!active) {
-          stopListening();
+        if (PREVIEW_MODE) {
+          applySnapshot((await import("./preview")).previewSnapshot);
           return;
         }
+        unlisten = await listen<RuntimeEvent>("runtime-event", ({ payload }) => {
+          if (!active) return;
+          setConnection(payload.connection);
+          if (payload.input && payload.pressed !== null) {
+            const currentModel = modelRef.current;
+            if (payload.code === "learning_input" && payload.pressed && learningRef.current
+              && selectedRef.current && viewRef.current === "hardware" && currentModel) {
+              const learned = learnInput(currentModel, selectedRef.current, payload.input);
+              setModels((current) => current.map((model) => model.model.id === learned.model.id ? learned : model));
+            }
+            if (currentModel) {
+              const buttonId = resolveButton(currentModel, payload.input);
+              if (buttonId) {
+                setPressedButtonIds((current) => {
+                  const next = new Set(current);
+                  if (payload.pressed) next.add(buttonId);
+                  else next.delete(buttonId);
+                  return next;
+                });
+              }
+            }
+          }
+        });
         const snapshot = await invoke<AppSnapshot>("get_snapshot");
-        if (!active) return;
-        applySnapshot(snapshot);
+        if (active) applySnapshot(snapshot);
       } catch (loadError) {
-        if (!active) return;
-        setError(errorMessage(loadError));
+        if (active) setError(`${t("zh-CN", "error.load")}: ${errorMessage(loadError)}`);
       } finally {
         if (active) setLoaded(true);
       }
-    };
-    void initialize();
-
+    })();
     return () => {
       active = false;
-      stopListening?.();
+      unlisten?.();
     };
   }, [applySnapshot]);
 
-  const enqueueIoCapture = useCallback((enabled: boolean) => {
-    const transition = ioCaptureQueueRef.current.then(async () => {
-      await invoke("set_io_capture", { enabled });
-    });
-    ioCaptureQueueRef.current = transition.catch(() => undefined);
-    return transition;
-  }, []);
-
   useEffect(() => {
-    if (mode !== "io" || !selectedButtonId || connection.state !== "connected") return;
-    const generation = ++captureGenerationRef.current;
-    capturingButtonRef.current = null;
-    void enqueueIoCapture(true)
-      .then(() => {
-        if (captureGenerationRef.current === generation) {
-          capturingButtonRef.current = selectedButtonId;
-        }
-      })
-      .catch((captureError) => {
-        if (captureGenerationRef.current === generation) {
-          capturingButtonRef.current = null;
-          setError(errorMessage(captureError));
-        }
-      });
-    return () => {
-      captureGenerationRef.current += 1;
-      capturingButtonRef.current = null;
-      void enqueueIoCapture(false).catch(() => undefined);
-    };
-  }, [connection.state, enqueueIoCapture, mode, selectedButtonId]);
+    const buttons = allButtons(activeConfig);
+    if (!buttons.some((button) => button.id === selectedButtonId)) {
+      setSelectedButtonId(buttons[0]?.id ?? null);
+    }
+  }, [activeConfig, selectedButtonId]);
 
-  const dirty = useMemo(
-    () => JSON.stringify([models, activeModel, ioMaps, actions])
-      !== JSON.stringify([savedModels, savedActiveModel, savedIoMaps, savedActions]),
-    [actions, activeModel, ioMaps, models, savedActions, savedActiveModel, savedIoMaps, savedModels],
-  );
+  const updateActive = (update: (model: ModelConfig) => ModelConfig) => {
+    if (!activeConfig) return;
+    setModels((current) => current.map((model) => model.model.id === activeConfig.model.id ? update(model) : model));
+  };
 
-  const saveWorkspace = useCallback(async () => {
-    if (!loaded || !dirty || saving || layoutEditorOpen) return;
-    setSaving(true);
+  const saveSettings = async (nextActive: string | null, nextLanguage: Language) => {
+    await autosave.flush();
+    if (PREVIEW_MODE) {
+      setActiveModel(nextActive);
+      setLanguage(nextLanguage);
+      return;
+    }
+    const snapshot = await queue.enqueue(() => invoke<AppSnapshot>("save_settings", {
+      settings: { schema_version: 1, active_model: nextActive, language: nextLanguage },
+    }));
+    applySnapshot(snapshot);
+  };
+
+  const run = async (label: string, task: () => Promise<void>) => {
     setError(null);
     try {
-      const snapshot = await invoke<AppSnapshot>("save_workspace", {
-        activeModel,
-        ioMaps,
-        actions,
-        models,
-      });
-      applySnapshot(snapshot);
-    } catch (saveError) {
-      const message = errorMessage(saveError);
-      setError(message);
-      setEvents((current) => [
-        ...current,
-        {
-          timestampMs: Date.now(),
-          level: "error" as const,
-          message: `Save failed: ${message}`,
-          connection,
-          gpio: null,
-          pressed: null,
-        },
-      ].slice(-200));
-    } finally {
-      setSaving(false);
+      await task();
+    } catch (operationError) {
+      setError(`${label}: ${errorMessage(operationError)}`);
     }
-  }, [
-    actions,
-    activeModel,
-    applySnapshot,
-    connection,
-    dirty,
-    ioMaps,
-    layoutEditorOpen,
-    loaded,
-    models,
-    saving,
-  ]);
+  };
 
-  useEffect(() => {
-    const handleShortcut = (event: KeyboardEvent) => {
-      if (event.metaKey && event.key.toLowerCase() === "s") {
-        event.preventDefault();
-        void saveWorkspace();
-      }
-    };
-    window.addEventListener("keydown", handleShortcut);
-    return () => window.removeEventListener("keydown", handleShortcut);
-  }, [saveWorkspace]);
+  const chooseImport = () => run(t(language, "error.import"), async () => {
+    await autosave.flush();
+    const path = await open({ multiple: false, filters: [{ name: "Kivo", extensions: ["yaml", "yml"] }] });
+    if (!path) return;
+    const preview = await invoke<ImportPreview>("preview_model_import", { path });
+    setConfirmation({ kind: "import", path, preview });
+  });
 
-  useEffect(() => {
-    setPressedGpios(new Set());
-  }, [activeModel]);
+  const chooseRestore = () => run(t(language, "error.restore"), async () => {
+    await autosave.flush();
+    const path = await open({ multiple: false, filters: [{ name: "Kivo", extensions: ["yaml", "yml"] }] });
+    if (!path) return;
+    const preview = await invoke<BackupPreview>("preview_backup", { path });
+    setConfirmation({ kind: "restore", path, preview });
+  });
 
-  const activeLayout = models.find((model) => model.id === activeModel);
-  const pressedButtonIds = useMemo(() => new Set(
-    Object.entries(ioMaps[activeModel] ?? {})
-      .filter(([gpio]) => pressedGpios.has(Number(gpio)))
-      .map(([, buttonId]) => buttonId),
-  ), [activeModel, ioMaps, pressedGpios]);
-  const missingActiveModel = loaded && !activeLayout;
+  const confirmOperation = () => {
+    const current = confirmation;
+    if (!current) return;
+    setConfirmation(null);
+    void run(
+      t(language, current.kind === "restore" ? "error.restore" : current.kind === "delete" ? "error.delete" : "error.import"),
+      async () => {
+        const snapshot = current.kind === "import"
+          ? await invoke<AppSnapshot>("import_model", { path: current.path })
+          : current.kind === "restore"
+            ? await invoke<AppSnapshot>("restore_backup", { path: current.path })
+            : await invoke<AppSnapshot>("delete_model", { id: current.model.model.id });
+        applySnapshot(snapshot);
+      },
+    );
+  };
+
+  const selectedButton = allButtons(activeConfig).find((button) => button.id === selectedButtonId) ?? null;
+  const selectedActions = activeConfig && selectedButtonId ? activeConfig.actions[selectedButtonId] ?? [] : [];
   const connected = connection.state === "connected";
 
-  const selectModel = (modelId: string) => {
-    setActiveModel(modelId);
-    setSelectedButtonId(null);
-    setSelectedAnchor(null);
-    setCapturedGpio(null);
-  };
-
-  const closePopover = () => {
-    setSelectedButtonId(null);
-    setSelectedAnchor(null);
-    setCapturedGpio(null);
-  };
-
-  const revertWorkspace = () => {
-    setModels(savedModels);
-    setActiveModel(savedActiveModel);
-    setIoMaps(savedIoMaps);
-    setActions(savedActions);
-    setLayoutEditorOpen(false);
-    closePopover();
-  };
-
   return (
-    <main className="app-shell">
+    <main className="product-shell">
       <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark"><Usb size={20} strokeWidth={2} /></span>
-          <h1>Kivo</h1>
-        </div>
-        <div className={`connection ${connected ? "is-connected" : ""}`}>
-          {connected ? <Usb size={16} /> : <Unplug size={16} />}
-          <span>{connected ? "Connected" : "Waiting"}</span>
+        <div className="brand"><span><Usb size={19} /></span><h1>Kivo</h1></div>
+        <div className={connected ? "connection is-connected" : "connection"}>
+          {connected ? <Cable size={15} /> : <Unplug size={15} />}
+          <span>{t(language, connected ? "connection.connected" : "connection.searching")}</span>
           {connection.port && <code>{connection.port}</code>}
         </div>
-        <div className="config-location" title={configPath}>
-          {configPath || "Loading configuration..."}
-        </div>
-        <div className="save-controls">
-          <button
-            className="icon-button"
-            type="button"
-            aria-label="Revert workspace"
-            title="Revert workspace"
-            disabled={!loaded || !dirty || saving || layoutEditorOpen}
-            onClick={revertWorkspace}
-          >
-            <RotateCcw size={17} />
-          </button>
-          <button
-            className="save-button"
-            type="button"
-            aria-label="Save workspace"
-            disabled={!loaded || !dirty || saving || layoutEditorOpen}
-            onClick={() => void saveWorkspace()}
-          >
-            <Save size={17} />
-            {saving ? "Saving" : "Save"}
-          </button>
+        <div className={`save-state is-${autosave.status}`} aria-live="polite">
+          {autosave.status === "saving" && t(language, "save.saving")}
+          {autosave.status === "error" && (
+            <><span>{t(language, "save.failed")}</span><button type="button" onClick={() => void autosave.retry()}>{t(language, "save.retry")}</button></>
+          )}
         </div>
       </header>
 
-      {error && <div className="error-banner" role="alert">{error}</div>}
+      {(error || runtimeError) && (
+        <div className="error-banner" role="alert">
+          {error ?? runtimeError?.detail ?? runtimeError?.code}
+          <button className="icon-button" type="button" aria-label={t(language, "common.close")} onClick={() => {
+            setError(null);
+            setRuntimeError(null);
+          }}><X size={16} /></button>
+        </div>
+      )}
 
-      <div className="workspace">
-        <section className="mapping-section" aria-labelledby="keypad-heading">
-          <div className="section-heading workspace-heading">
-            <div>
-              <p className="eyebrow">Configuration</p>
-              <h2 id="keypad-heading">Keypad</h2>
-            </div>
-            <div className="workspace-controls">
-              <button
-                className="icon-button"
-                type="button"
-                aria-label="Edit layout"
-                title="Edit layout"
-                disabled={!loaded || saving || !activeLayout}
-                onClick={() => {
-                  closePopover();
-                  setLayoutEditorOpen(true);
-                }}
-              >
-                <Pencil size={16} />
-              </button>
-              <label className="model-picker">
-                <span>Model</span>
-                <select
-                  aria-label="Device model"
-                  value={activeModel}
-                  disabled={!loaded || saving || dirty}
-                  onChange={(event) => selectModel(event.target.value)}
-                >
-                  {missingActiveModel && (
-                    <option value={activeModel} disabled>Missing: {activeModel}</option>
-                  )}
-                  {models.map((model) => (
-                    <option value={model.id} key={model.id}>{model.name}</option>
-                  ))}
-                </select>
-              </label>
-              <div className="mode-switch" role="group" aria-label="Configuration mode">
-                {(["io", "behavior"] as const).map((value) => (
-                  <button
-                    className={mode === value ? "is-active" : ""}
-                    type="button"
-                    aria-label={value === "io" ? "IO" : "Behavior"}
-                    aria-pressed={mode === value}
-                    key={value}
-                    onClick={() => {
-                      setMode(value);
-                      if (value !== mode) closePopover();
-                    }}
-                  >
-                    {value === "io" ? "IO" : "Behavior"}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="keypad-workspace">
-            {activeLayout && (
-              <Keypad
-                layout={activeLayout}
-                mode={mode}
-                ioMap={ioMaps[activeModel] ?? {}}
-                actions={actions}
-                supportedGpios={supportedGpios}
-                pressedButtonIds={pressedButtonIds}
-                selectedButtonId={selectedButtonId}
-                selectedAnchor={selectedAnchor}
-                capturedGpio={capturedGpio}
-                onSelect={(buttonId, anchor) => {
-                  setCapturedGpio(null);
-                  setSelectedButtonId(buttonId);
-                  setSelectedAnchor(anchor);
-                }}
-                onApplyIoMap={(ioMap) => {
-                  setIoMaps((current) => ({ ...current, [activeModel]: ioMap }));
-                  closePopover();
-                }}
-                onApplyAction={(buttonId, action) => {
-                  setActions((current) => ({ ...current, [buttonId]: action }));
-                  closePopover();
-                }}
-                onDeleteAction={(buttonId) => {
-                  setActions((current) => Object.fromEntries(
-                    Object.entries(current).filter(([id]) => id !== buttonId),
-                  ));
-                  closePopover();
-                }}
-                onCancel={closePopover}
-              />
-            )}
-          </div>
-        </section>
-
-        <section className="activity-section" aria-labelledby="activity-heading">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">Runtime</p>
-              <h2 id="activity-heading">Activity</h2>
-            </div>
-            <button
-              className="icon-button"
-              type="button"
-              aria-label="Clear activity"
-              title="Clear activity"
-              disabled={events.length === 0}
-              onClick={() => setEvents([])}
+      <div className="product-workspace">
+        <aside className="sidebar">
+          <label className="model-picker">
+            <span>{t(language, "model.label")}</span>
+            <select
+              aria-label={t(language, "model.select")}
+              value={activeModel ?? ""}
+              disabled={!loaded || models.length === 0}
+              onChange={(event) => void run(t(language, "error.save"), () => saveSettings(event.target.value, language))}
             >
-              <Trash2 size={17} />
+              {models.length === 0 && <option value="">{t(language, "model.empty")}</option>}
+              {models.map((model) => <option value={model.model.id} key={model.model.id}>{model.model.name}</option>)}
+            </select>
+          </label>
+
+          <nav aria-label={t(language, "nav.configuration")}>
+            <span>{t(language, "nav.configuration")}</span>
+            <button className={view === "behavior" ? "is-active" : ""} type="button" onClick={() => setView("behavior")}>
+              <Keyboard size={17} />{t(language, "nav.behavior")}
+            </button>
+            <button className={view === "hardware" ? "is-active" : ""} type="button" disabled={!activeConfig} onClick={() => setView("hardware")}>
+              <Cable size={17} />{t(language, "nav.hardware")}
+            </button>
+            <button className={view === "layout" ? "is-active" : ""} type="button" disabled={!activeConfig} onClick={() => setView("layout")}>
+              <LayoutGrid size={17} />{t(language, "nav.layout")}
+            </button>
+          </nav>
+
+          <div className="data-menu">
+            <span>{t(language, "nav.data")}</span>
+            <button type="button" onClick={() => void chooseImport()}><FileInput size={16} />{t(language, "nav.import")}</button>
+            <button type="button" disabled={!activeConfig} onClick={() => void run(t(language, "error.export"), async () => {
+              await autosave.flush();
+              const path = await saveFile({ defaultPath: `${activeConfig?.model.id ?? "model"}.yaml`, filters: [{ name: "Kivo", extensions: ["yaml"] }] });
+              if (path && activeConfig) await invoke("export_model", { id: activeConfig.model.id, path });
+            })}><Upload size={16} />{t(language, "nav.export")}</button>
+            <button type="button" disabled={models.length === 0} onClick={() => void run(t(language, "error.export"), async () => {
+              await autosave.flush();
+              const path = await saveFile({ defaultPath: "kivo-backup.yaml", filters: [{ name: "Kivo", extensions: ["yaml"] }] });
+              if (path) await invoke("export_backup", { path });
+            })}><DatabaseBackup size={16} />{t(language, "nav.backup")}</button>
+            <button type="button" onClick={() => void chooseRestore()}><ArchiveRestore size={16} />{t(language, "nav.restore")}</button>
+            <button className="is-danger" type="button" disabled={!activeConfig} onClick={() => activeConfig && setConfirmation({ kind: "delete", model: activeConfig })}>
+              <Trash2 size={16} />{t(language, "nav.delete")}
             </button>
           </div>
-          <div className="event-log" role="log" aria-live="polite">
-            {events.length === 0 ? (
-              <div className="empty-log">
-                <Unplug size={22} />
-                <span>No button activity yet</span>
+
+          <label className="language-picker">
+            <span>{t(language, "common.language")}</span>
+            <select value={language} onChange={(event) => {
+              const nextLanguage = event.target.value as Language;
+              setLanguage(nextLanguage);
+              void run(t(nextLanguage, "error.save"), () => saveSettings(activeModel, nextLanguage));
+            }}>
+              <option value="zh-CN">简体中文</option>
+              <option value="en-US">English</option>
+            </select>
+          </label>
+        </aside>
+
+        <section className="content-panel">
+          {!activeConfig ? (
+            <div className="empty-workspace">
+              <Download size={28} />
+              <h2>{t(language, "model.empty")}</h2>
+              <div><button className="primary-button" type="button" onClick={() => void chooseImport()}>{t(language, "model.import")}</button><button type="button" onClick={() => void chooseRestore()}>{t(language, "model.restore")}</button></div>
+            </div>
+          ) : view === "hardware" ? (
+            <HardwareMapping
+              language={language}
+              layout={activeConfig.model}
+              hardware={activeConfig.hardware}
+              supportedGpios={supportedGpios}
+              learning={learning}
+              selectedButtonId={selectedButtonId}
+              onSelectButton={setSelectedButtonId}
+              onChange={(hardware) => updateActive((model) => ({ ...model, hardware }))}
+              onBeginLearning={(pins) => void run(t(language, "error.learning"), async () => applySnapshot(await invoke("begin_learning", { pins })))}
+              onEndLearning={() => void run(t(language, "error.learning"), async () => applySnapshot(await invoke("end_learning")))}
+            />
+          ) : (
+            <>
+              <div className="content-heading">
+                <div><span>{activeConfig.model.name}</span><h2>{t(language, view === "layout" ? "layout.title" : "behavior.title")}</h2></div>
+                {view === "layout" && <button className="primary-button" type="button" onClick={() => setLayoutEditorOpen(true)}><LayoutGrid size={16} />{t(language, "layout.edit")}</button>}
               </div>
-            ) : (
-              events.map((event, index) => (
-                <div className={`event-row is-${event.level}`} key={`${event.timestampMs}-${index}`}>
-                  <time dateTime={new Date(event.timestampMs).toISOString()}>
-                    {eventTime(event.timestampMs)}
-                  </time>
-                  <span className="event-level" aria-hidden="true" />
-                  <span>{event.message}</span>
-                </div>
-              ))
-            )}
-          </div>
+              <div className="keypad-stage">
+                <Keypad
+                  layout={activeConfig.model}
+                  actions={activeConfig.actions}
+                  selectedButtonId={selectedButtonId}
+                  pressedButtonIds={pressedButtonIds}
+                  actionCountLabel={(count) => t(language, "model.actionCount", { count })}
+                  onSelect={setSelectedButtonId}
+                />
+              </div>
+            </>
+          )}
         </section>
+
+        <ActionEditor
+          language={language}
+          button={selectedButton}
+          actions={selectedActions}
+          onChange={(actions: ButtonAction[]) => selectedButtonId && updateActive((model) => ({
+            ...model,
+            actions: { ...model.actions, [selectedButtonId]: actions },
+          }))}
+        />
       </div>
+
       <LayoutEditor
-        layout={activeLayout ?? null}
+        layout={activeConfig?.model ?? null}
+        language={language}
         open={layoutEditorOpen}
         onCancel={() => setLayoutEditorOpen(false)}
         onApply={(layout) => {
-          setModels((current) => current.map((model) => model.id === layout.id ? layout : model));
-          const buttonIds = new Set(
-            layout.groups.flatMap((group) => group.buttons.map((button) => button.id)),
-          );
-          setIoMaps((current) => {
-            const activeIoMap = current[layout.id];
-            if (!activeIoMap) return current;
-            return {
-              ...current,
-              [layout.id]: Object.fromEntries(
-                Object.entries(activeIoMap).filter(([, buttonId]) => buttonIds.has(buttonId)),
-              ),
-            };
+          updateActive((model) => {
+            const buttonIds = new Set(layout.groups.flatMap((group) => group.buttons.map((button) => button.id)));
+            const actions = Object.fromEntries(Object.entries(model.actions).filter(([id]) => buttonIds.has(id)));
+            const inputs = model.hardware.inputs.map((source) => ({
+              ...source,
+              keys: Object.fromEntries(Object.entries(source.keys).filter(([id]) => buttonIds.has(id))),
+            })) as InputSource[];
+            return { ...model, model: layout, actions, hardware: { ...model.hardware, inputs } };
           });
           setLayoutEditorOpen(false);
-          closePopover();
         }}
       />
+
+      {confirmation && (
+        <ConfirmDialog
+          title={confirmation.kind === "restore"
+            ? t(language, "dialog.restoreTitle")
+            : confirmation.kind === "delete"
+              ? t(language, "dialog.deleteTitle")
+              : t(language, confirmation.preview.replacesExisting ? "dialog.replaceTitle" : "dialog.importTitle")}
+          body={confirmation.kind === "restore"
+            ? t(language, "dialog.restoreBody")
+            : confirmation.kind === "delete"
+              ? t(language, "dialog.deleteBody", { name: confirmation.model.model.name })
+              : t(language, confirmation.preview.replacesExisting ? "dialog.replaceBody" : "dialog.importBody")}
+          summary={confirmation.kind === "restore"
+            ? t(language, "dialog.backupSummary", {
+              models: confirmation.preview.modelCount,
+              buttons: confirmation.preview.buttonCount,
+              bindings: confirmation.preview.hardwareBindingCount,
+              actions: confirmation.preview.actionCount,
+            })
+            : confirmation.kind === "import"
+              ? t(language, "dialog.modelSummary", {
+                buttons: confirmation.preview.buttonCount,
+                bindings: confirmation.preview.hardwareBindingCount,
+                actions: confirmation.preview.actionCount,
+              })
+              : confirmation.model.model.name}
+          confirmLabel={t(language, "common.confirm")}
+          cancelLabel={t(language, "common.cancel")}
+          danger={confirmation.kind !== "import" || confirmation.preview.replacesExisting}
+          onCancel={() => setConfirmation(null)}
+          onConfirm={confirmOperation}
+        />
+      )}
     </main>
   );
 }

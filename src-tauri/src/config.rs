@@ -1,3 +1,4 @@
+#[cfg(test)]
 use crate::model::ModelLayout;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fs, io::ErrorKind, path::Path};
@@ -35,6 +36,7 @@ struct ConfigDocument {
 }
 
 impl MappingConfig {
+    #[cfg(test)]
     pub fn resolved_button(&self, gpio: u8) -> Option<&str> {
         self.io_maps
             .get(&self.active_model)?
@@ -42,6 +44,7 @@ impl MappingConfig {
             .map(String::as_str)
     }
 
+    #[cfg(test)]
     pub fn resolved_action(&self, gpio: u8) -> Option<ButtonAction> {
         self.resolved_button(gpio)
             .and_then(|button| self.actions.get(button))
@@ -114,6 +117,7 @@ impl MappingConfig {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn validate(&self, models: &[ModelLayout]) -> Result<(), String> {
         self.validate_contents()?;
         if self.active_model.trim().is_empty() {
@@ -163,6 +167,7 @@ pub fn load(path: &Path) -> Result<MappingConfig, String> {
     Ok(config)
 }
 
+#[cfg(test)]
 pub fn save(path: &Path, config: &MappingConfig) -> Result<(), String> {
     let mut config = config.clone();
     config.migrate_legacy();
