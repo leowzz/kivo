@@ -18,7 +18,7 @@ test:
 	cargo test --manifest-path src-tauri/Cargo.toml
 	npm test
 
-helper:
+helper: helper-kill
 	npm run tauri dev
 
 helper-kill:
