@@ -1,6 +1,6 @@
 .PHONY: all build upload test helper helper-build release
 
-all: upload
+all: helper
 
 build:
 	uv run pio run -e esp32s3

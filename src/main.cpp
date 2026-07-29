@@ -76,6 +76,9 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
   }
 
   switch (command->kind) {
+    case HelperCommandKind::Hello:
+      writeLine(kHelloLine);
+      return;
     case HelperCommandKind::ConfigBegin:
       if (controller.isLearning() ||
           !topologyBuilder.begin(command->revision, command->debounceMs)) {

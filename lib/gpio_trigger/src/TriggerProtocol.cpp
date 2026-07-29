@@ -108,6 +108,12 @@ std::optional<HelperCommand> parseHelperCommand(std::string_view line) {
   const auto kind = takeToken(line);
   if (!kind.has_value()) return std::nullopt;
 
+  if (*kind == "HELLO") {
+    return takeToken(line).has_value()
+               ? std::nullopt
+               : std::optional<HelperCommand>{{HelperCommandKind::Hello}};
+  }
+
   if (*kind == "CONFIG_BEGIN") {
     const auto revision = takeNumber(line);
     const auto debounce = takeNumber(line);

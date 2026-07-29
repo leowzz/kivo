@@ -10,6 +10,7 @@
 #include "GpioTriggerController.h"
 
 enum class HelperCommandKind {
+  Hello,
   ConfigBegin,
   ConfigDirect,
   ConfigMatrix,

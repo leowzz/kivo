@@ -46,6 +46,10 @@ void test_contact_edge_reports_unordered_pair_once_after_debounce() {
 }
 
 void test_parses_runtime_configuration_commands() {
+  const auto hello = parseHelperCommand("HELLO\n");
+  TEST_ASSERT_TRUE(hello.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::Hello, hello->kind);
+
   const auto begin = parseHelperCommand("CONFIG_BEGIN 3 30\n");
   TEST_ASSERT_TRUE(begin.has_value());
   TEST_ASSERT_EQUAL(HelperCommandKind::ConfigBegin, begin->kind);
