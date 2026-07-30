@@ -3,10 +3,14 @@ import { t } from "./i18n";
 import type { ConnectionStatus, HomeMetricsSnapshot, Language, ModelConfig } from "./types";
 
 interface Props {
+  activeModel: string | null;
   connection: ConnectionStatus;
   language: Language;
+  loaded: boolean;
   metrics: HomeMetricsSnapshot | null;
   model: ModelConfig | undefined;
+  models: ModelConfig[];
+  onModelChange: (modelId: string) => void;
 }
 
 function buttonLabel(model: ModelConfig | undefined, buttonId: string | undefined) {
@@ -14,16 +18,23 @@ function buttonLabel(model: ModelConfig | undefined, buttonId: string | undefine
   return model?.model.groups.flatMap((group) => group.buttons).find((button) => button.id === buttonId)?.label ?? buttonId;
 }
 
-export function HomeDashboard({ connection, language, metrics, model }: Props) {
+export function HomeDashboard({ activeModel, connection, language, loaded, metrics, model, models, onModelChange }: Props) {
   const maxHeat = Math.max(1, ...((metrics?.heatmap ?? []).map((entry) => entry.presses)));
   return (
     <div className="home-dashboard">
       <section className="home-main" aria-labelledby="home-title">
         <header className="content-heading home-heading">
-          <div><span>{model?.model.name ?? "Kivo"}</span><h2 id="home-title">{t(language, "home.title")}</h2></div>
+          <div><h2 id="home-title">{t(language, "home.title")}</h2></div>
           <div className={connection.state === "connected" ? "home-device is-connected" : "home-device"}>
             <Activity size={15} /><span>{t(language, connection.state === "connected" ? "connection.connected" : "connection.searching")}</span>
             {connection.port && <code>{connection.port}</code>}
+            <label className="home-model-picker">
+              <span>{t(language, "model.label")}</span>
+              <select aria-label={t(language, "model.select")} value={activeModel ?? ""} disabled={!loaded || models.length === 0} onChange={(event) => onModelChange(event.target.value)}>
+                {models.length === 0 && <option value="">{t(language, "model.empty")}</option>}
+                {models.map((item) => <option value={item.model.id} key={item.model.id}>{item.model.name}</option>)}
+              </select>
+            </label>
           </div>
         </header>
         {!metrics ? <p className="home-unavailable">{t(language, "home.unavailable")}</p> : <>

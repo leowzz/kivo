@@ -323,7 +323,7 @@ export default function App() {
 
       <div className={view === "home" ? "product-workspace is-home" : "product-workspace"}>
         <aside className="sidebar">
-          <label className="model-picker">
+          {view !== "home" && <label className="model-picker">
             <span>{t(language, "model.label")}</span>
             <select
               aria-label={t(language, "model.select")}
@@ -334,13 +334,14 @@ export default function App() {
               {models.length === 0 && <option value="">{t(language, "model.empty")}</option>}
               {models.map((model) => <option value={model.model.id} key={model.model.id}>{model.model.name}</option>)}
             </select>
-          </label>
+          </label>}
+
+          <button className={`home-nav-button ${view === "home" ? "is-active" : ""}`} type="button" onClick={() => setView("home")}>
+            <Home size={17} />{t(language, "nav.home")}
+          </button>
 
           <nav aria-label={t(language, "nav.configuration")}>
             <span>{t(language, "nav.configuration")}</span>
-            <button className={view === "home" ? "is-active" : ""} type="button" onClick={() => setView("home")}>
-              <Home size={17} />{t(language, "nav.home")}
-            </button>
             <button className={view === "behavior" ? "is-active" : ""} type="button" onClick={() => setView("behavior")}>
               <Keyboard size={17} />{t(language, "nav.behavior")}
             </button>
@@ -386,7 +387,16 @@ export default function App() {
 
         <section className="content-panel">
           {view === "home" ? (
-            <HomeDashboard connection={connection} language={language} metrics={homeMetrics} model={activeConfig} />
+            <HomeDashboard
+              activeModel={activeModel}
+              connection={connection}
+              language={language}
+              loaded={loaded}
+              metrics={homeMetrics}
+              model={activeConfig}
+              models={models}
+              onModelChange={(modelId) => void run(t(language, "error.save"), () => saveSettings(modelId, language))}
+            />
           ) : !activeConfig ? (
             <div className="empty-workspace">
               <Download size={28} />

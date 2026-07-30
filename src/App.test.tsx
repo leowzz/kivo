@@ -81,14 +81,18 @@ beforeEach(() => {
   });
 });
 
-test("uses Chinese by default with home first and no global save button", async () => {
+test("keeps home separate from configuration navigation and moves model selection beside connection", async () => {
   render(<App />);
 
   expect(await screen.findByRole("heading", { name: "按键概览" })).toBeInTheDocument();
-  expect(screen.getByRole("navigation", { name: "配置" })).toBeInTheDocument();
+  const navigation = screen.getByRole("navigation", { name: "配置" });
+  expect(navigation).not.toContainElement(screen.getByRole("button", { name: "首页" }));
   expect(screen.getByRole("button", { name: "首页" })).toHaveClass("is-active");
+  const deviceStatus = document.querySelector(".home-device");
+  expect(deviceStatus).not.toBeNull();
+  expect(within(deviceStatus as HTMLElement).getByLabelText("选择设备型号")).toHaveValue("tel-carbon-v1");
+  expect(document.querySelector(".sidebar .model-picker")).toBeNull();
   expect(screen.getByLabelText("运行日志")).toBeInTheDocument();
-  expect(screen.getByLabelText("设备型号")).toHaveValue("tel-carbon-v1");
   expect(screen.queryByRole("button", { name: /^保存$/ })).not.toBeInTheDocument();
 });
 
