@@ -1,0 +1,40 @@
+:root {
+  color: var(--gray-12);
+  background: var(--bg-app);
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-synthesis: none;
+  letter-spacing: 0;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { width: 100%; height: 100%; overflow: hidden; }
+body { margin: 0; min-width: 320px; }
+button, input, select, textarea { color: inherit; font: inherit; letter-spacing: 0; }
+button { cursor: pointer; }
+button:disabled { cursor: default; opacity: .45; }
+
+select, input, textarea {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-8);
+  outline: none;
+  background: var(--bg-surface);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+select {
+  appearance: none;
+  padding-right: 28px !important;
+  background: var(--bg-surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%2379837e' d='m4 6 4 4 4-4z'/%3E%3C/svg%3E") no-repeat right 9px center / 12px;
+}
+
+/* 统一焦点环：2px 绿外发光 + 圆角跟随 */
+select:focus, input:focus, textarea:focus, button:focus-visible {
+  border-color: var(--green-8);
+  box-shadow: 0 0 0 2px var(--green-3);
+  outline: none;
+}
+
+/* 细滚动条 */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 6px; background: var(--gray-6); background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--gray-7); background-clip: content-box; }
+::-webkit-scrollbar-track { background: transparent; }
