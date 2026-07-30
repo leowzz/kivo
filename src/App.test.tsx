@@ -81,33 +81,47 @@ beforeEach(() => {
   });
 });
 
-test("keeps home separate from configuration navigation and moves model selection beside connection", async () => {
+test("keeps home separate from configuration navigation and puts model selection in the top bar", async () => {
   render(<App />);
 
   expect(await screen.findByRole("heading", { name: "按键概览" })).toBeInTheDocument();
   const navigation = screen.getByRole("navigation", { name: "配置" });
   expect(navigation).not.toContainElement(screen.getByRole("button", { name: "首页" }));
   expect(screen.getByRole("button", { name: "首页" })).toHaveClass("is-active");
-  const deviceStatus = document.querySelector(".home-device");
-  expect(deviceStatus).not.toBeNull();
-  expect(within(deviceStatus as HTMLElement).getByLabelText("选择设备型号")).toHaveValue("tel-carbon-v1");
+  expect(screen.getByLabelText("选择设备型号")).toHaveClass("topbar-model-picker");
   expect(document.querySelector(".sidebar .model-picker")).toBeNull();
   expect(screen.getByLabelText("运行日志")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /^保存$/ })).not.toBeInTheDocument();
 });
 
-test("switches the complete interface to English", async () => {
-  const user = userEvent.setup();
+test("keeps the interface in Simplified Chinese without a language selector", async () => {
+  currentSnapshot.language = "en-US";
   render(<App />);
-  await screen.findByText("配置文件");
 
-  await user.selectOptions(screen.getByLabelText("语言"), "en-US");
+  expect(await screen.findByText("配置文件")).toBeInTheDocument();
+  expect(screen.queryByLabelText("语言")).toBeNull();
+});
 
-  expect(await screen.findByText("Configuration files")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Button behavior" })).toBeInTheDocument();
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_settings", {
-    settings: { schema_version: 1, active_model: "tel-carbon-v1", language: "en-US" },
-  }));
+test("renders seven-day metrics in model order with Chinese logs and one global model selector", async () => {
+  currentSnapshot.models[0].model.groups = [
+    { id: "digits", columns: 2, buttons: [{ id: "DIGIT_2", label: "2" }, { id: "DIGIT_5", label: "5" }] },
+    { id: "actions", columns: 1, buttons: [{ id: "ENTER", label: "确认" }] },
+  ];
+  currentSnapshot.homeMetrics = {
+    ...baseSnapshot.homeMetrics!,
+    heatmap: [{ buttonId: "DIGIT_5", day: "2026-07-30", presses: 3 }],
+    logs: [{ timestampMs: 1785396000000, kind: "button", message: "DIGIT_5 pressed" }],
+  };
+  render(<App />);
+
+  await screen.findByRole("heading", { name: "按键概览" });
+  expect([...document.querySelectorAll(".heat-cell")].map((item) => item.textContent)).toEqual([
+    expect.stringContaining("2"), expect.stringContaining("5"), expect.stringContaining("确认"),
+  ]);
+  expect(screen.getByText("按下 DIGIT_5")).toBeInTheDocument();
+  expect(screen.getByLabelText("选择设备型号")).toHaveClass("topbar-model-picker");
+  expect(document.querySelector(".home-model-picker")).toBeNull();
+  expect(screen.queryByLabelText("语言")).toBeNull();
 });
 
 test("builds an ordered action list and autosaves it", async () => {

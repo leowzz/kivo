@@ -145,7 +145,7 @@ export default function App() {
     setModels(snapshot.models);
     setSavedModels(Object.fromEntries(snapshot.models.map((model) => [model.model.id, JSON.stringify(model)])));
     setActiveModel(snapshot.activeModel);
-    setLanguage(snapshot.language);
+    setLanguage("zh-CN");
     setSupportedGpios(snapshot.supportedGpios);
     setConnection(snapshot.connection);
     setRuntimeError(snapshot.runtimeError);
@@ -309,6 +309,16 @@ export default function App() {
             <><span>{t(language, "save.failed")}</span><button type="button" onClick={() => void autosave.retry()}>{t(language, "save.retry")}</button></>
           )}
         </div>
+        <select
+          className="topbar-model-picker"
+          aria-label={t(language, "model.select")}
+          value={activeModel ?? ""}
+          disabled={!loaded || models.length === 0}
+          onChange={(event) => void run(t(language, "error.save"), () => saveSettings(event.target.value, language))}
+        >
+          {models.length === 0 && <option value="">{t(language, "model.empty")}</option>}
+          {models.map((model) => <option value={model.model.id} key={model.model.id}>{model.model.name}</option>)}
+        </select>
       </header>
 
       {(error || runtimeError) && (
@@ -323,19 +333,6 @@ export default function App() {
 
       <div className={view === "home" ? "product-workspace is-home" : "product-workspace"}>
         <aside className="sidebar">
-          {view !== "home" && <label className="model-picker">
-            <span>{t(language, "model.label")}</span>
-            <select
-              aria-label={t(language, "model.select")}
-              value={activeModel ?? ""}
-              disabled={!loaded || models.length === 0}
-              onChange={(event) => void run(t(language, "error.save"), () => saveSettings(event.target.value, language))}
-            >
-              {models.length === 0 && <option value="">{t(language, "model.empty")}</option>}
-              {models.map((model) => <option value={model.model.id} key={model.model.id}>{model.model.name}</option>)}
-            </select>
-          </label>}
-
           <button className={`home-nav-button ${view === "home" ? "is-active" : ""}`} type="button" onClick={() => setView("home")}>
             <Home size={17} />{t(language, "nav.home")}
           </button>
@@ -372,30 +369,15 @@ export default function App() {
             </button>
           </div>
 
-          <label className="language-picker">
-            <span>{t(language, "common.language")}</span>
-            <select value={language} onChange={(event) => {
-              const nextLanguage = event.target.value as Language;
-              setLanguage(nextLanguage);
-              void run(t(nextLanguage, "error.save"), () => saveSettings(activeModel, nextLanguage));
-            }}>
-              <option value="zh-CN">简体中文</option>
-              <option value="en-US">English</option>
-            </select>
-          </label>
         </aside>
 
         <section className="content-panel">
           {view === "home" ? (
             <HomeDashboard
-              activeModel={activeModel}
               connection={connection}
               language={language}
-              loaded={loaded}
               metrics={homeMetrics}
               model={activeConfig}
-              models={models}
-              onModelChange={(modelId) => void run(t(language, "error.save"), () => saveSettings(modelId, language))}
             />
           ) : !activeConfig ? (
             <div className="empty-workspace">
