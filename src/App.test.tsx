@@ -10,13 +10,6 @@ import type { AppSnapshot, ModelConfig } from "./types";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
-const appWindow = vi.hoisted(() => ({
-  innerSize: vi.fn<() => Promise<{ width: number; height: number }>>(),
-  scaleFactor: vi.fn<() => Promise<number>>(),
-  onResized: vi.fn<(callback: () => void) => Promise<() => void>>(),
-  onScaleChanged: vi.fn<(callback: () => void) => Promise<() => void>>(),
-}));
-vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => appWindow }));
 
 const model: ModelConfig = {
   schema_version: 1,
@@ -65,11 +58,6 @@ let currentSnapshot: AppSnapshot;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  document.documentElement.style.removeProperty("--app-height");
-  appWindow.innerSize.mockResolvedValue({ width: 2240, height: 1520 });
-  appWindow.scaleFactor.mockResolvedValue(2);
-  appWindow.onResized.mockResolvedValue(vi.fn());
-  appWindow.onScaleChanged.mockResolvedValue(vi.fn());
   currentSnapshot = structuredClone(baseSnapshot);
   HTMLDialogElement.prototype.showModal = function showModal() { this.setAttribute("open", ""); };
   HTMLDialogElement.prototype.close = function close() { this.removeAttribute("open"); };
@@ -93,48 +81,24 @@ beforeEach(() => {
   });
 });
 
-test("tracks the Tauri window's logical height", async () => {
+test("does not override the WebView viewport height", async () => {
   render(<App />);
 
-  await waitFor(() => expect(document.documentElement.style.getPropertyValue("--app-height")).toBe("760px"));
-  await waitFor(() => expect(appWindow.onResized).toHaveBeenCalledOnce());
-
-  appWindow.innerSize.mockResolvedValue({ width: 2240, height: 1800 });
-  appWindow.onResized.mock.calls[0][0]();
-
-  await waitFor(() => expect(document.documentElement.style.getPropertyValue("--app-height")).toBe("900px"));
-  await waitFor(() => expect(appWindow.onScaleChanged).toHaveBeenCalledOnce());
-
-  appWindow.scaleFactor.mockResolvedValue(3);
-  appWindow.onScaleChanged.mock.calls[0][0]();
-
-  await waitFor(() => expect(document.documentElement.style.getPropertyValue("--app-height")).toBe("600px"));
+  await screen.findByRole("heading", { name: "按键概览" });
+  expect(document.documentElement.style.getPropertyValue("--app-height")).toBe("");
 });
 
-test("releases the Tauri window listeners on unmount", async () => {
-  const unlistenResize = vi.fn();
-  const unlistenScale = vi.fn();
-  appWindow.onResized.mockResolvedValue(unlistenResize);
-  appWindow.onScaleChanged.mockResolvedValue(unlistenScale);
-  const { unmount } = render(<App />);
-
-  await waitFor(() => expect(appWindow.onScaleChanged).toHaveBeenCalledOnce());
-  unmount();
-
-  expect(unlistenResize).toHaveBeenCalledOnce();
-  expect(unlistenScale).toHaveBeenCalledOnce();
-});
-
-test("keeps home separate from configuration navigation and puts model selection in the top bar", async () => {
+test("keeps device switching and configuration-file actions on their own page", async () => {
   render(<App />);
 
   expect(await screen.findByRole("heading", { name: "按键概览" })).toBeInTheDocument();
   const navigation = screen.getByRole("navigation", { name: "配置" });
   expect(navigation).not.toContainElement(screen.getByRole("button", { name: "首页" }));
   expect(screen.getByRole("button", { name: "首页" })).toHaveClass("is-active");
-  expect(screen.getByLabelText("选择设备型号")).toHaveClass("topbar-model-picker");
-  expect(document.querySelector(".sidebar .model-picker")).toBeNull();
-  expect(screen.getByLabelText("运行日志")).toBeInTheDocument();
+  expect(screen.queryByLabelText("选择设备型号")).toBeNull();
+  await userEvent.setup().click(screen.getByRole("button", { name: "配置文件" }));
+  expect(screen.getByLabelText("选择设备型号")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "删除型号" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /^保存$/ })).not.toBeInTheDocument();
 });
 
@@ -146,7 +110,7 @@ test("keeps the interface in Simplified Chinese without a language selector", as
   expect(screen.queryByLabelText("语言")).toBeNull();
 });
 
-test("renders seven-day metrics in model order with Chinese logs and one global model selector", async () => {
+test("renders seven-day metrics in model order with Chinese logs", async () => {
   currentSnapshot.models[0].model.groups = [
     { id: "digits", columns: 2, buttons: [{ id: "DIGIT_2", label: "2" }, { id: "DIGIT_5", label: "5" }] },
     { id: "actions", columns: 1, buttons: [{ id: "ENTER", label: "确认" }] },
@@ -163,8 +127,7 @@ test("renders seven-day metrics in model order with Chinese logs and one global 
     expect.stringContaining("2"), expect.stringContaining("5"), expect.stringContaining("确认"),
   ]);
   expect(screen.getByText("按下 DIGIT_5")).toBeInTheDocument();
-  expect(screen.getByLabelText("选择设备型号")).toHaveClass("topbar-model-picker");
-  expect(document.querySelector(".home-model-picker")).toBeNull();
+  expect(screen.queryByLabelText("选择设备型号")).toBeNull();
   expect(screen.queryByLabelText("语言")).toBeNull();
 });
 
@@ -278,10 +241,10 @@ test("previews a model before importing it", async () => {
     return structuredClone(currentSnapshot);
   });
   render(<App />);
-  const dataMenu = (await screen.findByText("配置文件")).closest(".data-menu");
-  expect(dataMenu).not.toBeNull();
+  await screen.findByText("配置文件");
 
-  await user.click(within(dataMenu as HTMLElement).getByRole("button", { name: "导入型号" }));
+  await user.click(screen.getByRole("button", { name: "配置文件" }));
+  await user.click(screen.getByRole("button", { name: "导入型号" }));
   const dialog = await screen.findByRole("dialog", { name: "替换现有型号" });
   expect(within(dialog).getByText("22 个按键，22 项硬件映射，8 项行为")).toBeInTheDocument();
   await user.click(within(dialog).getByRole("button", { name: "确认" }));
@@ -304,6 +267,7 @@ test("previews a full backup before restoring it", async () => {
   render(<App />);
   await screen.findByText("配置文件");
 
+  await user.click(screen.getByRole("button", { name: "配置文件" }));
   await user.click(screen.getByRole("button", { name: "恢复备份" }));
   const dialog = await screen.findByRole("dialog", { name: "恢复全量备份" });
   expect(within(dialog).getByText("3 个型号，44 个按键，40 项硬件映射，19 项行为")).toBeInTheDocument();
@@ -312,18 +276,17 @@ test("previews a full backup before restoring it", async () => {
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("restore_backup", { path: "/tmp/backup.yaml" }));
 });
 
-test("deletes the last model and keeps import and restore available", async () => {
+test("deletes the last model and keeps configuration-file actions available", async () => {
   const user = userEvent.setup();
   render(<App />);
   await screen.findByText("配置文件");
 
-  await user.click(screen.getByRole("button", { name: "按键行为" }));
-
+  await user.click(screen.getByRole("button", { name: "配置文件" }));
   await user.click(screen.getByRole("button", { name: "删除型号" }));
   const dialog = await screen.findByRole("dialog", { name: "删除型号" });
   await user.click(within(dialog).getByRole("button", { name: "确认" }));
 
-  expect(await screen.findByRole("heading", { name: "还没有设备型号" })).toBeInTheDocument();
+  expect(await screen.findByRole("option", { name: "还没有设备型号" })).toBeInTheDocument();
   expect(screen.getAllByRole("button", { name: "导入型号" }).length).toBeGreaterThan(0);
   expect(screen.getAllByRole("button", { name: "恢复备份" }).length).toBeGreaterThan(0);
 });

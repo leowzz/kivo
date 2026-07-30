@@ -14,7 +14,7 @@ The home page has a second sizing issue: its main column keeps its intrinsic con
 
 Use one height chain from `html`, `body`, and `#root` through `product-shell`, `product-workspace`, and `content-panel`. Place `product-workspace` explicitly in the shell's third grid row so the optional error banner exclusively owns the second row.
 
-The shell height will come from a CSS custom property containing the Tauri window's logical inner height. It will update after window resize and scale changes. Browser preview mode and failed Tauri size queries will fall back to `100dvh`.
+The shell height will use the WebView's native `100dvh`. The WebView viewport excludes native window chrome and updates automatically when its usable area changes, so no platform size conversion is needed.
 
 `content-panel` will be the shared column container. Each page root will use the same `flex: 1` and `min-height: 0` contract. Scrolling will remain at leaf content regions such as the home main column, keypad stage, hardware source list, action list, and activity log, so the sidebar and page frame stay full height.
 
@@ -22,11 +22,10 @@ Responsive breakpoints will keep their current stacked behavior. No UI component
 
 ## Error Handling
 
-Failure to read the Tauri window size must not block rendering. The CSS `100dvh` fallback remains active, and resize listeners are removed when the application unmounts.
+No platform window query is required. CSS owns viewport sizing, so native title bars and scale factors cannot inflate the application shell.
 
 ## Verification
 
-1. Add a focused frontend test for converting the Tauri physical window height to CSS logical pixels.
-2. Verify resize and scale-change subscriptions update the shared shell height and are cleaned up.
-3. Run the complete frontend test suite and production build.
-4. Inspect all four navigation pages and the no-model empty state at the default 1120 x 760 window and after enlarging the window. The shell, sidebar, main content, and optional right panel must reach the bottom edge without page-level overflow or blank space.
+1. Add a focused frontend test that rejects a scripted height override.
+2. Run the complete frontend test suite and production build.
+3. Inspect all four navigation pages and the no-model empty state at the default 1120 x 760 window and after enlarging the window. The shell, sidebar, main content, and optional right panel must reach the bottom edge without page-level overflow or blank space.

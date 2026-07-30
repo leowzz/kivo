@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save as saveFile } from "@tauri-apps/plugin-dialog";
 import {
   ArchiveRestore,
@@ -38,7 +37,7 @@ import type {
 } from "./types";
 import { SerializedSaveQueue, useAutosave } from "./useAutosave";
 
-type View = "home" | "behavior" | "hardware" | "layout";
+type View = "home" | "behavior" | "hardware" | "layout" | "data";
 type Confirmation =
   | { kind: "import"; path: string; preview: ImportPreview }
   | { kind: "restore"; path: string; preview: BackupPreview }
@@ -141,27 +140,6 @@ export default function App() {
     [activeModel, models],
   );
   const dirty = Boolean(activeConfig && savedModels[activeConfig.model.id] !== JSON.stringify(activeConfig));
-
-  useEffect(() => {
-    if (PREVIEW_MODE) return;
-    const appWindow = getCurrentWindow();
-    let active = true;
-    let unlistenResize: (() => void) | undefined;
-    let unlistenScale: (() => void) | undefined;
-    const syncHeight = async () => {
-      const [size, scaleFactor] = await Promise.all([appWindow.innerSize(), appWindow.scaleFactor()]);
-      if (active) document.documentElement.style.setProperty("--app-height", `${size.height / scaleFactor}px`);
-    };
-
-    void syncHeight().catch(() => undefined);
-    void appWindow.onResized(() => void syncHeight()).then((unlisten) => { unlistenResize = unlisten; });
-    void appWindow.onScaleChanged(() => void syncHeight()).then((unlisten) => { unlistenScale = unlisten; });
-    return () => {
-      active = false;
-      unlistenResize?.();
-      unlistenScale?.();
-    };
-  }, []);
 
   const applySnapshot = useCallback((snapshot: AppSnapshot) => {
     setModels(snapshot.models);
@@ -331,16 +309,6 @@ export default function App() {
             <><span>{t(language, "save.failed")}</span><button type="button" onClick={() => void autosave.retry()}>{t(language, "save.retry")}</button></>
           )}
         </div>
-        <select
-          className="topbar-model-picker"
-          aria-label={t(language, "model.select")}
-          value={activeModel ?? ""}
-          disabled={!loaded || models.length === 0}
-          onChange={(event) => void run(t(language, "error.save"), () => saveSettings(event.target.value, language))}
-        >
-          {models.length === 0 && <option value="">{t(language, "model.empty")}</option>}
-          {models.map((model) => <option value={model.model.id} key={model.model.id}>{model.model.name}</option>)}
-        </select>
       </header>
 
       {(error || runtimeError) && (
@@ -353,7 +321,7 @@ export default function App() {
         </div>
       )}
 
-      <div className={view === "home" ? "product-workspace is-home" : "product-workspace"}>
+      <div className={view === "home" || view === "data" ? "product-workspace is-home" : "product-workspace"}>
         <aside className="sidebar">
           <button className={`home-nav-button ${view === "home" ? "is-active" : ""}`} type="button" onClick={() => setView("home")}>
             <Home size={17} />{t(language, "nav.home")}
@@ -372,8 +340,27 @@ export default function App() {
             </button>
           </nav>
 
-          <div className="data-menu">
-            <span>{t(language, "nav.data")}</span>
+          <button className={`data-nav-button ${view === "data" ? "is-active" : ""}`} type="button" onClick={() => setView("data")}>
+            <FileInput size={17} />{t(language, "nav.data")}
+          </button>
+
+        </aside>
+
+        <section className="content-panel">
+          {view === "data" ? (
+            <div className="data-page">
+              <div className="content-heading"><div><h2>{t(language, "nav.data")}</h2></div></div>
+              <div className="data-page-body">
+                <label className="model-picker"><span>{t(language, "model.select")}</span><select
+                  aria-label={t(language, "model.select")}
+                  value={activeModel ?? ""}
+                  disabled={!loaded || models.length === 0}
+                  onChange={(event) => void run(t(language, "error.save"), () => saveSettings(event.target.value, language))}
+                >
+                  {models.length === 0 && <option value="">{t(language, "model.empty")}</option>}
+                  {models.map((model) => <option value={model.model.id} key={model.model.id}>{model.model.name}</option>)}
+                </select></label>
+                <div className="data-menu">
             <button type="button" onClick={() => void chooseImport()}><FileInput size={16} />{t(language, "nav.import")}</button>
             <button type="button" disabled={!activeConfig} onClick={() => void run(t(language, "error.export"), async () => {
               await autosave.flush();
@@ -389,12 +376,10 @@ export default function App() {
             <button className="is-danger" type="button" disabled={!activeConfig} onClick={() => activeConfig && setConfirmation({ kind: "delete", model: activeConfig })}>
               <Trash2 size={16} />{t(language, "nav.delete")}
             </button>
-          </div>
-
-        </aside>
-
-        <section className="content-panel">
-          {view === "home" ? (
+                </div>
+              </div>
+            </div>
+          ) : view === "home" ? (
             <HomeDashboard
               connection={connection}
               language={language}
@@ -440,7 +425,7 @@ export default function App() {
           )}
         </section>
 
-        {view !== "home" && <ActionEditor
+        {view !== "home" && view !== "data" && <ActionEditor
           language={language}
           button={selectedButton}
           actions={selectedActions}

@@ -4,9 +4,9 @@
 
 **Goal:** Make every Kivo page fill the Tauri window through one shared height and scrolling contract.
 
-**Architecture:** Reserve the shell's second grid row for the optional error banner and place the workspace explicitly in the flexible third row. Synchronize the Tauri window's logical inner height into `--app-height`, carry that height through the existing shell, and keep scrolling at leaf content regions.
+**Architecture:** Reserve the shell's second grid row for the optional error banner, place the workspace explicitly in the flexible third row, size the shell with the WebView's native `100dvh`, and keep scrolling at leaf content regions.
 
-**Tech Stack:** React 19, TypeScript, Tauri 2 window API, CSS Grid/Flexbox, Vitest, Testing Library
+**Tech Stack:** React 19, TypeScript, CSS Grid/Flexbox, Vitest, Testing Library
 
 ## Global Constraints
 
@@ -25,67 +25,19 @@
 - Modify: `src/App.css`
 
 **Interfaces:**
-- Consumes: Tauri `getCurrentWindow()`, `innerSize()`, `scaleFactor()`, `onResized()`, and `onScaleChanged()`.
-- Produces: root CSS property `--app-height: <logical-pixels>px` and one shared full-height layout contract.
+- Consumes: the WebView's native dynamic viewport.
+- Produces: one shared `100dvh` full-height layout contract.
 
-- [ ] **Step 1: Isolate the Tauri window test double and add viewport lifecycle coverage**
+- [ ] **Step 1: Add native viewport regression coverage**
 
-Replace the inline window mock with an accessible hoisted test double:
-
-```tsx
-const appWindow = vi.hoisted(() => ({
-  innerSize: vi.fn<() => Promise<{ width: number; height: number }>>(),
-  scaleFactor: vi.fn<() => Promise<number>>(),
-  onResized: vi.fn<(callback: () => void) => Promise<() => void>>(),
-  onScaleChanged: vi.fn<(callback: () => void) => Promise<() => void>>(),
-}));
-
-vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => appWindow }));
-```
-
-Reset the test double in `beforeEach`:
+Assert that the application does not script a root height override:
 
 ```tsx
-document.documentElement.style.removeProperty("--app-height");
-appWindow.innerSize.mockResolvedValue({ width: 2240, height: 1520 });
-appWindow.scaleFactor.mockResolvedValue(2);
-appWindow.onResized.mockResolvedValue(vi.fn());
-appWindow.onScaleChanged.mockResolvedValue(vi.fn());
-```
-
-Add focused behavior and cleanup tests:
-
-```tsx
-test("tracks the Tauri window's logical height", async () => {
+test("does not override the WebView viewport height", async () => {
   render(<App />);
 
-  await waitFor(() => expect(document.documentElement.style.getPropertyValue("--app-height")).toBe("760px"));
-  await waitFor(() => expect(appWindow.onResized).toHaveBeenCalledOnce());
-
-  appWindow.innerSize.mockResolvedValue({ width: 2240, height: 1800 });
-  appWindow.onResized.mock.calls[0][0]();
-
-  await waitFor(() => expect(document.documentElement.style.getPropertyValue("--app-height")).toBe("900px"));
-  await waitFor(() => expect(appWindow.onScaleChanged).toHaveBeenCalledOnce());
-
-  appWindow.scaleFactor.mockResolvedValue(3);
-  appWindow.onScaleChanged.mock.calls[0][0]();
-
-  await waitFor(() => expect(document.documentElement.style.getPropertyValue("--app-height")).toBe("600px"));
-});
-
-test("releases the Tauri window listeners on unmount", async () => {
-  const unlistenResize = vi.fn();
-  const unlistenScale = vi.fn();
-  appWindow.onResized.mockResolvedValue(unlistenResize);
-  appWindow.onScaleChanged.mockResolvedValue(unlistenScale);
-  const { unmount } = render(<App />);
-
-  await waitFor(() => expect(appWindow.onScaleChanged).toHaveBeenCalledOnce());
-  unmount();
-
-  expect(unlistenResize).toHaveBeenCalledOnce();
-  expect(unlistenScale).toHaveBeenCalledOnce();
+  await screen.findByRole("heading", { name: "按键概览" });
+  expect(document.documentElement.style.getPropertyValue("--app-height")).toBe("");
 });
 ```
 
@@ -102,33 +54,14 @@ rtk npm --prefix "$layout_tmp" test -- src/App.test.tsx
 case "$layout_tmp" in /tmp/kivo-layout-red.*) rtk proxy rm -rf -- "$layout_tmp" ;; *) exit 1 ;; esac
 ```
 
-Expected: FAIL because `HEAD` never sets `--app-height`; the assertion receives an empty string instead of `760px`.
+Expected: FAIL while the shell still uses `var(--app-height, 100dvh)`.
 
-- [ ] **Step 3: Synchronize the logical Tauri window height**
+- [ ] **Step 3: Use the native WebView viewport**
 
-In `src/App.tsx`, import `getCurrentWindow` and add this effect before snapshot loading:
+Remove the Tauri window size effect from `src/App.tsx` and use native CSS sizing:
 
-```tsx
-useEffect(() => {
-  if (PREVIEW_MODE) return;
-  const appWindow = getCurrentWindow();
-  let active = true;
-  let unlistenResize: (() => void) | undefined;
-  let unlistenScale: (() => void) | undefined;
-  const syncHeight = async () => {
-    const [size, scaleFactor] = await Promise.all([appWindow.innerSize(), appWindow.scaleFactor()]);
-    if (active) document.documentElement.style.setProperty("--app-height", `${size.height / scaleFactor}px`);
-  };
-
-  void syncHeight().catch(() => undefined);
-  void appWindow.onResized(() => void syncHeight()).then((unlisten) => { unlistenResize = unlisten; });
-  void appWindow.onScaleChanged(() => void syncHeight()).then((unlisten) => { unlistenScale = unlisten; });
-  return () => {
-    active = false;
-    unlistenResize?.();
-    unlistenScale?.();
-  };
-}, []);
+```css
+.product-shell { height: 100dvh; min-height: 0; }
 ```
 
 - [ ] **Step 4: Apply the shared CSS height and scroll contract**
@@ -137,7 +70,7 @@ Use these exact layout rules in `src/App.css`, preserving existing visual declar
 
 ```css
 html, body, #root { width: 100%; height: 100%; overflow: hidden; }
-.product-shell { height: var(--app-height, 100dvh); min-height: 0; }
+.product-shell { height: 100dvh; min-height: 0; }
 .product-workspace { grid-row: 3; min-height: 0; height: 100%; }
 .content-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .home-dashboard { min-height: 0; flex: 1; overflow: hidden; }
@@ -154,7 +87,7 @@ Remove the page-specific `calc(100vh - 118px)`, `height: 100%`, and `min-height:
 
 Run: `rtk npm test -- src/App.test.tsx`
 
-Expected: all `src/App.test.tsx` tests pass, including the logical-height and listener-cleanup tests.
+Expected: all `src/App.test.tsx` tests pass, including the native viewport contract test.
 
 - [ ] **Step 6: Run full automated verification**
 
@@ -185,7 +118,7 @@ Expected: the commit contains only the three frontend layout files.
 - Verify only: `src/App.tsx`, `src/App.css`, `src/App.test.tsx`
 
 **Interfaces:**
-- Consumes: the shared `--app-height` contract from Task 1.
+- Consumes: the shared `100dvh` contract from Task 1.
 - Produces: visual evidence that every page reaches the Tauri window bottom edge.
 
 - [ ] **Step 1: Start the Tauri development application**
