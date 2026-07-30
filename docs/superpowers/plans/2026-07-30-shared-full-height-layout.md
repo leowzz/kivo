@@ -4,7 +4,7 @@
 
 **Goal:** Make every Kivo page fill the Tauri window through one shared height and scrolling contract.
 
-**Architecture:** Synchronize the Tauri window's logical inner height into the `--app-height` CSS property, with `100dvh` as the browser and error fallback. Carry that height through the existing shell and make each page root flex into the shared content panel while keeping scrolling at leaf content regions.
+**Architecture:** Reserve the shell's second grid row for the optional error banner and place the workspace explicitly in the flexible third row. Synchronize the Tauri window's logical inner height into `--app-height`, carry that height through the existing shell, and keep scrolling at leaf content regions.
 
 **Tech Stack:** React 19, TypeScript, Tauri 2 window API, CSS Grid/Flexbox, Vitest, Testing Library
 
@@ -138,16 +138,17 @@ Use these exact layout rules in `src/App.css`, preserving existing visual declar
 ```css
 html, body, #root { width: 100%; height: 100%; overflow: hidden; }
 .product-shell { height: var(--app-height, 100dvh); min-height: 0; }
-.product-workspace { min-height: 0; height: 100%; }
+.product-workspace { grid-row: 3; min-height: 0; height: 100%; }
 .content-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .home-dashboard { min-height: 0; flex: 1; overflow: hidden; }
+.home-main { min-width: 0; min-height: 0; overflow: auto; }
 .keypad-stage { min-height: 0; flex: 1; overflow: auto; }
 .hardware-view { min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .source-list { min-height: 0; flex: 1; overflow: auto; }
 .empty-workspace { min-height: 0; flex: 1; }
 ```
 
-Remove the page-specific `calc(100vh - 118px)`, `height: 100%`, and `min-height: 100%` sizing rules that conflict with this contract. Keep the existing `@media` layout overrides, changing only the obsolete home-dashboard `height: auto` declaration to `flex: initial`.
+Remove the page-specific `calc(100vh - 118px)`, `height: 100%`, and `min-height: 100%` sizing rules that conflict with this contract. Keep the existing `@media` layout overrides, changing only the obsolete home-dashboard `height: auto` declaration to `flex: initial`. Verify that `.product-workspace`, `.sidebar`, `.content-panel`, and `.action-panel` have a bottom edge equal to the viewport height; on the home page, verify `.home-main` scrolls without stretching `.activity-log`.
 
 - [ ] **Step 5: Run the focused test**
 
