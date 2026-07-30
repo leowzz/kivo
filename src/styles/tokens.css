@@ -1,0 +1,79 @@
+:root {
+  /* 灰阶（冷调，Radix 式 12 档） */
+  --gray-1: #fbfcfb;
+  --gray-2: #f5f7f6;
+  --gray-3: #eef1ef;
+  --gray-4: #e6eae7;
+  --gray-5: #dce1de;
+  --gray-6: #d0d6d2;
+  --gray-7: #bac2bd;
+  --gray-8: #97a19c;
+  --gray-9: #79837e;
+  --gray-10: #5e6863;
+  --gray-11: #3c4641;
+  --gray-12: #1a211e;
+
+  /* 品牌绿 12 档（--green-9 为主色） */
+  --green-1: #f4faf7;
+  --green-2: #e7f4ee;
+  --green-3: #d7ebe1;
+  --green-4: #bcdccf;
+  --green-5: #95c9b1;
+  --green-6: #6bae91;
+  --green-7: #469475;
+  --green-8: #237a5d;
+  --green-9: #177457;
+  --green-10: #106048;
+  --green-11: #0e4b39;
+  --green-12: #0b382b;
+
+  /* 警告 / 错误（各 3 档 + 危险按钮主色） */
+  --amber-bg: #fdf6e7;
+  --amber-border: #ecd9a8;
+  --amber-text: #7a5b12;
+  --red-bg: #fdf1f0;
+  --red-border: #f0cfcc;
+  --red-text: #9c332b;
+  --red-strong: #a83b34;
+
+  /* 表面分层 */
+  --bg-app: var(--gray-2);
+  --bg-surface: #ffffff;
+  --bg-raised: #ffffff;
+  --border-subtle: var(--gray-4);
+  --border-default: var(--gray-5);
+  --border-strong: var(--gray-6);
+
+  /* 阴影（双层柔和） */
+  --shadow-1: 0 1px 2px rgba(26, 33, 30, .05), 0 1px 3px rgba(26, 33, 30, .04);
+  --shadow-2: 0 1px 2px rgba(26, 33, 30, .06), 0 6px 16px rgba(26, 33, 30, .08);
+  --shadow-3: 0 4px 8px rgba(26, 33, 30, .06), 0 16px 48px rgba(26, 33, 30, .16);
+
+  /* 字阶 / 字重 */
+  --text-11: 11px;
+  --text-12: 12px;
+  --text-13: 13px;
+  --text-14: 14px;
+  --text-17: 17px;
+  --text-20: 20px;
+  --text-24: 24px;
+  --weight-regular: 450;
+  --weight-medium: 550;
+  --weight-semibold: 650;
+  --weight-bold: 750;
+
+  /* 圆角 */
+  --radius-6: 6px;
+  --radius-8: 8px;
+  --radius-10: 10px;
+  --radius-12: 12px;
+
+  /* 间距（4px 基网格） */
+  --space-4: 4px;
+  --space-8: 8px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-20: 20px;
+  --space-24: 24px;
+  --space-32: 32px;
+}
