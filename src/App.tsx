@@ -13,6 +13,7 @@ import {
   Trash2,
   Unplug,
   Upload,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import brandIcon from "../src-tauri/icons/128x128.png";
@@ -310,6 +311,16 @@ export default function App() {
           )}
         </div>
       </header>
+
+      {(error || runtimeError) && (
+        <div className="error-toast" role="alert">
+          <span>{error ?? runtimeError?.detail ?? runtimeError?.code}</span>
+          <button className="icon-button" type="button" aria-label={t(language, "common.close")} onClick={() => {
+            setError(null);
+            setRuntimeError(null);
+          }}><X size={15} /></button>
+        </div>
+      )}
 
       <div className={view === "home" || view === "data" ? "product-workspace is-home" : "product-workspace"}>
         <aside className="sidebar">
