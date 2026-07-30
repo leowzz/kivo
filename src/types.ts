@@ -79,6 +79,19 @@ export interface RuntimeEvent extends RuntimeActivity {
   timestampMs: number;
   level: EventLevel;
   connection: ConnectionStatus;
+  homeUpdate: HomeMetricsSnapshot | null;
+}
+
+export interface ButtonMetric { buttonId: string; presses: number; }
+export interface ButtonDayMetric { buttonId: string; day: string; presses: number; }
+export interface ActivityLog { timestampMs: number; kind: string; message: string; }
+export interface HomeMetricsSnapshot {
+  totalPresses: number;
+  todayPresses: number;
+  activeButtonCount: number;
+  topButton: ButtonMetric | null;
+  heatmap: ButtonDayMetric[];
+  logs: ActivityLog[];
 }
 
 export interface LearningSession {
@@ -94,6 +107,7 @@ export interface AppSnapshot {
   connection: ConnectionStatus;
   runtimeError: RuntimeActivity | null;
   learning: LearningSession | null;
+  homeMetrics: HomeMetricsSnapshot | null;
 }
 
 export interface ImportPreview {

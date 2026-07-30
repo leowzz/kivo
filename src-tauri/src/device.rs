@@ -1,4 +1,5 @@
 use crate::{
+    metrics::{HomeMetricsSnapshot, MetricsStore},
     protocol::{
         ActionSequence, DeviceMessage, InputState, PhysicalInput, parse_device, topology_commands,
     },
@@ -443,6 +444,7 @@ pub struct WorkerState {
     pub capabilities: Arc<RwLock<Option<DeviceCapabilities>>>,
     pub runtime_error: Arc<RwLock<Option<RuntimeActivity>>>,
     pub learning: Arc<RwLock<Option<LearningSession>>>,
+    pub metrics: Option<Arc<MetricsStore>>,
     pub controls: Arc<Mutex<VecDeque<String>>>,
     pub stop: Arc<AtomicBool>,
 }
@@ -453,8 +455,34 @@ pub struct RuntimeEvent {
     pub timestamp_ms: u64,
     pub level: EventLevel,
     pub connection: ConnectionStatus,
+    pub home_update: Option<HomeMetricsSnapshot>,
     #[serde(flatten)]
     pub activity: RuntimeActivity,
+}
+
+fn persist_metrics(
+    metrics: &MetricsStore,
+    model: Option<&ModelConfig>,
+    activity: &RuntimeActivity,
+    timestamp_ms: u64,
+) -> Result<Option<HomeMetricsSnapshot>, rusqlite::Error> {
+    if activity.code != "input_state" || activity.pressed != Some(true) {
+        return Ok(None);
+    }
+    let Some(model) = model else {
+        return Ok(None);
+    };
+    let Some(input) = activity.input.as_ref() else {
+        return Ok(None);
+    };
+    let Some(button_id) = model.button_for(input) else {
+        return Ok(None);
+    };
+    metrics.record_button_press(&model.model.id, button_id, timestamp_ms)?;
+    metrics.record_activity(timestamp_ms, "button", &format!("{button_id} pressed"))?;
+    metrics
+        .home_snapshot(&model.model.id, timestamp_ms)
+        .map(Some)
 }
 
 pub fn is_target_port(port: &SerialPortInfo) -> bool {
@@ -473,6 +501,7 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
         capabilities,
         runtime_error,
         learning,
+        metrics,
         controls,
         stop,
     } = state;
@@ -562,7 +591,7 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
             if next_model != loaded_model {
                 loaded_model = next_model.clone();
                 let output = session.replace_model(next_model);
-                match write_output(&app, &connection, &runtime_error, device.get_mut(), output) {
+                match write_output(&app, &connection, &runtime_error, &active_model, metrics.as_deref(), device.get_mut(), output) {
                     Ok(sent_action) => {
                         update_action_deadline(&mut action_deadline, &session, sent_action)
                     }
@@ -575,7 +604,7 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
             if action_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 let output =
                     session.fail_active("action_ack_timeout", None, &mut copy_to_clipboard);
-                match write_output(&app, &connection, &runtime_error, device.get_mut(), output) {
+                match write_output(&app, &connection, &runtime_error, &active_model, metrics.as_deref(), device.get_mut(), output) {
                     Ok(sent_action) => {
                         update_action_deadline(&mut action_deadline, &session, sent_action)
                     }
@@ -595,6 +624,8 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
                     &app,
                     &connection,
                     &runtime_error,
+                    &active_model,
+                    metrics.as_deref(),
                     device.get_mut(),
                     SessionOutput {
                         lines: control_lines,
@@ -634,7 +665,7 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
                             });
                     }
                     let output = session.on_message(message, &mut copy_to_clipboard);
-                    match write_output(&app, &connection, &runtime_error, device.get_mut(), output)
+                    match write_output(&app, &connection, &runtime_error, &active_model, metrics.as_deref(), device.get_mut(), output)
                     {
                         Ok(sent_action) => {
                             update_action_deadline(&mut action_deadline, &session, sent_action)
@@ -671,6 +702,8 @@ fn write_output<W: Write + ?Sized>(
     app: &AppHandle,
     connection: &RwLock<ConnectionStatus>,
     runtime_error: &RwLock<Option<RuntimeActivity>>,
+    active_model: &RwLock<Option<ModelConfig>>,
+    metrics: Option<&MetricsStore>,
     writer: &mut W,
     output: SessionOutput,
 ) -> std::io::Result<bool> {
@@ -685,7 +718,24 @@ fn write_output<W: Write + ?Sized>(
                 .write()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
         }
-        emit_activity(app, connection, level, activity);
+        let timestamp_ms = now_ms();
+        let home_update = metrics.and_then(|metrics| {
+            let model = active_model
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match persist_metrics(metrics, model.as_ref(), &activity, timestamp_ms) {
+                Ok(update) => update,
+                Err(error) => {
+                    *runtime_error
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(
+                        RuntimeActivity::new("metrics_write_failed").with_detail(error.to_string()),
+                    );
+                    None
+                }
+            }
+        });
+        emit_activity_with_home_update(app, connection, level, activity, home_update);
     }
     let sent_action = output
         .lines
@@ -821,19 +871,34 @@ fn emit_activity(
     level: EventLevel,
     activity: RuntimeActivity,
 ) {
+    emit_activity_with_home_update(app, connection, level, activity, None);
+}
+
+fn emit_activity_with_home_update(
+    app: &AppHandle,
+    connection: &RwLock<ConnectionStatus>,
+    level: EventLevel,
+    activity: RuntimeActivity,
+    home_update: Option<HomeMetricsSnapshot>,
+) {
     let payload = RuntimeEvent {
-        timestamp_ms: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64,
+        timestamp_ms: now_ms(),
         level,
         connection: connection
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone(),
+        home_update,
         activity,
     };
     let _ = app.emit("runtime-event", payload);
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn wait(stop: &AtomicBool) {
@@ -850,6 +915,7 @@ mod tests {
     use super::*;
     use crate::{
         config::ButtonAction,
+        metrics::MetricsStore,
         model::{ButtonDefinition, ButtonGroup, ModelLayout},
         protocol::{DeviceMessage, PhysicalInput},
         workspace::{HardwareConfig, InputSource, MODEL_SCHEMA_VERSION, ModelConfig},
@@ -893,6 +959,34 @@ mod tests {
             )]),
             legacy: None,
         }
+    }
+
+    #[test]
+    fn persists_a_mapped_button_press_as_metrics_and_activity() {
+        let model = runtime_model();
+        let path = std::env::temp_dir().join(format!(
+            "kivo-device-metrics-{}-{}.sqlite3",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let store = MetricsStore::open(&path).unwrap();
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let activity = RuntimeActivity {
+            input: Some(PhysicalInput::Direct { gpio: 6 }),
+            pressed: Some(true),
+            ..RuntimeActivity::new("input_state")
+        };
+
+        let update = persist_metrics(&store, Some(&model), &activity, timestamp)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(update.today_presses, 1);
+        assert_eq!(update.logs[0].message, "A pressed");
+        std::fs::remove_file(path).unwrap();
     }
 
     fn hello() -> DeviceMessage {
@@ -1027,6 +1121,7 @@ mod tests {
             timestamp_ms: 1,
             level: EventLevel::Info,
             connection: ConnectionStatus::searching(),
+            home_update: None,
             activity: RuntimeActivity::new("device_searching"),
         };
         let value = serde_json::to_value(&event).unwrap();
