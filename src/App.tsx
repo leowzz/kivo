@@ -299,7 +299,8 @@ export default function App() {
       <header className="topbar">
         <div className="brand"><img src={brandIcon} alt="" /><h1>Kivo</h1></div>
         <div className={connected ? "connection is-connected" : "connection"}>
-          {connected ? <Cable size={15} /> : <Unplug size={15} />}
+          <span className="status-dot" aria-hidden="true" />
+          {connected ? <Cable size={14} /> : <Unplug size={14} />}
           <span>{t(language, connected ? "connection.connected" : "connection.searching")}</span>
           {connection.port && <code>{connection.port}</code>}
         </div>
@@ -311,15 +312,6 @@ export default function App() {
         </div>
       </header>
 
-      {(error || runtimeError) && (
-        <div className="error-banner" role="alert">
-          {error ?? runtimeError?.detail ?? runtimeError?.code}
-          <button className="icon-button" type="button" aria-label={t(language, "common.close")} onClick={() => {
-            setError(null);
-            setRuntimeError(null);
-          }}><X size={16} /></button>
-        </div>
-      )}
 
       <div className={view === "home" || view === "data" ? "product-workspace is-home" : "product-workspace"}>
         <aside className="sidebar">
