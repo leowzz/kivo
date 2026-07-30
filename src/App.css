@@ -43,7 +43,7 @@ select:focus, input:focus, textarea:focus, button:focus-visible { border-color: 
 .data-menu { border-top: 1px solid #d5dcda; margin-top: 14px; }
 
 .content-panel { min-width: 0; min-height: 0; overflow: auto; background: #fafbfa; }
-.home-dashboard { min-height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) 360px; }
+.home-dashboard { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 360px; overflow: hidden; }
 .home-main { min-width: 0; padding-bottom: 24px; }
 .home-heading { margin-bottom: 18px; }
 .home-device { display: flex; align-items: center; gap: 7px; color: #6e7773; font-size: 12px; }
@@ -61,8 +61,9 @@ select:focus, input:focus, textarea:focus, button:focus-visible { border-color: 
 .heat-cell small { color: inherit; font-size: 10px; }
 .activity-log { min-width: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid #d9dfdc; background: #fff; }
 .activity-log-list { min-height: 0; flex: 1; overflow: auto; padding: 8px 12px; }
-.activity-log-item { display: grid; gap: 3px; padding: 10px 4px; border-bottom: 1px solid #edf0ee; color: #44504b; font-size: 12px; line-height: 1.35; }
-.activity-log-item time { color: #89928e; font-size: 10px; }
+.activity-log-item { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 7px 4px; border-bottom: 1px solid #edf0ee; color: #44504b; font-size: 12px; line-height: 1.35; }
+.activity-log-item time { flex: 0 0 auto; color: #89928e; font-size: 10px; }
+.activity-log-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .home-unavailable { margin: 20px; color: #8a4944; font-size: 13px; }
 .content-heading { min-height: 66px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 12px 20px; border-bottom: 1px solid #e1e6e3; background: #fff; }
 .content-heading span, .panel-title span { display: block; margin-bottom: 2px; color: #79827f; font-size: 11px; }
@@ -175,7 +176,7 @@ select:focus, input:focus, textarea:focus, button:focus-visible { border-color: 
   .action-panel { grid-column: 1 / -1; min-height: 380px; border-top: 1px solid #d9dfdc; border-left: 0; }
   .action-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 10px; }
   .action-item { margin: 0; }
-  .home-dashboard { grid-template-columns: 1fr; }
+  .home-dashboard { height: auto; min-height: 480px; grid-template-columns: 1fr; overflow: visible; }
   .activity-log { min-height: 260px; border-top: 1px solid #d9dfdc; border-left: 0; }
 }
 
@@ -195,7 +196,6 @@ select:focus, input:focus, textarea:focus, button:focus-visible { border-color: 
   .sidebar nav button, .data-menu button { flex: 0 0 auto; width: auto; white-space: nowrap; }
   .data-menu { border-top: 0; margin-top: 0; }
   .content-panel { min-height: 480px; }
-  .home-dashboard { min-height: 480px; }
   .metric-grid { grid-template-columns: 1fr; padding: 0 14px; }
   .heatmap-section { margin: 14px; }
   .home-heading { align-items: flex-start; flex-direction: column; gap: 8px; }
