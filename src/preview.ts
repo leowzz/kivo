@@ -36,4 +36,23 @@ export const previewSnapshot: AppSnapshot = {
   connection: { state: "searching", port: null },
   runtimeError: null,
   learning: null,
+  homeMetrics: {
+    totalPresses: 182,
+    todayPresses: 42,
+    activeButtonCount: 8,
+    topButton: { buttonId: "DIGIT_2", presses: 64 },
+    heatmap: [
+      { buttonId: "DIGIT_2", day: "2026-07-24", presses: 8 },
+      { buttonId: "DIGIT_2", day: "2026-07-25", presses: 12 },
+      { buttonId: "DIGIT_2", day: "2026-07-26", presses: 9 },
+      { buttonId: "DIGIT_2", day: "2026-07-27", presses: 15 },
+      { buttonId: "DIGIT_2", day: "2026-07-28", presses: 6 },
+      { buttonId: "DIGIT_2", day: "2026-07-29", presses: 10 },
+      { buttonId: "DIGIT_2", day: "2026-07-30", presses: 42 },
+    ],
+    logs: [
+      { timestampMs: 1785396000000, kind: "button", message: "DIGIT_2 pressed" },
+      { timestampMs: 1785395940000, kind: "device", message: "Device connected" },
+    ],
+  },
 };

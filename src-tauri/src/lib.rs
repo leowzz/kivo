@@ -9,6 +9,7 @@ mod tray;
 mod workspace;
 
 use device::{ConnectionStatus, DeviceCapabilities, LearningSession, RuntimeActivity};
+use metrics::{HomeMetricsSnapshot, MetricsStore};
 use serde::Serialize;
 use std::{
     collections::{BTreeSet, VecDeque},
@@ -19,6 +20,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread::{self, JoinHandle},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::Manager;
 use workspace::{
@@ -33,6 +35,7 @@ struct AppState {
     capabilities: Arc<RwLock<Option<DeviceCapabilities>>>,
     runtime_error: Arc<RwLock<Option<RuntimeActivity>>>,
     learning: Arc<RwLock<Option<LearningSession>>>,
+    metrics: Option<Arc<MetricsStore>>,
     next_learning_revision: Mutex<u32>,
     device_controls: Arc<Mutex<VecDeque<String>>>,
     stop: Arc<AtomicBool>,
@@ -49,10 +52,18 @@ struct AppSnapshot {
     connection: ConnectionStatus,
     runtime_error: Option<RuntimeActivity>,
     learning: Option<LearningSession>,
+    home_metrics: Option<HomeMetricsSnapshot>,
 }
 
 fn state_error(code: &str) -> AppError {
     AppError::new(code)
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn active_model(workspace: &Workspace) -> Option<ModelConfig> {
@@ -79,6 +90,16 @@ fn snapshot(state: &AppState) -> Result<AppSnapshot, AppError> {
         .map_err(|_| state_error("workspace_unavailable"))?;
     let mut models = workspace.models.values().cloned().collect::<Vec<_>>();
     models.sort_by(|left, right| left.model.name.cmp(&right.model.name));
+    let home_metrics = state
+        .metrics
+        .as_ref()
+        .and_then(|metrics| {
+            workspace
+                .settings
+                .active_model
+                .as_deref()
+                .and_then(|model_id| metrics.home_snapshot(model_id, now_ms()).ok())
+        });
     Ok(AppSnapshot {
         models,
         active_model: workspace.settings.active_model.clone(),
@@ -105,6 +126,7 @@ fn snapshot(state: &AppState) -> Result<AppSnapshot, AppError> {
             .read()
             .map_err(|_| state_error("learning_state_unavailable"))?
             .clone(),
+        home_metrics,
     })
 }
 
@@ -352,6 +374,9 @@ pub fn run() {
                     models: Some(&legacy_models),
                 },
             )?;
+            let metrics = MetricsStore::open(&config_directory.join("metrics.sqlite3"))
+                .ok()
+                .map(Arc::new);
             let active_runtime_model = Arc::new(RwLock::new(active_model(&workspace)));
             let workspace = Arc::new(RwLock::new(workspace));
             let initial_connection = ConnectionStatus::searching();
@@ -370,6 +395,7 @@ pub fn run() {
                 let capabilities = Arc::clone(&capabilities);
                 let runtime_error = Arc::clone(&runtime_error);
                 let learning = Arc::clone(&learning);
+                let metrics = metrics.clone();
                 let device_controls = Arc::clone(&device_controls);
                 let stop = Arc::clone(&stop);
                 thread::spawn(move || {
@@ -381,6 +407,7 @@ pub fn run() {
                             capabilities,
                             runtime_error,
                             learning,
+                            metrics,
                             controls: device_controls,
                             stop,
                         },
@@ -394,6 +421,7 @@ pub fn run() {
                 capabilities,
                 runtime_error,
                 learning,
+                metrics,
                 next_learning_revision: Mutex::new(0),
                 device_controls,
                 stop,
@@ -533,6 +561,7 @@ mod tests {
             capabilities: Arc::new(RwLock::new(None)),
             runtime_error: Arc::new(RwLock::new(None)),
             learning: Arc::new(RwLock::new(None)),
+            metrics: MetricsStore::open(&directory.join("metrics.sqlite3")).ok().map(Arc::new),
             next_learning_revision: Mutex::new(0),
             device_controls: Arc::new(Mutex::new(VecDeque::new())),
             stop: Arc::new(AtomicBool::new(false)),
@@ -560,6 +589,30 @@ mod tests {
             Some(&updated)
         );
         assert!(directory.path("data/models/red-phone-v1.yaml").exists());
+    }
+
+    #[test]
+    fn snapshot_includes_active_model_metrics() {
+        let directory = TestDirectory::new();
+        let state = product_state(&directory.0, vec![product_model()]);
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        state
+            .metrics
+            .as_ref()
+            .unwrap()
+            .record_button_press("red-phone-v1", "UP", timestamp)
+            .unwrap();
+
+        let snapshot = snapshot(&state).unwrap();
+
+        assert_eq!(snapshot.home_metrics.as_ref().unwrap().today_presses, 1);
+        assert_eq!(
+            snapshot.home_metrics.unwrap().top_button.unwrap().button_id,
+            "UP"
+        );
     }
 
     #[test]
