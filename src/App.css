@@ -15,7 +15,7 @@ button:disabled { cursor: default; opacity: .45; }
 .product-shell { height: 100vh; display: grid; grid-template-rows: 52px auto minmax(0, 1fr); background: #f5f7f6; }
 .topbar { display: grid; grid-template-columns: 184px 1fr minmax(160px, 240px) auto; align-items: center; border-bottom: 1px solid #d9dfdc; background: #fff; }
 .brand { height: 52px; display: flex; align-items: center; gap: 9px; padding: 0 16px; border-right: 1px solid #e2e6e4; }
-.brand span { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 6px; color: #fff; background: #177457; }
+.brand img { width: 28px; height: 28px; border-radius: 6px; }
 .brand h1 { margin: 0; font-size: 17px; font-weight: 720; }
 .connection { justify-self: start; display: flex; align-items: center; gap: 7px; min-width: 0; padding: 0 17px; color: #69736f; font-size: 12px; }
 .connection.is-connected { color: #146b50; }
