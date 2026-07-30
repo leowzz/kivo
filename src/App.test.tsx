@@ -10,6 +10,14 @@ import type { AppSnapshot, ModelConfig } from "./types";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: vi.fn(() => ({
+    innerSize: vi.fn().mockResolvedValue({ width: 2240, height: 1520 }),
+    scaleFactor: vi.fn().mockResolvedValue(2),
+    onResized: vi.fn().mockResolvedValue(vi.fn()),
+    onScaleChanged: vi.fn().mockResolvedValue(vi.fn()),
+  })),
+}));
 
 const model: ModelConfig = {
   schema_version: 1,
@@ -85,6 +93,7 @@ test("keeps home separate from configuration navigation and puts model selection
   render(<App />);
 
   expect(await screen.findByRole("heading", { name: "按键概览" })).toBeInTheDocument();
+  await waitFor(() => expect(document.documentElement.style.getPropertyValue("--app-height")).toBe("760px"));
   const navigation = screen.getByRole("navigation", { name: "配置" });
   expect(navigation).not.toContainElement(screen.getByRole("button", { name: "首页" }));
   expect(screen.getByRole("button", { name: "首页" })).toHaveClass("is-active");
