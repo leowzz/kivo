@@ -1,0 +1,59 @@
+/* ===== 首页仪表盘 ===== */
+.home-dashboard { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 340px); overflow: hidden; }
+.home-main { min-width: 0; min-height: 0; overflow: auto; padding-bottom: var(--space-24); }
+.home-heading { margin-bottom: var(--space-16); }
+.home-device { display: flex; align-items: center; gap: 7px; padding: 4px 12px; border: 1px solid var(--border-default); border-radius: 999px; color: var(--gray-10); background: var(--bg-app); font-size: var(--text-12); }
+.home-device.is-connected { border-color: var(--green-4); color: var(--green-11); background: var(--green-1); }
+.home-device code { max-width: 190px; overflow: hidden; text-overflow: ellipsis; color: var(--gray-9); white-space: nowrap; font-size: var(--text-11); }
+
+/* 指标卡（主区内容限宽 880px，与页面头左对齐） */
+.metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-16); max-width: 880px; padding: 0 var(--space-24); }
+.metric-card {
+  min-height: 108px; display: grid; align-content: start; gap: var(--space-8);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-10); padding: var(--space-16);
+  color: var(--gray-10); background: var(--bg-surface); font-size: var(--text-12);
+  box-shadow: var(--shadow-1); transition: box-shadow .15s ease, transform .15s ease;
+}
+.metric-card:hover { box-shadow: var(--shadow-2); transform: translateY(-1px); }
+.metric-icon { width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--radius-8); color: var(--green-9); background: var(--green-3); }
+.metric-card strong { color: var(--gray-12); font-size: 28px; font-weight: var(--weight-bold); font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+
+/* 热力图（5 档阶梯色） */
+.heatmap-section { max-width: 880px; margin: var(--space-16) var(--space-24) 0; border: 1px solid var(--border-subtle); border-radius: var(--radius-10); background: var(--bg-surface); box-shadow: var(--shadow-1); }
+.heatmap { display: grid; gap: 10px; padding: var(--space-12); }
+.heatmap-group { display: grid; gap: 7px; }
+.heat-cell {
+  min-height: 68px; display: grid; align-content: space-between;
+  border: 1px dashed var(--border-strong); border-radius: var(--radius-8); padding: 7px 9px;
+  color: var(--gray-11); background: var(--gray-2); font-size: var(--text-11);
+}
+.heat-cell strong { font-size: var(--text-17); font-variant-numeric: tabular-nums; }
+.heat-cell small { color: inherit; font-size: 10px; opacity: .75; }
+.heat-cell.heat-1 { border: 1px solid var(--green-3); background: var(--green-2); color: var(--green-12); }
+.heat-cell.heat-2 { border: 1px solid var(--green-4); background: var(--green-3); color: var(--green-12); }
+.heat-cell.heat-3 { border: 1px solid var(--green-5); background: var(--green-4); color: var(--green-12); }
+.heat-cell.heat-4 { border: 1px solid var(--green-6); background: var(--green-5); color: var(--green-12); }
+
+/* 活动日志（卡片化条目） */
+.activity-log { min-width: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--border-subtle); background: var(--bg-surface); }
+.panel-title { min-height: 64px; display: flex; align-items: center; justify-content: space-between; padding: 10px 18px; border-bottom: 1px solid var(--border-subtle); }
+.panel-title strong { min-width: 24px; height: 24px; display: grid; place-items: center; border-radius: 12px; color: var(--green-11); background: var(--green-3); font-size: var(--text-11); font-variant-numeric: tabular-nums; }
+.activity-log-list { min-height: 0; flex: 1; overflow: auto; padding: var(--space-8); }
+.activity-log-item {
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+  padding: 7px 8px; border-radius: var(--radius-6);
+  color: var(--gray-11); font-size: var(--text-12); line-height: 1.35;
+  transition: background .12s ease;
+}
+.activity-log-item:hover { background: var(--gray-2); }
+.activity-log-item time { flex: 0 0 auto; color: var(--gray-8); font-size: var(--text-11); font-variant-numeric: tabular-nums; }
+.activity-log-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-empty { display: grid; place-items: center; align-content: center; gap: 6px; min-height: 120px; color: var(--gray-8); font-size: var(--text-13); text-align: center; }
+.panel-empty svg { color: var(--gray-7); }
+.home-unavailable { margin: var(--space-20) var(--space-24); padding: 10px 14px; border: 1px solid var(--red-border); border-radius: var(--radius-8); color: var(--red-text); background: var(--red-bg); font-size: var(--text-13); }
+
+@media (max-width: 680px) {
+  .metric-grid { grid-template-columns: 1fr; padding: 0 14px; }
+  .heatmap-section { margin: 14px; }
+  .home-heading { align-items: flex-start; flex-direction: column; gap: 8px; }
+}

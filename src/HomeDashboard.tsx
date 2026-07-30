@@ -34,9 +34,9 @@ export function HomeDashboard({ connection, language, metrics, model }: Props) {
         </header>
         {!metrics ? <p className="home-unavailable">{t(language, "home.unavailable")}</p> : <>
           <div className="metric-grid">
-            <div className="metric-card"><MousePointer2 size={18} /><span>{t(language, "home.todayPresses")}</span><strong>{metrics.todayPresses}</strong></div>
-            <div className="metric-card"><Hash size={18} /><span>{t(language, "home.activeButtons")}</span><strong>{metrics.activeButtonCount}</strong></div>
-            <div className="metric-card"><Trophy size={18} /><span>{t(language, "home.topButton")}</span><strong>{buttonLabel(model, metrics.topButton?.buttonId)}</strong></div>
+            <div className="metric-card"><span className="metric-icon"><MousePointer2 size={16} /></span><span>{t(language, "home.todayPresses")}</span><strong>{metrics.todayPresses}</strong></div>
+            <div className="metric-card"><span className="metric-icon"><Hash size={16} /></span><span>{t(language, "home.activeButtons")}</span><strong>{metrics.activeButtonCount}</strong></div>
+            <div className="metric-card"><span className="metric-icon"><Trophy size={16} /></span><span>{t(language, "home.topButton")}</span><strong>{buttonLabel(model, metrics.topButton?.buttonId)}</strong></div>
           </div>
           <section className="heatmap-section" aria-labelledby="heatmap-title">
             <div className="panel-title"><div><span>{t(language, "home.totalPresses")}: {metrics.totalPresses}</span><h2 id="heatmap-title">{t(language, "home.heatmap")}</h2></div></div>
@@ -45,7 +45,8 @@ export function HomeDashboard({ connection, language, metrics, model }: Props) {
                 {group.buttons.map((button) => {
                   const entry = heatmapByButton.get(button.id);
                   const presses = entry?.presses ?? 0;
-                  return <div className="heat-cell" key={button.id} style={presses ? { backgroundColor: `rgba(23, 116, 87, ${.08 + (presses / maxHeat) * .24})` } : undefined} title={`${button.label}: ${presses}`}>
+                  const level = presses === 0 ? 0 : Math.min(4, Math.max(1, Math.ceil((presses / maxHeat) * 4)));
+                  return <div className={level ? `heat-cell heat-${level}` : "heat-cell"} key={button.id} title={`${button.label}: ${presses}`}>
                     <span>{button.label}</span>{presses > 0 && <><strong>{presses}</strong><small>{entry?.day.slice(5)}</small></>}
                   </div>;
                 })}
@@ -57,7 +58,7 @@ export function HomeDashboard({ connection, language, metrics, model }: Props) {
       <aside className="activity-log" aria-label={t(language, "home.logs")}>
         <div className="panel-title"><div><span>{metrics?.logs.length ?? 0}</span><h2>{t(language, "home.logs")}</h2></div></div>
         <div className="activity-log-list">
-          {metrics?.logs.length ? metrics.logs.map((log, index) => <div className="activity-log-item" key={`${log.timestampMs}-${index}`}><time>{new Date(log.timestampMs).toLocaleTimeString()}</time><span>{formatLog(log.message)}</span></div>) : <p className="panel-empty">{t(language, "activity.empty")}</p>}
+          {metrics?.logs.length ? metrics.logs.map((log, index) => <div className="activity-log-item" key={`${log.timestampMs}-${index}`}><time>{new Date(log.timestampMs).toLocaleTimeString()}</time><span>{formatLog(log.message)}</span></div>) : <p className="panel-empty"><Activity size={18} />{t(language, "activity.empty")}</p>}
         </div>
       </aside>
     </div>
