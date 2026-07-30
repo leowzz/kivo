@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save as saveFile } from "@tauri-apps/plugin-dialog";
 import {
   ArchiveRestore,
@@ -140,6 +141,27 @@ export default function App() {
     [activeModel, models],
   );
   const dirty = Boolean(activeConfig && savedModels[activeConfig.model.id] !== JSON.stringify(activeConfig));
+
+  useEffect(() => {
+    if (PREVIEW_MODE) return;
+    const appWindow = getCurrentWindow();
+    let active = true;
+    let unlistenResize: (() => void) | undefined;
+    let unlistenScale: (() => void) | undefined;
+    const syncHeight = async () => {
+      const [size, scaleFactor] = await Promise.all([appWindow.innerSize(), appWindow.scaleFactor()]);
+      if (active) document.documentElement.style.setProperty("--app-height", `${size.height / scaleFactor}px`);
+    };
+
+    void syncHeight().catch(() => undefined);
+    void appWindow.onResized(() => void syncHeight()).then((unlisten) => { unlistenResize = unlisten; });
+    void appWindow.onScaleChanged(() => void syncHeight()).then((unlisten) => { unlistenScale = unlisten; });
+    return () => {
+      active = false;
+      unlistenResize?.();
+      unlistenScale?.();
+    };
+  }, []);
 
   const applySnapshot = useCallback((snapshot: AppSnapshot) => {
     setModels(snapshot.models);
