@@ -13,10 +13,10 @@ import {
   Trash2,
   Unplug,
   Upload,
-  Usb,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import brandIcon from "../src-tauri/icons/128x128.png";
 import { ActionEditor } from "./ActionEditor";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { HardwareMapping } from "./HardwareMapping";
@@ -297,7 +297,7 @@ export default function App() {
   return (
     <main className="product-shell">
       <header className="topbar">
-        <div className="brand"><span><Usb size={19} /></span><h1>Kivo</h1></div>
+        <div className="brand"><img src={brandIcon} alt="" /><h1>Kivo</h1></div>
         <div className={connected ? "connection is-connected" : "connection"}>
           {connected ? <Cable size={15} /> : <Unplug size={15} />}
           <span>{t(language, connected ? "connection.connected" : "connection.searching")}</span>
