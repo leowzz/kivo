@@ -3,14 +3,10 @@ import { t } from "./i18n";
 import type { ConnectionStatus, HomeMetricsSnapshot, Language, ModelConfig } from "./types";
 
 interface Props {
-  activeModel: string | null;
   connection: ConnectionStatus;
   language: Language;
-  loaded: boolean;
   metrics: HomeMetricsSnapshot | null;
   model: ModelConfig | undefined;
-  models: ModelConfig[];
-  onModelChange: (modelId: string) => void;
 }
 
 function buttonLabel(model: ModelConfig | undefined, buttonId: string | undefined) {
@@ -18,8 +14,14 @@ function buttonLabel(model: ModelConfig | undefined, buttonId: string | undefine
   return model?.model.groups.flatMap((group) => group.buttons).find((button) => button.id === buttonId)?.label ?? buttonId;
 }
 
-export function HomeDashboard({ activeModel, connection, language, loaded, metrics, model, models, onModelChange }: Props) {
+function formatLog(message: string) {
+  const match = /^(\S+) pressed$/.exec(message);
+  return match ? `按下 ${match[1]}` : message;
+}
+
+export function HomeDashboard({ connection, language, metrics, model }: Props) {
   const maxHeat = Math.max(1, ...((metrics?.heatmap ?? []).map((entry) => entry.presses)));
+  const heatmapByButton = new Map((metrics?.heatmap ?? []).map((entry) => [entry.buttonId, entry]));
   return (
     <div className="home-dashboard">
       <section className="home-main" aria-labelledby="home-title">
@@ -28,13 +30,6 @@ export function HomeDashboard({ activeModel, connection, language, loaded, metri
           <div className={connection.state === "connected" ? "home-device is-connected" : "home-device"}>
             <Activity size={15} /><span>{t(language, connection.state === "connected" ? "connection.connected" : "connection.searching")}</span>
             {connection.port && <code>{connection.port}</code>}
-            <label className="home-model-picker">
-              <span>{t(language, "model.label")}</span>
-              <select aria-label={t(language, "model.select")} value={activeModel ?? ""} disabled={!loaded || models.length === 0} onChange={(event) => onModelChange(event.target.value)}>
-                {models.length === 0 && <option value="">{t(language, "model.empty")}</option>}
-                {models.map((item) => <option value={item.model.id} key={item.model.id}>{item.model.name}</option>)}
-              </select>
-            </label>
           </div>
         </header>
         {!metrics ? <p className="home-unavailable">{t(language, "home.unavailable")}</p> : <>
@@ -46,7 +41,15 @@ export function HomeDashboard({ activeModel, connection, language, loaded, metri
           <section className="heatmap-section" aria-labelledby="heatmap-title">
             <div className="panel-title"><div><span>{t(language, "home.totalPresses")}: {metrics.totalPresses}</span><h2 id="heatmap-title">{t(language, "home.heatmap")}</h2></div></div>
             <div className="heatmap" aria-label={t(language, "home.heatmap")}>
-              {metrics.heatmap.map((entry) => <div className="heat-cell" key={`${entry.buttonId}-${entry.day}`} style={{ backgroundColor: `rgba(23, 116, 87, ${.12 + (entry.presses / maxHeat) * .88})` }} title={`${buttonLabel(model, entry.buttonId)}: ${entry.presses}`}><span>{buttonLabel(model, entry.buttonId)}</span><strong>{entry.presses}</strong><small>{entry.day.slice(5)}</small></div>)}
+              {model?.model.groups.map((group) => <div className="heatmap-group" key={group.id} style={{ gridTemplateColumns: `repeat(${group.columns}, minmax(0, 1fr))` }}>
+                {group.buttons.map((button) => {
+                  const entry = heatmapByButton.get(button.id);
+                  const presses = entry?.presses ?? 0;
+                  return <div className="heat-cell" key={button.id} style={presses ? { backgroundColor: `rgba(23, 116, 87, ${.08 + (presses / maxHeat) * .24})` } : undefined} title={`${button.label}: ${presses}`}>
+                    <span>{button.label}</span>{presses > 0 && <><strong>{presses}</strong><small>{entry?.day.slice(5)}</small></>}
+                  </div>;
+                })}
+              </div>)}
             </div>
           </section>
         </>}
@@ -54,7 +57,7 @@ export function HomeDashboard({ activeModel, connection, language, loaded, metri
       <aside className="activity-log" aria-label={t(language, "home.logs")}>
         <div className="panel-title"><div><span>{metrics?.logs.length ?? 0}</span><h2>{t(language, "home.logs")}</h2></div></div>
         <div className="activity-log-list">
-          {metrics?.logs.length ? metrics.logs.map((log, index) => <div className="activity-log-item" key={`${log.timestampMs}-${index}`}><time>{new Date(log.timestampMs).toLocaleTimeString()}</time><span>{log.message}</span></div>) : <p className="panel-empty">{t(language, "activity.empty")}</p>}
+          {metrics?.logs.length ? metrics.logs.map((log, index) => <div className="activity-log-item" key={`${log.timestampMs}-${index}`}><time>{new Date(log.timestampMs).toLocaleTimeString()}</time><span>{formatLog(log.message)}</span></div>) : <p className="panel-empty">{t(language, "activity.empty")}</p>}
         </div>
       </aside>
     </div>

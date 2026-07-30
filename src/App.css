@@ -13,7 +13,7 @@ button { cursor: pointer; }
 button:disabled { cursor: default; opacity: .45; }
 
 .product-shell { height: 100vh; display: grid; grid-template-rows: 52px auto minmax(0, 1fr); background: #f5f7f6; }
-.topbar { display: grid; grid-template-columns: 184px 1fr auto; align-items: center; border-bottom: 1px solid #d9dfdc; background: #fff; }
+.topbar { display: grid; grid-template-columns: 184px 1fr minmax(160px, 240px) auto; align-items: center; border-bottom: 1px solid #d9dfdc; background: #fff; }
 .brand { height: 52px; display: flex; align-items: center; gap: 9px; padding: 0 16px; border-right: 1px solid #e2e6e4; }
 .brand span { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 6px; color: #fff; background: #177457; }
 .brand h1 { margin: 0; font-size: 17px; font-weight: 720; }
@@ -28,12 +28,10 @@ button:disabled { cursor: default; opacity: .45; }
 .product-workspace { min-height: 0; display: grid; grid-template-columns: 184px minmax(360px, 1fr) 360px; }
 .product-workspace.is-home { grid-template-columns: 184px minmax(0, 1fr); }
 .sidebar { min-height: 0; display: flex; flex-direction: column; padding: 15px 10px 12px; border-right: 1px solid #d9dfdc; background: #edf1ef; }
-.model-picker, .language-picker { display: grid; gap: 6px; }
-.model-picker { padding: 0 5px 15px; border-bottom: 1px solid #d5dcda; }
-.model-picker span, .language-picker span, .sidebar nav > span, .data-menu > span { color: #707a76; font-size: 11px; font-weight: 650; }
+.sidebar nav > span, .data-menu > span { color: #707a76; font-size: 11px; font-weight: 650; }
 select, input, textarea { border: 1px solid #cbd3d0; border-radius: 5px; outline: none; background: #fff; }
 select:focus, input:focus, textarea:focus, button:focus-visible { border-color: #177457; box-shadow: 0 0 0 2px rgba(23, 116, 87, .14); outline: none; }
-.model-picker select, .language-picker select { min-width: 0; height: 34px; padding: 0 8px; }
+.topbar-model-picker { width: min(100%, 220px); height: 32px; justify-self: end; padding: 0 8px; }
 .home-nav-button, .sidebar nav button, .data-menu button { width: 100%; min-height: 34px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: 5px; padding: 7px 9px; color: #4f5a56; background: transparent; text-align: left; font-size: 13px; }
 .home-nav-button { margin-top: 15px; }
 .sidebar nav, .data-menu { display: grid; gap: 3px; padding: 15px 0 0; }
@@ -43,7 +41,6 @@ select:focus, input:focus, textarea:focus, button:focus-visible { border-color: 
 .home-nav-button.is-active, .sidebar nav button.is-active { color: #125f48; background: #dbe9e3; font-weight: 650; }
 .sidebar button.is-danger { color: #a23832; }
 .data-menu { border-top: 1px solid #d5dcda; margin-top: 14px; }
-.language-picker { margin-top: auto; padding: 16px 5px 0; }
 
 .content-panel { min-width: 0; min-height: 0; overflow: auto; background: #fafbfa; }
 .home-dashboard { min-height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) 360px; }
@@ -52,16 +49,14 @@ select:focus, input:focus, textarea:focus, button:focus-visible { border-color: 
 .home-device { display: flex; align-items: center; gap: 7px; color: #6e7773; font-size: 12px; }
 .home-device.is-connected { color: #146b50; }
 .home-device code { max-width: 190px; overflow: hidden; text-overflow: ellipsis; color: #87908d; white-space: nowrap; font-size: 11px; }
-.home-model-picker { display: flex; align-items: center; gap: 6px; margin-left: 9px; }
-.home-device .home-model-picker > span { display: inline; margin: 0; color: #79827f; font-size: 11px; font-weight: 650; white-space: nowrap; }
-.home-model-picker select { min-width: 0; max-width: 180px; height: 30px; padding: 0 7px; }
 .metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 0 20px; }
 .metric-card { min-height: 116px; display: grid; align-content: start; gap: 6px; border: 1px solid #d9dfdc; border-radius: 6px; padding: 14px; color: #64706b; background: #fff; font-size: 12px; }
 .metric-card svg { color: #177457; }
 .metric-card strong { color: #26312d; font-size: 24px; font-weight: 720; }
 .heatmap-section { margin: 18px 20px 0; border: 1px solid #d9dfdc; border-radius: 6px; background: #fff; }
-.heatmap { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 7px; padding: 12px; }
-.heat-cell { min-height: 70px; display: grid; align-content: space-between; border: 1px solid #a5c0b5; border-radius: 5px; padding: 7px; color: #123d30; font-size: 11px; }
+.heatmap { display: grid; gap: 10px; padding: 12px; }
+.heatmap-group { display: grid; gap: 7px; }
+.heat-cell { min-height: 70px; display: grid; align-content: space-between; border: 1px solid #c9d0cd; border-bottom-color: #aeb7b3; border-radius: 5px; padding: 7px; color: #123d30; background: #f8fbf9; font-size: 11px; }
 .heat-cell strong { font-size: 16px; }
 .heat-cell small { color: inherit; font-size: 10px; }
 .activity-log { min-width: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid #d9dfdc; background: #fff; }
@@ -176,7 +171,7 @@ select:focus, input:focus, textarea:focus, button:focus-visible { border-color: 
 @media (max-width: 980px) {
   .product-workspace { grid-template-columns: 168px minmax(360px, 1fr); }
   .product-workspace.is-home { grid-template-columns: 168px minmax(0, 1fr); }
-  .topbar { grid-template-columns: 168px 1fr auto; }
+  .topbar { grid-template-columns: 168px 1fr minmax(140px, 210px) auto; }
   .action-panel { grid-column: 1 / -1; min-height: 380px; border-top: 1px solid #d9dfdc; border-left: 0; }
   .action-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 10px; }
   .action-item { margin: 0; }
@@ -199,7 +194,6 @@ select:focus, input:focus, textarea:focus, button:focus-visible { border-color: 
   .sidebar nav > span, .data-menu > span { display: none; }
   .sidebar nav button, .data-menu button { flex: 0 0 auto; width: auto; white-space: nowrap; }
   .data-menu { border-top: 0; margin-top: 0; }
-  .language-picker { margin-top: 8px; padding-top: 8px; border-top: 1px solid #d5dcda; }
   .content-panel { min-height: 480px; }
   .home-dashboard { min-height: 480px; }
   .metric-grid { grid-template-columns: 1fr; padding: 0 14px; }
