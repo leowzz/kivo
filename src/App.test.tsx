@@ -10,14 +10,13 @@ import type { AppSnapshot, ModelConfig } from "./types";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
-vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: vi.fn(() => ({
-    innerSize: vi.fn().mockResolvedValue({ width: 2240, height: 1520 }),
-    scaleFactor: vi.fn().mockResolvedValue(2),
-    onResized: vi.fn().mockResolvedValue(vi.fn()),
-    onScaleChanged: vi.fn().mockResolvedValue(vi.fn()),
-  })),
+const appWindow = vi.hoisted(() => ({
+  innerSize: vi.fn<() => Promise<{ width: number; height: number }>>(),
+  scaleFactor: vi.fn<() => Promise<number>>(),
+  onResized: vi.fn<(callback: () => void) => Promise<() => void>>(),
+  onScaleChanged: vi.fn<(callback: () => void) => Promise<() => void>>(),
 }));
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => appWindow }));
 
 const model: ModelConfig = {
   schema_version: 1,
@@ -66,6 +65,11 @@ let currentSnapshot: AppSnapshot;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  document.documentElement.style.removeProperty("--app-height");
+  appWindow.innerSize.mockResolvedValue({ width: 2240, height: 1520 });
+  appWindow.scaleFactor.mockResolvedValue(2);
+  appWindow.onResized.mockResolvedValue(vi.fn());
+  appWindow.onScaleChanged.mockResolvedValue(vi.fn());
   currentSnapshot = structuredClone(baseSnapshot);
   HTMLDialogElement.prototype.showModal = function showModal() { this.setAttribute("open", ""); };
   HTMLDialogElement.prototype.close = function close() { this.removeAttribute("open"); };
@@ -89,11 +93,42 @@ beforeEach(() => {
   });
 });
 
+test("tracks the Tauri window's logical height", async () => {
+  render(<App />);
+
+  await waitFor(() => expect(document.documentElement.style.getPropertyValue("--app-height")).toBe("760px"));
+  await waitFor(() => expect(appWindow.onResized).toHaveBeenCalledOnce());
+
+  appWindow.innerSize.mockResolvedValue({ width: 2240, height: 1800 });
+  appWindow.onResized.mock.calls[0][0]();
+
+  await waitFor(() => expect(document.documentElement.style.getPropertyValue("--app-height")).toBe("900px"));
+  await waitFor(() => expect(appWindow.onScaleChanged).toHaveBeenCalledOnce());
+
+  appWindow.scaleFactor.mockResolvedValue(3);
+  appWindow.onScaleChanged.mock.calls[0][0]();
+
+  await waitFor(() => expect(document.documentElement.style.getPropertyValue("--app-height")).toBe("600px"));
+});
+
+test("releases the Tauri window listeners on unmount", async () => {
+  const unlistenResize = vi.fn();
+  const unlistenScale = vi.fn();
+  appWindow.onResized.mockResolvedValue(unlistenResize);
+  appWindow.onScaleChanged.mockResolvedValue(unlistenScale);
+  const { unmount } = render(<App />);
+
+  await waitFor(() => expect(appWindow.onScaleChanged).toHaveBeenCalledOnce());
+  unmount();
+
+  expect(unlistenResize).toHaveBeenCalledOnce();
+  expect(unlistenScale).toHaveBeenCalledOnce();
+});
+
 test("keeps home separate from configuration navigation and puts model selection in the top bar", async () => {
   render(<App />);
 
   expect(await screen.findByRole("heading", { name: "按键概览" })).toBeInTheDocument();
-  await waitFor(() => expect(document.documentElement.style.getPropertyValue("--app-height")).toBe("760px"));
   const navigation = screen.getByRole("navigation", { name: "配置" });
   expect(navigation).not.toContainElement(screen.getByRole("button", { name: "首页" }));
   expect(screen.getByRole("button", { name: "首页" })).toHaveClass("is-active");
