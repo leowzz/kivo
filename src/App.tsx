@@ -13,7 +13,6 @@ import {
   Trash2,
   Unplug,
   Upload,
-  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import brandIcon from "../src-tauri/icons/128x128.png";
@@ -311,7 +310,6 @@ export default function App() {
           )}
         </div>
       </header>
-
 
       <div className={view === "home" || view === "data" ? "product-workspace is-home" : "product-workspace"}>
         <aside className="sidebar">
