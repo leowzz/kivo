@@ -7,6 +7,7 @@ import {
   DatabaseBackup,
   Download,
   FileInput,
+  Home,
   Keyboard,
   LayoutGrid,
   Trash2,
@@ -19,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActionEditor } from "./ActionEditor";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { HardwareMapping } from "./HardwareMapping";
+import { HomeDashboard } from "./HomeDashboard";
 import { Keypad } from "./Keypad";
 import { LayoutEditor } from "./LayoutEditor";
 import { t } from "./i18n";
@@ -35,7 +37,7 @@ import type {
 } from "./types";
 import { SerializedSaveQueue, useAutosave } from "./useAutosave";
 
-type View = "behavior" | "hardware" | "layout";
+type View = "home" | "behavior" | "hardware" | "layout";
 type Confirmation =
   | { kind: "import"; path: string; preview: ImportPreview }
   | { kind: "restore"; path: string; preview: BackupPreview }
@@ -124,7 +126,8 @@ export default function App() {
   const [connection, setConnection] = useState<AppSnapshot["connection"]>({ state: "searching", port: null });
   const [learning, setLearning] = useState<AppSnapshot["learning"]>(null);
   const [runtimeError, setRuntimeError] = useState<AppSnapshot["runtimeError"]>(null);
-  const [view, setView] = useState<View>("behavior");
+  const [view, setView] = useState<View>("home");
+  const [homeMetrics, setHomeMetrics] = useState<AppSnapshot["homeMetrics"]>(null);
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
   const [pressedButtonIds, setPressedButtonIds] = useState<Set<string>>(() => new Set());
   const [loaded, setLoaded] = useState(false);
@@ -147,6 +150,7 @@ export default function App() {
     setConnection(snapshot.connection);
     setRuntimeError(snapshot.runtimeError);
     setLearning(snapshot.learning);
+    setHomeMetrics(snapshot.homeMetrics);
     setPressedButtonIds(new Set());
   }, []);
 
@@ -184,6 +188,7 @@ export default function App() {
         unlisten = await listen<RuntimeEvent>("runtime-event", ({ payload }) => {
           if (!active) return;
           setConnection(payload.connection);
+          if (payload.homeUpdate) setHomeMetrics(payload.homeUpdate);
           if (payload.input && payload.pressed !== null) {
             const currentModel = modelRef.current;
             if (payload.code === "learning_input" && payload.pressed && learningRef.current
@@ -316,7 +321,7 @@ export default function App() {
         </div>
       )}
 
-      <div className="product-workspace">
+      <div className={view === "home" ? "product-workspace is-home" : "product-workspace"}>
         <aside className="sidebar">
           <label className="model-picker">
             <span>{t(language, "model.label")}</span>
@@ -333,6 +338,9 @@ export default function App() {
 
           <nav aria-label={t(language, "nav.configuration")}>
             <span>{t(language, "nav.configuration")}</span>
+            <button className={view === "home" ? "is-active" : ""} type="button" onClick={() => setView("home")}>
+              <Home size={17} />{t(language, "nav.home")}
+            </button>
             <button className={view === "behavior" ? "is-active" : ""} type="button" onClick={() => setView("behavior")}>
               <Keyboard size={17} />{t(language, "nav.behavior")}
             </button>
@@ -377,7 +385,9 @@ export default function App() {
         </aside>
 
         <section className="content-panel">
-          {!activeConfig ? (
+          {view === "home" ? (
+            <HomeDashboard connection={connection} language={language} metrics={homeMetrics} model={activeConfig} />
+          ) : !activeConfig ? (
             <div className="empty-workspace">
               <Download size={28} />
               <h2>{t(language, "model.empty")}</h2>
@@ -416,7 +426,7 @@ export default function App() {
           )}
         </section>
 
-        <ActionEditor
+        {view !== "home" && <ActionEditor
           language={language}
           button={selectedButton}
           actions={selectedActions}
@@ -424,7 +434,7 @@ export default function App() {
             ...model,
             actions: { ...model.actions, [selectedButtonId]: actions },
           }))}
-        />
+        />}
       </div>
 
       <LayoutEditor

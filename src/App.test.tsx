@@ -44,6 +44,14 @@ const baseSnapshot: AppSnapshot = {
   connection: { state: "connected", port: "/dev/cu.test" },
   runtimeError: null,
   learning: null,
+  homeMetrics: {
+    totalPresses: 12,
+    todayPresses: 3,
+    activeButtonCount: 2,
+    topButton: { buttonId: "DIGIT_2", presses: 8 },
+    heatmap: [{ buttonId: "DIGIT_2", day: "2026-07-30", presses: 3 }],
+    logs: [{ timestampMs: 1785396000000, kind: "button", message: "DIGIT_2 pressed" }],
+  },
 };
 
 let currentSnapshot: AppSnapshot;
@@ -73,14 +81,15 @@ beforeEach(() => {
   });
 });
 
-test("uses Chinese by default with behavior first and no global save button", async () => {
+test("uses Chinese by default with home first and no global save button", async () => {
   render(<App />);
 
-  expect(await screen.findByRole("heading", { name: "按键行为" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "按键概览" })).toBeInTheDocument();
   expect(screen.getByRole("navigation", { name: "配置" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "首页" })).toHaveClass("is-active");
+  expect(screen.getByLabelText("运行日志")).toBeInTheDocument();
   expect(screen.getByLabelText("设备型号")).toHaveValue("tel-carbon-v1");
   expect(screen.queryByRole("button", { name: /^保存$/ })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "2，0 项行为" })).toBeInTheDocument();
 });
 
 test("switches the complete interface to English", async () => {
@@ -100,6 +109,7 @@ test("switches the complete interface to English", async () => {
 test("builds an ordered action list and autosaves it", async () => {
   const user = userEvent.setup();
   render(<App />);
+  await user.click(await screen.findByRole("button", { name: "按键行为" }));
   await screen.findByRole("button", { name: "2，0 项行为" });
   await screen.findByRole("complementary", { name: "2" });
 
@@ -123,6 +133,7 @@ test("builds an ordered action list and autosaves it", async () => {
 test("records a shortcut from the application window", async () => {
   const user = userEvent.setup();
   render(<App />);
+  await user.click(await screen.findByRole("button", { name: "按键行为" }));
   const editor = await screen.findByRole("complementary", { name: "2" });
 
   await user.click(screen.getByRole("button", { name: "按下按键" }));
@@ -135,6 +146,7 @@ test("records a shortcut from the application window", async () => {
 test("manually selects a multi-modifier shortcut", async () => {
   const user = userEvent.setup();
   render(<App />);
+  await user.click(await screen.findByRole("button", { name: "按键行为" }));
   const editor = await screen.findByRole("complementary", { name: "2" });
 
   await user.click(screen.getByRole("button", { name: "按下按键" }));
@@ -158,6 +170,7 @@ test("reorders actions from the right editor", async () => {
     { type: "hotkey", keys: ["enter"] },
   ];
   render(<App />);
+  await user.click(await screen.findByRole("button", { name: "按键行为" }));
   const editor = await screen.findByRole("complementary", { name: "2" });
 
   await user.click(within(editor).getAllByRole("button", { name: "上移" })[1]);
@@ -177,6 +190,7 @@ test("keeps a failed autosave and exposes retry", async () => {
     return structuredClone(currentSnapshot);
   });
   render(<App />);
+  await user.click(await screen.findByRole("button", { name: "按键行为" }));
   const key = await screen.findByRole("button", { name: "2，0 项行为" });
 
   await user.click(key);
@@ -240,6 +254,8 @@ test("deletes the last model and keeps import and restore available", async () =
   const user = userEvent.setup();
   render(<App />);
   await screen.findByText("配置文件");
+
+  await user.click(screen.getByRole("button", { name: "按键行为" }));
 
   await user.click(screen.getByRole("button", { name: "删除型号" }));
   const dialog = await screen.findByRole("dialog", { name: "删除型号" });

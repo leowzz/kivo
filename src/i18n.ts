@@ -1,6 +1,7 @@
 export type Language = "zh-CN" | "en-US";
 
 const zhCN = {
+  "nav.home": "首页",
   "nav.behavior": "按键行为",
   "nav.hardware": "硬件映射",
   "nav.layout": "按键布局",
@@ -80,11 +81,20 @@ const zhCN = {
   "error.learning": "逐键学习失败",
   "activity.title": "设备动态",
   "activity.empty": "暂无按键动态",
+  "home.title": "按键概览",
+  "home.todayPresses": "今日按下",
+  "home.activeButtons": "活跃按键",
+  "home.topButton": "最常用",
+  "home.heatmap": "最近 7 天",
+  "home.logs": "运行日志",
+  "home.unavailable": "指标暂不可用",
+  "home.totalPresses": "累计按下",
 } as const;
 
 export type MessageKey = keyof typeof zhCN;
 
 const enUS: Record<MessageKey, string> = {
+  "nav.home": "Home",
   "nav.behavior": "Button behavior",
   "nav.hardware": "Hardware mapping",
   "nav.layout": "Key layout",
@@ -164,6 +174,14 @@ const enUS: Record<MessageKey, string> = {
   "error.learning": "Key learning failed",
   "activity.title": "Device activity",
   "activity.empty": "No button activity",
+  "home.title": "Button overview",
+  "home.todayPresses": "Today",
+  "home.activeButtons": "Active keys",
+  "home.topButton": "Most used",
+  "home.heatmap": "Last 7 days",
+  "home.logs": "Activity log",
+  "home.unavailable": "Metrics unavailable",
+  "home.totalPresses": "Total presses",
 };
 
 export const messages: Record<Language, Record<MessageKey, string>> = {
