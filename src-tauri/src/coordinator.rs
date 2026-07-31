@@ -1,8 +1,6 @@
 use crate::{
     device::{LearningTarget, RuntimeActivity, RuntimeProfileSnapshot},
-    hardware::{
-        BoardProfile, DeviceId, board_by_bootloader_usb, board_by_id, board_by_runtime_usb,
-    },
+    hardware::{BoardProfile, DeviceId, HardwareRegistry, compiled_registry},
     metrics::{HomeMetricsSnapshot, MetricAttribution},
     paste::PasteHandle,
     profile::{DeviceProfile, ProfileChange},
@@ -395,6 +393,7 @@ impl ClassifiedObservation {
 }
 
 pub struct RuntimeCoordinator {
+    registry: HardwareRegistry<'static>,
     enumerator: Arc<dyn UsbEnumerator>,
     launcher: Arc<dyn WorkerLauncher>,
     workspace: Arc<RwLock<Workspace>>,
@@ -459,11 +458,31 @@ impl RuntimeCoordinator {
         Self::with_paste(enumerator, launcher, workspace, None)
     }
 
+    #[cfg(test)]
+    fn new_with_registry(
+        enumerator: Arc<dyn UsbEnumerator>,
+        launcher: Arc<dyn WorkerLauncher>,
+        workspace: Arc<RwLock<Workspace>>,
+        registry: HardwareRegistry<'static>,
+    ) -> Self {
+        Self::with_registry_and_paste(enumerator, launcher, workspace, None, registry)
+    }
+
     pub fn with_paste(
         enumerator: Arc<dyn UsbEnumerator>,
         launcher: Arc<dyn WorkerLauncher>,
         workspace: Arc<RwLock<Workspace>>,
         paste: Option<PasteHandle>,
+    ) -> Self {
+        Self::with_registry_and_paste(enumerator, launcher, workspace, paste, compiled_registry())
+    }
+
+    fn with_registry_and_paste(
+        enumerator: Arc<dyn UsbEnumerator>,
+        launcher: Arc<dyn WorkerLauncher>,
+        workspace: Arc<RwLock<Workspace>>,
+        paste: Option<PasteHandle>,
+        registry: HardwareRegistry<'static>,
     ) -> Self {
         let (event_sender, event_receiver) = mpsc::channel();
         let workspace_revision = {
@@ -473,6 +492,7 @@ impl RuntimeCoordinator {
             WorkspaceRevision::capture(&workspace)
         };
         Self {
+            registry,
             enumerator,
             launcher,
             workspace,
@@ -494,12 +514,18 @@ impl RuntimeCoordinator {
         let bootloader = self.enumerator.usb_devices()?;
         let mut classified = Vec::new();
         for observation in serial {
-            if let Some(board) = board_by_runtime_usb(observation.vid, observation.pid) {
+            if let Some(board) = self
+                .registry
+                .board_by_runtime_usb(observation.vid, observation.pid)
+            {
                 classified.push(ClassifiedObservation::Runtime { board, observation });
             }
         }
         for observation in bootloader {
-            if let Some(board) = board_by_bootloader_usb(observation.vid, observation.pid) {
+            if let Some(board) = self
+                .registry
+                .board_by_bootloader_usb(observation.vid, observation.pid)
+            {
                 classified.push(ClassifiedObservation::Bootloader { board, observation });
             }
         }
@@ -521,7 +547,7 @@ impl RuntimeCoordinator {
                 ));
                 continue;
             };
-            match DeviceId::new(observation.board().id, serial) {
+            match self.registry.device_id(observation.board().id, serial) {
                 Ok(id) => groups.entry(id).or_default().push(observation),
                 Err(_) => self.candidates.push(candidate_from(
                     &observation,
@@ -825,7 +851,9 @@ impl RuntimeCoordinator {
         context: RuntimeEventContext,
         activity: RuntimeActivity,
     ) -> RuntimeEvent {
-        let board = board_by_id(device_id.board_profile_id())
+        let board = self
+            .registry
+            .board_by_id(device_id.board_profile_id())
             .expect("validated Device ID references a compiled Board Profile");
         RuntimeEvent {
             timestamp_ms: context.timestamp_ms,
@@ -846,7 +874,7 @@ impl RuntimeCoordinator {
         if !self.workers.contains_key(&device_id) {
             return;
         }
-        let Some(board) = board_by_id(device_id.board_profile_id()) else {
+        let Some(board) = self.registry.board_by_id(device_id.board_profile_id()) else {
             self.stop_worker(&device_id);
             return;
         };
@@ -859,7 +887,7 @@ impl RuntimeCoordinator {
                 .workspace
                 .write()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            match workspace.enroll_device(device_id.clone()) {
+            match workspace.enroll_device_with_registry(self.registry, device_id.clone()) {
                 Ok(_) => Ok(WorkspaceRevision::capture(&workspace)),
                 Err(error) => Err(error),
             }
@@ -908,7 +936,12 @@ impl RuntimeCoordinator {
             .settings
             .devices
             .keys()
-            .map(|id| (id.clone(), offline_status(&self.workspace_revision, id)))
+            .map(|id| {
+                (
+                    id.clone(),
+                    offline_status(self.registry, &self.workspace_revision, id),
+                )
+            })
             .collect();
         for id in self.workers.keys() {
             if let Some(status) = previous.get(id) {
@@ -919,8 +952,10 @@ impl RuntimeCoordinator {
 
     fn rebuild_device(&mut self, id: &DeviceId) {
         if self.workspace_revision.settings.devices.contains_key(id) {
-            self.devices
-                .insert(id.clone(), offline_status(&self.workspace_revision, id));
+            self.devices.insert(
+                id.clone(),
+                offline_status(self.registry, &self.workspace_revision, id),
+            );
         }
     }
 
@@ -1040,7 +1075,12 @@ impl RuntimeCoordinator {
             .settings
             .devices
             .keys()
-            .map(|id| (id.clone(), offline_status(&self.workspace_revision, id)))
+            .map(|id| {
+                (
+                    id.clone(),
+                    offline_status(self.registry, &self.workspace_revision, id),
+                )
+            })
             .collect();
         RetiredWorkers(retired)
     }
@@ -1080,7 +1120,9 @@ impl RuntimeCoordinator {
         if status.learning.is_some() {
             return Err(AppError::new("learning_session_active"));
         }
-        let board = board_by_id(device_id.board_profile_id())
+        let board = self
+            .registry
+            .board_by_id(device_id.board_profile_id())
             .ok_or_else(|| AppError::new("unknown_board_profile"))?;
         {
             let profile = self
@@ -1207,16 +1249,17 @@ impl RuntimeCoordinator {
     }
 
     fn refresh_persisted_status(&mut self) {
+        let registry = self.registry;
         self.devices
             .retain(|id, _| self.workspace_revision.settings.devices.contains_key(id));
         for id in self.workspace_revision.settings.devices.keys() {
             self.devices
                 .entry(id.clone())
-                .or_insert_with(|| offline_status(&self.workspace_revision, id));
+                .or_insert_with(|| offline_status(registry, &self.workspace_revision, id));
         }
         for (id, status) in &mut self.devices {
             if self.workspace_revision.settings.devices.contains_key(id) {
-                let persisted = offline_status(&self.workspace_revision, id);
+                let persisted = offline_status(registry, &self.workspace_revision, id);
                 status.name = persisted.name;
                 status.assignment = persisted.assignment;
                 status.runtime_assignment = persisted.runtime_assignment;
@@ -1383,9 +1426,15 @@ fn workspace_worker_update(
     }
 }
 
-fn offline_status(workspace: &WorkspaceRevision, id: &DeviceId) -> DeviceStatus {
+fn offline_status(
+    registry: HardwareRegistry<'_>,
+    workspace: &WorkspaceRevision,
+    id: &DeviceId,
+) -> DeviceStatus {
     let record = &workspace.settings.devices[id];
-    let board = board_by_id(&record.board_profile_id).expect("validated persisted board profile");
+    let board = registry
+        .board_by_id(&record.board_profile_id)
+        .expect("validated persisted board profile");
     let (assignment, runtime_assignment) = match workspace.assignment_resolution(id) {
         AssignmentResolution::Unassigned { device } => (
             AssignmentDimension::Unassigned,
@@ -1456,7 +1505,10 @@ mod tests {
     use super::*;
     use crate::{
         device::DeviceSession,
-        hardware::DeviceId,
+        hardware::{
+            BOARD_PROFILES, BoardProfile, DeviceId, TEST_ESP32C3_BOARD_ID,
+            TEST_SECOND_RP2040_BOARD_ID, test_registry,
+        },
         paste::{ClipboardWriter, PasteCoordinator, PasteReply, PasteRequest},
         profile::{
             ButtonAction, DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION,
@@ -1652,7 +1704,7 @@ mod tests {
             hardware_profiles: vec![HardwareProfile {
                 id: "esp".into(),
                 name: "ESP".into(),
-                board_profile_id: "luatos-esp32s3-aio".into(),
+                board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
                 debounce_ms: 30,
                 inputs: Vec::new(),
             }],
@@ -1712,6 +1764,130 @@ mod tests {
         coordinator.drain_worker_events();
     }
 
+    #[derive(Debug, Eq, PartialEq)]
+    struct RegistryFlowShape {
+        status_keys: Vec<String>,
+        assignment_keys: Vec<String>,
+        metric_keys: Vec<String>,
+        command_kind: &'static str,
+        command_has_snapshot: bool,
+    }
+
+    fn object_keys(value: &serde_json::Value) -> Vec<String> {
+        value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::from)
+            .collect()
+    }
+
+    fn exercise_registry_board(board: &'static BoardProfile) -> RegistryFlowShape {
+        let registry = test_registry();
+        let directory = TestDirectory::new();
+        let mut workspace = Workspace::create(&directory.0, vec![profile()]).unwrap();
+        let hardware = &mut workspace
+            .profiles
+            .get_mut("red-phone-v1")
+            .unwrap()
+            .hardware_profiles[0];
+        hardware.id = "fixture-hardware".into();
+        hardware.name = "Fixture hardware".into();
+        hardware.board_profile_id = board.id.into();
+        hardware.inputs = vec![InputSource::Direct {
+            id: "fixture-input".into(),
+            keys: BTreeMap::from([("UP".into(), 6)]),
+        }];
+        let enumerator = Arc::new(FakeEnumerator::default());
+        let launcher = Arc::new(FakeLauncher::default());
+        let port = format!("/dev/{}", board.id);
+        launcher.set_hello(
+            &port,
+            HelloCapabilities {
+                protocol: 3,
+                controller_family_id: board.family_id.into(),
+                board_profile_id: board.id.into(),
+                firmware_build_id: "fixture-build".into(),
+                pins: board.safe_pins.to_vec(),
+            },
+        );
+        let mut coordinator = RuntimeCoordinator::new_with_registry(
+            enumerator.clone(),
+            launcher.clone(),
+            Arc::new(RwLock::new(workspace)),
+            registry,
+        );
+        enumerator.set(
+            vec![serial(
+                &port,
+                board.runtime_usb.vid,
+                board.runtime_usb.pid,
+                Some("FIXTURE-SERIAL"),
+            )],
+            Vec::new(),
+        );
+
+        scan(&mut coordinator);
+
+        let device_id = registry.device_id(board.id, "FIXTURE-SERIAL").unwrap();
+        assert_eq!(launcher.starts()[0].device_id, device_id);
+        assert_eq!(launcher.starts()[0].board_profile_id, board.id);
+        launcher.clear_commands();
+        let assignment = RuntimeAssignment {
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "fixture-hardware".into(),
+        };
+        coordinator
+            .workspace
+            .write()
+            .unwrap()
+            .set_assignment(&device_id, assignment.clone())
+            .unwrap();
+        coordinator.sync_profiles();
+
+        let commands = launcher.commands_for(&device_id);
+        let [
+            WorkerCommand::Reconfigure {
+                snapshot: Some(snapshot),
+                revision,
+            },
+        ] = commands.as_slice()
+        else {
+            panic!("unexpected registry fixture commands: {commands:?}");
+        };
+        assert!(*revision > 0);
+        assert_eq!(snapshot.metric_attribution.device_id, device_id);
+        assert_eq!(snapshot.hardware_profile_id, "fixture-hardware");
+        coordinator.handle_worker_event(WorkerEvent::Activity {
+            generation: 1,
+            device_id: device_id.clone(),
+            context: RuntimeEventContext::from_snapshot(1_722_355_200_000, Some(snapshot))
+                .with_port(&port),
+            activity: RuntimeActivity::new("topology_active"),
+        });
+
+        let status = coordinator
+            .devices()
+            .into_iter()
+            .find(|status| status.device_id == device_id)
+            .unwrap();
+        assert_eq!(status.runtime, RuntimeDimension::Ready);
+        assert_eq!(status.controller_family_id, board.family_id);
+        assert_eq!(status.board_profile_id, board.id);
+        assert_eq!(status.runtime_assignment.as_ref(), Some(&assignment));
+        let status = serde_json::to_value(status).unwrap();
+        let assignment = serde_json::to_value(assignment).unwrap();
+        let metric = serde_json::to_value(&snapshot.metric_attribution).unwrap();
+
+        RegistryFlowShape {
+            status_keys: object_keys(&status),
+            assignment_keys: object_keys(&assignment),
+            metric_keys: object_keys(&metric),
+            command_kind: "reconfigure",
+            command_has_snapshot: true,
+        }
+    }
+
     fn input_event(device_id: DeviceId, event_id: u64, timestamp_ms: u64) -> WorkerEvent {
         WorkerEvent::Input {
             generation: 1,
@@ -1762,6 +1938,26 @@ mod tests {
     }
 
     #[test]
+    fn second_rp2040_board_traverses_injected_registry_domain_flow() {
+        assert_eq!(
+            exercise_registry_board(
+                test_registry()
+                    .board_by_id(TEST_SECOND_RP2040_BOARD_ID)
+                    .unwrap(),
+            ),
+            exercise_registry_board(&BOARD_PROFILES[1])
+        );
+    }
+
+    #[test]
+    fn esp32c3_board_traverses_injected_registry_domain_flow() {
+        assert_eq!(
+            exercise_registry_board(test_registry().board_by_id(TEST_ESP32C3_BOARD_ID).unwrap()),
+            exercise_registry_board(&BOARD_PROFILES[0])
+        );
+    }
+
+    #[test]
     fn queued_input_keeps_serial_receipt_attribution_and_action_mapping() {
         let (_directory, enumerator, launcher, mut coordinator) = harness();
         enumerator.set(
@@ -1769,7 +1965,8 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let device_id = DeviceId::new("luatos-esp32s3-aio", "EVENT-A").unwrap();
+        let device_id =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "EVENT-A").unwrap();
         let mut old_profile = profile();
         old_profile.hardware_profiles[0].inputs = vec![InputSource::Direct {
             id: "buttons".into(),
@@ -1914,8 +2111,14 @@ mod tests {
         assert_eq!(event.timestamp_ms, 1_720_086_400_123);
         assert_eq!(event.device_id, device_id);
         assert_eq!(event.raw_serial, "EVENT-A");
-        assert_eq!(event.controller_family_id, "esp32s3");
-        assert_eq!(event.board_profile_id, "luatos-esp32s3-aio");
+        assert_eq!(
+            event.controller_family_id,
+            crate::hardware::ESP32S3_FAMILY_ID
+        );
+        assert_eq!(
+            event.board_profile_id,
+            crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID
+        );
         assert_eq!(event.port.as_deref(), Some("/dev/esp-event"));
         assert_eq!(event.device_profile_id.as_deref(), Some("red-phone-v1"));
         assert_eq!(event.hardware_profile_id.as_deref(), Some("esp"));
@@ -1988,7 +2191,8 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let device_id = DeviceId::new("luatos-esp32s3-aio", "PORT-A").unwrap();
+        let device_id =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "PORT-A").unwrap();
         {
             let mut workspace = coordinator.workspace.write().unwrap();
             workspace
@@ -2233,7 +2437,7 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let id = DeviceId::new("vccgnd-yd-rp2040", "MODE").unwrap();
+        let id = DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "MODE").unwrap();
 
         enumerator.set(Vec::new(), vec![boot("1-1", "MODE")]);
         scan(&mut coordinator);
@@ -2263,7 +2467,7 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let rejected = DeviceId::new("luatos-esp32s3-aio", "A").unwrap();
+        let rejected = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "A").unwrap();
 
         coordinator.handle_worker_event(WorkerEvent::Activity {
             generation: 1,
@@ -2321,7 +2525,7 @@ mod tests {
             HelloCapabilities {
                 protocol: 3,
                 controller_family_id: "wrong-family".into(),
-                board_profile_id: "luatos-esp32s3-aio".into(),
+                board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
                 firmware_build_id: "bad".into(),
                 pins: vec![0],
             },
@@ -2354,7 +2558,7 @@ mod tests {
     #[test]
     fn stale_hello_from_a_stopped_worker_cannot_enroll() {
         let (_directory, _enumerator, _launcher, mut coordinator) = harness();
-        let id = DeviceId::new("luatos-esp32s3-aio", "STALE").unwrap();
+        let id = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "STALE").unwrap();
         let board = crate::hardware::board_by_id(id.board_profile_id()).unwrap();
 
         coordinator.handle_worker_event(WorkerEvent::HelloValidated {
@@ -2400,14 +2604,14 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let id = DeviceId::new("luatos-esp32s3-aio", "A").unwrap();
+        let id = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "A").unwrap();
         coordinator.handle_worker_event(input_event(id, 9, 10));
 
         enumerator.set(Vec::new(), Vec::new());
         scan(&mut coordinator);
         handle.register_sequence(2).unwrap();
         let (reply, replies) = std::sync::mpsc::channel();
-        let next_id = DeviceId::new("luatos-esp32s3-aio", "B").unwrap();
+        let next_id = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "B").unwrap();
         handle
             .submit(PasteRequest {
                 receive_sequence: 2,
@@ -2457,7 +2661,7 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let id = DeviceId::new("luatos-esp32s3-aio", "A").unwrap();
+        let id = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "A").unwrap();
 
         coordinator.handle_worker_event(input_event(id.clone(), 8, 10));
         coordinator.handle_worker_event(input_event(id, 9, 11));
@@ -2474,12 +2678,12 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let owner = DeviceId::new("luatos-esp32s3-aio", "A").unwrap();
+        let owner = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "A").unwrap();
         coordinator.handle_worker_event(input_event(owner.clone(), 8, 10));
 
         coordinator.handle_worker_event(WorkerEvent::SequenceFinished {
             generation: 1,
-            device_id: DeviceId::new("luatos-esp32s3-aio", "B").unwrap(),
+            device_id: DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "B").unwrap(),
             receive_sequence: 1,
         });
         assert_eq!(coordinator.sequence_owners.get(&1), Some(&owner));
@@ -2502,8 +2706,8 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let a = DeviceId::new("luatos-esp32s3-aio", "A").unwrap();
-        let b = DeviceId::new("luatos-esp32s3-aio", "B").unwrap();
+        let a = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "A").unwrap();
+        let b = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "B").unwrap();
         {
             let mut workspace = coordinator.workspace.write().unwrap();
             for id in [&a, &b] {
@@ -2553,7 +2757,7 @@ mod tests {
         expanded.hardware_profiles.push(HardwareProfile {
             id: "esp-secondary".into(),
             name: "ESP secondary".into(),
-            board_profile_id: "luatos-esp32s3-aio".into(),
+            board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
             debounce_ms: 30,
             inputs: Vec::new(),
         });
@@ -2571,8 +2775,8 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let a = DeviceId::new("luatos-esp32s3-aio", "A").unwrap();
-        let b = DeviceId::new("luatos-esp32s3-aio", "B").unwrap();
+        let a = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "A").unwrap();
+        let b = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "B").unwrap();
         {
             let mut workspace = coordinator.workspace.write().unwrap();
             workspace
@@ -2645,8 +2849,8 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let a = DeviceId::new("luatos-esp32s3-aio", "A").unwrap();
-        let b = DeviceId::new("luatos-esp32s3-aio", "B").unwrap();
+        let a = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "A").unwrap();
+        let b = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "B").unwrap();
         let persisted = coordinator.workspace.read().unwrap().profiles["red-phone-v1"].clone();
         launcher.clear_commands();
 

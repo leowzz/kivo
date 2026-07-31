@@ -149,7 +149,10 @@ impl DeviceSession {
     pub fn new(profile: RuntimeProfileSnapshot) -> Self {
         Self {
             profile: Some(Arc::new(profile)),
-            candidate_board: crate::hardware::board_by_id("luatos-esp32s3-aio").unwrap(),
+            candidate_board: crate::hardware::board_by_id(
+                crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+            )
+            .unwrap(),
             hello: None,
             revision: 0,
             configuring: None,
@@ -1556,7 +1559,11 @@ mod tests {
         RuntimeProfileSnapshot {
             hardware_profile_id: "esp-primary".into(),
             metric_attribution: MetricAttribution {
-                device_id: DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap(),
+                device_id: DeviceId::new(
+                    crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+                    "ABCDEF123456",
+                )
+                .unwrap(),
                 device_name: "Desk".into(),
                 device_profile_id: "phone".into(),
                 hardware_profile_id: "esp-primary".into(),
@@ -1578,7 +1585,7 @@ mod tests {
                 hardware_profiles: vec![HardwareProfile {
                     id: "esp-primary".into(),
                     name: "ESP primary".into(),
-                    board_profile_id: "luatos-esp32s3-aio".into(),
+                    board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
                     debounce_ms: 30,
                     inputs: vec![InputSource::Direct {
                         id: "direct".into(),
@@ -1732,8 +1739,8 @@ mod tests {
     fn hello() -> DeviceMessage {
         DeviceMessage::Hello(HelloCapabilities {
             protocol: 3,
-            controller_family_id: "esp32s3".into(),
-            board_profile_id: "luatos-esp32s3-aio".into(),
+            controller_family_id: crate::hardware::ESP32S3_FAMILY_ID.into(),
+            board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
             firmware_build_id: "test".into(),
             pins: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18],
         })
@@ -2136,7 +2143,8 @@ mod tests {
         session.on_message_deferred(DeviceMessage::Hello(hello), 0, 100);
         session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
         let target = LearningTarget {
-            device_id: DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap(),
+            device_id: DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456")
+                .unwrap(),
             device_profile_id: "phone".into(),
             hardware_profile_id: "esp-primary".into(),
             editing_revision: 9,
@@ -2191,8 +2199,8 @@ mod tests {
         let output = session.on_message(
             DeviceMessage::Hello(HelloCapabilities {
                 protocol: 3,
-                controller_family_id: "esp32s3".into(),
-                board_profile_id: "luatos-esp32s3-aio".into(),
+                controller_family_id: crate::hardware::ESP32S3_FAMILY_ID.into(),
+                board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
                 firmware_build_id: "test".into(),
                 pins: vec![1, 2],
             }),

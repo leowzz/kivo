@@ -1,5 +1,5 @@
 use crate::{
-    hardware::{DeviceId, board_by_id},
+    hardware::{DeviceId, HardwareRegistry, compiled_registry},
     metrics::{MetricsBackup, MetricsStore},
     profile::{DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION},
     storage::atomic_write,
@@ -333,9 +333,18 @@ impl Workspace {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn enroll_device(&mut self, id: DeviceId) -> Result<&DeviceRecord, AppError> {
+        self.enroll_device_with_registry(compiled_registry(), id)
+    }
+
+    pub(crate) fn enroll_device_with_registry(
+        &mut self,
+        registry: HardwareRegistry<'_>,
+        id: DeviceId,
+    ) -> Result<&DeviceRecord, AppError> {
         if !self.settings.devices.contains_key(&id) {
-            let board = board_by_id(id.board_profile_id()).ok_or_else(|| {
+            let board = registry.board_by_id(id.board_profile_id()).ok_or_else(|| {
                 AppError::new("unknown_board_profile")
                     .with_param("board_profile", id.board_profile_id())
             })?;
@@ -623,6 +632,14 @@ fn validate_settings(
     settings: &SettingsDocument,
     profiles: &BTreeMap<String, DeviceProfile>,
 ) -> Result<(), AppError> {
+    validate_settings_with_registry(compiled_registry(), settings, profiles)
+}
+
+fn validate_settings_with_registry(
+    registry: HardwareRegistry<'_>,
+    settings: &SettingsDocument,
+    profiles: &BTreeMap<String, DeviceProfile>,
+) -> Result<(), AppError> {
     if settings.schema_version != SETTINGS_SCHEMA_VERSION {
         return Err(AppError::new("unsupported_settings_schema"));
     }
@@ -635,10 +652,12 @@ fn validate_settings(
         if id != &device.device_id {
             return Err(AppError::new("device_id_mismatch").with_param("device_id", id.as_str()));
         }
-        let board = board_by_id(&device.board_profile_id).ok_or_else(|| {
-            AppError::new("unknown_board_profile")
-                .with_param("board_profile", &device.board_profile_id)
-        })?;
+        let board = registry
+            .board_by_id(&device.board_profile_id)
+            .ok_or_else(|| {
+                AppError::new("unknown_board_profile")
+                    .with_param("board_profile", &device.board_profile_id)
+            })?;
         if id.board_profile_id() != board.id {
             return Err(AppError::new("device_board_mismatch").with_param("device_id", id.as_str()));
         }
@@ -1065,9 +1084,12 @@ mod tests {
             schema_version: PROFILE_SCHEMA_VERSION,
             profile: layout(),
             hardware_profiles: vec![
-                hardware("esp-primary", "luatos-esp32s3-aio"),
-                hardware("esp-alternate", "luatos-esp32s3-aio"),
-                hardware("rp-primary", "vccgnd-yd-rp2040"),
+                hardware("esp-primary", crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID),
+                hardware(
+                    "esp-alternate",
+                    crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+                ),
+                hardware("rp-primary", crate::hardware::VCCGND_YD_RP2040_BOARD_ID),
             ],
             actions: BTreeMap::from([(
                 "A".into(),
@@ -1157,7 +1179,8 @@ mod tests {
             .unwrap();
         let source_metrics =
             MetricsStore::open(&source_directory.join("data/metrics.sqlite3")).unwrap();
-        let device = DeviceId::new("luatos-esp32s3-aio", "AAAAAAAAAAAA").unwrap();
+        let device =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "AAAAAAAAAAAA").unwrap();
         let source_attribution = MetricAttribution {
             device_id: device.clone(),
             device_name: "Backup desk".into(),
@@ -1198,8 +1221,18 @@ mod tests {
         let yaml = serde_yaml_ng::to_string(&profile).unwrap();
         let loaded: DeviceProfile = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(loaded, profile);
-        assert_eq!(loaded.compatible_hardware("luatos-esp32s3-aio").len(), 2);
-        assert_eq!(loaded.compatible_hardware("vccgnd-yd-rp2040").len(), 1);
+        assert_eq!(
+            loaded
+                .compatible_hardware(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID)
+                .len(),
+            2
+        );
+        assert_eq!(
+            loaded
+                .compatible_hardware(crate::hardware::VCCGND_YD_RP2040_BOARD_ID)
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -1297,15 +1330,17 @@ mod tests {
 
     #[test]
     fn settings_reject_mismatched_malformed_and_unknown_board_device_ids() {
-        let id = DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap();
-        let other = DeviceId::new("luatos-esp32s3-aio", "654321FEDCBA").unwrap();
+        let id =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456").unwrap();
+        let other =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "654321FEDCBA").unwrap();
         let settings = SettingsDocument {
             devices: BTreeMap::from([(
                 id,
                 DeviceRecord {
                     device_id: other,
                     name: "Desk".into(),
-                    board_profile_id: "luatos-esp32s3-aio".into(),
+                    board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
                     runtime_assignment: None,
                 },
             )]),
@@ -1318,7 +1353,8 @@ mod tests {
             "device_id_mismatch"
         );
         let mut unknown = SettingsDocument::default();
-        let id = DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap();
+        let id =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456").unwrap();
         unknown.devices.insert(
             id.clone(),
             DeviceRecord {
@@ -1343,7 +1379,7 @@ mod tests {
     fn enrollment_is_idempotent_and_persists_a_default_name() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let id = DeviceId::new("vccgnd-yd-rp2040", "E0C9125B0D9B").unwrap();
+        let id = DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "E0C9125B0D9B").unwrap();
         let first = workspace.enroll_device(id.clone()).unwrap().clone();
         let second = workspace.enroll_device(id.clone()).unwrap().clone();
         assert_eq!(first, second);
@@ -1361,7 +1397,7 @@ mod tests {
     fn assignments_require_exact_board_equality() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let id = DeviceId::new("vccgnd-yd-rp2040", "E0C9125B0D9B").unwrap();
+        let id = DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "E0C9125B0D9B").unwrap();
         workspace.enroll_device(id.clone()).unwrap();
         assert_eq!(
             workspace
@@ -1394,9 +1430,12 @@ mod tests {
     fn editor_settings_patch_ignores_stale_device_mutations() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let removed_id = DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap();
-        let changed_id = DeviceId::new("luatos-esp32s3-aio", "654321FEDCBA").unwrap();
-        let added_id = DeviceId::new("luatos-esp32s3-aio", "ADDED123456").unwrap();
+        let removed_id =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456").unwrap();
+        let changed_id =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "654321FEDCBA").unwrap();
+        let added_id =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ADDED123456").unwrap();
         let assignment = RuntimeAssignment {
             device_profile_id: "red-phone-v1".into(),
             hardware_profile_id: "esp-primary".into(),
@@ -1425,7 +1464,7 @@ mod tests {
             DeviceRecord {
                 device_id: added_id,
                 name: "Stale addition".into(),
-                board_profile_id: "luatos-esp32s3-aio".into(),
+                board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
                 runtime_assignment: Some(assignment),
             },
         );
@@ -1449,7 +1488,8 @@ mod tests {
     fn invalid_editor_settings_patch_rolls_back_memory_and_disk() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let id = DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap();
+        let id =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456").unwrap();
         workspace.enroll_device(id).unwrap();
         let settings_before = workspace.settings.clone();
         let settings_path = directory.path("data/settings.yaml");
@@ -1488,7 +1528,8 @@ mod tests {
     fn broken_assignments_are_retained_without_compatible_fallback() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let id = DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap();
+        let id =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456").unwrap();
         workspace.enroll_device(id.clone()).unwrap();
         let assignment = RuntimeAssignment {
             device_profile_id: "red-phone-v1".into(),
@@ -1506,7 +1547,8 @@ mod tests {
             Some(&assignment)
         );
         let mut incompatible = device_profile();
-        incompatible.hardware_profiles[0].board_profile_id = "vccgnd-yd-rp2040".into();
+        incompatible.hardware_profiles[0].board_profile_id =
+            crate::hardware::VCCGND_YD_RP2040_BOARD_ID.into();
         workspace.save_profile(incompatible).unwrap();
         assert!(matches!(
             workspace.assignment_resolution(&id),
@@ -1518,7 +1560,8 @@ mod tests {
     fn clear_rename_and_forget_are_durable_transactions() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let id = DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap();
+        let id =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456").unwrap();
         workspace.enroll_device(id.clone()).unwrap();
         workspace
             .set_assignment(
@@ -1599,7 +1642,8 @@ mod tests {
             .unwrap();
         let source_metrics =
             MetricsStore::open(&source_directory.join("data/metrics.sqlite3")).unwrap();
-        let device = DeviceId::new("luatos-esp32s3-aio", "AAAAAAAAAAAA").unwrap();
+        let device =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "AAAAAAAAAAAA").unwrap();
         let attribution = MetricAttribution {
             device_id: device.clone(),
             device_name: "Backup desk".into(),
@@ -1739,7 +1783,8 @@ mod tests {
         let workspace = workspace(&directory);
         let metrics = MetricsStore::open(&directory.path("data/metrics.sqlite3")).unwrap();
         let attribution = MetricAttribution {
-            device_id: DeviceId::new("luatos-esp32s3-aio", "AAAAAAAAAAAA").unwrap(),
+            device_id: DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "AAAAAAAAAAAA")
+                .unwrap(),
             device_name: "D".repeat(MAX_IMPORT_BYTES as usize + 1),
             device_profile_id: "red-phone-v1".into(),
             hardware_profile_id: "esp-primary".into(),
@@ -1780,7 +1825,7 @@ mod tests {
         assert_eq!(profiles[0].hardware_profiles.len(), 1);
         assert_eq!(
             profiles[0].hardware_profiles[0].board_profile_id,
-            "luatos-esp32s3-aio"
+            crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID
         );
     }
 

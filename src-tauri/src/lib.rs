@@ -763,7 +763,7 @@ mod tests {
             hardware_profiles: vec![HardwareProfile {
                 id: "esp-primary".into(),
                 name: "ESP primary".into(),
-                board_profile_id: "luatos-esp32s3-aio".into(),
+                board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
                 debounce_ms: 30,
                 inputs: vec![InputSource::Direct {
                     id: "direct".into(),
@@ -1044,9 +1044,12 @@ mod tests {
         let boards = value["boardProfiles"].as_array().unwrap();
         let rp2040 = boards
             .iter()
-            .find(|board| board["id"] == "vccgnd-yd-rp2040")
+            .find(|board| board["id"] == crate::hardware::VCCGND_YD_RP2040_BOARD_ID)
             .unwrap();
-        assert_eq!(rp2040["controllerFamilyId"], "rp2040");
+        assert_eq!(
+            rp2040["controllerFamilyId"],
+            crate::hardware::RP2040_FAMILY_ID
+        );
         assert_eq!(rp2040["runtimeUsb"], "2e8a:102e");
         assert_eq!(rp2040["bootloaderUsb"], "2e8a:0003");
         assert_eq!(
@@ -1067,8 +1070,10 @@ mod tests {
         );
         coordinator.scan_once().unwrap();
         coordinator.drain_worker_events();
-        let a = hardware::DeviceId::new("luatos-esp32s3-aio", "SAVE-A").unwrap();
-        let b = hardware::DeviceId::new("luatos-esp32s3-aio", "SAVE-B").unwrap();
+        let a = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
+            .unwrap();
+        let b = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-B")
+            .unwrap();
         state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
         launcher.commands.lock().unwrap().clear();
         let assignment = workspace::RuntimeAssignment {
@@ -1197,7 +1202,9 @@ mod tests {
         assert_eq!(coordinator.candidates().len(), 1);
         assert!(coordinator.candidates()[0].device_id.is_none());
         state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
-        let unregistered = hardware::DeviceId::new("vccgnd-yd-rp2040", "NOT-ENROLLED").unwrap();
+        let unregistered =
+            hardware::DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "NOT-ENROLLED")
+                .unwrap();
 
         assert_eq!(
             rename_device_inner(&state, &unregistered, "Nope".into())
@@ -1225,8 +1232,10 @@ mod tests {
     fn runtime_event_home_update_is_editor_profile_aggregate_only() {
         let directory = TestDirectory::new();
         let state = product_state(&directory.0, vec![product_profile()]);
-        let a = hardware::DeviceId::new("luatos-esp32s3-aio", "EVENT-A").unwrap();
-        let b = hardware::DeviceId::new("luatos-esp32s3-aio", "EVENT-B").unwrap();
+        let a = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "EVENT-A")
+            .unwrap();
+        let b = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "EVENT-B")
+            .unwrap();
         let timestamp = now_ms();
         for device_id in [&a, &b] {
             state
@@ -1253,8 +1262,8 @@ mod tests {
             level: coordinator::EventLevel::Info,
             device_id: a,
             raw_serial: "EVENT-A".into(),
-            controller_family_id: "esp32s3".into(),
-            board_profile_id: "luatos-esp32s3-aio".into(),
+            controller_family_id: crate::hardware::ESP32S3_FAMILY_ID.into(),
+            board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
             port: Some("/dev/event-a".into()),
             device_profile_id: Some("red-phone-v1".into()),
             hardware_profile_id: Some("esp-primary".into()),
@@ -1289,8 +1298,10 @@ mod tests {
         );
         coordinator.scan_once().unwrap();
         coordinator.drain_worker_events();
-        let a = hardware::DeviceId::new("luatos-esp32s3-aio", "SAVE-A").unwrap();
-        let b = hardware::DeviceId::new("luatos-esp32s3-aio", "SAVE-B").unwrap();
+        let a = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
+            .unwrap();
+        let b = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-B")
+            .unwrap();
         {
             let mut workspace = state.workspace.write().unwrap();
             for id in [&a, &b] {
@@ -1326,7 +1337,9 @@ mod tests {
     fn workspace_command_saves_only_editor_preferences() {
         let directory = TestDirectory::new();
         let state = product_state(&directory.0, vec![product_profile()]);
-        let id = hardware::DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap();
+        let id =
+            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456")
+                .unwrap();
         {
             let mut workspace = state.workspace.write().unwrap();
             workspace.enroll_device(id.clone()).unwrap();
@@ -1367,7 +1380,9 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        let device_id = hardware::DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap();
+        let device_id =
+            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456")
+                .unwrap();
         state
             .metrics
             .as_ref()
@@ -1411,7 +1426,11 @@ mod tests {
         let backup = directory.path("backup.yaml");
         let timestamp = now_ms();
         let attribution = MetricAttribution {
-            device_id: hardware::DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap(),
+            device_id: hardware::DeviceId::new(
+                crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+                "ABCDEF123456",
+            )
+            .unwrap(),
             device_name: "Desk".into(),
             device_profile_id: "red-phone-v1".into(),
             hardware_profile_id: "esp-primary".into(),
@@ -1458,7 +1477,9 @@ mod tests {
         );
         coordinator.scan_once().unwrap();
         coordinator.drain_worker_events();
-        let device_id = hardware::DeviceId::new("luatos-esp32s3-aio", "SAVE-A").unwrap();
+        let device_id =
+            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
+                .unwrap();
         state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
         save_runtime_assignment_inner(
             &state,
@@ -1524,7 +1545,9 @@ mod tests {
         assert!(lifecycle_after_restore.joins_saw_released_barrier);
         drop(lifecycle_after_restore);
 
-        let esp = hardware::DeviceId::new("luatos-esp32s3-aio", "RESTORE-ESP").unwrap();
+        let esp =
+            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "RESTORE-ESP")
+                .unwrap();
         let stale = state
             .coordinator
             .as_ref()
@@ -1579,7 +1602,11 @@ mod tests {
         let backup = directory.path("backup.yaml");
         export_backup_inner(&state, &backup).unwrap();
         let attribution = MetricAttribution {
-            device_id: hardware::DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap(),
+            device_id: hardware::DeviceId::new(
+                crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+                "ABCDEF123456",
+            )
+            .unwrap(),
             device_name: "Desk".into(),
             device_profile_id: "red-phone-v1".into(),
             hardware_profile_id: "esp-primary".into(),
@@ -1639,7 +1666,11 @@ mod tests {
             let _operation = commit_state.operation_barrier.read().unwrap();
             commit_started_thread.store(true, AtomicOrdering::SeqCst);
             let attribution = MetricAttribution {
-                device_id: hardware::DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap(),
+                device_id: hardware::DeviceId::new(
+                    crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+                    "ABCDEF123456",
+                )
+                .unwrap(),
                 device_name: "Desk".into(),
                 device_profile_id: "red-phone-v1".into(),
                 hardware_profile_id: "esp-primary".into(),

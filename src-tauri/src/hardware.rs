@@ -1,4 +1,4 @@
-use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,6 +31,11 @@ pub struct BoardProfile {
     pub firmware_environment: &'static str,
 }
 
+pub(crate) const ESP32S3_FAMILY_ID: &str = "esp32s3";
+pub(crate) const RP2040_FAMILY_ID: &str = "rp2040";
+pub(crate) const LUATOS_ESP32S3_AIO_BOARD_ID: &str = "luatos-esp32s3-aio";
+pub(crate) const VCCGND_YD_RP2040_BOARD_ID: &str = "vccgnd-yd-rp2040";
+
 const ESP32S3_SAFE_PINS: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18];
 const YD_RP2040_SAFE_PINS: &[u8] = &[
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
@@ -38,19 +43,19 @@ const YD_RP2040_SAFE_PINS: &[u8] = &[
 
 pub const CONTROLLER_FAMILIES: &[ControllerFamily] = &[
     ControllerFamily {
-        id: "esp32s3",
+        id: ESP32S3_FAMILY_ID,
         display_name: "ESP32-S3",
     },
     ControllerFamily {
-        id: "rp2040",
+        id: RP2040_FAMILY_ID,
         display_name: "RP2040",
     },
 ];
 
 pub const BOARD_PROFILES: &[BoardProfile] = &[
     BoardProfile {
-        id: "luatos-esp32s3-aio",
-        family_id: "esp32s3",
+        id: LUATOS_ESP32S3_AIO_BOARD_ID,
+        family_id: ESP32S3_FAMILY_ID,
         display_name: "LuatOS ESP32-S3 AIO",
         runtime_usb: UsbIdentity {
             vid: 0x303a,
@@ -62,8 +67,8 @@ pub const BOARD_PROFILES: &[BoardProfile] = &[
         firmware_environment: "esp32s3",
     },
     BoardProfile {
-        id: "vccgnd-yd-rp2040",
-        family_id: "rp2040",
+        id: VCCGND_YD_RP2040_BOARD_ID,
+        family_id: RP2040_FAMILY_ID,
         display_name: "VCC-GND YD-RP2040",
         runtime_usb: UsbIdentity {
             vid: 0x2e8a,
@@ -80,16 +85,122 @@ pub const BOARD_PROFILES: &[BoardProfile] = &[
     },
 ];
 
+#[derive(Clone, Copy, Debug)]
+pub struct HardwareRegistry<'a> {
+    families: &'a [ControllerFamily],
+    boards: &'a [BoardProfile],
+}
+
+impl<'a> HardwareRegistry<'a> {
+    pub const fn new(families: &'a [ControllerFamily], boards: &'a [BoardProfile]) -> Self {
+        Self { families, boards }
+    }
+
+    pub fn board_by_runtime_usb(&self, vid: u16, pid: u16) -> Option<&'a BoardProfile> {
+        self.registered_board(board_by_runtime_usb_in(self.boards, vid, pid)?)
+    }
+
+    pub fn board_by_bootloader_usb(&self, vid: u16, pid: u16) -> Option<&'a BoardProfile> {
+        self.registered_board(board_by_bootloader_usb_in(self.boards, vid, pid)?)
+    }
+
+    pub fn board_by_id(&self, id: &str) -> Option<&'a BoardProfile> {
+        self.registered_board(board_by_id_in(self.boards, id)?)
+    }
+
+    pub fn device_id(
+        &self,
+        board_profile_id: &str,
+        hardware_serial: &str,
+    ) -> Result<DeviceId, DeviceIdError> {
+        device_id_from_boards(self.boards, board_profile_id, hardware_serial)
+    }
+
+    #[cfg(test)]
+    fn is_valid(&self) -> bool {
+        registries_are_valid(self.families, self.boards)
+    }
+
+    fn registered_board(&self, board: &'a BoardProfile) -> Option<&'a BoardProfile> {
+        self.families
+            .iter()
+            .any(|family| family.id == board.family_id)
+            .then_some(board)
+    }
+}
+
+pub const fn compiled_registry() -> HardwareRegistry<'static> {
+    HardwareRegistry::new(CONTROLLER_FAMILIES, BOARD_PROFILES)
+}
+
+#[cfg(test)]
+pub(crate) const TEST_ESP32C3_FAMILY_ID: &str = "esp32c3";
+#[cfg(test)]
+pub(crate) const TEST_SECOND_RP2040_BOARD_ID: &str = "test-rp2040-board";
+#[cfg(test)]
+pub(crate) const TEST_ESP32C3_BOARD_ID: &str = "test-esp32c3-board";
+
+#[cfg(test)]
+const TEST_CONTROLLER_FAMILIES: &[ControllerFamily] = &[
+    CONTROLLER_FAMILIES[0],
+    CONTROLLER_FAMILIES[1],
+    ControllerFamily {
+        id: TEST_ESP32C3_FAMILY_ID,
+        display_name: "ESP32-C3",
+    },
+];
+
+#[cfg(test)]
+const TEST_BOARD_PROFILES: &[BoardProfile] = &[
+    BOARD_PROFILES[0],
+    BOARD_PROFILES[1],
+    BoardProfile {
+        id: TEST_SECOND_RP2040_BOARD_ID,
+        family_id: RP2040_FAMILY_ID,
+        display_name: "Test RP2040 Board",
+        runtime_usb: UsbIdentity {
+            vid: 0x1209,
+            pid: 0x2040,
+            mode: UsbMode::Runtime,
+        },
+        bootloader_usb: Some(UsbIdentity {
+            vid: 0x1209,
+            pid: 0x2041,
+            mode: UsbMode::Bootloader,
+        }),
+        safe_pins: &[0, 6, 22],
+        firmware_environment: "test-rp2040",
+    },
+    BoardProfile {
+        id: TEST_ESP32C3_BOARD_ID,
+        family_id: TEST_ESP32C3_FAMILY_ID,
+        display_name: "Test ESP32-C3 Board",
+        runtime_usb: UsbIdentity {
+            vid: 0x1209,
+            pid: 0x32c3,
+            mode: UsbMode::Runtime,
+        },
+        bootloader_usb: None,
+        safe_pins: &[6],
+        firmware_environment: "test-esp32c3",
+    },
+];
+
+#[cfg(test)]
+pub(crate) const fn test_registry() -> HardwareRegistry<'static> {
+    HardwareRegistry::new(TEST_CONTROLLER_FAMILIES, TEST_BOARD_PROFILES)
+}
+
 pub fn board_by_runtime_usb(vid: u16, pid: u16) -> Option<&'static BoardProfile> {
-    board_by_runtime_usb_in(BOARD_PROFILES, vid, pid)
+    compiled_registry().board_by_runtime_usb(vid, pid)
 }
 
 pub fn board_by_bootloader_usb(vid: u16, pid: u16) -> Option<&'static BoardProfile> {
-    board_by_bootloader_usb_in(BOARD_PROFILES, vid, pid)
+    compiled_registry().board_by_bootloader_usb(vid, pid)
 }
 
 pub fn board_by_id(id: &str) -> Option<&'static BoardProfile> {
-    board_by_id_in(BOARD_PROFILES, id)
+    compiled_registry().board_by_id(id)
 }
 
 fn board_by_runtime_usb_in(boards: &[BoardProfile], vid: u16, pid: u16) -> Option<&BoardProfile> {
@@ -177,16 +288,7 @@ impl std::error::Error for DeviceIdError {}
 
 impl DeviceId {
     pub fn new(board_profile_id: &str, hardware_serial: &str) -> Result<Self, DeviceIdError> {
-        device_id_from_boards(BOARD_PROFILES, board_profile_id, hardware_serial)
-    }
-
-    #[cfg(test)]
-    fn new_with_boards(
-        boards: &[BoardProfile],
-        board_profile_id: &str,
-        hardware_serial: &str,
-    ) -> Result<Self, DeviceIdError> {
-        device_id_from_boards(boards, board_profile_id, hardware_serial)
+        compiled_registry().device_id(board_profile_id, hardware_serial)
     }
 
     pub fn parse(value: &str) -> Result<Self, DeviceIdError> {
@@ -303,65 +405,33 @@ mod tests {
     }
 
     #[test]
-    fn registry_helpers_support_synthetic_extensions() {
-        const FAMILIES: &[ControllerFamily] = &[
-            ControllerFamily {
-                id: "rp2040",
-                display_name: "RP2040",
-            },
-            ControllerFamily {
-                id: "esp32c3",
-                display_name: "ESP32-C3",
-            },
-        ];
-        const BOARDS: &[BoardProfile] = &[
-            BoardProfile {
-                id: "second-rp2040",
-                family_id: "rp2040",
-                display_name: "Second RP2040",
-                runtime_usb: UsbIdentity {
-                    vid: 0x2e8a,
-                    pid: 0x102f,
-                    mode: UsbMode::Runtime,
-                },
-                bootloader_usb: Some(UsbIdentity {
-                    vid: 0x2e8a,
-                    pid: 0x0004,
-                    mode: UsbMode::Bootloader,
-                }),
-                safe_pins: &[0],
-                firmware_environment: "second-rp2040",
-            },
-            BoardProfile {
-                id: "esp32c3-dev",
-                family_id: "esp32c3",
-                display_name: "ESP32-C3 Dev",
-                runtime_usb: UsbIdentity {
-                    vid: 0x303a,
-                    pid: 0x1001,
-                    mode: UsbMode::Runtime,
-                },
-                bootloader_usb: None,
-                safe_pins: &[1],
-                firmware_environment: "esp32c3-dev",
-            },
-        ];
+    fn injected_registry_supports_synthetic_extensions() {
+        let registry = test_registry();
+        let rp2040 = registry.board_by_id(TEST_SECOND_RP2040_BOARD_ID).unwrap();
+        let esp32c3 = registry.board_by_id(TEST_ESP32C3_BOARD_ID).unwrap();
 
         assert_eq!(
-            board_by_runtime_usb_in(BOARDS, 0x2e8a, 0x102f),
-            Some(&BOARDS[0])
+            registry.board_by_runtime_usb(rp2040.runtime_usb.vid, rp2040.runtime_usb.pid),
+            Some(rp2040)
         );
+        let bootloader = rp2040.bootloader_usb.unwrap();
         assert_eq!(
-            board_by_bootloader_usb_in(BOARDS, 0x2e8a, 0x0004),
-            Some(&BOARDS[0])
+            registry.board_by_bootloader_usb(bootloader.vid, bootloader.pid),
+            Some(rp2040)
         );
-        assert_eq!(board_by_id_in(BOARDS, "esp32c3-dev"), Some(&BOARDS[1]));
-        assert!(registries_are_valid(FAMILIES, BOARDS));
+        assert_eq!(registry.board_by_id(TEST_ESP32C3_BOARD_ID), Some(esp32c3));
+        assert!(registry.is_valid());
+        let id = registry
+            .device_id(TEST_ESP32C3_BOARD_ID, "serial-c3")
+            .unwrap();
         assert_eq!(
-            DeviceId::new_with_boards(BOARDS, "esp32c3-dev", "serial-c3")
-                .unwrap()
-                .as_str(),
-            "11:esp32c3-devserial-c3"
+            id.as_str(),
+            format!(
+                "{}:{}{}",
+                TEST_ESP32C3_BOARD_ID.len(),
+                TEST_ESP32C3_BOARD_ID,
+                "serial-c3"
+            )
         );
     }
 
