@@ -166,7 +166,9 @@ export default function App() {
   const refreshInFlightRef = useRef(false);
   const refreshPendingRef = useRef(false);
   const refreshFullSnapshotPendingRef = useRef(false);
+  const fullSnapshotRequiredRef = useRef(true);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
+  const loadErrorMessageRef = useRef<string | null>(null);
 
   const { deviceProfiles, editorProfile, boardProfiles, devices, candidates } = registry;
   const editorProfileConfig = useMemo(
@@ -238,16 +240,30 @@ export default function App() {
       return refreshPromiseRef.current ?? Promise.resolve();
     }
     refreshInFlightRef.current = true;
+    const requestFullSnapshot = fullSnapshot || fullSnapshotRequiredRef.current;
     const requestEpoch = registryEpochRef.current;
     const request = (async () => {
       try {
         const snapshot = await invoke<AppSnapshot>("get_snapshot");
         if (mountedRef.current && requestEpoch === registryEpochRef.current) {
-          if (fullSnapshot) applySnapshot(snapshot);
+          if (requestFullSnapshot) {
+            applySnapshot(snapshot);
+            fullSnapshotRequiredRef.current = false;
+            const loadErrorMessage = loadErrorMessageRef.current;
+            loadErrorMessageRef.current = null;
+            if (loadErrorMessage) {
+              setError((current) => current === loadErrorMessage ? null : current);
+            }
+          }
           else replaceRegistrySnapshot(snapshot);
         }
-      } catch {
-        // Runtime events and the interval provide the next refresh opportunity.
+      } catch (refreshError) {
+        if (mountedRef.current && requestFullSnapshot) {
+          fullSnapshotRequiredRef.current = true;
+          const message = `${t("zh-CN", "error.load")}: ${errorMessage(refreshError)}`;
+          loadErrorMessageRef.current = message;
+          setError(message);
+        }
       } finally {
         refreshInFlightRef.current = false;
         refreshPromiseRef.current = null;
@@ -371,7 +387,11 @@ export default function App() {
         unlisten = registeredUnlisten;
         await refreshRegistry(true, true);
       } catch (loadError) {
-        if (active) setError(`${t("zh-CN", "error.load")}: ${errorMessage(loadError)}`);
+        if (active) {
+          const message = `${t("zh-CN", "error.load")}: ${errorMessage(loadError)}`;
+          loadErrorMessageRef.current = message;
+          setError(message);
+        }
       } finally {
         if (active) setLoaded(true);
       }

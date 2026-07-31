@@ -306,6 +306,29 @@ test("disposes a listener that resolves after App unmounts without loading a sna
   expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "get_snapshot")).toBe(false);
 });
 
+test("retries a failed bootstrap as a full snapshot and clears its load error", async () => {
+  vi.useFakeTimers();
+  let snapshotRequests = 0;
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "get_snapshot" && snapshotRequests++ === 0) {
+      throw new Error("temporary snapshot failure");
+    }
+    return structuredClone(currentSnapshot);
+  });
+
+  render(<App />);
+  await act(async () => undefined);
+
+  expect(screen.getByRole("alert")).toHaveTextContent("载入失败: temporary snapshot failure");
+  expect(screen.getByText("等待设备")).toBeInTheDocument();
+
+  await act(async () => vi.advanceTimersByTimeAsync(2_000));
+
+  expect(screen.getByText("设备已连接")).toBeInTheDocument();
+  expect(screen.getByText("/dev/cu.test")).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
 test("preserves a dirty Device Profile draft across a registry refresh", async () => {
   const user = userEvent.setup();
   render(<App />);
