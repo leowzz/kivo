@@ -43,6 +43,12 @@ Management without a Runtime Assignment. Enrollment is automatic after identity
 and protocol validation.
 _Avoid_: Pairing, connection
 
+**Forget Device**:
+Remove one disconnected **Device** from Device Management together with its
+name and Runtime Assignment. Historical metrics and activity remain attributed
+to its Device ID; reconnecting enrolls it again without an assignment.
+_Avoid_: Disconnect, Delete Device History
+
 **Runtime Assignment**:
 The association of one **Device Profile** and one compatible **Hardware
 Profile** with one **Device** for live input and action execution. Every Device
@@ -68,6 +74,12 @@ A controller-specific wiring topology and input binding contained in a **Device
 Profile**. Every Hardware Profile targets one Board Profile, and one Device
 Profile may contain multiple wiring variants for the same board.
 _Avoid_: Board Profile, Device Profile, pin list
+
+**Learning Session**:
+A temporary scan bound to one explicit Device and one Hardware Profile. It
+produces editor draft bindings and suspends only that Device; it never applies
+results to other Devices until the draft is saved.
+_Avoid_: Global learning, automatic assignment
 
 ## Flagged Ambiguities
 
