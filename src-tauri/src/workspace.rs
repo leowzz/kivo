@@ -1183,7 +1183,11 @@ mod tests {
     ) {
         let source_directory = directory.path("source-operations");
         let target_directory = directory.path("target-operations");
-        let mut source = Workspace::create(&source_directory, vec![device_profile()]).unwrap();
+        let mut second_profile = device_profile();
+        second_profile.profile.id = "blue-phone-v1".into();
+        second_profile.profile.name = "Blue phone".into();
+        let mut source =
+            Workspace::create(&source_directory, vec![device_profile(), second_profile]).unwrap();
         source
             .save_settings(EditorSettingsPatch {
                 schema_version: SETTINGS_SCHEMA_VERSION,
@@ -1203,6 +1207,28 @@ mod tests {
         };
         source_metrics
             .record_button_press(&source_attribution, "A", 1_720_086_400_000)
+            .unwrap();
+        source.enroll_device(device.clone()).unwrap();
+        source
+            .set_assignment(
+                &device,
+                RuntimeAssignment {
+                    device_profile_id: "red-phone-v1".into(),
+                    hardware_profile_id: "esp-primary".into(),
+                },
+            )
+            .unwrap();
+        let rp2040 =
+            DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "BBBBBBBBBBBB").unwrap();
+        source.enroll_device(rp2040.clone()).unwrap();
+        source
+            .set_assignment(
+                &rp2040,
+                RuntimeAssignment {
+                    device_profile_id: "blue-phone-v1".into(),
+                    hardware_profile_id: "rp-primary".into(),
+                },
+            )
             .unwrap();
         let backup_path = directory.path("operations-backup.yaml");
         source.export_backup(&backup_path, &source_metrics).unwrap();
@@ -1595,9 +1621,74 @@ mod tests {
         workspace.forget_offline_device(&id, false).unwrap();
         assert!(!workspace.settings.devices.contains_key(&id));
         assert!(workspace.profiles.contains_key("red-phone-v1"));
-        let reloaded = Workspace::load_existing(&directory.0).unwrap();
+        let mut reloaded = Workspace::load_existing(&directory.0).unwrap();
         assert!(!reloaded.settings.devices.contains_key(&id));
         assert!(reloaded.profiles.contains_key("red-phone-v1"));
+        let reenrolled = reloaded.enroll_device(id.clone()).unwrap().clone();
+        assert_eq!(id.as_str(), "18:luatos-esp32s3-aioABCDEF123456");
+        assert_eq!(reenrolled.name, "LuatOS ESP32-S3 AIO · 123456");
+        assert_eq!(reenrolled.runtime_assignment, None);
+        assert_eq!(
+            Workspace::load_existing(&directory.0)
+                .unwrap()
+                .settings
+                .devices[&id],
+            reenrolled
+        );
+    }
+
+    #[test]
+    fn full_backup_restore_switches_devices_assignments_and_metrics_together() {
+        let directory = TestDirectory::new();
+        let (backup, mut target, metrics, original_settings, original_metrics) =
+            restore_fixture(&directory);
+        assert!(original_settings.devices.is_empty());
+
+        target.restore_backup(&backup, &metrics).unwrap();
+
+        let id =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "AAAAAAAAAAAA").unwrap();
+        let rp2040 =
+            DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "BBBBBBBBBBBB").unwrap();
+        assert_eq!(id.as_str(), "18:luatos-esp32s3-aioAAAAAAAAAAAA");
+        assert_eq!(rp2040.as_str(), "16:vccgnd-yd-rp2040BBBBBBBBBBBB");
+        assert_eq!(target.profiles.len(), 2);
+        assert_eq!(target.settings.devices.len(), 2);
+        assert_eq!(
+            target.settings.devices[&id].runtime_assignment,
+            Some(RuntimeAssignment {
+                device_profile_id: "red-phone-v1".into(),
+                hardware_profile_id: "esp-primary".into(),
+            })
+        );
+        assert_eq!(
+            target.settings.devices[&rp2040].runtime_assignment,
+            Some(RuntimeAssignment {
+                device_profile_id: "blue-phone-v1".into(),
+                hardware_profile_id: "rp-primary".into(),
+            })
+        );
+        assert_eq!(target.settings.language, Language::EnUs);
+        let restored_metrics = metrics.backup().unwrap();
+        assert_ne!(restored_metrics, original_metrics);
+        assert_eq!(restored_metrics.button_metrics.len(), 1);
+        assert_eq!(restored_metrics.button_metrics[0].device_id, id);
+        assert_eq!(restored_metrics.button_metrics[0].button_id, "A");
+        assert_eq!(restored_metrics.activity_logs.len(), 1);
+        assert_eq!(restored_metrics.activity_logs[0].device_id, id);
+        assert_eq!(
+            restored_metrics.activity_logs[0].button_id.as_deref(),
+            Some("A")
+        );
+        assert_eq!(restored_metrics.activity_logs[0].device_name, "Backup desk");
+        assert_eq!(
+            restored_metrics.activity_logs[0].device_profile_id,
+            "red-phone-v1"
+        );
+        assert_eq!(
+            restored_metrics.activity_logs[0].hardware_profile_id,
+            "esp-primary"
+        );
     }
 
     #[test]
@@ -1820,11 +1911,9 @@ mod tests {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
         let assigned =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "AAAAAAAAAAAA")
-                .unwrap();
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "AAAAAAAAAAAA").unwrap();
         let unassigned =
-            DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "BBBBBBBBBBBB")
-                .unwrap();
+            DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "BBBBBBBBBBBB").unwrap();
         workspace.enroll_device(assigned.clone()).unwrap();
         workspace.enroll_device(unassigned).unwrap();
         workspace

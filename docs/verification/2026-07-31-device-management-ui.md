@@ -67,3 +67,54 @@ The selected Device ID now has a dedicated `28ch` maximum width while retaining 
 The refreshed `docs/verification/screenshots/device-management-760x560-detail-id-assignment.png` visibly shows the canonical ID wrapping across two lines above the assignment controls, with no overlap or page-level horizontal overflow.
 
 Final checks after this follow-up: `rtk npm test` passed 115 tests across 9 files, `rtk cargo test --manifest-path src-tauri/Cargo.toml` passed 107 tests across 3 suites, and `rtk npm run build` passed with 1,800 modules transformed.
+
+## Integration Acceptance Boundary (2026-08-01)
+
+The checked-in `?preview` fixture renders representative multi-Device states; it does not execute state-changing workflows. The workflow results below come from command-boundary/component tests that invoke the mutations. Preview screenshots are listed only where they show the corresponding visible state.
+
+Exact focused commands and results:
+
+```text
+A1  rtk cargo test --manifest-path src-tauri/Cargo.toml --lib starts_four_independent_workers_and_enrolls_each_valid_runtime_once
+    Pass: 1
+A2  rtk npm test -- src/DeviceManagement.test.tsx src/App.test.tsx -t "stages one exact assignment|does not fan an assignment|preselects the one exact-board|saves one runtime assignment"
+    Pass: 4
+A3  rtk npm test -- src/DeviceManagement.test.tsx -t "shows no compatible hardware state|retains invalid stored IDs until repair"
+    Pass: 2
+A4  rtk cargo test --manifest-path src-tauri/Cargo.toml --lib enrollment_is_idempotent_and_persists_a_default_name
+    Pass: 1
+B1  rtk cargo test --manifest-path src-tauri/Cargo.toml --lib live_update_
+    Pass: 7
+B2  rtk cargo test --manifest-path src-tauri/Cargo.toml --lib broken_assignments_are_retained_without_compatible_fallback
+    Pass: 1
+C1  rtk cargo test --manifest-path src-tauri/Cargo.toml --lib learning_targets_one_exact_device_keeps_draft_unpersisted_and_cancels_on_disconnect
+    Pass: 1
+C2  rtk npm test -- src/App.test.tsx -t "isolates learning lifecycle"
+    Pass: 1
+D1  rtk cargo test --manifest-path src-tauri/Cargo.toml --lib clear_rename_and_forget_are_durable_transactions
+    Pass: 1
+D2  rtk cargo test --manifest-path src-tauri/Cargo.toml --lib attribution_is_immutable_across_reassignment_and_forgetting
+    Pass: 1
+D3  rtk npm test -- src/App.test.tsx -t "forgets only the confirmed offline Device"
+    Pass: 1
+E1  rtk cargo test --manifest-path src-tauri/Cargo.toml --lib full_backup_restore_switches_devices_assignments_and_metrics_together
+    Pass: 1
+E2  rtk cargo test --manifest-path src-tauri/Cargo.toml --lib full_backup_preview_counts_devices_assignments_metric_rows_and_activity
+    Pass: 1
+E3  rtk cargo test --manifest-path src-tauri/Cargo.toml --lib preview_export_and_button_lookup_use_complete_profiles
+    Pass: 1
+E4  rtk npm test -- src/App.test.tsx -t "previews a device profile before importing it|previews a full backup before restoring it"
+    Pass: 2
+```
+
+| Workflow | Fixture Device IDs | Automated result and exact evidence | Physical result | Screenshot |
+| --- | --- | --- | --- | --- |
+| Unknown runtime enrollment; zero/one/many Hardware Profile choices; one-Device assignment isolation | Rust identities `ESP-A`, `ESP-B`, `RP-A`, `RP-B`; UI `rp-a`, `rp-b`, `esp-a` | Pass: A1-A4. A1 enrolls four exact runtime identities as Unassigned; A2/A3 execute zero/one/many selection and prove one assignment does not fan out; A4 proves deterministic default-name persistence. | Not Run | `docs/verification/screenshots/device-management-760x560-assignment-dialog.png` shows the preview confirmation state only. |
+| Invalid stored references; explicit repair; action-only and topology live updates | UI `rp-a`; preview `16:vccgnd-yd-rp2040E0C9125B0D9B` | Pass: A3, B1, B2. Stored IDs remain visible until explicit repair; action-only and topology paths are independently exercised. | Not Run | `docs/verification/screenshots/device-management-1120x760-detail.png` shows the preview invalid-assignment state only. |
+| Targeted learning, unsaved draft retention, cancel/restore isolation | Rust exact learning target; UI `device-second` while `device-front-desk` remains independent | Pass: C1-C2. | Not Run | N/A: headless workflow evidence; no learning screenshot is claimed. |
+| Offline forget/re-enroll boundary and immutable historical attribution | Canonical backend ID `18:luatos-esp32s3-aioABCDEF123456`; UI `device-front-desk` | Pass: D1-D3. D1 forgets, reloads the absent record, re-enrolls the same ID, and asserts deterministic name `LuatOS ESP32-S3 AIO · 123456`, no Runtime Assignment, and durable persistence. D2 proves old metrics/activity attribution remains immutable. | Not Run | `docs/verification/screenshots/device-management-760x560-detail-metrics-activity.png` shows stored event-time attribution only, not the forget transition. |
+| Full backup preview/restore and Device Profile-only export boundary | Restore IDs `18:luatos-esp32s3-aioAAAAAAAAAAAA` and `16:vccgnd-yd-rp2040BBBBBBBBBBBB`; UI preview reports 4 Devices / 3 assignments | Pass: E1-E4. E1 mutates the target, then atomically restores 2 Device Profiles, both Devices, both exact Runtime Assignments, language, metrics, and activity. E2 verifies full-backup counts. E3 verifies profile-only export/preview through the `DeviceProfile` boundary. | Not Run | N/A: headless workflow evidence; no backup dialog screenshot is claimed. |
+
+Live multi-Device workflow verification was Not Run: RP2040 serial `E0C9125B0D9B` was absent, and the only attached ESP32-S3 failed the runtime v3 HELLO check after a successful explicit flash/re-enumeration. Consequently no physical assignment, action/topology update, learning, disconnect isolation, forget/re-enroll, or two-device backup/restore result is claimed.
+
+The deterministic four-Device Rust fixture separately passed for two ESP32-S3 and two RP2040 identities, including assignments, reconnect, bootloader transition, independent runtime errors, interleaved hotkeys, and global Paste FIFO. That result is automated backend evidence, not a substitute for physical UI verification.

@@ -24,7 +24,8 @@ upload:
 
 upload-esp32s3: require-serial build-esp32s3
 	@download_port="$$(uv run python scripts/enter_download_mode.py --serial "$(SERIAL)")" || exit $$?; \
-	  KIVO_FIRMWARE_BUILD_ID="$(BUILD_ID)" uv run pio run -e esp32s3 -t upload --upload-port "$$download_port"
+	  KIVO_FIRMWARE_BUILD_ID="$(BUILD_ID)" uv run pio run -e esp32s3 -t upload --upload-port "$$download_port" && \
+	  uv run pio pkg exec -p tool-esptoolpy -- esptool.py --chip esp32s3 --port "$$download_port" --after hard_reset run
 	uv run python scripts/verify_runtime_firmware.py --serial "$(SERIAL)" --vid 0x303a --pid 0x4002 --family esp32s3 --board luatos-esp32s3-aio --build "$(BUILD_ID)"
 
 upload-rp2040: require-serial build-rp2040

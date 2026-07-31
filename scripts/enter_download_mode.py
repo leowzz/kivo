@@ -1,4 +1,5 @@
 import argparse
+import re
 import sys
 import time
 from collections.abc import Iterable
@@ -20,6 +21,24 @@ def require_serial(serial_number: str | None) -> str:
     if not serial_number:
         raise TargetError("SERIAL is required")
     return serial_number
+
+
+def serials_match(expected: str, observed: str) -> bool:
+    if expected == observed:
+        return True
+
+    def canonical_hex_serial(value: str) -> str | None:
+        if re.fullmatch(r"[0-9a-fA-F]{12}", value):
+            return value.casefold()
+        if re.fullmatch(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", value):
+            return value.replace(":", "").casefold()
+        if re.fullmatch(r"(?:[0-9a-fA-F]{2}-){5}[0-9a-fA-F]{2}", value):
+            return value.replace("-", "").casefold()
+        return None
+
+    expected_hex = canonical_hex_serial(expected)
+    observed_hex = canonical_hex_serial(observed)
+    return expected_hex is not None and expected_hex == observed_hex
 
 
 def select_runtime_port(ports: Iterable[object], usb_id: tuple[int, int], serial_number: str) -> object:
@@ -48,7 +67,7 @@ def select_download_port(ports: Iterable[object], serial_number: str, location: 
         and getattr(port, "location", None) == location
         and (
             not getattr(port, "serial_number", None)
-            or getattr(port, "serial_number", None) == serial_number
+            or serials_match(serial_number, getattr(port, "serial_number"))
         )
     ]
     if not matches:

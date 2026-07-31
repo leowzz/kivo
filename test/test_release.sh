@@ -33,6 +33,10 @@ done
 esp32_upload_body="$(target_body upload-esp32s3)"
 rp2040_upload_body="$(target_body upload-rp2040)"
 test "$(grep -n -- '-t upload' <<<"$esp32_upload_body" | cut -d: -f1)" -lt "$(grep -n 'verify_runtime_firmware.py' <<<"$esp32_upload_body" | cut -d: -f1)"
+grep -Fq -- 'esptool.py --chip esp32s3' <<<"$esp32_upload_body"
+grep -Fq -- '--after hard_reset run' <<<"$esp32_upload_body"
+test "$(grep -n -- '-t upload' <<<"$esp32_upload_body" | cut -d: -f1)" -lt "$(grep -n -- 'esptool.py --chip esp32s3' <<<"$esp32_upload_body" | cut -d: -f1)"
+test "$(grep -n -- 'esptool.py --chip esp32s3' <<<"$esp32_upload_body" | cut -d: -f1)" -lt "$(grep -n 'verify_runtime_firmware.py' <<<"$esp32_upload_body" | cut -d: -f1)"
 test "$(grep -n -- 'picotool load' <<<"$rp2040_upload_body" | cut -d: -f1)" -lt "$(grep -n 'verify_runtime_firmware.py' <<<"$rp2040_upload_body" | cut -d: -f1)"
 
 grep -Eq '^upload:[[:space:]]*$' "$MAKEFILE"

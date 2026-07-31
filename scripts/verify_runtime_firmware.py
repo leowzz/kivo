@@ -28,21 +28,40 @@ def wait_for_runtime_port(serial_number: str, usb_id: tuple[int, int], timeout: 
     return select_runtime_port(comports(), usb_id, serial_number)
 
 
+def wait_for_expected_hello(
+    port: str,
+    expected: list[str],
+    *,
+    timeout: float = 10.0,
+    serial_factory: object = serial.Serial,
+    monotonic: object = time.monotonic,
+    sleep: object = time.sleep,
+) -> None:
+    deadline = monotonic() + timeout
+    last_line = ""
+    try:
+        with serial_factory(port, 115200, timeout=1) as device:
+            while monotonic() < deadline:
+                device.write(b"HELLO\n")
+                last_line = device.readline().decode("utf-8", errors="replace").strip()
+                if last_line.split()[:5] == expected:
+                    return
+                sleep(0.1)
+    except serial.SerialException as error:
+        raise TargetError(f"cannot open {port}: {error}") from error
+    expected_line = " ".join(expected)
+    raise TargetError(
+        f"timed out waiting for {expected_line} on {port}; last reply: {last_line!r}"
+    )
+
+
 def verify_runtime_firmware(
     serial_number: str, usb_id: tuple[int, int], family: str, board: str, build: str
 ) -> None:
     serial_number = require_serial(serial_number)
     port = wait_for_runtime_port(serial_number, usb_id)
-    try:
-        with serial.Serial(port.device, 115200, timeout=1) as device:
-            device.write(b"HELLO\n")
-            line = device.readline().decode("utf-8", errors="replace").strip()
-    except serial.SerialException as error:
-        raise TargetError(f"cannot open {port.device}: {error}") from error
-
     expected = ["HELLO", "3", family, board, build]
-    if line.split()[:5] != expected:
-        raise TargetError(f"unexpected runtime handshake on {port.device}: {line!r}")
+    wait_for_expected_hello(port.device, expected)
 
 
 def main() -> None:

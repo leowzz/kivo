@@ -15,6 +15,7 @@ from scripts.list_firmware_targets import (
     macos_uf2_rows,
     merge_rows,
 )
+from scripts.verify_runtime_firmware import wait_for_expected_hello
 
 
 @dataclass
@@ -24,6 +25,25 @@ class FakePort:
     pid: int
     serial_number: str | None
     location: str | None = None
+
+
+class FakeRuntimeSerial:
+    def __init__(self, responses: list[bytes]) -> None:
+        self.responses = iter(responses)
+        self.write_count = 0
+
+    def __enter__(self) -> "FakeRuntimeSerial":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def write(self, payload: bytes) -> None:
+        assert payload == b"HELLO\n"
+        self.write_count += 1
+
+    def readline(self) -> bytes:
+        return next(self.responses)
 
 
 def test_select_port_requires_exact_serial() -> None:
@@ -59,6 +79,64 @@ def test_select_download_port_uses_runtime_location_and_serial_when_present() ->
     ]
 
     assert select_download_port(ports, "TARGET", "1-1").device == "/dev/target"
+
+
+def test_select_download_port_accepts_equivalent_hex_serial_format() -> None:
+    ports = [
+        FakePort("/dev/target", 0x303A, 0x1001, "68:B6:B3:3D:9F:58", "1-1"),
+    ]
+
+    assert select_download_port(ports, "68B6B33D9F58", "1-1").device == "/dev/target"
+
+
+@pytest.mark.parametrize(
+    "observed",
+    ["6:8:B6:B3:3D:9F:58", "68-B6:B3-3D:9F-58", "68:B6:B3:3D:9F:59"],
+)
+def test_select_download_port_rejects_malformed_or_different_hex_serial(observed: str) -> None:
+    ports = [FakePort("/dev/target", 0x303A, 0x1001, observed, "1-1")]
+
+    with pytest.raises(TargetError, match="not found"):
+        select_download_port(ports, "68B6B33D9F58", "1-1")
+
+
+def test_runtime_verifier_retries_until_protocol_is_ready() -> None:
+    runtime = FakeRuntimeSerial(
+        [b"", b"HELLO 3 esp32s3 luatos-esp32s3-aio acceptance\n"]
+    )
+    opened: list[str] = []
+    times = iter([0.0, 0.0, 0.1])
+
+    wait_for_expected_hello(
+        "/dev/target",
+        ["HELLO", "3", "esp32s3", "luatos-esp32s3-aio", "acceptance"],
+        timeout=1,
+        serial_factory=lambda port, *_args, **_kwargs: opened.append(port) or runtime,
+        monotonic=lambda: next(times),
+        sleep=lambda _duration: None,
+    )
+    assert opened == ["/dev/target"]
+    assert runtime.write_count == 2
+
+
+def test_runtime_verifier_bounds_timeout_and_reports_expected_and_observed() -> None:
+    runtime = FakeRuntimeSerial([b"", b"WRONG 3 response\n"])
+    times = iter([0.0, 0.0, 0.5, 1.0])
+
+    with pytest.raises(TargetError) as captured:
+        wait_for_expected_hello(
+            "/dev/target",
+            ["HELLO", "3", "esp32s3", "luatos-esp32s3-aio", "acceptance"],
+            timeout=1,
+            serial_factory=lambda *_args, **_kwargs: runtime,
+            monotonic=lambda: next(times),
+            sleep=lambda _duration: None,
+        )
+
+    assert runtime.write_count == 2
+    assert "timed out" in str(captured.value)
+    assert "HELLO 3 esp32s3 luatos-esp32s3-aio acceptance" in str(captured.value)
+    assert "WRONG 3 response" in str(captured.value)
 
 
 def test_select_download_port_rejects_missing_or_ambiguous_location() -> None:
