@@ -165,6 +165,8 @@ export default function App() {
   const registryEpochRef = useRef(0);
   const refreshInFlightRef = useRef(false);
   const refreshPendingRef = useRef(false);
+  const refreshFullSnapshotPendingRef = useRef(false);
+  const refreshPromiseRef = useRef<Promise<void> | null>(null);
 
   const { deviceProfiles, editorProfile, boardProfiles, devices, candidates } = registry;
   const editorProfileConfig = useMemo(
@@ -173,6 +175,7 @@ export default function App() {
   );
   const editorHardwareProfile = editorProfileConfig?.hardware_profiles[0];
   const editorDevice = devices.find((device) =>
+    device.connection === "online" &&
     device.runtimeAssignment?.device_profile_id === editorProfile &&
     device.runtimeAssignment.hardware_profile_id === editorHardwareProfile?.id
   );
@@ -222,29 +225,43 @@ export default function App() {
     setPressedButtonIds(new Set());
   }, []);
 
-  const refreshRegistry = useCallback(async function refreshRegistryTask(queueIfBusy = false) {
-    if (PREVIEW_MODE) return;
+  const refreshRegistry = useCallback(function refreshRegistryTask(
+    queueIfBusy = false,
+    fullSnapshot = false,
+  ): Promise<void> {
+    if (PREVIEW_MODE) return Promise.resolve();
     if (refreshInFlightRef.current) {
-      if (queueIfBusy) refreshPendingRef.current = true;
-      return;
+      if (queueIfBusy) {
+        refreshPendingRef.current = true;
+        refreshFullSnapshotPendingRef.current ||= fullSnapshot;
+      }
+      return refreshPromiseRef.current ?? Promise.resolve();
     }
     refreshInFlightRef.current = true;
     const requestEpoch = registryEpochRef.current;
-    try {
-      const snapshot = await invoke<AppSnapshot>("get_snapshot");
-      if (mountedRef.current && requestEpoch === registryEpochRef.current) {
-        replaceRegistrySnapshot(snapshot);
+    const request = (async () => {
+      try {
+        const snapshot = await invoke<AppSnapshot>("get_snapshot");
+        if (mountedRef.current && requestEpoch === registryEpochRef.current) {
+          if (fullSnapshot) applySnapshot(snapshot);
+          else replaceRegistrySnapshot(snapshot);
+        }
+      } catch {
+        // Runtime events and the interval provide the next refresh opportunity.
+      } finally {
+        refreshInFlightRef.current = false;
+        refreshPromiseRef.current = null;
+        if (mountedRef.current && refreshPendingRef.current) {
+          refreshPendingRef.current = false;
+          const pendingFullSnapshot = refreshFullSnapshotPendingRef.current;
+          refreshFullSnapshotPendingRef.current = false;
+          void refreshRegistryTask(false, pendingFullSnapshot);
+        }
       }
-    } catch {
-      // Runtime events and the interval provide the next refresh opportunity.
-    } finally {
-      refreshInFlightRef.current = false;
-      if (mountedRef.current && refreshPendingRef.current) {
-        refreshPendingRef.current = false;
-        void refreshRegistryTask();
-      }
-    }
-  }, [replaceRegistrySnapshot]);
+    })();
+    refreshPromiseRef.current = request;
+    return request;
+  }, [applySnapshot, replaceRegistrySnapshot]);
 
   const saveEditorProfile = useCallback(async (profile: DeviceProfile | undefined) => {
     if (!profile) return;
@@ -289,7 +306,7 @@ export default function App() {
           applySnapshot((await import("./preview")).previewSnapshot);
           return;
         }
-        unlisten = await listen<RuntimeEvent>("runtime-event", ({ payload }) => {
+        const registeredUnlisten = await listen<RuntimeEvent>("runtime-event", ({ payload }) => {
           if (!active) return;
           if (payload.homeUpdate) setHomeMetrics(payload.homeUpdate);
           if (payload.input && payload.pressed !== null) {
@@ -347,17 +364,15 @@ export default function App() {
           }
           void refreshRegistry(true);
         });
-        refreshInFlightRef.current = true;
-        const snapshot = await invoke<AppSnapshot>("get_snapshot");
-        if (active) applySnapshot(snapshot);
+        if (!active) {
+          registeredUnlisten();
+          return;
+        }
+        unlisten = registeredUnlisten;
+        await refreshRegistry(true, true);
       } catch (loadError) {
         if (active) setError(`${t("zh-CN", "error.load")}: ${errorMessage(loadError)}`);
       } finally {
-        refreshInFlightRef.current = false;
-        if (mountedRef.current && refreshPendingRef.current) {
-          refreshPendingRef.current = false;
-          void refreshRegistry();
-        }
         if (active) setLoaded(true);
       }
     })();
@@ -365,6 +380,7 @@ export default function App() {
       active = false;
       mountedRef.current = false;
       refreshPendingRef.current = false;
+      refreshFullSnapshotPendingRef.current = false;
       if (refreshTimer) clearInterval(refreshTimer);
       unlisten?.();
     };

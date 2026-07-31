@@ -99,6 +99,14 @@ const baseSnapshot: AppSnapshot = {
 let currentSnapshot: AppSnapshot;
 let emitRuntimeEvent: (event: RuntimeEvent) => void;
 
+function deferred<Value>() {
+  let resolve!: (value: Value) => void;
+  const promise = new Promise<Value>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
 function runtimeEvent(overrides: Partial<RuntimeEvent> = {}): RuntimeEvent {
   return {
     timestampMs: 1785396000000,
@@ -245,6 +253,59 @@ test("periodically refreshes candidates that produce no runtime event", async ()
   expect(screen.getByLabelText("设备状态汇总")).toHaveTextContent("1 就绪 · 1 需处理 · 0 离线");
 });
 
+test("serializes bootstrap behind a delayed listener and existing registry refresh", async () => {
+  vi.useFakeTimers();
+  const listener = deferred<() => void>();
+  const firstSnapshot = deferred<AppSnapshot>();
+  const secondSnapshot = deferred<AppSnapshot>();
+  let snapshotRequests = 0;
+  vi.mocked(listen).mockReturnValue(listener.promise);
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command !== "get_snapshot") return structuredClone(currentSnapshot);
+    snapshotRequests += 1;
+    return snapshotRequests === 1 ? firstSnapshot.promise : secondSnapshot.promise;
+  });
+
+  const { unmount } = render(<App />);
+  await act(async () => vi.advanceTimersByTimeAsync(2_000));
+  expect(snapshotRequests).toBe(1);
+
+  await act(async () => {
+    listener.resolve(() => undefined);
+    await Promise.resolve();
+  });
+  expect(snapshotRequests).toBe(1);
+
+  await act(async () => {
+    firstSnapshot.resolve(structuredClone(currentSnapshot));
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(snapshotRequests).toBe(2);
+
+  await act(async () => {
+    secondSnapshot.resolve(structuredClone(currentSnapshot));
+    await Promise.resolve();
+  });
+  unmount();
+});
+
+test("disposes a listener that resolves after App unmounts without loading a snapshot", async () => {
+  const listener = deferred<() => void>();
+  const unlisten = vi.fn();
+  vi.mocked(listen).mockReturnValue(listener.promise);
+
+  const { unmount } = render(<App />);
+  unmount();
+  await act(async () => {
+    listener.resolve(unlisten);
+    await Promise.resolve();
+  });
+
+  expect(unlisten).toHaveBeenCalledOnce();
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "get_snapshot")).toBe(false);
+});
+
 test("preserves a dirty Device Profile draft across a registry refresh", async () => {
   const user = userEvent.setup();
   render(<App />);
@@ -358,6 +419,29 @@ test("shows Home as searching when only another profile's Device is online", asy
   expect(await screen.findByText("等待设备")).toBeInTheDocument();
   expect(screen.queryByText("设备已连接")).toBeNull();
   expect(screen.queryByText("/dev/cu.unrelated")).toBeNull();
+});
+
+test("shows Home as connected when an online matching Device follows an offline one", async () => {
+  currentSnapshot.devices = [
+    device({
+      deviceId: "device-offline",
+      connection: "offline",
+      mode: null,
+      runtime: "inactive",
+      port: null,
+    }),
+    device({
+      deviceId: "device-online",
+      hardwareSerial: "ONLINE",
+      port: "/dev/cu.online",
+    }),
+  ];
+
+  render(<App />);
+
+  expect(await screen.findByText("设备已连接")).toBeInTheDocument();
+  expect(screen.getByText("/dev/cu.online")).toBeInTheDocument();
+  expect(screen.queryByText("等待设备")).toBeNull();
 });
 
 test("isolates a shared pressed button by emitting Device", async () => {
