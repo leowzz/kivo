@@ -1,11 +1,9 @@
 mod coordinator;
-#[allow(dead_code)]
 mod device;
 pub mod hardware;
 mod metrics;
 mod model;
 mod paste;
-#[allow(dead_code)]
 mod profile;
 mod protocol;
 mod storage;
@@ -380,10 +378,13 @@ fn restore_backup_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, Ap
     workspace.restore_backup(path, metrics)?;
     let revision = WorkspaceRevision::capture(&workspace);
     drop(workspace);
-    if let Some(coordinator) = coordinator.as_mut() {
-        coordinator.apply_workspace_revision(revision);
-    }
+    let retired = coordinator
+        .as_mut()
+        .map(|coordinator| coordinator.activate_restored_revision(revision));
     drop(operation);
+    if let Some(retired) = retired {
+        retired.join();
+    }
     drop(coordinator);
     snapshot(state)
 }
@@ -854,6 +855,100 @@ mod tests {
         }
     }
 
+    struct RestoreEnumerator;
+
+    impl UsbEnumerator for RestoreEnumerator {
+        fn serial_ports(&self) -> Result<Vec<SerialObservation>, String> {
+            Ok(vec![
+                SerialObservation {
+                    port: "/dev/restore-esp".into(),
+                    vid: 0x303a,
+                    pid: 0x4002,
+                    serial_number: Some("RESTORE-ESP".into()),
+                },
+                SerialObservation {
+                    port: "/dev/restore-rp".into(),
+                    vid: 0x2e8a,
+                    pid: 0x102e,
+                    serial_number: Some("RESTORE-RP".into()),
+                },
+            ])
+        }
+
+        fn usb_devices(&self) -> Result<Vec<BootloaderObservation>, String> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[derive(Default)]
+    struct RestoreLifecycle {
+        starts: Vec<WorkerStart>,
+        stopped: Vec<hardware::DeviceId>,
+        joined: Vec<hardware::DeviceId>,
+        joins_saw_released_barrier: bool,
+    }
+
+    struct RestoreLauncher {
+        lifecycle: Arc<Mutex<RestoreLifecycle>>,
+        operation_barrier: Arc<RwLock<()>>,
+    }
+
+    struct RestoreWorker {
+        device_id: hardware::DeviceId,
+        lifecycle: Arc<Mutex<RestoreLifecycle>>,
+        operation_barrier: Arc<RwLock<()>>,
+    }
+
+    impl DeviceWorker for RestoreWorker {
+        fn send(&self, _command: WorkerCommand) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn stop(&mut self) {
+            self.lifecycle
+                .lock()
+                .unwrap()
+                .stopped
+                .push(self.device_id.clone());
+        }
+
+        fn join(&mut self) {
+            let barrier_released = self.operation_barrier.try_read().is_ok();
+            let mut lifecycle = self.lifecycle.lock().unwrap();
+            lifecycle.joined.push(self.device_id.clone());
+            lifecycle.joins_saw_released_barrier |= barrier_released;
+        }
+    }
+
+    impl WorkerLauncher for RestoreLauncher {
+        fn start(
+            &self,
+            start: WorkerStart,
+            events: mpsc::Sender<WorkerEvent>,
+        ) -> Result<Box<dyn DeviceWorker>, String> {
+            self.lifecycle.lock().unwrap().starts.push(start.clone());
+            let board = hardware::board_by_id(&start.board_profile_id).unwrap();
+            events
+                .send(WorkerEvent::HelloValidated {
+                    generation: start.generation,
+                    device_id: start.device_id.clone(),
+                    capabilities: protocol::HelloCapabilities {
+                        protocol: 3,
+                        controller_family_id: board.family_id.into(),
+                        board_profile_id: board.id.into(),
+                        firmware_build_id: "restore-test".into(),
+                        pins: board.safe_pins.to_vec(),
+                    },
+                })
+                .unwrap();
+            Ok(Box::new(RestoreWorker {
+                device_id: start.device_id,
+                lifecycle: Arc::clone(&self.lifecycle),
+                operation_barrier: Arc::clone(&self.operation_barrier),
+            }))
+        }
+    }
+
     #[derive(Default)]
     struct SaveLauncher {
         commands: Arc<Mutex<BTreeMap<hardware::DeviceId, Vec<WorkerCommand>>>>,
@@ -889,6 +984,7 @@ mod tests {
             let board = hardware::board_by_id(&start.board_profile_id).unwrap();
             events
                 .send(WorkerEvent::HelloValidated {
+                    generation: start.generation,
                     device_id: start.device_id.clone(),
                     capabilities: protocol::HelloCapabilities {
                         protocol: 3,
@@ -1389,6 +1485,91 @@ mod tests {
             .find(|device| device.device_id == device_id)
             .unwrap();
         assert_eq!(device.assignment, coordinator::AssignmentDimension::Valid);
+    }
+
+    #[test]
+    fn successful_restore_offlines_all_workers_and_rejects_old_generation_events() {
+        let directory = TestDirectory::new();
+        let mut state = product_state(&directory.0, vec![product_profile()]);
+        let lifecycle = Arc::new(Mutex::new(RestoreLifecycle::default()));
+        let launcher = Arc::new(RestoreLauncher {
+            lifecycle: Arc::clone(&lifecycle),
+            operation_barrier: Arc::clone(&state.operation_barrier),
+        });
+        let mut coordinator = RuntimeCoordinator::new(
+            Arc::new(RestoreEnumerator),
+            launcher,
+            Arc::clone(&state.workspace),
+        );
+        coordinator.scan_once().unwrap();
+        coordinator.drain_worker_events();
+        let backup = directory.path("live-backup.yaml");
+        export_backup_inner(&state, &backup).unwrap();
+        let old_generation = lifecycle.lock().unwrap().starts[0].generation;
+        state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
+
+        let restored_snapshot = restore_backup_inner(&state, &backup).unwrap();
+
+        assert_eq!(restored_snapshot.devices.len(), 2);
+        assert!(restored_snapshot.devices.iter().all(|device| {
+            device.connection == coordinator::ConnectionDimension::Offline
+                && device.runtime == coordinator::RuntimeDimension::Inactive
+                && device.mode.is_none()
+                && device.pins.is_empty()
+                && device.learning.is_none()
+        }));
+        let lifecycle_after_restore = lifecycle.lock().unwrap();
+        assert_eq!(lifecycle_after_restore.stopped.len(), 2);
+        assert_eq!(lifecycle_after_restore.joined.len(), 2);
+        assert!(lifecycle_after_restore.joins_saw_released_barrier);
+        drop(lifecycle_after_restore);
+
+        let esp = hardware::DeviceId::new("luatos-esp32s3-aio", "RESTORE-ESP").unwrap();
+        let stale = state
+            .coordinator
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .handle_worker_event(WorkerEvent::Activity {
+                generation: old_generation,
+                device_id: esp.clone(),
+                context: coordinator::RuntimeEventContext {
+                    timestamp_ms: 1,
+                    port: Some("/dev/restore-esp".into()),
+                    device_profile_id: None,
+                    hardware_profile_id: None,
+                },
+                activity: device::RuntimeActivity::new("topology_rejected"),
+            });
+        assert!(stale.is_none());
+        assert_eq!(
+            snapshot(&state)
+                .unwrap()
+                .devices
+                .into_iter()
+                .find(|device| device.device_id == esp)
+                .unwrap()
+                .runtime,
+            coordinator::RuntimeDimension::Inactive
+        );
+
+        let mut coordinator = state.coordinator.as_ref().unwrap().lock().unwrap();
+        coordinator.scan_once().unwrap();
+        coordinator.drain_worker_events();
+        assert!(
+            coordinator
+                .devices()
+                .iter()
+                .all(|device| device.connection == coordinator::ConnectionDimension::Online)
+        );
+        let lifecycle = lifecycle.lock().unwrap();
+        assert_eq!(lifecycle.starts.len(), 4);
+        assert!(
+            lifecycle.starts[2..]
+                .iter()
+                .all(|start| start.generation > old_generation)
+        );
     }
 
     #[test]

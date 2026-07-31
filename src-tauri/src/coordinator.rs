@@ -12,9 +12,8 @@ use crate::{
 use nusb::MaybeFuture;
 use serde::Serialize;
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, RwLock, mpsc},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -181,7 +180,63 @@ pub struct RuntimeEvent {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RuntimeEventContext {
+    pub(crate) timestamp_ms: u64,
+    pub(crate) port: Option<String>,
+    pub(crate) device_profile_id: Option<String>,
+    pub(crate) hardware_profile_id: Option<String>,
+}
+
+impl RuntimeEventContext {
+    pub(crate) fn unassigned(timestamp_ms: u64) -> Self {
+        Self {
+            timestamp_ms,
+            port: None,
+            device_profile_id: None,
+            hardware_profile_id: None,
+        }
+    }
+
+    pub(crate) fn with_timestamp(&self, timestamp_ms: u64) -> Self {
+        Self {
+            timestamp_ms,
+            port: self.port.clone(),
+            device_profile_id: self.device_profile_id.clone(),
+            hardware_profile_id: self.hardware_profile_id.clone(),
+        }
+    }
+
+    pub(crate) fn from_snapshot(
+        timestamp_ms: u64,
+        snapshot: Option<&RuntimeProfileSnapshot>,
+    ) -> Self {
+        Self {
+            timestamp_ms,
+            port: None,
+            device_profile_id: snapshot
+                .map(|snapshot| snapshot.metric_attribution.device_profile_id.clone()),
+            hardware_profile_id: snapshot.map(|snapshot| snapshot.hardware_profile_id.clone()),
+        }
+    }
+
+    pub(crate) fn from_learning(timestamp_ms: u64, target: &LearningTarget) -> Self {
+        Self {
+            timestamp_ms,
+            port: None,
+            device_profile_id: Some(target.device_profile_id.clone()),
+            hardware_profile_id: Some(target.hardware_profile_id.clone()),
+        }
+    }
+
+    pub(crate) fn with_port(mut self, port: impl Into<String>) -> Self {
+        self.port = Some(port.into());
+        self
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkerStart {
+    pub generation: u64,
     pub device_id: DeviceId,
     pub port: String,
     pub board_profile_id: String,
@@ -200,6 +255,7 @@ pub enum WorkerCommand {
         revision: u32,
     },
     Input {
+        context: RuntimeEventContext,
         receive_sequence: u64,
         event_id: u64,
         input: PhysicalInput,
@@ -213,10 +269,12 @@ pub enum WorkerCommand {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorkerEvent {
     HelloValidated {
+        generation: u64,
         device_id: DeviceId,
         capabilities: HelloCapabilities,
     },
     Input {
+        generation: u64,
         device_id: DeviceId,
         event_id: u64,
         input: PhysicalInput,
@@ -224,14 +282,18 @@ pub enum WorkerEvent {
         occurred_at_ms: u64,
     },
     SequenceFinished {
+        generation: u64,
         device_id: DeviceId,
         receive_sequence: u64,
     },
     Activity {
+        generation: u64,
         device_id: DeviceId,
+        context: RuntimeEventContext,
         activity: RuntimeActivity,
     },
     Disconnected {
+        generation: u64,
         device_id: DeviceId,
         error: Option<String>,
     },
@@ -257,11 +319,14 @@ struct WorkerSlot {
     firmware_revision: u32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct InputEventContext {
-    timestamp_ms: u64,
-    device_profile_id: Option<String>,
-    hardware_profile_id: Option<String>,
+pub(crate) struct RetiredWorkers(Vec<Box<dyn DeviceWorker>>);
+
+impl RetiredWorkers {
+    pub(crate) fn join(mut self) {
+        for worker in &mut self.0 {
+            worker.join();
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -337,9 +402,9 @@ pub struct RuntimeCoordinator {
     candidates: Vec<CandidateStatus>,
     event_sender: mpsc::Sender<WorkerEvent>,
     event_receiver: mpsc::Receiver<WorkerEvent>,
+    generation: u64,
     receive_sequence: u64,
     sequence_owners: BTreeMap<u64, DeviceId>,
-    pending_input_contexts: BTreeMap<DeviceId, VecDeque<InputEventContext>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -415,9 +480,9 @@ impl RuntimeCoordinator {
             candidates: Vec::new(),
             event_sender,
             event_receiver,
+            generation: 1,
             receive_sequence: 0,
             sequence_owners: BTreeMap::new(),
-            pending_input_contexts: BTreeMap::new(),
         }
     }
 
@@ -524,6 +589,7 @@ impl RuntimeCoordinator {
                         continue;
                     }
                     let start = WorkerStart {
+                        generation: self.generation,
                         device_id: device_id.clone(),
                         port: observation.port.clone(),
                         board_profile_id: board.id.into(),
@@ -599,8 +665,12 @@ impl RuntimeCoordinator {
     }
 
     pub fn handle_worker_event(&mut self, event: WorkerEvent) -> Option<RuntimeEvent> {
+        if event_generation(&event) != self.generation {
+            return None;
+        }
         match event {
             WorkerEvent::HelloValidated {
+                generation: _,
                 device_id,
                 capabilities,
             } => {
@@ -608,6 +678,7 @@ impl RuntimeCoordinator {
                 None
             }
             WorkerEvent::Input {
+                generation: _,
                 device_id,
                 event_id,
                 input,
@@ -621,11 +692,7 @@ impl RuntimeCoordinator {
                 let receive_sequence = self.receive_sequence;
                 self.sequence_owners
                     .insert(receive_sequence, device_id.clone());
-                let input_context = self.input_event_context(&device_id, occurred_at_ms);
-                self.pending_input_contexts
-                    .entry(device_id.clone())
-                    .or_default()
-                    .push_back(input_context);
+                let context = self.runtime_event_context(&device_id, occurred_at_ms);
                 if let Some(paste) = &self.paste {
                     let _ = paste.register_sequence(receive_sequence);
                 }
@@ -633,6 +700,7 @@ impl RuntimeCoordinator {
                     if slot
                         .worker
                         .send(WorkerCommand::Input {
+                            context,
                             receive_sequence,
                             event_id,
                             input,
@@ -642,18 +710,12 @@ impl RuntimeCoordinator {
                         .is_err()
                     {
                         self.sequence_owners.remove(&receive_sequence);
-                        self.pending_input_contexts
-                            .get_mut(&device_id)
-                            .and_then(VecDeque::pop_back);
                         if let Some(paste) = &self.paste {
                             let _ = paste.finish_sequence(receive_sequence);
                         }
                     }
                 } else {
                     self.sequence_owners.remove(&receive_sequence);
-                    self.pending_input_contexts
-                        .get_mut(&device_id)
-                        .and_then(VecDeque::pop_back);
                     if let Some(paste) = &self.paste {
                         let _ = paste.finish_sequence(receive_sequence);
                     }
@@ -661,6 +723,7 @@ impl RuntimeCoordinator {
                 None
             }
             WorkerEvent::SequenceFinished {
+                generation: _,
                 device_id,
                 receive_sequence,
             } => {
@@ -673,11 +736,15 @@ impl RuntimeCoordinator {
                 None
             }
             WorkerEvent::Activity {
+                generation: _,
                 device_id,
+                context,
                 activity,
             } => {
-                let event = self.runtime_event(&device_id, activity.clone());
-                if let Some(status) = self.devices.get_mut(&device_id) {
+                let event = self.runtime_event(&device_id, context, activity.clone());
+                if self.workers.contains_key(&device_id)
+                    && let Some(status) = self.devices.get_mut(&device_id)
+                {
                     if activity.code == "topology_active" {
                         status.runtime = RuntimeDimension::Ready;
                         status.latest_error = None;
@@ -692,7 +759,11 @@ impl RuntimeCoordinator {
                 }
                 Some(event)
             }
-            WorkerEvent::Disconnected { device_id, error } => {
+            WorkerEvent::Disconnected {
+                generation: _,
+                device_id,
+                error,
+            } => {
                 if !self.workers.contains_key(&device_id) {
                     return None;
                 }
@@ -718,42 +789,37 @@ impl RuntimeCoordinator {
         }
     }
 
-    fn input_event_context(&self, device_id: &DeviceId, timestamp_ms: u64) -> InputEventContext {
+    fn runtime_event_context(
+        &self,
+        device_id: &DeviceId,
+        timestamp_ms: u64,
+    ) -> RuntimeEventContext {
         let assignment = self
             .workspace_revision
             .settings
             .devices
             .get(device_id)
             .and_then(|device| device.runtime_assignment.as_ref());
-        InputEventContext {
+        RuntimeEventContext {
             timestamp_ms,
+            port: self
+                .devices
+                .get(device_id)
+                .and_then(|status| status.port.clone())
+                .or_else(|| self.workers.get(device_id).map(|slot| slot.port.clone())),
             device_profile_id: assignment.map(|value| value.device_profile_id.clone()),
             hardware_profile_id: assignment.map(|value| value.hardware_profile_id.clone()),
         }
     }
 
-    fn runtime_event(&mut self, device_id: &DeviceId, activity: RuntimeActivity) -> RuntimeEvent {
-        let context = if activity.code == "input_state" {
-            self.pending_input_contexts
-                .get_mut(device_id)
-                .and_then(VecDeque::pop_front)
-        } else if let Some(target) = &activity.learning_target {
-            Some(InputEventContext {
-                timestamp_ms: now_ms(),
-                device_profile_id: Some(target.device_profile_id.clone()),
-                hardware_profile_id: Some(target.hardware_profile_id.clone()),
-            })
-        } else {
-            Some(self.input_event_context(device_id, now_ms()))
-        }
-        .unwrap_or_else(|| self.input_event_context(device_id, now_ms()));
+    fn runtime_event(
+        &self,
+        device_id: &DeviceId,
+        context: RuntimeEventContext,
+        activity: RuntimeActivity,
+    ) -> RuntimeEvent {
         let board = board_by_id(device_id.board_profile_id())
             .expect("validated Device ID references a compiled Board Profile");
-        let port = self
-            .devices
-            .get(device_id)
-            .and_then(|status| status.port.clone())
-            .or_else(|| self.workers.get(device_id).map(|slot| slot.port.clone()));
         RuntimeEvent {
             timestamp_ms: context.timestamp_ms,
             level: activity_level(&activity.code),
@@ -761,7 +827,7 @@ impl RuntimeCoordinator {
             raw_serial: device_id.hardware_serial().into(),
             controller_family_id: board.family_id.into(),
             board_profile_id: board.id.into(),
-            port,
+            port: context.port,
             device_profile_id: context.device_profile_id,
             hardware_profile_id: context.hardware_profile_id,
             home_update: None,
@@ -856,7 +922,6 @@ impl RuntimeCoordinator {
             slot.worker.stop();
             slot.worker.join();
         }
-        self.pending_input_contexts.remove(id);
         if let Some(paste) = &self.paste {
             let _ = paste.cancel_device(id);
             let sequences = self
@@ -940,6 +1005,37 @@ impl RuntimeCoordinator {
             }
         }
         self.refresh_persisted_status();
+    }
+
+    pub(crate) fn activate_restored_revision(&mut self, next: WorkspaceRevision) -> RetiredWorkers {
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .expect("worker generation exhausted");
+        self.workspace_revision = next;
+        let mut retired = Vec::with_capacity(self.workers.len());
+        for (_, mut slot) in std::mem::take(&mut self.workers) {
+            slot.worker.stop();
+            retired.push(slot.worker);
+        }
+        if let Some(paste) = &self.paste {
+            for device_id in self.devices.keys() {
+                let _ = paste.cancel_device(device_id);
+            }
+            for sequence in self.sequence_owners.keys().copied().collect::<Vec<_>>() {
+                let _ = paste.finish_sequence(sequence);
+            }
+        }
+        self.sequence_owners.clear();
+        self.candidates.clear();
+        self.devices = self
+            .workspace_revision
+            .settings
+            .devices
+            .keys()
+            .map(|id| (id.clone(), offline_status(&self.workspace_revision, id)))
+            .collect();
+        RetiredWorkers(retired)
     }
 
     #[cfg(test)]
@@ -1159,11 +1255,14 @@ fn runtime_error(code: String) -> RuntimeActivity {
     RuntimeActivity::new(code)
 }
 
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+fn event_generation(event: &WorkerEvent) -> u64 {
+    match event {
+        WorkerEvent::HelloValidated { generation, .. }
+        | WorkerEvent::Input { generation, .. }
+        | WorkerEvent::SequenceFinished { generation, .. }
+        | WorkerEvent::Activity { generation, .. }
+        | WorkerEvent::Disconnected { generation, .. } => *generation,
+    }
 }
 
 fn set_runtime_observed(
@@ -1487,6 +1586,7 @@ mod tests {
                 .unwrap_or_else(|| hello_for(&start));
             events
                 .send(WorkerEvent::HelloValidated {
+                    generation: start.generation,
                     device_id: start.device_id.clone(),
                     capabilities,
                 })
@@ -1645,9 +1745,11 @@ mod tests {
         coordinator.sync_profiles();
         launcher.clear_commands();
 
+        let generation = launcher.starts()[0].generation;
         assert!(
             coordinator
                 .handle_worker_event(WorkerEvent::Input {
+                    generation,
                     device_id: device_id.clone(),
                     event_id: 7,
                     input: PhysicalInput::Direct { gpio: 6 },
@@ -1656,6 +1758,19 @@ mod tests {
                 })
                 .is_none()
         );
+        let input_context = launcher
+            .commands_for(&device_id)
+            .into_iter()
+            .find_map(|command| match command {
+                WorkerCommand::Input { context, .. } => Some(context),
+                _ => None,
+            })
+            .expect("input command carries immutable event context");
+        coordinator.handle_worker_event(WorkerEvent::Disconnected {
+            generation,
+            device_id: device_id.clone(),
+            error: None,
+        });
         {
             let mut workspace = coordinator.workspace.write().unwrap();
             workspace.clear_assignment(&device_id).unwrap();
@@ -1669,7 +1784,9 @@ mod tests {
         activity.pressed = Some(true);
         let event = coordinator
             .handle_worker_event(WorkerEvent::Activity {
+                generation,
                 device_id: device_id.clone(),
+                context: input_context,
                 activity,
             })
             .unwrap();
@@ -1850,6 +1967,7 @@ mod tests {
         enumerator.set(Vec::new(), vec![boot("1-1", "MODE")]);
         scan(&mut coordinator);
         coordinator.handle_worker_event(WorkerEvent::Disconnected {
+            generation: 1,
             device_id: id,
             error: None,
         });
@@ -1877,7 +1995,9 @@ mod tests {
         let rejected = DeviceId::new("luatos-esp32s3-aio", "A").unwrap();
 
         coordinator.handle_worker_event(WorkerEvent::Activity {
+            generation: 1,
             device_id: rejected,
+            context: RuntimeEventContext::unassigned(1),
             activity: RuntimeActivity::new("topology_rejected"),
         });
 
@@ -1967,6 +2087,7 @@ mod tests {
         let board = crate::hardware::board_by_id(id.board_profile_id()).unwrap();
 
         coordinator.handle_worker_event(WorkerEvent::HelloValidated {
+            generation: 1,
             device_id: id,
             capabilities: HelloCapabilities {
                 protocol: 3,
@@ -2010,6 +2131,7 @@ mod tests {
         scan(&mut coordinator);
         let id = DeviceId::new("luatos-esp32s3-aio", "A").unwrap();
         coordinator.handle_worker_event(WorkerEvent::Input {
+            generation: 1,
             device_id: id,
             event_id: 9,
             input: crate::protocol::PhysicalInput::Direct { gpio: 6 },
@@ -2074,6 +2196,7 @@ mod tests {
         let id = DeviceId::new("luatos-esp32s3-aio", "A").unwrap();
 
         coordinator.handle_worker_event(WorkerEvent::Input {
+            generation: 1,
             device_id: id.clone(),
             event_id: 8,
             input: crate::protocol::PhysicalInput::Direct { gpio: 6 },
@@ -2081,6 +2204,7 @@ mod tests {
             occurred_at_ms: 10,
         });
         coordinator.handle_worker_event(WorkerEvent::Input {
+            generation: 1,
             device_id: id,
             event_id: 9,
             input: crate::protocol::PhysicalInput::Direct { gpio: 6 },
@@ -2102,6 +2226,7 @@ mod tests {
         scan(&mut coordinator);
         let owner = DeviceId::new("luatos-esp32s3-aio", "A").unwrap();
         coordinator.handle_worker_event(WorkerEvent::Input {
+            generation: 1,
             device_id: owner.clone(),
             event_id: 8,
             input: crate::protocol::PhysicalInput::Direct { gpio: 6 },
@@ -2110,11 +2235,13 @@ mod tests {
         });
 
         coordinator.handle_worker_event(WorkerEvent::SequenceFinished {
+            generation: 1,
             device_id: DeviceId::new("luatos-esp32s3-aio", "B").unwrap(),
             receive_sequence: 1,
         });
         assert_eq!(coordinator.sequence_owners.get(&1), Some(&owner));
         coordinator.handle_worker_event(WorkerEvent::SequenceFinished {
+            generation: 1,
             device_id: owner,
             receive_sequence: 1,
         });
@@ -2312,6 +2439,7 @@ mod tests {
             .begin_learning(&a, "red-phone-v1", "esp", 18, vec![6, 7])
             .unwrap();
         coordinator.handle_worker_event(WorkerEvent::Disconnected {
+            generation: 1,
             device_id: a.clone(),
             error: None,
         });

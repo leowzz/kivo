@@ -130,6 +130,7 @@ impl DeviceProfile {
             .find(|hardware| hardware.id == id)
     }
 
+    #[cfg(test)]
     pub fn compatible_hardware(&self, board_id: &str) -> Vec<&HardwareProfile> {
         self.hardware_profiles
             .iter()

@@ -1,7 +1,9 @@
 #[cfg(test)]
 use crate::hardware::board_by_runtime_usb;
 use crate::{
-    coordinator::{DeviceWorker, WorkerCommand, WorkerEvent, WorkerLauncher, WorkerStart},
+    coordinator::{
+        DeviceWorker, RuntimeEventContext, WorkerCommand, WorkerEvent, WorkerLauncher, WorkerStart,
+    },
     hardware::{BoardProfile, DeviceId},
     metrics::{HomeMetricsSnapshot, MetricAttribution, MetricsStore},
     paste::{PasteHandle, PasteReply, PasteRequest},
@@ -787,20 +789,6 @@ fn activity_from_error(error: crate::workspace::AppError) -> RuntimeActivity {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ConnectionState {
-    Searching,
-    Connected,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConnectionStatus {
-    pub state: ConnectionState,
-    pub port: Option<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LearningTarget {
     pub device_id: DeviceId,
@@ -809,15 +797,6 @@ pub struct LearningTarget {
     pub editing_revision: u64,
     pub firmware_revision: u32,
     pub pins: Vec<u8>,
-}
-
-impl ConnectionStatus {
-    pub fn searching() -> Self {
-        Self {
-            state: ConnectionState::Searching,
-            port: None,
-        }
-    }
 }
 
 fn persist_metrics(
@@ -955,6 +934,7 @@ fn run_isolated_worker(
     let _ = paste.cancel_device(&start.device_id);
     if !stop.load(Ordering::Relaxed) {
         let _ = events.send(WorkerEvent::Disconnected {
+            generation: start.generation,
             device_id: start.device_id,
             error: result.err(),
         });
@@ -986,6 +966,7 @@ fn run_isolated_worker_inner(
     let hello = read_valid_hello(&mut device, board, stop)?;
     events
         .send(WorkerEvent::HelloValidated {
+            generation: start.generation,
             device_id: start.device_id.clone(),
             capabilities: hello.clone(),
         })
@@ -995,6 +976,8 @@ fn run_isolated_worker_inner(
     let mut active_paste_ack = None;
     let mut action_deadline = None;
     let mut line = Vec::new();
+    let mut current_context =
+        RuntimeEventContext::unassigned(now_ms()).with_port(start.port.clone());
     let initial = session.on_message_deferred(DeviceMessage::Hello(hello), 0, now_ms());
     write_isolated_output(
         start,
@@ -1006,33 +989,60 @@ fn run_isolated_worker_inner(
         initial,
         &mut pending_paste,
         &mut action_deadline,
+        &current_context,
+        stop,
     )?;
 
     while !stop.load(Ordering::Relaxed) {
         for command in commands.try_iter() {
-            let output = match command {
-                WorkerCommand::UpdateSnapshot(snapshot) => session.update_snapshot(snapshot),
-                WorkerCommand::Reconfigure { snapshot, revision } => {
-                    session.reconfigure(snapshot, revision)
+            let (output, context) = match command {
+                WorkerCommand::UpdateSnapshot(snapshot) => {
+                    current_context =
+                        RuntimeEventContext::from_snapshot(now_ms(), snapshot.as_deref())
+                            .with_port(start.port.clone());
+                    (session.update_snapshot(snapshot), current_context.clone())
                 }
-                WorkerCommand::BeginLearning(target) => session.begin_learning(target),
+                WorkerCommand::Reconfigure { snapshot, revision } => {
+                    current_context =
+                        RuntimeEventContext::from_snapshot(now_ms(), snapshot.as_deref())
+                            .with_port(start.port.clone());
+                    (
+                        session.reconfigure(snapshot, revision),
+                        current_context.clone(),
+                    )
+                }
+                WorkerCommand::BeginLearning(target) => {
+                    current_context = RuntimeEventContext::from_learning(now_ms(), &target)
+                        .with_port(start.port.clone());
+                    (session.begin_learning(target), current_context.clone())
+                }
                 WorkerCommand::EndLearning { snapshot, revision } => {
-                    session.end_learning(snapshot, revision)
+                    current_context =
+                        RuntimeEventContext::from_snapshot(now_ms(), snapshot.as_deref())
+                            .with_port(start.port.clone());
+                    (
+                        session.end_learning(snapshot, revision),
+                        current_context.clone(),
+                    )
                 }
                 WorkerCommand::Input {
+                    context,
                     receive_sequence,
                     event_id,
                     input,
                     state,
                     occurred_at_ms,
-                } => session.on_message_deferred(
-                    DeviceMessage::State {
-                        event_id,
-                        input,
-                        state,
-                    },
-                    receive_sequence,
-                    occurred_at_ms,
+                } => (
+                    session.on_message_deferred(
+                        DeviceMessage::State {
+                            event_id,
+                            input,
+                            state,
+                        },
+                        receive_sequence,
+                        occurred_at_ms,
+                    ),
+                    context,
                 ),
                 WorkerCommand::Shutdown => return Ok(()),
             };
@@ -1046,6 +1056,8 @@ fn run_isolated_worker_inner(
                 output,
                 &mut pending_paste,
                 &mut action_deadline,
+                &context,
+                stop,
             )?;
         }
 
@@ -1065,6 +1077,8 @@ fn run_isolated_worker_inner(
                         output,
                         &mut pending_paste,
                         &mut action_deadline,
+                        &current_context.with_timestamp(now_ms()),
+                        stop,
                     )?;
                 }
                 Ok(PasteReply::TimedOut) => {
@@ -1081,6 +1095,8 @@ fn run_isolated_worker_inner(
                         output,
                         &mut pending_paste,
                         &mut action_deadline,
+                        &current_context.with_timestamp(now_ms()),
+                        stop,
                     )?;
                 }
                 Ok(PasteReply::Cancelled) => {
@@ -1097,6 +1113,8 @@ fn run_isolated_worker_inner(
                         output,
                         &mut pending_paste,
                         &mut action_deadline,
+                        &current_context.with_timestamp(now_ms()),
+                        stop,
                     )?;
                 }
                 Ok(PasteReply::ClipboardError(error)) => {
@@ -1113,6 +1131,8 @@ fn run_isolated_worker_inner(
                         output,
                         &mut pending_paste,
                         &mut action_deadline,
+                        &current_context.with_timestamp(now_ms()),
+                        stop,
                     )?;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
@@ -1137,6 +1157,8 @@ fn run_isolated_worker_inner(
                 output,
                 &mut pending_paste,
                 &mut action_deadline,
+                &current_context.with_timestamp(now_ms()),
+                stop,
             )?;
         }
         if !session.is_awaiting_action() && pending_paste.is_none() {
@@ -1165,6 +1187,7 @@ fn run_isolated_worker_inner(
                     } => {
                         events
                             .send(WorkerEvent::Input {
+                                generation: start.generation,
                                 device_id: start.device_id.clone(),
                                 event_id,
                                 input,
@@ -1196,6 +1219,8 @@ fn run_isolated_worker_inner(
                             output,
                             &mut pending_paste,
                             &mut action_deadline,
+                            &current_context.with_timestamp(received_at_ms),
+                            stop,
                         )?;
                     }
                     DeviceMessage::Hello(ref capability) => {
@@ -1211,6 +1236,8 @@ fn run_isolated_worker_inner(
                             output,
                             &mut pending_paste,
                             &mut action_deadline,
+                            &current_context.with_timestamp(received_at_ms),
+                            stop,
                         )?;
                     }
                     message => {
@@ -1225,6 +1252,8 @@ fn run_isolated_worker_inner(
                             output,
                             &mut pending_paste,
                             &mut action_deadline,
+                            &current_context.with_timestamp(received_at_ms),
+                            stop,
                         )?;
                     }
                 }
@@ -1278,18 +1307,25 @@ fn write_isolated_output<W: Write + ?Sized>(
     mut output: SessionOutput,
     pending_paste: &mut Option<PendingPasteReply>,
     action_deadline: &mut Option<Instant>,
+    context: &RuntimeEventContext,
+    stop: &AtomicBool,
 ) -> Result<(), String> {
     for activity in output.activities.drain(..) {
         if let Some(metrics) = metrics {
             let _operation = operation_barrier
                 .read()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if stop.load(Ordering::Relaxed) {
+                return Ok(());
+            }
             persist_metrics(metrics, &activity, now_ms())
                 .map_err(|error| format!("metrics_write_failed: {error}"))?;
         }
         events
             .send(WorkerEvent::Activity {
+                generation: start.generation,
                 device_id: start.device_id.clone(),
+                context: context.clone(),
                 activity,
             })
             .map_err(|_| "coordinator_stopped".to_owned())?;
@@ -1298,6 +1334,7 @@ fn write_isolated_output<W: Write + ?Sized>(
     for receive_sequence in output.completed_receive_sequences.drain(..) {
         events
             .send(WorkerEvent::SequenceFinished {
+                generation: start.generation,
                 device_id: start.device_id.clone(),
                 receive_sequence,
             })
