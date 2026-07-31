@@ -117,6 +117,7 @@ export function HardwareMapping({
   const board = boardProfiles.find(({ id }) => id === hardware?.board_profile_id);
   const compatibleDevices = devices.filter((device) =>
     device.connection === "online" &&
+    device.mode === "runtime" &&
     device.identity === "valid" &&
     device.boardProfileId === hardware?.board_profile_id
   );

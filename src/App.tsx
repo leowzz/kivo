@@ -179,6 +179,7 @@ export default function App() {
   const [deviceMetrics, setDeviceMetrics] = useState<{ deviceId: string; snapshot: HomeMetricsSnapshot } | null>(null);
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
   const [hardwareEditorTarget, setHardwareEditorTarget] = useState<HardwareEditorTarget | null>(null);
+  const [learningDraftProfileId, setLearningDraftProfileId] = useState<string | null>(null);
   const [pressedButtonIds, setPressedButtonIds] = useState<Set<string>>(() => new Set());
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -196,6 +197,7 @@ export default function App() {
   const selectedManagedDeviceIdRef = useRef<string | null>(null);
   const managedMetricsGenerationRef = useRef(0);
   const hardwareEditorTargetRef = useRef<HardwareEditorTarget | null>(null);
+  const learningEditingRevisionRef = useRef(0);
 
   const { deviceProfiles, editorProfile, boardProfiles, devices, candidates } = registry;
   const editorProfileConfig = useMemo(
@@ -212,6 +214,9 @@ export default function App() {
   const selectedLearningDevice = hardwareEditorTarget?.deviceProfileId === editorProfile
     ? devices.find((device) => device.deviceId === hardwareEditorTarget.deviceId)
     : undefined;
+  const editorLearningActive = devices.some((device) =>
+    device.learning?.deviceProfileId === editorProfileConfig?.profile.id
+  );
   const dirty = Boolean(editorProfileConfig &&
     savedDeviceProfiles[editorProfileConfig.profile.id] !== JSON.stringify(editorProfileConfig));
   const summary = deviceSummary(devices);
@@ -410,7 +415,8 @@ export default function App() {
 
   const autosave = useAutosave({
     value: editorProfileConfig,
-    valid: dirty && isValidDraft(editorProfileConfig, boardProfiles),
+    valid: dirty && learningDraftProfileId !== editorProfileConfig?.profile.id &&
+      isValidDraft(editorProfileConfig, boardProfiles),
     save: saveEditorProfile,
     queue,
   });
@@ -462,6 +468,7 @@ export default function App() {
                 selectedRef.current,
                 payload.input,
               );
+              setLearningDraftProfileId(learned.profile.id);
               setRegistry((current) => ({
                 ...current,
                 deviceProfiles: current.deviceProfiles.map((profile) =>
@@ -471,7 +478,8 @@ export default function App() {
             }
             const emittingDevice = devicesRef.current.find((device) => device.deviceId === payload.deviceId);
             const assignment = emittingDevice?.runtimeAssignment;
-            if (currentProfile && payload.deviceProfileId === currentProfile.profile.id
+            if (payload.code === "input_state" && currentProfile
+              && payload.deviceProfileId === currentProfile.profile.id
               && payload.hardwareProfileId
               && assignment?.device_profile_id === payload.deviceProfileId
               && assignment.hardware_profile_id === payload.hardwareProfileId) {
@@ -537,6 +545,7 @@ export default function App() {
 
   const updateEditorProfile = (update: (profile: DeviceProfile) => DeviceProfile) => {
     if (!editorProfileConfig) return;
+    if (!editorLearningActive) setLearningDraftProfileId(null);
     setRegistry((current) => ({
       ...current,
       deviceProfiles: current.deviceProfiles.map((profile) =>
@@ -757,17 +766,28 @@ export default function App() {
                 const selectedDevice = devices.find((device) =>
                   device.deviceId === deviceId &&
                   device.connection === "online" &&
+                  device.mode === "runtime" &&
                   device.identity === "valid" &&
                   device.boardProfileId === hardware?.board_profile_id
                 );
                 if (!hardware || !selectedDevice) return;
-                void run(t(language, "error.learning"), async () => replaceRegistrySnapshot(await invoke("begin_learning", {
-                  deviceId: selectedDevice.deviceId,
-                  deviceProfileId: editorProfileConfig.profile.id,
-                  hardwareProfileId: hardware.id,
-                  editingRevision: 0,
-                  pins,
-                })));
+                const learningProfileId = editorProfileConfig.profile.id;
+                const editingRevision = ++learningEditingRevisionRef.current;
+                setLearningDraftProfileId(learningProfileId);
+                void run(t(language, "error.learning"), async () => {
+                  try {
+                    replaceRegistrySnapshot(await invoke("begin_learning", {
+                      deviceId: selectedDevice.deviceId,
+                      deviceProfileId: learningProfileId,
+                      hardwareProfileId: hardware.id,
+                      editingRevision,
+                      pins,
+                    }));
+                  } catch (operationError) {
+                    setLearningDraftProfileId((current) => current === learningProfileId ? null : current);
+                    throw operationError;
+                  }
+                });
               }}
               onEndLearning={(deviceId) => {
                 void run(t(language, "error.learning"), async () => replaceRegistrySnapshot(await invoke("end_learning", {

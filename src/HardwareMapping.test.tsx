@@ -299,6 +299,32 @@ test("uses the exact offline safe set and explicitly narrows it with one compati
     .toEqual(["1", "6", "13"]);
 });
 
+test("offers learning only for online identity-valid runtime Devices on the exact Board Profile", async () => {
+  const user = userEvent.setup();
+  renderMapping({
+    devices: [
+      device({ deviceId: "eligible", name: "Eligible runtime" }),
+      device({ deviceId: "bootloader", name: "Bootloader", mode: "bootloader" }),
+      device({ deviceId: "invalid", name: "Invalid identity", identity: "invalid_identity" }),
+      device({ deviceId: "offline", name: "Offline", connection: "offline", mode: null }),
+      device({
+        deviceId: "wrong-board",
+        name: "Wrong board",
+        boardProfileId: "vccgnd-yd-rp2040",
+        controllerFamilyId: "rp2040",
+      }),
+    ],
+  });
+
+  await user.click(screen.getByText("适配新设备"));
+
+  const picker = screen.getByLabelText("在线设备");
+  expect(within(picker).getAllByRole("option").map((option) => option.textContent))
+    .toEqual(["离线编辑", "Eligible runtime"]);
+  expect(screen.getByRole("button", { name: "开始学习" })).toBeDisabled();
+  expect(screen.getByLabelText("消抖")).toBeEnabled();
+});
+
 test("never exposes GPIO23 through GPIO29 for vccgnd-yd-rp2040", async () => {
   const user = userEvent.setup();
   const rpProfile: HardwareProfile = {
