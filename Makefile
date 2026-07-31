@@ -18,7 +18,9 @@ build-rp2040:
 download-mode: require-serial
 	uv run python scripts/enter_download_mode.py --serial "$(SERIAL)"
 
-upload: upload-esp32s3
+upload:
+	@echo "Specify upload-esp32s3 or upload-rp2040 with SERIAL=<hardware serial>" >&2
+	@exit 2
 
 upload-esp32s3: require-serial build-esp32s3
 	@download_port="$$(uv run python scripts/enter_download_mode.py --serial "$(SERIAL)")" || exit $$?; \
@@ -31,9 +33,12 @@ upload-rp2040: require-serial build-rp2040
 
 test:
 	bash test/test_release.sh
+	uv run pytest test/test_upload_targeting.py
 	uv run pio test -e native
 	cargo test --manifest-path src-tauri/Cargo.toml
+	cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 	npm test
+	npm run build
 
 helper: helper-kill
 	npm run tauri dev

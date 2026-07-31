@@ -5,6 +5,56 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+MAKEFILE="$ROOT/Makefile"
+
+target_body() {
+  awk -v target="$1" '
+    $0 ~ "^" target ":" { found = 1; next }
+    found && /^[[:alnum:]_.-]+:/ { exit }
+    found { print }
+  ' "$MAKEFILE"
+}
+
+for target in build-esp32s3 build-rp2040 upload-esp32s3 upload-rp2040 require-serial; do
+  grep -Eq "^${target}:" "$MAKEFILE"
+done
+
+require_serial_body="$(target_body require-serial)"
+grep -Fq 'test -n "$(SERIAL)"' <<<"$require_serial_body"
+grep -Fq 'expected = ["HELLO", "3", family, board, build]' "$ROOT/scripts/verify_runtime_firmware.py"
+
+for target in upload-esp32s3 upload-rp2040; do
+  body="$(target_body "$target")"
+  grep -Fq 'scripts/verify_runtime_firmware.py' <<<"$body"
+  grep -Fq -- '--build "$(BUILD_ID)"' <<<"$body"
+done
+
+esp32_upload_body="$(target_body upload-esp32s3)"
+rp2040_upload_body="$(target_body upload-rp2040)"
+test "$(grep -n -- '-t upload' <<<"$esp32_upload_body" | cut -d: -f1)" -lt "$(grep -n 'verify_runtime_firmware.py' <<<"$esp32_upload_body" | cut -d: -f1)"
+test "$(grep -n -- 'picotool load' <<<"$rp2040_upload_body" | cut -d: -f1)" -lt "$(grep -n 'verify_runtime_firmware.py' <<<"$rp2040_upload_body" | cut -d: -f1)"
+
+! grep -Eq '^upload:[[:space:]]+(upload-esp32s3|upload-rp2040)' "$MAKEFILE"
+
+test_body="$(target_body test)"
+expected_test_commands=(
+  'bash test/test_release.sh'
+  'uv run pytest test/test_upload_targeting.py'
+  'uv run pio test -e native'
+  'cargo test --manifest-path src-tauri/Cargo.toml'
+  'cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings'
+  'npm test'
+  'npm run build'
+)
+previous_line=0
+for command in "${expected_test_commands[@]}"; do
+  line="$(grep -n -F "$command" <<<"$test_body" | cut -d: -f1)"
+  test -n "$line"
+  test "$line" -gt "$previous_line"
+  previous_line="$line"
+done
+! grep -Eq -- '(^|[[:space:]])(upload|picotool|enter_download_mode)([[:space:]]|$)' <<<"$test_body"
+
 cp "$ROOT/scripts/release.sh" "$TMP_DIR/release.sh"
 cd "$TMP_DIR"
 git init -q
