@@ -2,7 +2,8 @@
 use crate::hardware::board_by_runtime_usb;
 use crate::{
     coordinator::{
-        DeviceWorker, RuntimeEventContext, WorkerCommand, WorkerEvent, WorkerLauncher, WorkerStart,
+        CapturedInput, DeviceWorker, RuntimeEventContext, WorkerCommand, WorkerEvent,
+        WorkerLauncher, WorkerStart,
     },
     hardware::{BoardProfile, DeviceId},
     metrics::{HomeMetricsSnapshot, MetricAttribution, MetricsStore},
@@ -258,6 +259,15 @@ impl DeviceSession {
             && self.active.as_ref().is_some_and(ActionSequence::is_waiting)
     }
 
+    pub(crate) fn runtime_profile_for_input(&self) -> Option<Arc<RuntimeProfileSnapshot>> {
+        (self.ready
+            && self.pending_reconfiguration.is_none()
+            && self.pending_learning.is_none()
+            && self.learning.is_none())
+        .then(|| self.profile.clone())
+        .flatten()
+    }
+
     pub fn fail_active_deferred(&mut self, code: &str, detail: Option<String>) -> SessionOutput {
         let mut output = SessionOutput::default();
         if let Some(mut sequence) = self.active.take() {
@@ -316,6 +326,7 @@ impl DeviceSession {
                     RuntimeActivity::new("topology_active")
                         .with_param("revision", revision.to_string()),
                 );
+                self.start_next(&mut output);
             }
             DeviceMessage::ConfigError { revision, code } if self.configuring == Some(revision) => {
                 self.configuring = None;
@@ -332,49 +343,17 @@ impl DeviceSession {
                 state,
             } => {
                 let snapshot = self.profile.clone();
-                let metric_press = (state == InputState::Down)
-                    .then_some(snapshot.as_ref())
-                    .flatten()
-                    .and_then(|runtime| {
-                        runtime
-                            .profile
-                            .button_for(&runtime.hardware_profile_id, &input)
-                            .map(|button_id| MetricPress {
-                                attribution: runtime.metric_attribution.clone(),
-                                button_id: button_id.into(),
-                                occurred_at_ms,
-                            })
-                    });
-                output.activities.push(RuntimeActivity {
-                    input: Some(input),
-                    pressed: Some(state == InputState::Down),
-                    metric_press,
-                    ..RuntimeActivity::new("input_state")
-                });
-                if state == InputState::Down {
-                    if self.ready
-                        && self.pending_reconfiguration.is_none()
-                        && self.pending_learning.is_none()
-                        && self.learning.is_none()
-                        && let Some(snapshot) = snapshot
-                    {
-                        self.queue.push_back(QueuedInput {
-                            receive_sequence,
-                            event_id,
-                            input,
-                            snapshot,
-                        });
-                        self.start_next(&mut output);
-                    } else {
-                        output.lines.push(format!("SKIP {event_id}\n"));
-                        output.completed_receive_sequences.push(receive_sequence);
-                        output
-                            .activities
-                            .push(RuntimeActivity::new("input_before_configuration"));
-                    }
-                } else {
-                    output.completed_receive_sequences.push(receive_sequence);
-                }
+                let action_snapshot = self.runtime_profile_for_input();
+                self.handle_input(
+                    event_id,
+                    input,
+                    state,
+                    receive_sequence,
+                    occurred_at_ms,
+                    snapshot,
+                    action_snapshot,
+                    &mut output,
+                );
             }
             DeviceMessage::Done { event_id, step } => self.handle_done(event_id, step, &mut output),
             DeviceMessage::LearnOk { revision }
@@ -430,6 +409,95 @@ impl DeviceSession {
             | DeviceMessage::LearnOk { .. } => {}
         }
         output
+    }
+
+    pub(crate) fn capture_input(
+        &self,
+        current_context: &RuntimeEventContext,
+        received_at_ms: u64,
+        event_id: u64,
+        input: PhysicalInput,
+        state: InputState,
+    ) -> CapturedInput {
+        CapturedInput {
+            context: current_context.with_timestamp(received_at_ms),
+            runtime_profile: self.runtime_profile_for_input(),
+            event_id,
+            input,
+            state,
+        }
+    }
+
+    pub(crate) fn on_captured_input(
+        &mut self,
+        captured: &CapturedInput,
+        receive_sequence: u64,
+    ) -> SessionOutput {
+        let mut output = SessionOutput::default();
+        let snapshot = captured.runtime_profile.clone();
+        self.handle_input(
+            captured.event_id,
+            captured.input,
+            captured.state,
+            receive_sequence,
+            captured.context.timestamp_ms,
+            snapshot.clone(),
+            snapshot,
+            &mut output,
+        );
+        output
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn handle_input(
+        &mut self,
+        event_id: u64,
+        input: PhysicalInput,
+        state: InputState,
+        receive_sequence: u64,
+        occurred_at_ms: u64,
+        metric_snapshot: Option<Arc<RuntimeProfileSnapshot>>,
+        action_snapshot: Option<Arc<RuntimeProfileSnapshot>>,
+        output: &mut SessionOutput,
+    ) {
+        let metric_press = (state == InputState::Down)
+            .then_some(metric_snapshot.as_ref())
+            .flatten()
+            .and_then(|runtime| {
+                runtime
+                    .profile
+                    .button_for(&runtime.hardware_profile_id, &input)
+                    .map(|button_id| MetricPress {
+                        attribution: runtime.metric_attribution.clone(),
+                        button_id: button_id.into(),
+                        occurred_at_ms,
+                    })
+            });
+        output.activities.push(RuntimeActivity {
+            input: Some(input),
+            pressed: Some(state == InputState::Down),
+            metric_press,
+            ..RuntimeActivity::new("input_state")
+        });
+        if state == InputState::Down {
+            if let Some(snapshot) = action_snapshot {
+                self.queue.push_back(QueuedInput {
+                    receive_sequence,
+                    event_id,
+                    input,
+                    snapshot,
+                });
+                self.start_next(output);
+            } else {
+                output.lines.push(format!("SKIP {event_id}\n"));
+                output.completed_receive_sequences.push(receive_sequence);
+                output
+                    .activities
+                    .push(RuntimeActivity::new("input_before_configuration"));
+            }
+        } else {
+            output.completed_receive_sequences.push(receive_sequence);
+        }
     }
 
     #[cfg(test)]
@@ -1026,23 +1094,11 @@ fn run_isolated_worker_inner(
                     )
                 }
                 WorkerCommand::Input {
-                    context,
                     receive_sequence,
-                    event_id,
-                    input,
-                    state,
-                    occurred_at_ms,
+                    captured,
                 } => (
-                    session.on_message_deferred(
-                        DeviceMessage::State {
-                            event_id,
-                            input,
-                            state,
-                        },
-                        receive_sequence,
-                        occurred_at_ms,
-                    ),
-                    context,
+                    session.on_captured_input(&captured, receive_sequence),
+                    captured.context,
                 ),
                 WorkerCommand::Shutdown => return Ok(()),
             };
@@ -1185,14 +1241,18 @@ fn run_isolated_worker_inner(
                         input,
                         state,
                     } => {
+                        let captured = session.capture_input(
+                            &current_context,
+                            received_at_ms,
+                            event_id,
+                            input,
+                            state,
+                        );
                         events
                             .send(WorkerEvent::Input {
                                 generation: start.generation,
                                 device_id: start.device_id.clone(),
-                                event_id,
-                                input,
-                                state,
-                                occurred_at_ms: received_at_ms,
+                                captured,
                             })
                             .map_err(|_| "coordinator_stopped".to_owned())?;
                     }

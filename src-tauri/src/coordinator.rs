@@ -235,6 +235,15 @@ impl RuntimeEventContext {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CapturedInput {
+    pub(crate) context: RuntimeEventContext,
+    pub(crate) runtime_profile: Option<Arc<RuntimeProfileSnapshot>>,
+    pub(crate) event_id: u64,
+    pub(crate) input: PhysicalInput,
+    pub(crate) state: InputState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkerStart {
     pub generation: u64,
     pub device_id: DeviceId,
@@ -255,12 +264,8 @@ pub enum WorkerCommand {
         revision: u32,
     },
     Input {
-        context: RuntimeEventContext,
         receive_sequence: u64,
-        event_id: u64,
-        input: PhysicalInput,
-        state: InputState,
-        occurred_at_ms: u64,
+        captured: CapturedInput,
     },
     Shutdown,
 }
@@ -276,10 +281,7 @@ pub enum WorkerEvent {
     Input {
         generation: u64,
         device_id: DeviceId,
-        event_id: u64,
-        input: PhysicalInput,
-        state: InputState,
-        occurred_at_ms: u64,
+        captured: CapturedInput,
     },
     SequenceFinished {
         generation: u64,
@@ -680,10 +682,7 @@ impl RuntimeCoordinator {
             WorkerEvent::Input {
                 generation: _,
                 device_id,
-                event_id,
-                input,
-                state,
-                occurred_at_ms,
+                captured,
             } => {
                 self.receive_sequence = self
                     .receive_sequence
@@ -692,7 +691,6 @@ impl RuntimeCoordinator {
                 let receive_sequence = self.receive_sequence;
                 self.sequence_owners
                     .insert(receive_sequence, device_id.clone());
-                let context = self.runtime_event_context(&device_id, occurred_at_ms);
                 if let Some(paste) = &self.paste {
                     let _ = paste.register_sequence(receive_sequence);
                 }
@@ -700,12 +698,8 @@ impl RuntimeCoordinator {
                     if slot
                         .worker
                         .send(WorkerCommand::Input {
-                            context,
                             receive_sequence,
-                            event_id,
-                            input,
-                            state,
-                            occurred_at_ms,
+                            captured,
                         })
                         .is_err()
                     {
@@ -786,29 +780,6 @@ impl RuntimeCoordinator {
                 }
                 None
             }
-        }
-    }
-
-    fn runtime_event_context(
-        &self,
-        device_id: &DeviceId,
-        timestamp_ms: u64,
-    ) -> RuntimeEventContext {
-        let assignment = self
-            .workspace_revision
-            .settings
-            .devices
-            .get(device_id)
-            .and_then(|device| device.runtime_assignment.as_ref());
-        RuntimeEventContext {
-            timestamp_ms,
-            port: self
-                .devices
-                .get(device_id)
-                .and_then(|status| status.port.clone())
-                .or_else(|| self.workers.get(device_id).map(|slot| slot.port.clone())),
-            device_profile_id: assignment.map(|value| value.device_profile_id.clone()),
-            hardware_profile_id: assignment.map(|value| value.hardware_profile_id.clone()),
         }
     }
 
@@ -1448,10 +1419,14 @@ fn runtime_profile(workspace: &WorkspaceRevision, id: &DeviceId) -> Option<Runti
 mod tests {
     use super::*;
     use crate::{
+        device::DeviceSession,
         hardware::DeviceId,
         paste::{ClipboardWriter, PasteCoordinator, PasteReply, PasteRequest},
-        profile::{DeviceProfile, HardwareProfile, PROFILE_SCHEMA_VERSION, ProfileChange},
-        protocol::HelloCapabilities,
+        profile::{
+            ButtonAction, DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION,
+            ProfileChange,
+        },
+        protocol::{DeviceMessage, HelloCapabilities},
         workspace::Workspace,
     };
     use std::{
@@ -1686,6 +1661,20 @@ mod tests {
         coordinator.drain_worker_events();
     }
 
+    fn input_event(device_id: DeviceId, event_id: u64, timestamp_ms: u64) -> WorkerEvent {
+        WorkerEvent::Input {
+            generation: 1,
+            device_id,
+            captured: CapturedInput {
+                context: RuntimeEventContext::unassigned(timestamp_ms),
+                runtime_profile: None,
+                event_id,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+        }
+    }
+
     #[derive(Default)]
     struct FakeClipboard;
 
@@ -1722,7 +1711,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_event_keeps_input_receive_assignment_and_device_dimensions() {
+    fn queued_input_keeps_serial_receipt_attribution_and_action_mapping() {
         let (_directory, enumerator, launcher, mut coordinator) = harness();
         enumerator.set(
             vec![serial("/dev/esp-event", 0x303a, 0x4002, Some("EVENT-A"))],
@@ -1730,8 +1719,30 @@ mod tests {
         );
         scan(&mut coordinator);
         let device_id = DeviceId::new("luatos-esp32s3-aio", "EVENT-A").unwrap();
+        let mut old_profile = profile();
+        old_profile.hardware_profiles[0].inputs = vec![InputSource::Direct {
+            id: "buttons".into(),
+            keys: BTreeMap::from([("UP".into(), 6)]),
+        }];
+        old_profile.actions.insert(
+            "UP".into(),
+            vec![ButtonAction::Paste {
+                text: "old action".into(),
+            }],
+        );
+        let mut new_profile = old_profile.clone();
+        new_profile.profile.id = "new-profile".into();
+        new_profile.profile.name = "New profile".into();
+        new_profile.actions.insert(
+            "UP".into(),
+            vec![ButtonAction::Paste {
+                text: "new action".into(),
+            }],
+        );
         {
             let mut workspace = coordinator.workspace.write().unwrap();
+            workspace.save_profile(old_profile).unwrap();
+            workspace.save_profile(new_profile).unwrap();
             workspace
                 .set_assignment(
                     &device_id,
@@ -1746,47 +1757,104 @@ mod tests {
         launcher.clear_commands();
 
         let generation = launcher.starts()[0].generation;
-        assert!(
-            coordinator
-                .handle_worker_event(WorkerEvent::Input {
-                    generation,
-                    device_id: device_id.clone(),
-                    event_id: 7,
-                    input: PhysicalInput::Direct { gpio: 6 },
-                    state: InputState::Down,
-                    occurred_at_ms: 1_720_086_400_123,
-                })
-                .is_none()
+        let old_snapshot =
+            Arc::new(runtime_profile(&coordinator.workspace_revision, &device_id).unwrap());
+        let board = crate::hardware::board_by_id(device_id.board_profile_id()).unwrap();
+        let mut session = DeviceSession::new((*old_snapshot).clone());
+        session.on_message_deferred(
+            DeviceMessage::Hello(HelloCapabilities {
+                protocol: 3,
+                controller_family_id: board.family_id.into(),
+                board_profile_id: board.id.into(),
+                firmware_build_id: "test".into(),
+                pins: board.safe_pins.to_vec(),
+            }),
+            0,
+            1,
         );
-        let input_context = launcher
-            .commands_for(&device_id)
-            .into_iter()
-            .find_map(|command| match command {
-                WorkerCommand::Input { context, .. } => Some(context),
-                _ => None,
+        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 2);
+        let current_context = RuntimeEventContext::from_snapshot(0, Some(old_snapshot.as_ref()))
+            .with_port("/dev/esp-event");
+        let captured = session.capture_input(
+            &current_context,
+            1_720_086_400_123,
+            7,
+            PhysicalInput::Direct { gpio: 6 },
+            InputState::Down,
+        );
+        coordinator
+            .event_sender
+            .send(WorkerEvent::Input {
+                generation,
+                device_id: device_id.clone(),
+                captured: captured.clone(),
             })
-            .expect("input command carries immutable event context");
-        coordinator.handle_worker_event(WorkerEvent::Disconnected {
-            generation,
-            device_id: device_id.clone(),
-            error: None,
-        });
+            .unwrap();
+
         {
             let mut workspace = coordinator.workspace.write().unwrap();
-            workspace.clear_assignment(&device_id).unwrap();
+            workspace
+                .set_assignment(
+                    &device_id,
+                    RuntimeAssignment {
+                        device_profile_id: "new-profile".into(),
+                        hardware_profile_id: "esp".into(),
+                    },
+                )
+                .unwrap();
             let revision = WorkspaceRevision::capture(&workspace);
             drop(workspace);
             coordinator.apply_workspace_revision(revision);
         }
+        coordinator.devices.get_mut(&device_id).unwrap().port = Some("/dev/changed".into());
+        coordinator.workers.get_mut(&device_id).unwrap().port = "/dev/changed".into();
+        assert!(coordinator.drain_worker_events().is_empty());
 
-        let mut activity = RuntimeActivity::new("input_state");
-        activity.input = Some(PhysicalInput::Direct { gpio: 6 });
-        activity.pressed = Some(true);
+        let commands = launcher.commands_for(&device_id);
+        let [
+            WorkerCommand::Reconfigure {
+                snapshot: Some(new_snapshot),
+                revision: new_revision,
+            },
+            WorkerCommand::Input {
+                receive_sequence,
+                captured: forwarded,
+            },
+        ] = commands.as_slice()
+        else {
+            panic!("expected reconfiguration to overtake the queued input: {commands:?}");
+        };
+        assert_eq!(forwarded, &captured);
+        assert_eq!(new_snapshot.profile.profile.id, "new-profile");
+        assert_eq!(
+            forwarded.runtime_profile.as_ref().unwrap().profile.actions["UP"][0],
+            ButtonAction::Paste {
+                text: "old action".into()
+            }
+        );
+
+        session.reconfigure(Some(new_snapshot.clone()), *new_revision);
+        let input_output = session.on_captured_input(forwarded, *receive_sequence);
+        assert!(input_output.paste_requests.is_empty());
+        let configured = session.on_message_deferred(
+            DeviceMessage::ConfigOk {
+                revision: *new_revision,
+            },
+            0,
+            3,
+        );
+        assert_eq!(configured.paste_requests[0].text, "old action");
+
+        let activity = input_output
+            .activities
+            .into_iter()
+            .find(|activity| activity.code == "input_state")
+            .unwrap();
         let event = coordinator
             .handle_worker_event(WorkerEvent::Activity {
                 generation,
                 device_id: device_id.clone(),
-                context: input_context,
+                context: forwarded.context.clone(),
                 activity,
             })
             .unwrap();
@@ -2130,14 +2198,7 @@ mod tests {
         );
         scan(&mut coordinator);
         let id = DeviceId::new("luatos-esp32s3-aio", "A").unwrap();
-        coordinator.handle_worker_event(WorkerEvent::Input {
-            generation: 1,
-            device_id: id,
-            event_id: 9,
-            input: crate::protocol::PhysicalInput::Direct { gpio: 6 },
-            state: crate::protocol::InputState::Down,
-            occurred_at_ms: 10,
-        });
+        coordinator.handle_worker_event(input_event(id, 9, 10));
 
         enumerator.set(Vec::new(), Vec::new());
         scan(&mut coordinator);
@@ -2195,22 +2256,8 @@ mod tests {
         scan(&mut coordinator);
         let id = DeviceId::new("luatos-esp32s3-aio", "A").unwrap();
 
-        coordinator.handle_worker_event(WorkerEvent::Input {
-            generation: 1,
-            device_id: id.clone(),
-            event_id: 8,
-            input: crate::protocol::PhysicalInput::Direct { gpio: 6 },
-            state: crate::protocol::InputState::Down,
-            occurred_at_ms: 10,
-        });
-        coordinator.handle_worker_event(WorkerEvent::Input {
-            generation: 1,
-            device_id: id,
-            event_id: 9,
-            input: crate::protocol::PhysicalInput::Direct { gpio: 6 },
-            state: crate::protocol::InputState::Down,
-            occurred_at_ms: 11,
-        });
+        coordinator.handle_worker_event(input_event(id.clone(), 8, 10));
+        coordinator.handle_worker_event(input_event(id, 9, 11));
 
         assert_eq!(coordinator.last_receive_sequence(), 2);
         assert_eq!(launcher.sequences(), BTreeSet::from([1, 2]));
@@ -2225,14 +2272,7 @@ mod tests {
         );
         scan(&mut coordinator);
         let owner = DeviceId::new("luatos-esp32s3-aio", "A").unwrap();
-        coordinator.handle_worker_event(WorkerEvent::Input {
-            generation: 1,
-            device_id: owner.clone(),
-            event_id: 8,
-            input: crate::protocol::PhysicalInput::Direct { gpio: 6 },
-            state: crate::protocol::InputState::Down,
-            occurred_at_ms: 10,
-        });
+        coordinator.handle_worker_event(input_event(owner.clone(), 8, 10));
 
         coordinator.handle_worker_event(WorkerEvent::SequenceFinished {
             generation: 1,
