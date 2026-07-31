@@ -951,7 +951,7 @@ impl SystemWorkerLauncher {
             metrics,
             operation_barrier,
             Arc::new(SystemSerialTransportFactory),
-            Arc::new(SystemClock),
+            Arc::new(SystemClock::default()),
         )
     }
 
@@ -1607,7 +1607,7 @@ pub(crate) fn emit_worker_activities_for_test(
         &RwLock::new(()),
         &mut output.activities,
         context,
-        &SystemClock,
+        &SystemClock::default(),
         &AtomicBool::new(false),
     )
     .unwrap();
@@ -1615,7 +1615,7 @@ pub(crate) fn emit_worker_activities_for_test(
 
 #[cfg(test)]
 fn now_ms() -> u64 {
-    SystemClock.unix_time_ms()
+    SystemClock::default().unix_time_ms()
 }
 
 #[cfg(test)]
@@ -2017,7 +2017,7 @@ mod tests {
             &mut pending_paste,
             &mut action_deadline,
             &new_context,
-            &SystemClock,
+            &SystemClock::default(),
             &stop,
         )
         .unwrap();
@@ -2045,7 +2045,7 @@ mod tests {
             &mut pending_paste,
             &mut action_deadline,
             &new_context,
-            &SystemClock,
+            &SystemClock::default(),
             &stop,
         )
         .unwrap();

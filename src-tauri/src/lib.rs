@@ -51,6 +51,17 @@ pub mod test_support {
         },
         workspace::{RuntimeAssignment, Workspace},
     };
+
+    pub fn wait_for_paste_request(
+        paste: &PasteCoordinator,
+        device_id: &crate::hardware::DeviceId,
+        event_id: u64,
+        step: u16,
+        text: &str,
+        timeout: std::time::Duration,
+    ) -> Result<(), String> {
+        paste.wait_for_request(device_id, event_id, step, text, timeout)
+    }
 }
 
 struct AppState {

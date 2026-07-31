@@ -17,7 +17,9 @@ pub trait Clock: Send + Sync + 'static {
 }
 
 #[derive(Default)]
-pub struct SystemClock;
+pub struct SystemClock {
+    scheduler: Mutex<Option<SystemDeadlineScheduler>>,
+}
 
 impl Clock for SystemClock {
     fn monotonic_now(&self) -> Instant {
@@ -32,11 +34,97 @@ impl Clock for SystemClock {
     }
 
     fn schedule_deadline(&self, deadline: Instant, wake: Box<dyn FnOnce() + Send>) {
-        let delay = deadline.saturating_duration_since(Instant::now());
-        thread::spawn(move || {
-            thread::sleep(delay);
-            wake();
-        });
+        self.scheduler
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_or_insert_with(SystemDeadlineScheduler::start)
+            .schedule(deadline, wake);
+    }
+}
+
+type DeadlineWake = Box<dyn FnOnce() + Send>;
+
+enum SchedulerMessage {
+    Schedule {
+        deadline: Instant,
+        wake: DeadlineWake,
+    },
+    Shutdown,
+}
+
+struct ScheduledDeadline {
+    deadline: Instant,
+    wake: DeadlineWake,
+}
+
+struct SystemDeadlineScheduler {
+    sender: mpsc::Sender<SchedulerMessage>,
+    join: Option<JoinHandle<()>>,
+}
+
+impl SystemDeadlineScheduler {
+    fn start() -> Self {
+        let (sender, receiver) = mpsc::channel();
+        let join = thread::Builder::new()
+            .name("kivo-paste-deadlines".into())
+            .spawn(move || run_deadline_scheduler(receiver))
+            .expect("spawn paste deadline scheduler");
+        Self {
+            sender,
+            join: Some(join),
+        }
+    }
+
+    fn schedule(&self, deadline: Instant, wake: DeadlineWake) {
+        let _ = self
+            .sender
+            .send(SchedulerMessage::Schedule { deadline, wake });
+    }
+}
+
+impl Drop for SystemDeadlineScheduler {
+    fn drop(&mut self) {
+        let _ = self.sender.send(SchedulerMessage::Shutdown);
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+fn run_deadline_scheduler(receiver: mpsc::Receiver<SchedulerMessage>) {
+    let mut deadlines = Vec::<ScheduledDeadline>::new();
+    loop {
+        let message = deadlines
+            .iter()
+            .map(|scheduled| scheduled.deadline)
+            .min()
+            .map_or_else(
+                || {
+                    receiver
+                        .recv()
+                        .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+                },
+                |deadline| {
+                    receiver.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                },
+            );
+        match message {
+            Ok(SchedulerMessage::Schedule { deadline, wake }) => {
+                deadlines.push(ScheduledDeadline { deadline, wake });
+            }
+            Ok(SchedulerMessage::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        while let Some(index) = deadlines
+            .iter()
+            .enumerate()
+            .filter(|(_, scheduled)| scheduled.deadline <= Instant::now())
+            .min_by_key(|(_, scheduled)| scheduled.deadline)
+            .map(|(index, _)| index)
+        {
+            let scheduled = deadlines.remove(index);
+            (scheduled.wake)();
+        }
     }
 }
 
@@ -74,11 +162,15 @@ pub struct PasteCoordinator {
 
 impl PasteCoordinator {
     pub fn system() -> Self {
-        Self::with_clock(SystemClipboard, ACTION_TIMEOUT, Arc::new(SystemClock))
+        Self::with_clock(
+            SystemClipboard,
+            ACTION_TIMEOUT,
+            Arc::new(SystemClock::default()),
+        )
     }
 
     pub fn with_timeout(clipboard: impl ClipboardWriter, timeout: Duration) -> Self {
-        Self::with_clock(clipboard, timeout, Arc::new(SystemClock))
+        Self::with_clock(clipboard, timeout, Arc::new(SystemClock::default()))
     }
 
     pub fn with_clock(
@@ -98,6 +190,32 @@ impl PasteCoordinator {
 
     pub fn handle(&self) -> PasteHandle {
         self.handle.clone()
+    }
+
+    pub(crate) fn wait_for_request(
+        &self,
+        device_id: &DeviceId,
+        event_id: u64,
+        step: u16,
+        text: &str,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let (reply, observed) = mpsc::channel();
+        self.handle
+            .sender
+            .send(PasteMessage::ObserveRequest {
+                expected: PasteRequestObservation {
+                    device_id: device_id.clone(),
+                    event_id,
+                    step,
+                    text: text.to_owned(),
+                },
+                reply,
+            })
+            .map_err(|_| "paste_coordinator_stopped".to_owned())?;
+        observed
+            .recv_timeout(timeout)
+            .map_err(|_| "paste_request_observation_timeout".to_owned())
     }
 
     pub fn shutdown(&self) {
@@ -197,9 +315,35 @@ enum PasteMessage {
     DeadlineElapsed {
         token: u64,
     },
+    ObserveRequest {
+        expected: PasteRequestObservation,
+        reply: mpsc::Sender<()>,
+    },
     Shutdown {
         reply: mpsc::Sender<()>,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PasteRequestObservation {
+    device_id: DeviceId,
+    event_id: u64,
+    step: u16,
+    text: String,
+}
+
+impl PasteRequestObservation {
+    fn matches(&self, request: &PasteRequest) -> bool {
+        self.device_id == request.device_id
+            && self.event_id == request.event_id
+            && self.step == request.step
+            && self.text == request.text
+    }
+}
+
+struct RequestObserver {
+    expected: PasteRequestObservation,
+    reply: mpsc::Sender<()>,
 }
 
 #[derive(Default)]
@@ -223,6 +367,7 @@ fn run_paste_loop(
 ) {
     let mut sequences = BTreeMap::<u64, SequenceQueue>::new();
     let mut active: Option<ActivePaste> = None;
+    let mut request_observers = Vec::<RequestObserver>::new();
     let mut next_deadline_token = 0u64;
     loop {
         let Ok(message) = receiver.recv() else {
@@ -326,12 +471,16 @@ fn run_paste_loop(
                     cancel_sequence(&mut sequences, sequence);
                 }
             }
+            PasteMessage::ObserveRequest { expected, reply } => {
+                request_observers.push(RequestObserver { expected, reply });
+            }
             PasteMessage::Shutdown { reply } => {
                 cancel_all(&mut sequences, active.take());
                 let _ = reply.send(());
                 break;
             }
         }
+        notify_request_observers(&sequences, active.as_ref(), &mut request_observers);
         start_next(
             &mut sequences,
             &mut active,
@@ -343,6 +492,26 @@ fn run_paste_loop(
         );
     }
     cancel_all(&mut sequences, active);
+}
+
+fn notify_request_observers(
+    sequences: &BTreeMap<u64, SequenceQueue>,
+    active: Option<&ActivePaste>,
+    observers: &mut Vec<RequestObserver>,
+) {
+    observers.retain(|observer| {
+        let observed = active.is_some_and(|active| observer.expected.matches(&active.request))
+            || sequences.values().any(|sequence| {
+                sequence
+                    .requests
+                    .iter()
+                    .any(|request| observer.expected.matches(request))
+            });
+        if observed {
+            let _ = observer.reply.send(());
+        }
+        !observed
+    });
 }
 
 fn start_next(
@@ -454,7 +623,11 @@ mod tests {
     use super::*;
     use crate::hardware::DeviceId;
     use std::{
-        sync::{Arc, Mutex, mpsc},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+            mpsc,
+        },
         time::Duration,
     };
 
@@ -466,6 +639,49 @@ mod tests {
             self.0.lock().unwrap().push(text.into());
             Ok(())
         }
+    }
+
+    struct DropProbe(Arc<AtomicUsize>);
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn system_clock_runs_deadlines_on_one_owned_scheduler() {
+        let clock = SystemClock::default();
+        let deadline = Instant::now() + Duration::from_millis(20);
+        let (thread_ids, observed) = mpsc::channel();
+        for _ in 0..2 {
+            let thread_ids = thread_ids.clone();
+            clock.schedule_deadline(
+                deadline,
+                Box::new(move || {
+                    thread_ids.send(thread::current().id()).unwrap();
+                }),
+            );
+        }
+        let first = observed.recv_timeout(Duration::from_secs(1)).unwrap();
+        let second = observed.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn dropping_system_clock_joins_scheduler_and_discards_pending_deadlines() {
+        let dropped = Arc::new(AtomicUsize::new(0));
+        {
+            let clock = SystemClock::default();
+            for _ in 0..2 {
+                let probe = DropProbe(Arc::clone(&dropped));
+                clock.schedule_deadline(
+                    Instant::now() + Duration::from_secs(60),
+                    Box::new(move || drop(probe)),
+                );
+            }
+        }
+        assert_eq!(dropped.load(Ordering::SeqCst), 2);
     }
 
     fn request(

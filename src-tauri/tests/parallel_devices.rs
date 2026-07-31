@@ -5,7 +5,7 @@ use kivo_lib::{
         ConnectionDimension, DeviceMode, DeviceProfile, HardwareProfile, InputSource, ModelLayout,
         PROFILE_SCHEMA_VERSION, PasteCoordinator, RuntimeAssignment, RuntimeCoordinator,
         RuntimeDimension, SerialObservation, SerialTransport, SerialTransportFactory,
-        SystemWorkerLauncher, UsbEnumerator, Workspace, WorkspaceRevision,
+        SystemWorkerLauncher, UsbEnumerator, Workspace, WorkspaceRevision, wait_for_paste_request,
     },
 };
 use std::{
@@ -13,7 +13,10 @@ use std::{
     io::{self, ErrorKind, Read, Write},
     ops::{Deref, DerefMut},
     path::PathBuf,
-    sync::{Arc, Condvar, Mutex, RwLock},
+    sync::{
+        Arc, Condvar, Mutex, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -93,8 +96,36 @@ impl Clock for FakeClock {
     }
 
     fn schedule_deadline(&self, deadline: Instant, wake: Box<dyn FnOnce() + Send>) {
-        self.state.lock().unwrap().deadlines.push((deadline, wake));
+        let due = {
+            let mut state = self.state.lock().unwrap();
+            let now = self.base + Duration::from_millis(state.elapsed_ms);
+            if deadline <= now {
+                Some(wake)
+            } else {
+                state.deadlines.push((deadline, wake));
+                None
+            }
+        };
+        if let Some(wake) = due {
+            wake();
+        }
     }
+}
+
+fn assert_due_fake_deadline_fires_on_registration() {
+    let clock = FakeClock::new();
+    let deadline = clock.monotonic_now() + Duration::from_secs(1);
+    clock.advance(Duration::from_secs(2));
+    let fired = Arc::new(AtomicBool::new(false));
+    let callback_fired = Arc::clone(&fired);
+    clock.schedule_deadline(
+        deadline,
+        Box::new(move || callback_fired.store(true, Ordering::SeqCst)),
+    );
+    assert!(
+        fired.load(Ordering::SeqCst),
+        "an already-due deadline must fire during registration"
+    );
 }
 
 #[derive(Clone, Default)]
@@ -522,6 +553,7 @@ fn wait_for_input_event(coordinator: &mut RuntimeCoordinator, serial: &str) {
 
 #[test]
 fn four_concurrent_devices_keep_runtime_and_global_paste_isolated() {
+    assert_due_fake_deadline_fires_on_registration();
     let esp = board("luatos-esp32s3-aio");
     let rp = board("vccgnd-yd-rp2040");
     let specs = [
@@ -828,6 +860,15 @@ fn four_concurrent_devices_keep_runtime_and_global_paste_isolated() {
     // Worker/coordinator channels are FIFO: observing this input proves the preceding
     // hotkey SequenceFinished was handled before the clock can advance.
     wait_for_input_event(&mut coordinator, "RP-B");
+    wait_for_paste_request(
+        &coordinator.paste,
+        &DeviceId::new(rp.id, "RP-B").unwrap(),
+        204,
+        1,
+        "paste-profile-rp-b",
+        WAIT,
+    )
+    .unwrap();
     assert_eq!(transports.action_lines("PASTE ").len(), 2);
     assert!(
         transports
