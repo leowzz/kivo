@@ -46,7 +46,7 @@
 
 /* 统一页面头：64px，标题 + 副标题 + 右侧操作区 */
 .content-heading { min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: var(--space-20); padding: 10px var(--space-24); border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); }
-.content-heading span, .panel-title span { display: block; margin-bottom: 2px; color: var(--gray-9); font-size: var(--text-11); }
+.content-heading > div > span, .panel-title > div > span { display: block; margin-bottom: 2px; color: var(--gray-9); font-size: var(--text-11); }
 .content-heading h2, .panel-title h2, .action-panel > h2 { margin: 0; font-size: var(--text-17); font-weight: var(--weight-semibold); line-height: 1.3; letter-spacing: -.01em; }
 
 /* 过渡期兜底：数据页菜单容器布局（Task 7 在 views.css 中覆盖） */

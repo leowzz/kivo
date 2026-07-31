@@ -81,7 +81,7 @@
 
 /* ===== 动作面板 ===== */
 .action-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-left: 1px solid var(--border-subtle); background: var(--bg-surface); }
-.action-panel > h2 { padding: 21px 18px; border-bottom: 1px solid var(--border-subtle); }
+.action-panel > h2 { padding: 20px 18px; border-bottom: 1px solid var(--border-subtle); }
 .action-list { min-height: 0; flex: 1; overflow: auto; padding: var(--space-12); }
 .action-item { margin-bottom: 10px; border: 1px solid var(--border-subtle); border-radius: var(--radius-10); background: var(--bg-surface); box-shadow: var(--shadow-1); }
 .action-item-header { min-height: 38px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 5px 4px 12px; border-bottom: 1px solid var(--border-subtle); color: var(--gray-11); font-size: var(--text-12); font-weight: var(--weight-semibold); }
