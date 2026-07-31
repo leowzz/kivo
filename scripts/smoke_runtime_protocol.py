@@ -36,6 +36,24 @@ def expect_tokens(device: LineTransport, expected: list[str]) -> None:
         raise RuntimeError(f"expected {' '.join(expected)!r}, got {line!r}")
 
 
+def validate_hello(line: str, family: str, board: str, build: str) -> None:
+    parts = line.split()
+    expected = ["HELLO", "3", family, board, build]
+    if parts[:5] != expected:
+        raise RuntimeError(f"invalid HELLO: expected {' '.join(expected)!r}, got {line!r}")
+    if len(parts) < 7:
+        raise RuntimeError(f"invalid HELLO: missing non-empty pin list in {line!r}")
+    if not all(token.isascii() and token.isdigit() for token in parts[5:]):
+        raise RuntimeError(f"invalid HELLO: non-integer pin data in {line!r}")
+    try:
+        pin_count = int(parts[5])
+        pins = [int(pin) for pin in parts[6:]]
+    except ValueError as error:
+        raise RuntimeError(f"invalid HELLO: non-integer pin data in {line!r}") from error
+    if pin_count <= 0 or len(pins) != pin_count or len(set(pins)) != len(pins):
+        raise RuntimeError(f"invalid HELLO: inconsistent pin list in {line!r}")
+
+
 def send_topology(device: LineTransport, revision: int, pins: list[int], expect_ok: bool) -> None:
     pins_text = " ".join(str(pin) for pin in pins)
     write_line(device, f"CONFIG_BEGIN {revision} 30\n")
@@ -78,16 +96,13 @@ def run_smoke(
     board: str,
     valid_pins: list[int],
     rejected_pins: list[int],
-    build: str | None = None,
+    build: str,
     exercise_actions: bool = False,
 ) -> None:
     if not valid_pins:
         raise RuntimeError("valid pins are required")
     write_line(device, "HELLO\n")
-    hello = read_line(device).split()
-    expected_hello = ["HELLO", "3", family, board]
-    if hello[:4] != expected_hello or (build is not None and hello[4:5] != [build]):
-        raise RuntimeError(f"expected HELLO 3 {family} {board}, got {' '.join(hello)!r}")
+    validate_hello(read_line(device), family, board, build)
 
     revision = 1
     send_topology(device, revision, valid_pins, expect_ok=True)
@@ -120,29 +135,43 @@ def parse_pins(value: str) -> list[int]:
     return pins
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--serial", required=True)
     parser.add_argument("--vid", required=True, type=parse_usb_id)
     parser.add_argument("--pid", required=True, type=parse_usb_id)
     parser.add_argument("--family", required=True)
     parser.add_argument("--board", required=True)
+    parser.add_argument("--build", required=True)
     parser.add_argument("--valid-pins", required=True, type=parse_pins)
     parser.add_argument("--rejected-pins", required=True, type=parse_pins)
     parser.add_argument("--exercise-actions", action="store_true")
-    args = parser.parse_args()
+    return parser
+
+
+def run_from_args(
+    args: argparse.Namespace,
+    *,
+    port_waiter: object = wait_for_runtime_port,
+    serial_factory: object = serial.Serial,
+) -> None:
+    port = port_waiter(require_serial(args.serial), (args.vid, args.pid))
+    with serial_factory(port.device, 115200, timeout=0.5) as device:
+        run_smoke(
+            device,
+            family=args.family,
+            board=args.board,
+            build=args.build,
+            valid_pins=args.valid_pins,
+            rejected_pins=args.rejected_pins,
+            exercise_actions=args.exercise_actions,
+        )
+
+
+def main() -> None:
+    args = build_parser().parse_args()
     try:
-        serial_number = require_serial(args.serial)
-        port = wait_for_runtime_port(serial_number, (args.vid, args.pid))
-        with serial.Serial(port.device, 115200, timeout=0.5) as device:
-            run_smoke(
-                device,
-                family=args.family,
-                board=args.board,
-                valid_pins=args.valid_pins,
-                rejected_pins=args.rejected_pins,
-                exercise_actions=args.exercise_actions,
-            )
+        run_from_args(args)
     except (TargetError, RuntimeError, serial.SerialException) as error:
         print(error, file=sys.stderr)
         raise SystemExit(1) from error

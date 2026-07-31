@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+from types import SimpleNamespace
+import subprocess
 
 import pytest
 
@@ -7,6 +9,11 @@ from scripts.enter_download_mode import (
     require_serial,
     select_download_port,
     select_runtime_port,
+)
+from scripts.list_firmware_targets import (
+    InventoryError,
+    macos_uf2_rows,
+    merge_rows,
 )
 
 
@@ -65,3 +72,59 @@ def test_select_download_port_rejects_missing_or_ambiguous_location() -> None:
     ambiguous = ports + [FakePort("/dev/b", 0x303A, 0x1001, None, "1-1")]
     with pytest.raises(TargetError, match="multiple ports"):
         select_download_port(ambiguous, "TARGET", "1-1")
+
+
+def test_select_download_port_rejects_same_location_with_other_serial() -> None:
+    ports = [FakePort("/dev/other", 0x303A, 0x1001, "OTHER", "1-1")]
+
+    with pytest.raises(TargetError, match="serial TARGET not found"):
+        select_download_port(ports, "TARGET", "1-1")
+
+
+def test_inventory_merges_duplicate_identity_and_prefers_cdc_port() -> None:
+    merged = merge_rows(
+        [
+            ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", None),
+            ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", "/dev/tty.usbmodem"),
+            ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP2", None),
+        ]
+    )
+
+    assert merged == [
+        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", "/dev/tty.usbmodem"),
+        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP2", None),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("runner", "error"),
+    [
+        (
+            lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stderr="profiler failed", stdout=""),
+            "profiler failed",
+        ),
+        (
+            lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stderr="", stdout="not json"),
+            "invalid JSON",
+        ),
+        (
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(subprocess.TimeoutExpired("system_profiler", 10)),
+            "timed out",
+        ),
+    ],
+)
+def test_inventory_surfaces_system_profiler_failures(runner: object, error: str) -> None:
+    with pytest.raises(InventoryError, match=error):
+        list(macos_uf2_rows(run=runner, system_name="Darwin"))
+
+
+def test_inventory_parses_structured_uf2_json() -> None:
+    runner = lambda *_args, **_kwargs: SimpleNamespace(
+        returncode=0,
+        stderr="",
+        stdout='{"SPUSBDataType": [{"vendor_id": "0x2e8a", "product_id": "0x0003", "serial_num": "RP1"}]}',
+    )
+
+    assert list(macos_uf2_rows(run=runner, system_name="Darwin")) == [
+        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", None)
+    ]
