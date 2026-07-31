@@ -322,6 +322,7 @@ export default function App() {
       setDeviceMetrics(null);
       return;
     }
+    setDeviceMetrics(null);
     try {
       const metrics = await invoke<AppSnapshot["homeMetrics"]>("get_device_metrics", { deviceId });
       if (mountedRef.current && selectedManagedDeviceIdRef.current === deviceId && generation === managedMetricsGenerationRef.current) {

@@ -514,6 +514,27 @@ test("fetches selected Device metrics with an exact ID and renders its activity"
   expect(await screen.findByText("device-second pressed")).toBeInTheDocument();
 });
 
+test("clears prior Device metrics while another selected Device request is pending", async () => {
+  currentSnapshot.devices.push(device({ deviceId: "device-second", name: "Second Device", hardwareSerial: "SECOND" }));
+  const secondMetrics = deferred<AppSnapshot["homeMetrics"]>();
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "get_device_metrics") {
+      return (args as { deviceId: string }).deviceId === "device-second"
+        ? secondMetrics.promise
+        : { ...baseSnapshot.homeMetrics!, logs: [{ ...baseSnapshot.homeMetrics!.logs[0], message: "first activity" }] };
+    }
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "设备管理" }));
+  expect(await screen.findByText("first activity")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: /Second Device/ }));
+  expect(screen.queryByText("first activity")).toBeNull();
+  await act(async () => secondMetrics.resolve({ ...baseSnapshot.homeMetrics!, logs: [{ ...baseSnapshot.homeMetrics!.logs[0], message: "second activity" }] }));
+  expect(await screen.findByText("second activity")).toBeInTheDocument();
+});
+
 test("refreshes metrics only for a runtime event from the selected Device", async () => {
   let metricRequests = 0;
   vi.mocked(invoke).mockImplementation(async (command) => {

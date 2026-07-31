@@ -100,6 +100,18 @@ test("keeps same-board devices as separate selectable rows across filters and se
   expect(screen.getAllByRole("button", { name: /RP2040/ })).toHaveLength(2);
 });
 
+test("composes visible Board Profile search with non-All filters", async () => {
+  const user = userEvent.setup();
+  renderManagement();
+  await user.click(screen.getByRole("button", { name: "就绪" }));
+  await user.type(screen.getByRole("searchbox", { name: "搜索设备" }), "RP2040 Pad");
+  expect(screen.getAllByRole("button", { name: /RP2040/ })).toHaveLength(2);
+  await user.clear(screen.getByRole("searchbox", { name: "搜索设备" }));
+  await user.click(screen.getByRole("button", { name: "需处理" }));
+  await user.type(screen.getByRole("searchbox", { name: "搜索设备" }), "ESP32-S3 Pad");
+  expect(screen.getByRole("button", { name: /BAD-001/ })).toBeInTheDocument();
+});
+
 test("uses assignment display names, retains missing IDs, and shows selected activity", async () => {
   const user = userEvent.setup();
   renderManagement();

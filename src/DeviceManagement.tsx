@@ -99,11 +99,16 @@ export function DeviceManagement({
     () => new Map(boardProfiles.map((board) => [board.id, board])),
     [boardProfiles],
   );
-  const visibleDevices = devices.filter(
-    (device) =>
-      matchesDeviceFilter(device, filter, query) ||
-      (filter === "all" &&
-        matches([boards.get(device.boardProfileId)?.displayName ?? ""], query)),
+  const visibleDevices = devices.filter((device) =>
+    matchesDeviceFilter(device, filter, "") &&
+    matches([
+      device.name,
+      device.hardwareSerial,
+      device.deviceId,
+      device.boardProfileId,
+      boards.get(device.boardProfileId)?.displayName ?? "",
+      device.port ?? "",
+    ], query),
   );
   const visibleCandidates =
     filter === "all" || filter === "attention"
