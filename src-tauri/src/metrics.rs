@@ -377,6 +377,15 @@ impl MetricsStore {
         })
     }
 
+    pub fn device_snapshot(
+        &self,
+        device_profile_id: &str,
+        device_id: &DeviceId,
+        now_ms: u64,
+    ) -> Result<HomeMetricsSnapshot, rusqlite::Error> {
+        self.home_snapshot(device_profile_id, Some(device_id), now_ms)
+    }
+
     pub fn backup(&self) -> Result<MetricsBackup, rusqlite::Error> {
         let connection = self
             .connection
