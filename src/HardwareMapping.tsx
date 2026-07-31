@@ -1,4 +1,4 @@
-import { Plus, Radio, SquareStop, Trash2 } from "lucide-react";
+import { Cable, LayoutGrid, Plus, Radio, SquareStop, Trash2 } from "lucide-react";
 import { t } from "./i18n";
 import type { HardwareConfig, InputSource, Language, LearningSession, ModelLayout } from "./types";
 
@@ -65,6 +65,7 @@ export function HardwareMapping({
           <section className="source-editor" key={`${source.type}-${source.id}`}>
             <div className="source-heading">
               <div>
+                {source.type === "direct" ? <Cable size={14} /> : <LayoutGrid size={14} />}
                 <strong>{sourceName(language, source)}</strong>
                 <code>{source.id}</code>
               </div>
@@ -183,8 +184,12 @@ export function HardwareMapping({
       </div>
 
       <details className="learning-panel">
-        <summary>{t(language, "hardware.advanced")}</summary>
-        <div className="learning-controls">
+        <summary>
+          <Radio size={15} />
+          <span>{t(language, "hardware.advanced")}</span>
+          <small>{t(language, "hardware.advancedHint")}</small>
+        </summary>
+        <div className={learning ? "learning-controls is-learning" : "learning-controls"}>
           <label className="field-stack compact-field">
             <span>{t(language, "hardware.controller")}</span>
             <select value={hardware.controller} onChange={(event) => onChange({ ...hardware, controller: event.target.value })}>

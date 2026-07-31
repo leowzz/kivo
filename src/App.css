@@ -7,39 +7,6 @@
 .data-page .data-menu button:hover { border-color: #aab9b3; }
 
 
-.hardware-view { min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-.debounce-field { display: grid; grid-template-columns: auto 64px auto; align-items: center; gap: 6px; color: #65706c; font-size: 11px; }
-.debounce-field input { width: 64px; height: 32px; padding: 0 6px; }
-.source-list { min-height: 0; flex: 1; overflow: auto; padding: 16px 20px 2px; }
-.source-editor { margin-bottom: 14px; border: 1px solid #d9dfdc; border-radius: 6px; background: #fff; }
-.source-heading { min-height: 44px; display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 6px 12px; border-bottom: 1px solid #e4e8e6; }
-.source-heading > div { display: flex; align-items: baseline; gap: 9px; }
-.source-heading strong { font-size: 13px; }
-.source-heading code { color: #84908b; font-size: 10px; }
-.compact-field { padding: 10px 12px; border-bottom: 1px solid #e4e8e6; }
-.compact-field input, .compact-field select { height: 32px; padding: 0 8px; }
-.mapping-table { font-size: 12px; }
-.mapping-head, .mapping-row { display: grid; grid-template-columns: minmax(110px, 1fr) 150px; align-items: center; min-height: 38px; border-bottom: 1px solid #eef0ef; }
-.mapping-head { color: #75807c; background: #f7f9f8; font-size: 10px; font-weight: 650; }
-.mapping-head span { padding: 0 12px; }
-.mapping-row:last-child { border-bottom: 0; }
-.mapping-row.is-selected { background: #edf6f2; }
-.mapping-row > button { align-self: stretch; border: 0; padding: 0 12px; background: transparent; text-align: left; }
-.mapping-row > input, .contact-inputs select { width: 68px; height: 28px; padding: 0 6px; }
-.contact-inputs { display: flex; gap: 6px; }
-.source-actions { display: flex; gap: 8px; padding: 0 20px 16px; }
-.learning-panel { margin: 0 20px 24px; border-top: 1px solid #dce2df; }
-.learning-panel summary { padding: 13px 2px; color: #525d59; cursor: pointer; font-size: 12px; font-weight: 650; }
-.learning-controls { display: grid; gap: 13px; border: 1px solid #d9dfdc; border-radius: 6px; padding: 14px; background: #fff; }
-.learning-controls .compact-field { border: 0; padding: 0; }
-.safety-check { display: flex; align-items: flex-start; gap: 8px; color: #5a6561; font-size: 12px; line-height: 1.4; }
-.safety-check input { margin-top: 2px; }
-.learning-controls fieldset { border: 0; margin: 0; padding: 0; }
-.learning-controls legend { margin-bottom: 7px; color: #65706c; font-size: 11px; }
-.pin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(54px, 1fr)); gap: 5px; }
-.pin-grid label { display: flex; align-items: center; gap: 5px; border: 1px solid #dbe1de; border-radius: 4px; padding: 5px; font-size: 11px; }
-.learning-button { justify-self: start !important; }
-
 .modal-backdrop { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(18, 25, 22, .42); }
 .confirm-dialog { width: min(420px, 100%); border: 1px solid #cfd6d3; border-radius: 6px; background: #fff; box-shadow: 0 18px 50px rgba(22, 31, 27, .2); }
 .confirm-header { display: flex; align-items: center; justify-content: space-between; padding: 13px 12px 13px 16px; border-bottom: 1px solid #e1e6e3; }
