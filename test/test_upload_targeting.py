@@ -96,6 +96,41 @@ def test_inventory_merges_duplicate_identity_and_prefers_cdc_port() -> None:
     ]
 
 
+def test_inventory_preserves_same_serial_on_distinct_concrete_ports() -> None:
+    rows = [
+        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", "/dev/tty.a"),
+        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", "/dev/tty.b"),
+    ]
+
+    assert merge_rows(rows) == rows
+
+
+def test_inventory_reconciles_one_portless_row_against_two_concrete_rows() -> None:
+    rows = [
+        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", None),
+        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", "/dev/tty.a"),
+        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", "/dev/tty.b"),
+    ]
+
+    assert merge_rows(rows) == rows[1:]
+
+
+def test_inventory_retains_unmatched_portless_observation() -> None:
+    rows = [
+        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", None),
+        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", None),
+        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", "/dev/tty.a"),
+    ]
+
+    assert merge_rows(rows) == [rows[2], rows[0]]
+
+
+def test_inventory_deduplicates_exact_concrete_observations() -> None:
+    row = ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", "/dev/tty.a")
+
+    assert merge_rows([row, row]) == [row]
+
+
 def test_inventory_preserves_distinct_serialless_cdc_ports() -> None:
     rows = [
         ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", None, "/dev/tty.a"),
