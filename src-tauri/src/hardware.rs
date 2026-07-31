@@ -122,14 +122,15 @@ fn registries_are_valid(families: &[ControllerFamily], boards: &[BoardProfile]) 
         items
             .iter()
             .enumerate()
-            .all(|(index, item)| !item.is_empty() && !items[index + 1..].contains(item))
+            .all(|(index, item)| is_valid_component(item) && !items[index + 1..].contains(item))
     };
     let family_ids = families.iter().map(|family| family.id).collect::<Vec<_>>();
     let board_ids = boards.iter().map(|board| board.id).collect::<Vec<_>>();
     unique(&family_ids)
         && unique(&board_ids)
         && boards.iter().all(|board| {
-            families.iter().any(|family| family.id == board.family_id)
+            is_valid_component(board.family_id)
+                && families.iter().any(|family| family.id == board.family_id)
                 && board.runtime_usb.mode == UsbMode::Runtime
                 && board
                     .bootloader_usb
@@ -378,8 +379,28 @@ mod tests {
         families[1].id = families[0].id;
         assert!(!registries_are_valid(&families, BOARD_PROFILES));
 
+        let mut families = [CONTROLLER_FAMILIES[0], CONTROLLER_FAMILIES[1]];
+        let mut boards = [BOARD_PROFILES[0], BOARD_PROFILES[1]];
+        families[0].id = "esp 32s3";
+        boards[0].family_id = "esp 32s3";
+        assert!(!registries_are_valid(&families, &boards));
+
+        let mut families = [CONTROLLER_FAMILIES[0], CONTROLLER_FAMILIES[1]];
+        let mut boards = [BOARD_PROFILES[0], BOARD_PROFILES[1]];
+        families[0].id = "esp\u{0007}32s3";
+        boards[0].family_id = "esp\u{0007}32s3";
+        assert!(!registries_are_valid(&families, &boards));
+
         let mut boards = [BOARD_PROFILES[0], BOARD_PROFILES[1]];
         boards[1].id = boards[0].id;
+        assert!(!registries_are_valid(CONTROLLER_FAMILIES, &boards));
+
+        let mut boards = [BOARD_PROFILES[0], BOARD_PROFILES[1]];
+        boards[1].id = "yd rp2040";
+        assert!(!registries_are_valid(CONTROLLER_FAMILIES, &boards));
+
+        let mut boards = [BOARD_PROFILES[0], BOARD_PROFILES[1]];
+        boards[1].id = "yd\u{0007}rp2040";
         assert!(!registries_are_valid(CONTROLLER_FAMILIES, &boards));
 
         let mut boards = [BOARD_PROFILES[0], BOARD_PROFILES[1]];
