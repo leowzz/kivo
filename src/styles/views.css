@@ -205,7 +205,7 @@
 .layout-editor-header { display: flex; align-items: center; justify-content: space-between; padding: 13px 14px 13px 18px; border-bottom: 1px solid var(--border-subtle); }
 .layout-editor-header h2 { margin: 0; font-size: var(--text-17); font-weight: var(--weight-semibold); }
 .modal-subtitle { margin: 2px 0 0; color: var(--gray-9); font-size: var(--text-12); }
-.layout-editor-body { max-height: calc(100vh - 155px); overflow: auto; padding: 14px; background: var(--bg-app); }
+.layout-editor-body { max-height: calc(100vh - 175px); overflow: auto; padding: 14px; background: var(--bg-app); }
 .layout-group-editor { margin-bottom: 12px; border: 1px solid var(--border-default); border-radius: var(--radius-10); background: var(--bg-surface); }
 .layout-group-header, .layout-button-row { display: grid; grid-template-columns: minmax(150px, 1fr) 90px auto; gap: 10px; align-items: end; padding: 10px; border-bottom: 1px solid var(--gray-3); }
 .layout-button-row { grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) auto; }
