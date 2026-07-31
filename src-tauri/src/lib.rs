@@ -1,5 +1,6 @@
 mod config;
 mod device;
+pub mod hardware;
 mod metrics;
 mod model;
 mod protocol;
