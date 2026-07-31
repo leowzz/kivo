@@ -32,6 +32,7 @@ use workspace::{AppError, BackupPreview, EditorSettingsPatch, ImportPreview, Lan
 struct AppState {
     workspace: Arc<RwLock<Workspace>>,
     active_runtime_profile: Arc<RwLock<Option<RuntimeProfile>>>,
+    operation_barrier: Arc<RwLock<()>>,
     connection: Arc<RwLock<ConnectionStatus>>,
     capabilities: Arc<RwLock<Option<DeviceCapabilities>>>,
     runtime_error: Arc<RwLock<Option<RuntimeActivity>>>,
@@ -172,6 +173,10 @@ fn restore_backup_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, Ap
         .workspace
         .write()
         .map_err(|_| state_error("workspace_unavailable"))?;
+    let _operation = state
+        .operation_barrier
+        .write()
+        .map_err(|_| state_error("operation_barrier_unavailable"))?;
     let mut runtime = state
         .active_runtime_profile
         .write()
@@ -377,6 +382,7 @@ pub fn run() {
                 .ok()
                 .map(Arc::new);
             let active_runtime_profile = Arc::new(RwLock::new(None));
+            let operation_barrier = Arc::new(RwLock::new(()));
             let workspace = Arc::new(RwLock::new(workspace));
             let initial_connection = ConnectionStatus::searching();
             #[cfg(target_os = "macos")]
@@ -390,6 +396,7 @@ pub fn run() {
             let worker = {
                 let app_handle = app.handle().clone();
                 let active_runtime_profile = Arc::clone(&active_runtime_profile);
+                let operation_barrier = Arc::clone(&operation_barrier);
                 let connection = Arc::clone(&connection);
                 let capabilities = Arc::clone(&capabilities);
                 let runtime_error = Arc::clone(&runtime_error);
@@ -402,6 +409,7 @@ pub fn run() {
                         app_handle,
                         device::WorkerState {
                             active_profile: active_runtime_profile,
+                            operation_barrier,
                             connection,
                             capabilities,
                             runtime_error,
@@ -416,6 +424,7 @@ pub fn run() {
             app.manage(AppState {
                 workspace,
                 active_runtime_profile,
+                operation_barrier,
                 connection,
                 capabilities,
                 runtime_error,
@@ -498,7 +507,10 @@ mod tests {
     use std::{
         collections::BTreeMap,
         path::PathBuf,
-        sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
+        sync::{
+            atomic::{AtomicBool as TestAtomicBool, AtomicU64, Ordering as AtomicOrdering},
+            mpsc,
+        },
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -556,6 +568,7 @@ mod tests {
         AppState {
             workspace: Arc::new(RwLock::new(workspace)),
             active_runtime_profile: Arc::new(RwLock::new(None)),
+            operation_barrier: Arc::new(RwLock::new(())),
             connection: Arc::new(RwLock::new(ConnectionStatus::searching())),
             capabilities: Arc::new(RwLock::new(None)),
             runtime_error: Arc::new(RwLock::new(None)),
@@ -713,6 +726,93 @@ mod tests {
             "UP"
         );
         assert!(state.active_runtime_profile.read().unwrap().is_none());
+    }
+
+    #[test]
+    fn restore_waits_for_an_in_flight_metric_commit_before_swapping() {
+        let directory = TestDirectory::new();
+        let state = Arc::new(product_state(&directory.0, vec![product_profile()]));
+        let backup = directory.path("backup.yaml");
+        export_backup_inner(&state, &backup).unwrap();
+        let attribution = MetricAttribution {
+            device_id: hardware::DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap(),
+            device_name: "Desk".into(),
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        let (press_started_tx, press_started_rx) = mpsc::channel();
+        let (release_press_tx, release_press_rx) = mpsc::channel();
+        let (press_committed_tx, press_committed_rx) = mpsc::channel();
+        let press_state = Arc::clone(&state);
+        let press = thread::spawn(move || {
+            let _operation = press_state.operation_barrier.read().unwrap();
+            press_started_tx.send(()).unwrap();
+            release_press_rx.recv().unwrap();
+            press_state
+                .metrics
+                .as_deref()
+                .unwrap()
+                .record_button_press(&attribution, "UP", 1_720_086_400_000)
+                .unwrap();
+            press_committed_tx.send(()).unwrap();
+        });
+        press_started_rx.recv().unwrap();
+        let restore_started = Arc::new(TestAtomicBool::new(false));
+        let restore_finished = Arc::new(TestAtomicBool::new(false));
+        let restore_state = Arc::clone(&state);
+        let restore_backup = backup.clone();
+        let restore_started_thread = Arc::clone(&restore_started);
+        let restore_finished_thread = Arc::clone(&restore_finished);
+        let restore = thread::spawn(move || {
+            restore_started_thread.store(true, AtomicOrdering::SeqCst);
+            let result = restore_backup_inner(&restore_state, &restore_backup);
+            restore_finished_thread.store(true, AtomicOrdering::SeqCst);
+            result
+        });
+        while !restore_started.load(AtomicOrdering::SeqCst) {
+            thread::yield_now();
+        }
+
+        assert!(!restore_finished.load(AtomicOrdering::SeqCst));
+        release_press_tx.send(()).unwrap();
+        press_committed_rx.recv().unwrap();
+        press.join().unwrap();
+        restore.join().unwrap().unwrap();
+        assert!(restore_finished.load(AtomicOrdering::SeqCst));
+    }
+
+    #[test]
+    fn restore_barrier_prevents_a_new_metric_commit_from_starting() {
+        let directory = TestDirectory::new();
+        let state = Arc::new(product_state(&directory.0, vec![product_profile()]));
+        let restore_operation = state.operation_barrier.write().unwrap();
+        let commit_started = Arc::new(TestAtomicBool::new(false));
+        let (commit_attempted_tx, commit_attempted_rx) = mpsc::channel();
+        let commit_state = Arc::clone(&state);
+        let commit_started_thread = Arc::clone(&commit_started);
+        let commit = thread::spawn(move || {
+            commit_attempted_tx.send(()).unwrap();
+            let _operation = commit_state.operation_barrier.read().unwrap();
+            commit_started_thread.store(true, AtomicOrdering::SeqCst);
+            let attribution = MetricAttribution {
+                device_id: hardware::DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap(),
+                device_name: "Desk".into(),
+                device_profile_id: "red-phone-v1".into(),
+                hardware_profile_id: "esp-primary".into(),
+            };
+            commit_state
+                .metrics
+                .as_deref()
+                .unwrap()
+                .record_button_press(&attribution, "UP", 1_720_086_400_000)
+                .unwrap();
+        });
+        commit_attempted_rx.recv().unwrap();
+
+        assert!(!commit_started.load(AtomicOrdering::SeqCst));
+        drop(restore_operation);
+        commit.join().unwrap();
+        assert!(commit_started.load(AtomicOrdering::SeqCst));
     }
 
     #[test]

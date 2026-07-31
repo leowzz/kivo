@@ -165,6 +165,36 @@ pub struct Workspace {
     pub profiles: BTreeMap<String, DeviceProfile>,
 }
 
+trait RestoreOperations {
+    fn rename(&mut self, from: &Path, to: &Path) -> std::io::Result<()>;
+    fn remove_dir_all(&mut self, path: &Path) -> std::io::Result<()>;
+    fn reopen_metrics(
+        &mut self,
+        metrics: &MetricsStore,
+        path: &Path,
+    ) -> Result<(), rusqlite::Error>;
+}
+
+struct SystemRestoreOperations;
+
+impl RestoreOperations for SystemRestoreOperations {
+    fn rename(&mut self, from: &Path, to: &Path) -> std::io::Result<()> {
+        fs::rename(from, to)
+    }
+
+    fn remove_dir_all(&mut self, path: &Path) -> std::io::Result<()> {
+        fs::remove_dir_all(path)
+    }
+
+    fn reopen_metrics(
+        &mut self,
+        metrics: &MetricsStore,
+        path: &Path,
+    ) -> Result<(), rusqlite::Error> {
+        metrics.reopen(path)
+    }
+}
+
 impl Workspace {
     pub fn load(config_directory: &Path, bundled_profiles: &Path) -> Result<Self, AppError> {
         if config_directory.join("data/settings.yaml").exists() {
@@ -428,18 +458,14 @@ impl Workspace {
     }
 
     pub fn restore_backup(&mut self, path: &Path, metrics: &MetricsStore) -> Result<(), AppError> {
-        self.restore_backup_with_reopen(path, metrics, |store, path| {
-            store
-                .reopen(path)
-                .map_err(|error| metrics_error("reopen_metrics", error))
-        })
+        self.restore_backup_with_operations(path, metrics, &mut SystemRestoreOperations)
     }
 
-    fn restore_backup_with_reopen(
+    fn restore_backup_with_operations(
         &mut self,
         path: &Path,
         metrics: &MetricsStore,
-        reopen_metrics: impl FnOnce(&MetricsStore, &Path) -> Result<(), AppError>,
+        operations: &mut impl RestoreOperations,
     ) -> Result<(), AppError> {
         let snapshot = read_backup(path)?;
         let data_directory = self.data_directory();
@@ -469,48 +495,61 @@ impl Workspace {
         drop(staged_metrics);
 
         metrics.close();
-        if let Err(error) = fs::rename(&data_directory, &previous_directory) {
-            let _ = metrics.reopen(&data_directory.join("metrics.sqlite3"));
-            let _ = fs::remove_dir_all(&next_directory);
-            return Err(io_error("stage_restore", &data_directory, error));
-        }
-        if let Err(error) = fs::rename(&next_directory, &data_directory) {
-            fs::rename(&previous_directory, &data_directory).map_err(|rollback| {
-                io_error("rollback_previous_data", &previous_directory, rollback)
-            })?;
-            metrics
-                .reopen(&data_directory.join("metrics.sqlite3"))
-                .map_err(|reopen| metrics_error("reopen_rollback_metrics", reopen))?;
-            remove_directory_if_exists(&next_directory)?;
-            return Err(io_error("activate_restore", &next_directory, error));
-        }
-
-        let active_metrics_path = data_directory.join("metrics.sqlite3");
-        if let Err(error) = reopen_metrics(metrics, &active_metrics_path) {
-            rollback_data_swap(
+        if let Err(error) = operations.rename(&data_directory, &previous_directory) {
+            let primary = io_error("stage_restore", &data_directory, error);
+            let recovery = recover_original_generation(
+                RestoreGenerationState::OriginalActive,
                 &data_directory,
                 &next_directory,
                 &previous_directory,
                 metrics,
-            )?;
-            return Err(error);
+                operations,
+            );
+            return Err(restore_error(primary, recovery));
+        }
+        if let Err(error) = operations.rename(&next_directory, &data_directory) {
+            let primary = io_error("activate_restore", &next_directory, error);
+            let recovery = recover_original_generation(
+                RestoreGenerationState::OriginalPrevious,
+                &data_directory,
+                &next_directory,
+                &previous_directory,
+                metrics,
+                operations,
+            );
+            return Err(restore_error(primary, recovery));
+        }
+
+        let active_metrics_path = data_directory.join("metrics.sqlite3");
+        if let Err(error) = operations.reopen_metrics(metrics, &active_metrics_path) {
+            let primary = metrics_error("reopen_metrics", error);
+            let recovery = recover_original_generation(
+                RestoreGenerationState::RestoredActive,
+                &data_directory,
+                &next_directory,
+                &previous_directory,
+                metrics,
+                operations,
+            );
+            return Err(restore_error(primary, recovery));
         }
         let restored = match Self::load_existing(&self.config_directory) {
             Ok(restored) => restored,
             Err(error) => {
-                metrics.close();
-                rollback_data_swap(
+                let recovery = recover_original_generation(
+                    RestoreGenerationState::RestoredActive,
                     &data_directory,
                     &next_directory,
                     &previous_directory,
                     metrics,
-                )?;
-                return Err(error);
+                    operations,
+                );
+                return Err(restore_error(error, recovery));
             }
         };
         self.settings = restored.settings;
         self.profiles = restored.profiles;
-        let _ = fs::remove_dir_all(&previous_directory);
+        let _ = operations.remove_dir_all(&previous_directory);
         Ok(())
     }
 
@@ -701,28 +740,165 @@ fn remove_directory_if_exists(path: &Path) -> Result<(), AppError> {
     }
 }
 
-fn rollback_data_swap(
+#[derive(Clone, Copy)]
+enum RestoreGenerationState {
+    OriginalActive,
+    OriginalPrevious,
+    RestoredActive,
+}
+
+struct RestoreRecovery {
+    errors: Vec<String>,
+    fatal_state: Option<&'static str>,
+}
+
+fn recover_original_generation(
+    state: RestoreGenerationState,
     data_directory: &Path,
     next_directory: &Path,
     previous_directory: &Path,
     metrics: &MetricsStore,
-) -> Result<(), AppError> {
+    operations: &mut impl RestoreOperations,
+) -> RestoreRecovery {
+    let mut errors = Vec::new();
     metrics.close();
-    fs::rename(data_directory, next_directory)
-        .map_err(|error| io_error("rollback_restored_data", data_directory, error))?;
-    if let Err(error) = fs::rename(previous_directory, data_directory) {
-        let _ = fs::rename(next_directory, data_directory);
-        let _ = metrics.reopen(&data_directory.join("metrics.sqlite3"));
-        return Err(io_error(
-            "rollback_previous_data",
-            previous_directory,
-            error,
-        ));
+
+    if matches!(state, RestoreGenerationState::RestoredActive)
+        && !retry_rename(
+            operations,
+            data_directory,
+            next_directory,
+            "quarantine_restored_data",
+            &mut errors,
+        )
+        && !retry_remove(
+            operations,
+            data_directory,
+            "remove_restored_data",
+            &mut errors,
+        )
+    {
+        return RestoreRecovery {
+            errors,
+            fatal_state: Some("restored_active_original_previous_metrics_closed"),
+        };
     }
-    metrics
-        .reopen(&data_directory.join("metrics.sqlite3"))
-        .map_err(|error| metrics_error("reopen_rollback_metrics", error))?;
-    remove_directory_if_exists(next_directory)
+
+    if matches!(
+        state,
+        RestoreGenerationState::OriginalPrevious | RestoreGenerationState::RestoredActive
+    ) && !retry_rename(
+        operations,
+        previous_directory,
+        data_directory,
+        "restore_previous_data",
+        &mut errors,
+    ) {
+        return RestoreRecovery {
+            errors,
+            fatal_state: Some("original_previous_data_missing_metrics_closed"),
+        };
+    }
+
+    if !retry_reopen_metrics(
+        operations,
+        metrics,
+        &data_directory.join("metrics.sqlite3"),
+        &mut errors,
+    ) {
+        let _ = retry_remove(
+            operations,
+            next_directory,
+            "cleanup_failed_generation",
+            &mut errors,
+        );
+        return RestoreRecovery {
+            errors,
+            fatal_state: Some("original_active_metrics_closed"),
+        };
+    }
+
+    let _ = retry_remove(
+        operations,
+        next_directory,
+        "cleanup_failed_generation",
+        &mut errors,
+    );
+    let _ = retry_remove(
+        operations,
+        previous_directory,
+        "cleanup_previous_generation",
+        &mut errors,
+    );
+    RestoreRecovery {
+        errors,
+        fatal_state: None,
+    }
+}
+
+fn retry_rename(
+    operations: &mut impl RestoreOperations,
+    from: &Path,
+    to: &Path,
+    label: &str,
+    errors: &mut Vec<String>,
+) -> bool {
+    for _ in 0..2 {
+        match operations.rename(from, to) {
+            Ok(()) => return true,
+            Err(error) => errors.push(format!("{label}: {error}")),
+        }
+    }
+    false
+}
+
+fn retry_remove(
+    operations: &mut impl RestoreOperations,
+    path: &Path,
+    label: &str,
+    errors: &mut Vec<String>,
+) -> bool {
+    for _ in 0..2 {
+        match operations.remove_dir_all(path) {
+            Ok(()) => return true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return true,
+            Err(error) => errors.push(format!("{label}: {error}")),
+        }
+    }
+    false
+}
+
+fn retry_reopen_metrics(
+    operations: &mut impl RestoreOperations,
+    metrics: &MetricsStore,
+    path: &Path,
+    errors: &mut Vec<String>,
+) -> bool {
+    for _ in 0..2 {
+        match operations.reopen_metrics(metrics, path) {
+            Ok(()) => return true,
+            Err(error) => errors.push(format!("reopen_original_metrics: {error}")),
+        }
+    }
+    false
+}
+
+fn restore_error(mut primary: AppError, recovery: RestoreRecovery) -> AppError {
+    if let Some(state) = recovery.fatal_state {
+        let primary_code = primary.code.clone();
+        let primary_detail = primary.to_string();
+        return AppError::new("restore_rollback_failed")
+            .with_param("primary_code", primary_code)
+            .with_param("state", state)
+            .with_param("rollback_errors", recovery.errors.join(" | "))
+            .with_detail(primary_detail);
+    }
+    if !recovery.errors.is_empty() {
+        primary
+            .params
+            .insert("rollback_errors".into(), recovery.errors.join(" | "));
+    }
+    primary
 }
 
 fn write_data_directory(
@@ -821,6 +997,7 @@ mod tests {
         profile::ButtonAction,
     };
     use std::{
+        collections::VecDeque,
         sync::atomic::{AtomicU64, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -908,6 +1085,110 @@ mod tests {
 
     fn workspace(directory: &TestDirectory) -> Workspace {
         Workspace::create(&directory.0, vec![device_profile()]).unwrap()
+    }
+
+    #[derive(Default)]
+    struct InjectedRestoreOperations {
+        rename_failures: BTreeMap<(String, String), usize>,
+        reopen_failures: VecDeque<bool>,
+    }
+
+    impl InjectedRestoreOperations {
+        fn fail_rename(mut self, from: &str, to: &str, count: usize) -> Self {
+            self.rename_failures.insert((from.into(), to.into()), count);
+            self
+        }
+
+        fn fail_reopens(mut self, failures: impl IntoIterator<Item = bool>) -> Self {
+            self.reopen_failures.extend(failures);
+            self
+        }
+    }
+
+    impl RestoreOperations for InjectedRestoreOperations {
+        fn rename(&mut self, from: &Path, to: &Path) -> std::io::Result<()> {
+            let key = (
+                from.file_name().unwrap().to_string_lossy().into_owned(),
+                to.file_name().unwrap().to_string_lossy().into_owned(),
+            );
+            if let Some(remaining) = self.rename_failures.get_mut(&key)
+                && *remaining > 0
+            {
+                *remaining -= 1;
+                return Err(std::io::Error::other("injected rename failure"));
+            }
+            fs::rename(from, to)
+        }
+
+        fn remove_dir_all(&mut self, path: &Path) -> std::io::Result<()> {
+            fs::remove_dir_all(path)
+        }
+
+        fn reopen_metrics(
+            &mut self,
+            metrics: &MetricsStore,
+            path: &Path,
+        ) -> Result<(), rusqlite::Error> {
+            if self.reopen_failures.pop_front() == Some(true) {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+            metrics.reopen(path)
+        }
+    }
+
+    fn restore_fixture(
+        directory: &TestDirectory,
+    ) -> (
+        PathBuf,
+        Workspace,
+        MetricsStore,
+        SettingsDocument,
+        MetricsBackup,
+    ) {
+        let source_directory = directory.path("source-operations");
+        let target_directory = directory.path("target-operations");
+        let mut source = Workspace::create(&source_directory, vec![device_profile()]).unwrap();
+        source
+            .save_settings(EditorSettingsPatch {
+                schema_version: SETTINGS_SCHEMA_VERSION,
+                editor_profile: Some("red-phone-v1".into()),
+                language: Language::EnUs,
+            })
+            .unwrap();
+        let source_metrics =
+            MetricsStore::open(&source_directory.join("data/metrics.sqlite3")).unwrap();
+        let device = DeviceId::new("luatos-esp32s3-aio", "AAAAAAAAAAAA").unwrap();
+        let source_attribution = MetricAttribution {
+            device_id: device.clone(),
+            device_name: "Backup desk".into(),
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        source_metrics
+            .record_button_press(&source_attribution, "A", 1_720_086_400_000)
+            .unwrap();
+        let backup_path = directory.path("operations-backup.yaml");
+        source.export_backup(&backup_path, &source_metrics).unwrap();
+
+        let target = Workspace::create(&target_directory, vec![device_profile()]).unwrap();
+        let target_metrics =
+            MetricsStore::open(&target_directory.join("data/metrics.sqlite3")).unwrap();
+        let original_attribution = MetricAttribution {
+            device_name: "Original desk".into(),
+            ..source_attribution
+        };
+        target_metrics
+            .record_button_press(&original_attribution, "B", 1_720_086_400_001)
+            .unwrap();
+        let original_settings = target.settings.clone();
+        let original_metrics = target_metrics.backup().unwrap();
+        (
+            backup_path,
+            target,
+            target_metrics,
+            original_settings,
+            original_metrics,
+        )
     }
 
     #[test]
@@ -1344,15 +1625,104 @@ mod tests {
         let original_settings = target.settings.clone();
         let original_metrics = target_metrics.backup().unwrap();
 
+        let mut operations = InjectedRestoreOperations::default().fail_reopens([true, false]);
         let error = target
-            .restore_backup_with_reopen(&backup_path, &target_metrics, |_metrics, _path| {
-                Err(AppError::new("injected_metrics_reopen_failure"))
-            })
+            .restore_backup_with_operations(&backup_path, &target_metrics, &mut operations)
             .unwrap_err();
 
-        assert_eq!(error.code, "injected_metrics_reopen_failure");
+        assert_eq!(error.code, "reopen_metrics");
         assert_eq!(target.settings, original_settings);
         assert_eq!(target_metrics.backup().unwrap(), original_metrics);
+        assert_eq!(
+            Workspace::load_existing(&target_directory)
+                .unwrap()
+                .settings,
+            original_settings
+        );
+        assert!(!target_directory.join("data.previous").exists());
+        assert!(!target_directory.join("data.next").exists());
+    }
+
+    #[test]
+    fn rollback_recovers_after_secondary_quarantine_and_reopen_failures() {
+        let directory = TestDirectory::new();
+        let (backup, mut target, metrics, original_settings, original_metrics) =
+            restore_fixture(&directory);
+        let target_directory = target.config_directory.clone();
+        let mut operations = InjectedRestoreOperations::default()
+            .fail_rename("data", "data.next", 1)
+            .fail_reopens([true, true, false]);
+
+        let error = target
+            .restore_backup_with_operations(&backup, &metrics, &mut operations)
+            .unwrap_err();
+
+        assert_eq!(error.code, "reopen_metrics");
+        assert!(error.params.contains_key("rollback_errors"));
+        assert_eq!(target.settings, original_settings);
+        assert_eq!(metrics.backup().unwrap(), original_metrics);
+        assert_eq!(
+            Workspace::load_existing(&target_directory)
+                .unwrap()
+                .settings,
+            original_settings
+        );
+        assert!(!target_directory.join("data.previous").exists());
+        assert!(!target_directory.join("data.next").exists());
+    }
+
+    #[test]
+    fn activation_rollback_retries_a_secondary_previous_generation_rename_failure() {
+        let directory = TestDirectory::new();
+        let (backup, mut target, metrics, original_settings, original_metrics) =
+            restore_fixture(&directory);
+        let target_directory = target.config_directory.clone();
+        let mut operations = InjectedRestoreOperations::default()
+            .fail_rename("data.next", "data", 1)
+            .fail_rename("data.previous", "data", 1);
+
+        let error = target
+            .restore_backup_with_operations(&backup, &metrics, &mut operations)
+            .unwrap_err();
+
+        assert_eq!(error.code, "activate_restore");
+        assert!(error.params.contains_key("rollback_errors"));
+        assert_eq!(target.settings, original_settings);
+        assert_eq!(metrics.backup().unwrap(), original_metrics);
+        assert_eq!(
+            Workspace::load_existing(&target_directory)
+                .unwrap()
+                .settings,
+            original_settings
+        );
+        assert!(!target_directory.join("data.previous").exists());
+        assert!(!target_directory.join("data.next").exists());
+    }
+
+    #[test]
+    fn persistent_rollback_reopen_failure_reports_deterministic_fatal_state() {
+        let directory = TestDirectory::new();
+        let (backup, mut target, metrics, original_settings, _original_metrics) =
+            restore_fixture(&directory);
+        let target_directory = target.config_directory.clone();
+        let mut operations =
+            InjectedRestoreOperations::default().fail_reopens([true, true, true, true]);
+
+        let error = target
+            .restore_backup_with_operations(&backup, &metrics, &mut operations)
+            .unwrap_err();
+
+        assert_eq!(error.code, "restore_rollback_failed");
+        assert_eq!(
+            error.params.get("primary_code").map(String::as_str),
+            Some("reopen_metrics")
+        );
+        assert_eq!(
+            error.params.get("state").map(String::as_str),
+            Some("original_active_metrics_closed")
+        );
+        assert_eq!(target.settings, original_settings);
+        assert!(metrics.backup().is_err());
         assert_eq!(
             Workspace::load_existing(&target_directory)
                 .unwrap()

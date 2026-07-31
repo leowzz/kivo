@@ -45,6 +45,7 @@ pub struct RuntimeActivity {
 struct MetricPress {
     attribution: MetricAttribution,
     button_id: String,
+    occurred_at_ms: u64,
 }
 
 impl RuntimeActivity {
@@ -160,9 +161,19 @@ impl DeviceSession {
         output
     }
 
+    #[cfg(test)]
     pub fn on_message(
         &mut self,
         message: DeviceMessage,
+        copy: &mut impl FnMut(&str) -> Result<(), String>,
+    ) -> SessionOutput {
+        self.on_message_at(message, now_ms(), copy)
+    }
+
+    fn on_message_at(
+        &mut self,
+        message: DeviceMessage,
+        occurred_at_ms: u64,
         copy: &mut impl FnMut(&str) -> Result<(), String>,
     ) -> SessionOutput {
         let mut output = SessionOutput::default();
@@ -200,6 +211,7 @@ impl DeviceSession {
                             .map(|button_id| MetricPress {
                                 attribution: runtime.metric_attribution.clone(),
                                 button_id: button_id.into(),
+                                occurred_at_ms,
                             })
                     });
                 output.activities.push(RuntimeActivity {
@@ -251,13 +263,23 @@ impl DeviceSession {
         output
     }
 
+    #[cfg(test)]
     pub fn on_line(
         &mut self,
         line: &str,
         copy: &mut impl FnMut(&str) -> Result<(), String>,
     ) -> SessionOutput {
+        self.on_line_at(line, now_ms(), copy)
+    }
+
+    fn on_line_at(
+        &mut self,
+        line: &str,
+        occurred_at_ms: u64,
+        copy: &mut impl FnMut(&str) -> Result<(), String>,
+    ) -> SessionOutput {
         match parse_device(line) {
-            Some(message) => self.on_message(message, copy),
+            Some(message) => self.on_message_at(message, occurred_at_ms, copy),
             None if is_hello_line(line) => self.invalidate_hello(),
             None => SessionOutput::default(),
         }
@@ -483,6 +505,7 @@ pub enum EventLevel {
 #[derive(Clone)]
 pub struct WorkerState {
     pub active_profile: Arc<RwLock<Option<RuntimeProfile>>>,
+    pub operation_barrier: Arc<RwLock<()>>,
     pub connection: Arc<RwLock<ConnectionStatus>>,
     pub capabilities: Arc<RwLock<Option<DeviceCapabilities>>>,
     pub runtime_error: Arc<RwLock<Option<RuntimeActivity>>>,
@@ -506,7 +529,7 @@ pub struct RuntimeEvent {
 fn persist_metrics(
     metrics: &MetricsStore,
     activity: &RuntimeActivity,
-    timestamp_ms: u64,
+    snapshot_at_ms: u64,
 ) -> Result<Option<HomeMetricsSnapshot>, rusqlite::Error> {
     let Some(metric_press) = activity.metric_press.as_ref() else {
         return Ok(None);
@@ -514,13 +537,13 @@ fn persist_metrics(
     metrics.record_button_press(
         &metric_press.attribution,
         &metric_press.button_id,
-        timestamp_ms,
+        metric_press.occurred_at_ms,
     )?;
     metrics
         .home_snapshot(
             &metric_press.attribution.device_profile_id,
             None,
-            timestamp_ms,
+            snapshot_at_ms,
         )
         .map(Some)
 }
@@ -554,6 +577,7 @@ fn update_published_capabilities(
 pub fn run_worker(app: AppHandle, state: WorkerState) {
     let WorkerState {
         active_profile,
+        operation_barrier,
         connection,
         capabilities,
         runtime_error,
@@ -646,6 +670,9 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
         let mut action_deadline = None;
         let mut line = Vec::new();
         while !stop.load(Ordering::Relaxed) {
+            let operation = operation_barrier
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let next_profile = active_profile
                 .read()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -714,15 +741,44 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
                     }
                 }
             }
+            drop(operation);
             line.clear();
             match device.read_until(b'\n', &mut line) {
                 Ok(0) => break,
                 Ok(_) => {
+                    let received_at_ms = now_ms();
                     let Ok(text) = std::str::from_utf8(&line) else {
                         continue;
                     };
+                    let _operation = operation_barrier
+                        .read()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let next_profile = active_profile
+                        .read()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .clone();
+                    if next_profile != loaded_model {
+                        loaded_model = next_profile.clone();
+                        let output = session.replace_profile(next_profile);
+                        match write_output(
+                            &app,
+                            &connection,
+                            &runtime_error,
+                            metrics.as_deref(),
+                            device.get_mut(),
+                            output,
+                        ) {
+                            Ok(sent_action) => {
+                                update_action_deadline(&mut action_deadline, &session, sent_action)
+                            }
+                            Err(error) => {
+                                emit_serial_write_error(&app, &connection, error);
+                                break;
+                            }
+                        }
+                    }
                     update_published_capabilities(&capabilities, candidate_board, text);
-                    let output = session.on_line(text, &mut copy_to_clipboard);
+                    let output = session.on_line_at(text, received_at_ms, &mut copy_to_clipboard);
                     match write_output(
                         &app,
                         &connection,
@@ -1111,6 +1167,52 @@ mod tests {
                 .home_snapshot("console", Some(&original_device), 1_720_086_400_000)
                 .unwrap()
                 .total_presses,
+            0
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn persists_receive_time_after_action_work_crosses_a_day_boundary() {
+        let mut session = DeviceSession::new(runtime_model());
+        session.ready = true;
+        let received_at_ms = 1_720_000_000_000;
+        let persisted_at_ms = received_at_ms + 86_400_000;
+        let output = session.on_message_at(
+            DeviceMessage::State {
+                event_id: 1,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            received_at_ms,
+            &mut |_| Ok(()),
+        );
+        let path = std::env::temp_dir().join(format!(
+            "kivo-device-receive-time-{}-{}.sqlite3",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = MetricsStore::open(&path).unwrap();
+
+        persist_metrics(&store, &output.activities[0], persisted_at_ms).unwrap();
+
+        let backup = store.backup().unwrap();
+        assert_eq!(backup.activity_logs[0].occurred_at_ms, received_at_ms);
+        assert_eq!(
+            store
+                .home_snapshot("phone", None, received_at_ms)
+                .unwrap()
+                .today_presses,
+            1
+        );
+        assert_eq!(
+            store
+                .home_snapshot("phone", None, persisted_at_ms)
+                .unwrap()
+                .today_presses,
             0
         );
         std::fs::remove_file(path).unwrap();

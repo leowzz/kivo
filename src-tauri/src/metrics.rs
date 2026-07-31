@@ -352,6 +352,7 @@ impl MetricsStore {
             WHERE device_profile_id = ?1
               AND (?2 IS NULL OR device_id = ?2)
               AND day >= date(?3 / 1000, 'unixepoch', 'localtime', '-6 days')
+              AND day <= date(?3 / 1000, 'unixepoch', 'localtime')
             GROUP BY button_id, day
             ORDER BY day ASC, button_id ASC
             ",
@@ -918,5 +919,29 @@ mod tests {
         assert!(yaml.contains("activity_logs:"));
         assert!(yaml.contains("occurred_at_ms:"));
         assert!(yaml.contains("device_profile_id:"));
+    }
+
+    #[test]
+    fn seven_day_heatmap_excludes_future_days() {
+        let directory = TestDirectory::new();
+        let store = MetricsStore::open(&directory.0.join("metrics.sqlite3")).unwrap();
+        let attribution = MetricAttribution {
+            device_id: DeviceId::new("luatos-esp32s3-aio", "AAAAAAAAAAAA").unwrap(),
+            device_name: "Desk".into(),
+            device_profile_id: "phone".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        let today = 1_720_086_400_000;
+        store
+            .record_button_press(&attribution, "ONE", today)
+            .unwrap();
+        store
+            .record_button_press(&attribution, "ONE", today + 8 * 86_400_000)
+            .unwrap();
+
+        let snapshot = store.home_snapshot("phone", None, today).unwrap();
+
+        assert_eq!(snapshot.heatmap.len(), 1);
+        assert_eq!(snapshot.heatmap[0].presses, 1);
     }
 }
