@@ -1,6 +1,8 @@
 #include <unity.h>
 
+#include "BoardProfile.h"
 #include "GpioTriggerController.h"
+#include "Handshake.h"
 #include "InputTopology.h"
 #include "TriggerProtocol.h"
 
@@ -45,6 +47,22 @@ void test_board_profiles_enforce_exact_safe_pins() {
   TopologyBuilder reserved(kVccGndYdRp2040);
   TEST_ASSERT_TRUE(reserved.begin(1, 30));
   TEST_ASSERT_FALSE(reserved.addDirect(1, 0, {23}));
+}
+
+void test_formats_protocol_v3_hello_with_board_and_build() {
+  TEST_ASSERT_EQUAL_STRING(
+      "HELLO 3 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 23 "
+      "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22\n",
+      formatHello(kVccGndYdRp2040, "0.1.0+gabc1234").c_str());
+}
+
+void test_rejects_empty_firmware_build_id() {
+  TEST_ASSERT_EQUAL_STRING("", formatHello(kVccGndYdRp2040, "").c_str());
+}
+
+void test_rejects_whitespace_in_firmware_build_id() {
+  TEST_ASSERT_EQUAL_STRING("",
+                           formatHello(kVccGndYdRp2040, "0.1.0 test").c_str());
 }
 
 void test_contact_edge_reports_unordered_pair_once_after_debounce() {
@@ -420,6 +438,9 @@ int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_commits_complete_matrix_topology_atomically);
   RUN_TEST(test_board_profiles_enforce_exact_safe_pins);
+  RUN_TEST(test_formats_protocol_v3_hello_with_board_and_build);
+  RUN_TEST(test_rejects_empty_firmware_build_id);
+  RUN_TEST(test_rejects_whitespace_in_firmware_build_id);
   RUN_TEST(test_contact_edge_reports_unordered_pair_once_after_debounce);
   RUN_TEST(test_parses_runtime_configuration_commands);
   RUN_TEST(test_parses_extended_registered_board_pin_domain);

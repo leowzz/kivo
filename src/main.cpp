@@ -4,13 +4,14 @@
 #include <vector>
 
 #include "GpioTriggerController.h"
+#include "Handshake.h"
 #include "TriggerProtocol.h"
 #include "platform/Platform.h"
 
 namespace {
 constexpr std::size_t kMaxResponseLineLength = 255;
-constexpr const char *kHelloLine =
-    "HELLO 2 esp32s3 17 0 1 2 3 4 5 6 7 8 9 12 13 14 15 16 17 18\n";
+const std::string helloLine =
+    formatHello(platform::boardProfile(), KIVO_FIRMWARE_BUILD_ID);
 
 GpioTriggerController controller(platform::boardProfile());
 ResponseLineBuffer responseLines(kMaxResponseLineLength);
@@ -63,7 +64,7 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
 
   switch (command->kind) {
     case HelperCommandKind::Hello:
-      writeLine(kHelloLine);
+      writeLine(helloLine);
       return;
     case HelperCommandKind::ConfigBegin:
       if (controller.isLearning() ||
@@ -208,7 +209,7 @@ void setup() {
 void loop() {
   const std::uint32_t nowMs = millis();
   const bool connected = platform::connected();
-  if (connected && !helperConnected) writeLine(kHelloLine);
+  if (connected && !helperConnected) writeLine(helloLine);
   helperConnected = connected;
   controller.expire(nowMs);
   readHelperResponses(nowMs);
