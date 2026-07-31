@@ -23,3 +23,17 @@ Environment: macOS 15.7.4 (`Darwin 24.6.0 arm64`), uv 0.11.32, Cargo 1.94.1, npm
 | RP2040 acceptance build | `rtk proxy env KIVO_FIRMWARE_BUILD_ID=0.1.0+acceptance uv run pio run -e rp2040` | `e1231babcf172c3658f025409c0a143351208a7f` | PlatformIO RP2040 | 1.63 s | PASS, `.pio/build/rp2040/firmware.uf2` exists |
 
 The acceptance builds compile firmware only. No physical upload command was run, and no attached device was selected.
+
+## Final Integration Gate
+
+Final tested source commit: `ffbedf7` (`fix: harden explicit ESP32-S3 upload recovery`). Evidence-only commits after this SHA do not change the tested runtime, firmware, or UI implementation.
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Complete non-destructive gate | `rtk test make test` | PASS: release/upload contracts, 29 native firmware cases, 110 Rust unit tests plus the four-Device integration test, Clippy `-D warnings`, 115 frontend tests, and production frontend build |
+| ESP32-S3 acceptance build | `rtk proxy env KIVO_FIRMWARE_BUILD_ID=0.1.0+acceptance uv run pio run -e esp32s3` | PASS in 0.73 s; `.pio/build/esp32s3/firmware.bin` exists (321.5K) |
+| RP2040 acceptance build | `rtk proxy env KIVO_FIRMWARE_BUILD_ID=0.1.0+acceptance uv run pio run -e rp2040` | PASS in 1.42 s; `.pio/build/rp2040/firmware.uf2` exists (224.0K) |
+| macOS application bundle | `rtk npm run tauri build -- --bundles app` | PASS; release compile completed in 1m01s and produced `src-tauri/target/release/bundle/macos/Kivo.app` |
+| Bundle signature structure | `rtk proxy codesign --verify --deep --strict src-tauri/target/release/bundle/macos/Kivo.app` | PASS; ad-hoc signed 13M bundle |
+
+The bundle was not notarized because no Apple notarization credentials were configured. This does not alter the local packaged-application result, but distribution outside the development machine requires the release signing/notarization workflow.
