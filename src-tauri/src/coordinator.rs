@@ -178,7 +178,7 @@ pub struct RuntimeEvent {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct RuntimeEventContext {
+pub struct RuntimeEventContext {
     pub(crate) timestamp_ms: u64,
     pub(crate) port: Option<String>,
     pub(crate) device_profile_id: Option<String>,
@@ -233,7 +233,7 @@ impl RuntimeEventContext {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CapturedInput {
+pub struct CapturedInput {
     pub(crate) context: RuntimeEventContext,
     pub(crate) runtime_profile: Option<Arc<RuntimeProfileSnapshot>>,
     pub(crate) event_id: u64,

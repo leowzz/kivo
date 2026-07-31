@@ -11,14 +11,19 @@ mod storage;
 mod tray;
 mod workspace;
 
-use coordinator::{
-    CandidateStatus, DeviceStatus, IdentityDimension, RuntimeCoordinator, RuntimeEvent,
-    WorkspaceRevision,
+pub use coordinator::{
+    BootloaderObservation, CandidateStatus, ConnectionDimension, DeviceMode, DeviceStatus,
+    IdentityDimension, RuntimeCoordinator, RuntimeDimension, RuntimeEvent, SerialObservation,
+    UsbEnumerator, WorkspaceRevision,
 };
+pub use device::{SerialTransport, SerialTransportFactory, SystemWorkerLauncher};
 use hardware::{BOARD_PROFILES, BoardProfile};
 use metrics::{HomeMetricsSnapshot, MetricsStore};
-use paste::PasteCoordinator;
-use profile::DeviceProfile;
+pub use model::{ButtonDefinition, ButtonGroup, ModelLayout};
+pub use paste::{ClipboardWriter, Clock, PasteCoordinator};
+pub use profile::{
+    ButtonAction, DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION,
+};
 use serde::Serialize;
 use std::{
     fs,
@@ -33,8 +38,8 @@ use std::{
 use tauri::{Emitter, Manager};
 use workspace::{
     AppError, AssignmentResolution, BackupPreview, EditorSettingsPatch, ImportPreview, Language,
-    RuntimeAssignment, Workspace,
 };
+pub use workspace::{RuntimeAssignment, Workspace};
 
 struct AppState {
     workspace: Arc<RwLock<Workspace>>,

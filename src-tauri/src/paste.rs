@@ -3,12 +3,33 @@ use std::{
     collections::{BTreeMap, VecDeque},
     io::Write,
     process::{Command, Stdio},
-    sync::{Mutex, mpsc},
+    sync::{Arc, Mutex, mpsc},
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
 pub const ACTION_TIMEOUT: Duration = Duration::from_millis(1800);
+
+pub trait Clock: Send + Sync + 'static {
+    fn monotonic_now(&self) -> Instant;
+    fn unix_time_ms(&self) -> u64;
+}
+
+#[derive(Default)]
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn monotonic_now(&self) -> Instant {
+        Instant::now()
+    }
+
+    fn unix_time_ms(&self) -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    }
+}
 
 pub trait ClipboardWriter: Send + 'static {
     fn write(&self, text: &str) -> Result<(), String>;
@@ -44,12 +65,20 @@ pub struct PasteCoordinator {
 
 impl PasteCoordinator {
     pub fn system() -> Self {
-        Self::with_timeout(SystemClipboard, ACTION_TIMEOUT)
+        Self::with_clock(SystemClipboard, ACTION_TIMEOUT, Arc::new(SystemClock))
     }
 
     pub fn with_timeout(clipboard: impl ClipboardWriter, timeout: Duration) -> Self {
+        Self::with_clock(clipboard, timeout, Arc::new(SystemClock))
+    }
+
+    pub fn with_clock(
+        clipboard: impl ClipboardWriter,
+        timeout: Duration,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
         let (sender, receiver) = mpsc::channel();
-        let join = thread::spawn(move || run_paste_loop(receiver, clipboard, timeout));
+        let join = thread::spawn(move || run_paste_loop(receiver, clipboard, timeout, clock));
         Self {
             handle: PasteHandle { sender },
             join: Mutex::new(Some(join)),
@@ -175,21 +204,30 @@ fn run_paste_loop(
     receiver: mpsc::Receiver<PasteMessage>,
     clipboard: impl ClipboardWriter,
     timeout: Duration,
+    clock: Arc<dyn Clock>,
 ) {
     let mut sequences = BTreeMap::<u64, SequenceQueue>::new();
     let mut active: Option<ActivePaste> = None;
     loop {
         let message = match active.as_ref() {
-            Some(current) => match receiver
-                .recv_timeout(current.deadline.saturating_duration_since(Instant::now()))
-            {
+            Some(current) => match receiver.recv_timeout(
+                current
+                    .deadline
+                    .saturating_duration_since(clock.monotonic_now()),
+            ) {
                 Ok(message) => Some(message),
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     let timed_out = active.take().expect("active paste exists");
                     let sequence = timed_out.request.receive_sequence;
                     let _ = timed_out.request.reply.send(PasteReply::TimedOut);
                     cancel_sequence(&mut sequences, sequence);
-                    start_next(&mut sequences, &mut active, &clipboard, timeout);
+                    start_next(
+                        &mut sequences,
+                        &mut active,
+                        &clipboard,
+                        timeout,
+                        clock.as_ref(),
+                    );
                     None
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -295,7 +333,13 @@ fn run_paste_loop(
                 break;
             }
         }
-        start_next(&mut sequences, &mut active, &clipboard, timeout);
+        start_next(
+            &mut sequences,
+            &mut active,
+            &clipboard,
+            timeout,
+            clock.as_ref(),
+        );
     }
     cancel_all(&mut sequences, active);
 }
@@ -305,6 +349,7 @@ fn start_next(
     active: &mut Option<ActivePaste>,
     clipboard: &impl ClipboardWriter,
     timeout: Duration,
+    clock: &dyn Clock,
 ) {
     while active.is_none() {
         let Some(sequence_id) = sequences.keys().next().copied() else {
@@ -319,7 +364,7 @@ fn start_next(
                     let _ = request.reply.send(PasteReply::Granted);
                     *active = Some(ActivePaste {
                         request,
-                        deadline: Instant::now() + timeout,
+                        deadline: clock.monotonic_now() + timeout,
                     });
                     return;
                 }

@@ -7,7 +7,7 @@ use crate::{
     },
     hardware::{BoardProfile, DeviceId},
     metrics::{HomeMetricsSnapshot, MetricAttribution, MetricsStore},
-    paste::{PasteHandle, PasteReply, PasteRequest},
+    paste::{Clock, PasteHandle, PasteReply, PasteRequest, SystemClock},
     profile::DeviceProfile,
     protocol::{
         ActionSequence, DeviceMessage, HelloCapabilities, InputState, PhysicalInput, is_hello_line,
@@ -19,14 +19,14 @@ use serde::Serialize;
 use serialport::{SerialPortInfo, SerialPortType};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
-    io::{BufRead, BufReader, ErrorKind, Write},
+    io::{BufRead, BufReader, ErrorKind, Read, Write},
     sync::{
         Arc, RwLock,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
     thread::{self, JoinHandle},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 const ACTION_ACK_TIMEOUT: Duration = Duration::from_millis(1800);
@@ -936,6 +936,8 @@ pub struct SystemWorkerLauncher {
     paste: PasteHandle,
     metrics: Option<Arc<MetricsStore>>,
     operation_barrier: Arc<RwLock<()>>,
+    transport_factory: Arc<dyn SerialTransportFactory>,
+    clock: Arc<dyn Clock>,
 }
 
 impl SystemWorkerLauncher {
@@ -944,11 +946,76 @@ impl SystemWorkerLauncher {
         metrics: Option<Arc<MetricsStore>>,
         operation_barrier: Arc<RwLock<()>>,
     ) -> Self {
+        Self::with_runtime(
+            paste,
+            metrics,
+            operation_barrier,
+            Arc::new(SystemSerialTransportFactory),
+            Arc::new(SystemClock),
+        )
+    }
+
+    pub fn with_runtime(
+        paste: PasteHandle,
+        metrics: Option<Arc<MetricsStore>>,
+        operation_barrier: Arc<RwLock<()>>,
+        transport_factory: Arc<dyn SerialTransportFactory>,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
         Self {
             paste,
             metrics,
             operation_barrier,
+            transport_factory,
+            clock,
         }
+    }
+}
+
+pub trait SerialTransport: Read + Write + Send {
+    fn prepare(&mut self) -> Result<(), String>;
+}
+
+pub trait SerialTransportFactory: Send + Sync {
+    fn open(&self, port: &str) -> Result<Box<dyn SerialTransport>, String>;
+}
+
+struct SystemSerialTransportFactory;
+
+impl SerialTransportFactory for SystemSerialTransportFactory {
+    fn open(&self, port: &str) -> Result<Box<dyn SerialTransport>, String> {
+        let port = serialport::new(port, 115_200)
+            .timeout(Duration::from_millis(50))
+            .open()
+            .map_err(|error| format!("serial_open_failed: {error}"))?;
+        Ok(Box::new(SystemSerialTransport(port)))
+    }
+}
+
+struct SystemSerialTransport(Box<dyn serialport::SerialPort>);
+
+impl Read for SystemSerialTransport {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.0.read(buffer)
+    }
+}
+
+impl Write for SystemSerialTransport {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.0.write(buffer)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
+}
+
+impl SerialTransport for SystemSerialTransport {
+    fn prepare(&mut self) -> Result<(), String> {
+        self.0
+            .write_data_terminal_ready(true)
+            .and_then(|()| self.0.write_request_to_send(true))
+            .map_err(|error| format!("serial_handshake_failed: {error}"))
     }
 }
 
@@ -961,6 +1028,14 @@ struct SystemDeviceWorker {
 struct PendingPasteReply {
     request: PendingPaste,
     replies: mpsc::Receiver<PasteReply>,
+}
+
+struct WorkerRuntime {
+    paste: PasteHandle,
+    metrics: Option<Arc<MetricsStore>>,
+    operation_barrier: Arc<RwLock<()>>,
+    transport_factory: Arc<dyn SerialTransportFactory>,
+    clock: Arc<dyn Clock>,
 }
 
 pub(crate) fn apply_worker_context_update(
@@ -1004,21 +1079,17 @@ impl WorkerLauncher for SystemWorkerLauncher {
         let (commands, command_receiver) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
-        let paste = self.paste.clone();
-        let metrics = self.metrics.clone();
-        let operation_barrier = Arc::clone(&self.operation_barrier);
+        let runtime = WorkerRuntime {
+            paste: self.paste.clone(),
+            metrics: self.metrics.clone(),
+            operation_barrier: Arc::clone(&self.operation_barrier),
+            transport_factory: Arc::clone(&self.transport_factory),
+            clock: Arc::clone(&self.clock),
+        };
         let join = thread::Builder::new()
             .name(format!("kivo-device-{}", start.device_id.as_str()))
             .spawn(move || {
-                run_isolated_worker(
-                    start,
-                    command_receiver,
-                    events,
-                    paste,
-                    metrics,
-                    operation_barrier,
-                    thread_stop,
-                )
+                run_isolated_worker(start, command_receiver, events, runtime, thread_stop)
             })
             .map_err(|error| error.to_string())?;
         Ok(Box::new(SystemDeviceWorker {
@@ -1033,21 +1104,11 @@ fn run_isolated_worker(
     start: WorkerStart,
     commands: mpsc::Receiver<WorkerCommand>,
     events: mpsc::Sender<WorkerEvent>,
-    paste: PasteHandle,
-    metrics: Option<Arc<MetricsStore>>,
-    operation_barrier: Arc<RwLock<()>>,
+    runtime: WorkerRuntime,
     stop: Arc<AtomicBool>,
 ) {
-    let result = run_isolated_worker_inner(
-        &start,
-        &commands,
-        &events,
-        &paste,
-        metrics.as_deref(),
-        &operation_barrier,
-        &stop,
-    );
-    let _ = paste.cancel_device(&start.device_id);
+    let result = run_isolated_worker_inner(&start, &commands, &events, &runtime, &stop);
+    let _ = runtime.paste.cancel_device(&start.device_id);
     if !stop.load(Ordering::Relaxed) {
         let _ = events.send(WorkerEvent::Disconnected {
             generation: start.generation,
@@ -1061,25 +1122,23 @@ fn run_isolated_worker_inner(
     start: &WorkerStart,
     commands: &mpsc::Receiver<WorkerCommand>,
     events: &mpsc::Sender<WorkerEvent>,
-    paste: &PasteHandle,
-    metrics: Option<&MetricsStore>,
-    operation_barrier: &RwLock<()>,
+    runtime: &WorkerRuntime,
     stop: &AtomicBool,
 ) -> Result<(), String> {
+    let paste = &runtime.paste;
+    let metrics = runtime.metrics.as_deref();
+    let operation_barrier = runtime.operation_barrier.as_ref();
+    let transport_factory = runtime.transport_factory.as_ref();
+    let clock = runtime.clock.as_ref();
     let board = crate::hardware::board_by_id(&start.board_profile_id)
         .ok_or_else(|| "unknown_board_profile".to_owned())?;
-    let mut port = serialport::new(&start.port, 115_200)
-        .timeout(Duration::from_millis(50))
-        .open()
-        .map_err(|error| format!("serial_open_failed: {error}"))?;
-    port.write_data_terminal_ready(true)
-        .and_then(|()| port.write_request_to_send(true))
-        .map_err(|error| format!("serial_handshake_failed: {error}"))?;
+    let mut port = transport_factory.open(&start.port)?;
+    port.prepare()?;
     port.write_all(b"HELLO\n")
         .and_then(|()| port.flush())
         .map_err(|error| format!("serial_handshake_failed: {error}"))?;
     let mut device = BufReader::new(port);
-    let hello = read_valid_hello(&mut device, board, stop)?;
+    let hello = read_valid_hello(&mut device, board, clock, stop)?;
     events
         .send(WorkerEvent::HelloValidated {
             generation: start.generation,
@@ -1094,8 +1153,8 @@ fn run_isolated_worker_inner(
     let mut line = Vec::new();
     let mut current_port = start.port.clone();
     let mut current_context =
-        RuntimeEventContext::unassigned(now_ms()).with_port(current_port.clone());
-    let initial = session.on_message_deferred(DeviceMessage::Hello(hello), 0, now_ms());
+        RuntimeEventContext::unassigned(clock.unix_time_ms()).with_port(current_port.clone());
+    let initial = session.on_message_deferred(DeviceMessage::Hello(hello), 0, clock.unix_time_ms());
     write_isolated_output(
         start,
         events,
@@ -1107,6 +1166,7 @@ fn run_isolated_worker_inner(
         &mut pending_paste,
         &mut action_deadline,
         &current_context,
+        clock,
         stop,
     )?;
 
@@ -1118,29 +1178,36 @@ fn run_isolated_worker_inner(
             let (output, context) = match command {
                 WorkerCommand::UpdatePort(_) => unreachable!("port updates are handled above"),
                 WorkerCommand::UpdateSnapshot(snapshot) => {
-                    current_context =
-                        RuntimeEventContext::from_snapshot(now_ms(), snapshot.as_deref())
-                            .with_port(current_port.clone());
+                    current_context = RuntimeEventContext::from_snapshot(
+                        clock.unix_time_ms(),
+                        snapshot.as_deref(),
+                    )
+                    .with_port(current_port.clone());
                     (session.update_snapshot(snapshot), current_context.clone())
                 }
                 WorkerCommand::Reconfigure { snapshot, revision } => {
-                    current_context =
-                        RuntimeEventContext::from_snapshot(now_ms(), snapshot.as_deref())
-                            .with_port(current_port.clone());
+                    current_context = RuntimeEventContext::from_snapshot(
+                        clock.unix_time_ms(),
+                        snapshot.as_deref(),
+                    )
+                    .with_port(current_port.clone());
                     (
                         session.reconfigure(snapshot, revision),
                         current_context.clone(),
                     )
                 }
                 WorkerCommand::BeginLearning(target) => {
-                    current_context = RuntimeEventContext::from_learning(now_ms(), &target)
-                        .with_port(current_port.clone());
+                    current_context =
+                        RuntimeEventContext::from_learning(clock.unix_time_ms(), &target)
+                            .with_port(current_port.clone());
                     (session.begin_learning(target), current_context.clone())
                 }
                 WorkerCommand::EndLearning { snapshot, revision } => {
-                    current_context =
-                        RuntimeEventContext::from_snapshot(now_ms(), snapshot.as_deref())
-                            .with_port(current_port.clone());
+                    current_context = RuntimeEventContext::from_snapshot(
+                        clock.unix_time_ms(),
+                        snapshot.as_deref(),
+                    )
+                    .with_port(current_port.clone());
                     (
                         session.end_learning(snapshot, revision),
                         current_context.clone(),
@@ -1166,6 +1233,7 @@ fn run_isolated_worker_inner(
                 &mut pending_paste,
                 &mut action_deadline,
                 &context,
+                clock,
                 stop,
             )?;
         }
@@ -1186,7 +1254,8 @@ fn run_isolated_worker_inner(
                         output,
                         &mut pending_paste,
                         &mut action_deadline,
-                        &current_context.with_timestamp(now_ms()),
+                        &current_context.with_timestamp(clock.unix_time_ms()),
+                        clock,
                         stop,
                     )?;
                 }
@@ -1204,7 +1273,8 @@ fn run_isolated_worker_inner(
                         output,
                         &mut pending_paste,
                         &mut action_deadline,
-                        &current_context.with_timestamp(now_ms()),
+                        &current_context.with_timestamp(clock.unix_time_ms()),
+                        clock,
                         stop,
                     )?;
                 }
@@ -1222,7 +1292,8 @@ fn run_isolated_worker_inner(
                         output,
                         &mut pending_paste,
                         &mut action_deadline,
-                        &current_context.with_timestamp(now_ms()),
+                        &current_context.with_timestamp(clock.unix_time_ms()),
+                        clock,
                         stop,
                     )?;
                 }
@@ -1240,7 +1311,8 @@ fn run_isolated_worker_inner(
                         output,
                         &mut pending_paste,
                         &mut action_deadline,
-                        &current_context.with_timestamp(now_ms()),
+                        &current_context.with_timestamp(clock.unix_time_ms()),
+                        clock,
                         stop,
                     )?;
                 }
@@ -1251,7 +1323,7 @@ fn run_isolated_worker_inner(
             }
         }
 
-        if action_deadline.is_some_and(|deadline| Instant::now() >= deadline)
+        if action_deadline.is_some_and(|deadline| clock.monotonic_now() >= deadline)
             && pending_paste.is_none()
             && active_paste_ack.is_none()
         {
@@ -1266,7 +1338,8 @@ fn run_isolated_worker_inner(
                 output,
                 &mut pending_paste,
                 &mut action_deadline,
-                &current_context.with_timestamp(now_ms()),
+                &current_context.with_timestamp(clock.unix_time_ms()),
+                clock,
                 stop,
             )?;
         }
@@ -1278,7 +1351,7 @@ fn run_isolated_worker_inner(
         match device.read_until(b'\n', &mut line) {
             Ok(0) => return Err("device_disconnected".into()),
             Ok(_) => {
-                let received_at_ms = now_ms();
+                let received_at_ms = clock.unix_time_ms();
                 let Ok(text) = std::str::from_utf8(&line) else {
                     continue;
                 };
@@ -1333,6 +1406,7 @@ fn run_isolated_worker_inner(
                             &mut pending_paste,
                             &mut action_deadline,
                             &current_context.with_timestamp(received_at_ms),
+                            clock,
                             stop,
                         )?;
                     }
@@ -1350,6 +1424,7 @@ fn run_isolated_worker_inner(
                             &mut pending_paste,
                             &mut action_deadline,
                             &current_context.with_timestamp(received_at_ms),
+                            clock,
                             stop,
                         )?;
                     }
@@ -1366,6 +1441,7 @@ fn run_isolated_worker_inner(
                             &mut pending_paste,
                             &mut action_deadline,
                             &current_context.with_timestamp(received_at_ms),
+                            clock,
                             stop,
                         )?;
                     }
@@ -1381,11 +1457,12 @@ fn run_isolated_worker_inner(
 fn read_valid_hello<R: BufRead>(
     reader: &mut R,
     board: &BoardProfile,
+    clock: &dyn Clock,
     stop: &AtomicBool,
 ) -> Result<HelloCapabilities, String> {
-    let deadline = Instant::now() + ACTION_ACK_TIMEOUT;
+    let deadline = clock.monotonic_now() + ACTION_ACK_TIMEOUT;
     let mut line = Vec::new();
-    while !stop.load(Ordering::Relaxed) && Instant::now() < deadline {
+    while !stop.load(Ordering::Relaxed) && clock.monotonic_now() < deadline {
         line.clear();
         match reader.read_until(b'\n', &mut line) {
             Ok(0) => return Err("device_disconnected".into()),
@@ -1421,6 +1498,7 @@ fn write_isolated_output<W: Write + ?Sized>(
     pending_paste: &mut Option<PendingPasteReply>,
     action_deadline: &mut Option<Instant>,
     context: &RuntimeEventContext,
+    clock: &dyn Clock,
     stop: &AtomicBool,
 ) -> Result<(), String> {
     emit_worker_activities(
@@ -1430,6 +1508,7 @@ fn write_isolated_output<W: Write + ?Sized>(
         operation_barrier,
         &mut output.activities,
         context,
+        clock,
         stop,
     )?;
     let completed_sequence = !output.completed_receive_sequences.is_empty();
@@ -1472,7 +1551,7 @@ fn write_isolated_output<W: Write + ?Sized>(
         .flush()
         .map_err(|error| format!("serial_write_failed: {error}"))?;
     if sent_action {
-        *action_deadline = Some(Instant::now() + ACTION_ACK_TIMEOUT);
+        *action_deadline = Some(clock.monotonic_now() + ACTION_ACK_TIMEOUT);
     } else if completed_sequence {
         *action_deadline = None;
     }
@@ -1487,6 +1566,7 @@ fn emit_worker_activities(
     operation_barrier: &RwLock<()>,
     activities: &mut Vec<RuntimeActivity>,
     context: &RuntimeEventContext,
+    clock: &dyn Clock,
     stop: &AtomicBool,
 ) -> Result<(), String> {
     for activity in activities.drain(..) {
@@ -1498,7 +1578,7 @@ fn emit_worker_activities(
             if stop.load(Ordering::Relaxed) {
                 return Ok(());
             }
-            persist_metrics(metrics, &activity, now_ms())
+            persist_metrics(metrics, &activity, clock.unix_time_ms())
                 .map_err(|error| format!("metrics_write_failed: {error}"))?;
         }
         events
@@ -1527,16 +1607,15 @@ pub(crate) fn emit_worker_activities_for_test(
         &RwLock::new(()),
         &mut output.activities,
         context,
+        &SystemClock,
         &AtomicBool::new(false),
     )
     .unwrap();
 }
 
+#[cfg(test)]
 fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    SystemClock.unix_time_ms()
 }
 
 #[cfg(test)]
@@ -1553,7 +1632,11 @@ mod tests {
         protocol::{DeviceMessage, PhysicalInput},
     };
     use serialport::{SerialPortInfo, SerialPortType, UsbPortInfo};
-    use std::{cell::RefCell, collections::BTreeMap};
+    use std::{
+        cell::RefCell,
+        collections::BTreeMap,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     fn runtime_model() -> RuntimeProfileSnapshot {
         RuntimeProfileSnapshot {
@@ -1934,6 +2017,7 @@ mod tests {
             &mut pending_paste,
             &mut action_deadline,
             &new_context,
+            &SystemClock,
             &stop,
         )
         .unwrap();
@@ -1961,6 +2045,7 @@ mod tests {
             &mut pending_paste,
             &mut action_deadline,
             &new_context,
+            &SystemClock,
             &stop,
         )
         .unwrap();
