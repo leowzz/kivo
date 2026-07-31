@@ -1,14 +1,17 @@
 use kivo_lib::{
-    BootloaderObservation, ButtonAction, ButtonDefinition, ButtonGroup, ClipboardWriter, Clock,
-    ConnectionDimension, DeviceMode, DeviceProfile, HardwareProfile, InputSource, ModelLayout,
-    PROFILE_SCHEMA_VERSION, PasteCoordinator, RuntimeAssignment, RuntimeCoordinator,
-    RuntimeDimension, SerialObservation, SerialTransport, SerialTransportFactory,
-    SystemWorkerLauncher, UsbEnumerator, Workspace, WorkspaceRevision,
     hardware::{BOARD_PROFILES, BoardProfile, DeviceId},
+    test_support::{
+        BootloaderObservation, ButtonAction, ButtonDefinition, ButtonGroup, ClipboardWriter, Clock,
+        ConnectionDimension, DeviceMode, DeviceProfile, HardwareProfile, InputSource, ModelLayout,
+        PROFILE_SCHEMA_VERSION, PasteCoordinator, RuntimeAssignment, RuntimeCoordinator,
+        RuntimeDimension, SerialObservation, SerialTransport, SerialTransportFactory,
+        SystemWorkerLauncher, UsbEnumerator, Workspace, WorkspaceRevision,
+    },
 };
 use std::{
     collections::{BTreeMap, VecDeque},
     io::{self, ErrorKind, Read, Write},
+    ops::{Deref, DerefMut},
     path::PathBuf,
     sync::{Arc, Condvar, Mutex, RwLock},
     thread,
@@ -40,29 +43,57 @@ impl UsbEnumerator for FakeUsbEnumerator {
 
 struct FakeClock {
     base: Instant,
-    elapsed_ms: Mutex<u64>,
+    state: Mutex<FakeClockState>,
+}
+
+#[derive(Default)]
+struct FakeClockState {
+    elapsed_ms: u64,
+    deadlines: Vec<(Instant, Box<dyn FnOnce() + Send>)>,
 }
 
 impl FakeClock {
     fn new() -> Self {
         Self {
             base: Instant::now(),
-            elapsed_ms: Mutex::new(0),
+            state: Mutex::new(FakeClockState::default()),
         }
     }
 
     fn advance(&self, duration: Duration) {
-        *self.elapsed_ms.lock().unwrap() += duration.as_millis() as u64;
+        let due = {
+            let mut state = self.state.lock().unwrap();
+            state.elapsed_ms += duration.as_millis() as u64;
+            let now = self.base + Duration::from_millis(state.elapsed_ms);
+            let mut due = Vec::new();
+            let mut pending = Vec::new();
+            for (deadline, wake) in std::mem::take(&mut state.deadlines) {
+                if deadline <= now {
+                    due.push(wake);
+                } else {
+                    pending.push((deadline, wake));
+                }
+            }
+            state.deadlines = pending;
+            due
+        };
+        for wake in due {
+            wake();
+        }
     }
 }
 
 impl Clock for FakeClock {
     fn monotonic_now(&self) -> Instant {
-        self.base + Duration::from_millis(*self.elapsed_ms.lock().unwrap())
+        self.base + Duration::from_millis(self.state.lock().unwrap().elapsed_ms)
     }
 
     fn unix_time_ms(&self) -> u64 {
-        1_720_000_000_000 + *self.elapsed_ms.lock().unwrap()
+        1_720_000_000_000 + self.state.lock().unwrap().elapsed_ms
+    }
+
+    fn schedule_deadline(&self, deadline: Instant, wake: Box<dyn FnOnce() + Send>) {
+        self.state.lock().unwrap().deadlines.push((deadline, wake));
     }
 }
 
@@ -234,6 +265,16 @@ impl FakeTransportFactory {
             .cloned()
             .collect()
     }
+
+    fn device_action_lines(&self, port: &str, prefix: &str) -> Vec<String> {
+        self.global_writes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(actual_port, line)| actual_port == port && line.starts_with(prefix))
+            .map(|(_, line)| line.clone())
+            .collect()
+    }
 }
 
 impl SerialTransportFactory for FakeTransportFactory {
@@ -270,6 +311,32 @@ impl TestDirectory {
 impl Drop for TestDirectory {
     fn drop(&mut self) {
         std::fs::remove_dir_all(&self.0).unwrap();
+    }
+}
+
+struct RuntimeFixture {
+    coordinator: RuntimeCoordinator,
+    paste: PasteCoordinator,
+}
+
+impl Deref for RuntimeFixture {
+    type Target = RuntimeCoordinator;
+
+    fn deref(&self) -> &Self::Target {
+        &self.coordinator
+    }
+}
+
+impl DerefMut for RuntimeFixture {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.coordinator
+    }
+}
+
+impl Drop for RuntimeFixture {
+    fn drop(&mut self) {
+        self.coordinator.shutdown();
+        self.paste.shutdown();
     }
 }
 
@@ -408,6 +475,33 @@ fn wait_for_action_count(
     }
 }
 
+fn wait_for_device_action_count(
+    coordinator: &mut RuntimeCoordinator,
+    factory: &FakeTransportFactory,
+    port: &str,
+    prefix: &str,
+    count: usize,
+) {
+    let deadline = Instant::now() + WAIT;
+    while factory.device_action_lines(port, prefix).len() < count {
+        coordinator.drain_worker_events();
+        assert!(
+            Instant::now() < deadline,
+            "expected {count} {prefix} lines from {port}"
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn assert_device_action_lines(
+    factory: &FakeTransportFactory,
+    port: &str,
+    prefix: &str,
+    expected: &[String],
+) {
+    assert_eq!(factory.device_action_lines(port, prefix), expected);
+}
+
 fn wait_for_input_event(coordinator: &mut RuntimeCoordinator, serial: &str) {
     let deadline = Instant::now() + WAIT;
     loop {
@@ -509,12 +603,13 @@ fn four_concurrent_devices_keep_runtime_and_global_paste_isolated() {
         transports.clone(),
         clock.clone(),
     ));
-    let mut coordinator = RuntimeCoordinator::with_paste(
+    let coordinator = RuntimeCoordinator::with_paste(
         enumerator.clone(),
         launcher,
         workspace.clone(),
         Some(paste.handle()),
     );
+    let mut coordinator = RuntimeFixture { coordinator, paste };
 
     coordinator.scan_once().unwrap();
     wait_until(&mut coordinator, |coordinator| {
@@ -578,23 +673,44 @@ fn four_concurrent_devices_keep_runtime_and_global_paste_isolated() {
         endpoints[*serial].emit(&format!("STATE {} DIRECT {hot_pin} DOWN\n", 100 + index));
     }
     wait_for_action_count(&mut coordinator, &transports, "HOTKEY ", 4);
-    for index in [2usize, 0, 3, 1] {
-        let (serial, ..) = specs[index];
-        endpoints[serial].emit(&format!("DONE {} 1\n", 100 + index));
-    }
-    wait_for_action_count(&mut coordinator, &transports, "HOTKEY ", 8);
-    for index in [1usize, 3, 0, 2] {
-        let (serial, ..) = specs[index];
-        endpoints[serial].emit(&format!("DONE {} 2\n", 100 + index));
-    }
-    let hotkeys = transports.action_lines("HOTKEY ");
     for (index, (_, port, ..)) in specs.iter().enumerate() {
-        assert!(hotkeys.iter().any(|(actual_port, line)| {
-            actual_port == port && line.starts_with(&format!("HOTKEY {} 1 2 ", 100 + index))
-        }));
-        assert!(hotkeys.iter().any(|(actual_port, line)| {
-            actual_port == port && line.starts_with(&format!("HOTKEY {} 2 2 ", 100 + index))
-        }));
+        assert_device_action_lines(
+            &transports,
+            port,
+            "HOTKEY ",
+            &[format!("HOTKEY {} 1 2 0 40\n", 100 + index)],
+        );
+    }
+    let mut advanced = Vec::new();
+    for index in [2usize, 0, 3, 1] {
+        let (serial, port, ..) = specs[index];
+        endpoints[serial].emit(&format!("DONE {} 1\n", 100 + index));
+        wait_for_device_action_count(&mut coordinator, &transports, port, "HOTKEY ", 2);
+        advanced.push(index);
+        for (device_index, (_, device_port, ..)) in specs.iter().enumerate() {
+            let mut expected = vec![format!("HOTKEY {} 1 2 0 40\n", 100 + device_index)];
+            if advanced.contains(&device_index) {
+                expected.push(format!("HOTKEY {} 2 2 0 43\n", 100 + device_index));
+            }
+            assert_device_action_lines(&transports, device_port, "HOTKEY ", &expected);
+        }
+    }
+    for index in [1usize, 3, 0, 2] {
+        let (serial, _, _, _, _, hot_pin, _) = specs[index];
+        endpoints[serial].emit(&format!("DONE {} 2\n", 100 + index));
+        endpoints[serial].emit(&format!("STATE {} DIRECT {hot_pin} UP\n", 150 + index));
+        wait_for_input_event(&mut coordinator, serial);
+    }
+    for (index, (_, port, ..)) in specs.iter().enumerate() {
+        assert_device_action_lines(
+            &transports,
+            port,
+            "HOTKEY ",
+            &[
+                format!("HOTKEY {} 1 2 0 40\n", 100 + index),
+                format!("HOTKEY {} 2 2 0 43\n", 100 + index),
+            ],
+        );
     }
 
     // One disconnect is local, and the same stable identity resumes its assignment on reconnect.
@@ -686,44 +802,51 @@ fn four_concurrent_devices_keep_runtime_and_global_paste_isolated() {
     assert_eq!(ready_count(&coordinator), 4);
 
     // Paste ownership follows central receive order, while unrelated hotkeys remain live.
-    let paste_order = [
-        ("ESP-B", 201u64, 9u8),
-        ("RP-A", 202u64, 11u8),
-        ("ESP-A", 203u64, 7u8),
-    ];
-    for (serial, event_id, pin) in paste_order {
-        let endpoint = if serial == "ESP-A" {
-            &esp_a_reconnected
-        } else {
-            &endpoints[serial]
-        };
-        endpoint.emit(&format!("STATE {event_id} DIRECT {pin} DOWN\n"));
-        wait_for_input_event(&mut coordinator, serial);
-    }
+    endpoints["ESP-B"].emit("STATE 201 DIRECT 9 DOWN\n");
+    wait_for_input_event(&mut coordinator, "ESP-B");
     wait_for_action_count(&mut coordinator, &transports, "PASTE ", 1);
     assert_eq!(clipboard.writes(), ["paste-profile-esp-b"]);
+
+    endpoints["RP-A"].emit("STATE 202 DIRECT 11 DOWN\n");
+    wait_for_input_event(&mut coordinator, "RP-A");
     endpoints["ESP-B"].emit("DONE 201 1\n");
     wait_for_action_count(&mut coordinator, &transports, "PASTE ", 2);
     assert_eq!(
         clipboard.writes(),
         ["paste-profile-esp-b", "paste-profile-rp-a"]
     );
+
+    esp_a_reconnected.emit("STATE 203 DIRECT 7 DOWN\n");
+    wait_for_input_event(&mut coordinator, "ESP-A");
     endpoints["RP-B"].emit("STATE 250 DIRECT 12 DOWN\n");
+    wait_for_input_event(&mut coordinator, "RP-B");
     wait_for_action_count(&mut coordinator, &transports, "HOTKEY ", 9);
     endpoints["RP-B"].emit("DONE 250 1\n");
     wait_for_action_count(&mut coordinator, &transports, "HOTKEY ", 10);
     endpoints["RP-B"].emit("DONE 250 2\n");
-    assert_eq!(transports.action_lines("PASTE ").len(), 2);
-
-    // The fourth paste request wakes the actor after the injected deadline advances.
-    clock.advance(Duration::from_secs(61));
     endpoints["RP-B"].emit("STATE 204 DIRECT 13 DOWN\n");
+    // Worker/coordinator channels are FIFO: observing this input proves the preceding
+    // hotkey SequenceFinished was handled before the clock can advance.
     wait_for_input_event(&mut coordinator, "RP-B");
-    wait_until(&mut coordinator, |_| {
-        transports.action_lines("PASTE ").len() >= 3
-    });
+    assert_eq!(transports.action_lines("PASTE ").len(), 2);
+    assert!(
+        transports
+            .device_action_lines("/dev/fake-esp-a", "PASTE ")
+            .is_empty()
+    );
+    assert!(
+        transports
+            .device_action_lines("/dev/fake-rp-b", "PASTE ")
+            .is_empty()
+    );
+
+    // Advancing time alone wakes the actor and releases the next FIFO request.
+    clock.advance(Duration::from_secs(61));
+    esp_a_reconnected.wait_for_line(|line| line == "PASTE 203 1 1\n");
+    assert_eq!(transports.action_lines("PASTE ").len(), 3);
     esp_a_reconnected.emit("DONE 203 1\n");
     wait_for_action_count(&mut coordinator, &transports, "PASTE ", 4);
+    assert_eq!(transports.action_lines("PASTE ").len(), 4);
     endpoints["RP-B"].emit("DONE 204 1\n");
     wait_until(&mut coordinator, |coordinator| {
         coordinator.devices().iter().any(|status| {
@@ -782,7 +905,4 @@ fn four_concurrent_devices_keep_runtime_and_global_paste_isolated() {
                     && status.runtime == RuntimeDimension::Ready
             })
     );
-
-    coordinator.shutdown();
-    paste.shutdown();
 }

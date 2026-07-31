@@ -13,6 +13,7 @@ pub const ACTION_TIMEOUT: Duration = Duration::from_millis(1800);
 pub trait Clock: Send + Sync + 'static {
     fn monotonic_now(&self) -> Instant;
     fn unix_time_ms(&self) -> u64;
+    fn schedule_deadline(&self, deadline: Instant, wake: Box<dyn FnOnce() + Send>);
 }
 
 #[derive(Default)]
@@ -28,6 +29,14 @@ impl Clock for SystemClock {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64
+    }
+
+    fn schedule_deadline(&self, deadline: Instant, wake: Box<dyn FnOnce() + Send>) {
+        let delay = deadline.saturating_duration_since(Instant::now());
+        thread::spawn(move || {
+            thread::sleep(delay);
+            wake();
+        });
     }
 }
 
@@ -78,7 +87,9 @@ impl PasteCoordinator {
         clock: Arc<dyn Clock>,
     ) -> Self {
         let (sender, receiver) = mpsc::channel();
-        let join = thread::spawn(move || run_paste_loop(receiver, clipboard, timeout, clock));
+        let loop_sender = sender.clone();
+        let join =
+            thread::spawn(move || run_paste_loop(receiver, loop_sender, clipboard, timeout, clock));
         Self {
             handle: PasteHandle { sender },
             join: Mutex::new(Some(join)),
@@ -183,6 +194,9 @@ enum PasteMessage {
         device_id: DeviceId,
         reply: mpsc::Sender<Result<(), String>>,
     },
+    DeadlineElapsed {
+        token: u64,
+    },
     Shutdown {
         reply: mpsc::Sender<()>,
     },
@@ -197,48 +211,22 @@ struct SequenceQueue {
 
 struct ActivePaste {
     request: PasteRequest,
-    deadline: Instant,
+    deadline_token: u64,
 }
 
 fn run_paste_loop(
     receiver: mpsc::Receiver<PasteMessage>,
+    sender: mpsc::Sender<PasteMessage>,
     clipboard: impl ClipboardWriter,
     timeout: Duration,
     clock: Arc<dyn Clock>,
 ) {
     let mut sequences = BTreeMap::<u64, SequenceQueue>::new();
     let mut active: Option<ActivePaste> = None;
+    let mut next_deadline_token = 0u64;
     loop {
-        let message = match active.as_ref() {
-            Some(current) => match receiver.recv_timeout(
-                current
-                    .deadline
-                    .saturating_duration_since(clock.monotonic_now()),
-            ) {
-                Ok(message) => Some(message),
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    let timed_out = active.take().expect("active paste exists");
-                    let sequence = timed_out.request.receive_sequence;
-                    let _ = timed_out.request.reply.send(PasteReply::TimedOut);
-                    cancel_sequence(&mut sequences, sequence);
-                    start_next(
-                        &mut sequences,
-                        &mut active,
-                        &clipboard,
-                        timeout,
-                        clock.as_ref(),
-                    );
-                    None
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            },
-            None => match receiver.recv() {
-                Ok(message) => Some(message),
-                Err(_) => break,
-            },
-        };
-        let Some(message) = message else {
-            continue;
+        let Ok(message) = receiver.recv() else {
+            break;
         };
         match message {
             PasteMessage::Register {
@@ -327,6 +315,17 @@ fn run_paste_loop(
                 });
                 let _ = reply.send(Ok(()));
             }
+            PasteMessage::DeadlineElapsed { token } => {
+                if active
+                    .as_ref()
+                    .is_some_and(|active| active.deadline_token == token)
+                {
+                    let timed_out = active.take().expect("active paste exists");
+                    let sequence = timed_out.request.receive_sequence;
+                    let _ = timed_out.request.reply.send(PasteReply::TimedOut);
+                    cancel_sequence(&mut sequences, sequence);
+                }
+            }
             PasteMessage::Shutdown { reply } => {
                 cancel_all(&mut sequences, active.take());
                 let _ = reply.send(());
@@ -339,6 +338,8 @@ fn run_paste_loop(
             &clipboard,
             timeout,
             clock.as_ref(),
+            &sender,
+            &mut next_deadline_token,
         );
     }
     cancel_all(&mut sequences, active);
@@ -350,6 +351,8 @@ fn start_next(
     clipboard: &impl ClipboardWriter,
     timeout: Duration,
     clock: &dyn Clock,
+    sender: &mpsc::Sender<PasteMessage>,
+    next_deadline_token: &mut u64,
 ) {
     while active.is_none() {
         let Some(sequence_id) = sequences.keys().next().copied() else {
@@ -362,10 +365,24 @@ fn start_next(
             match clipboard.write(&request.text) {
                 Ok(()) => {
                     let _ = request.reply.send(PasteReply::Granted);
+                    *next_deadline_token = next_deadline_token
+                        .checked_add(1)
+                        .expect("paste deadline token exhausted");
+                    let deadline_token = *next_deadline_token;
                     *active = Some(ActivePaste {
                         request,
-                        deadline: clock.monotonic_now() + timeout,
+                        deadline_token,
                     });
+                    let deadline = clock.monotonic_now() + timeout;
+                    let sender = sender.clone();
+                    clock.schedule_deadline(
+                        deadline,
+                        Box::new(move || {
+                            let _ = sender.send(PasteMessage::DeadlineElapsed {
+                                token: deadline_token,
+                            });
+                        }),
+                    );
                     return;
                 }
                 Err(error) => {
