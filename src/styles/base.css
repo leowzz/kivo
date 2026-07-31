@@ -27,7 +27,7 @@ select {
 }
 
 /* 统一焦点环：2px 绿外发光 + 圆角跟随 */
-select:focus, input:focus, textarea:focus, button:focus-visible {
+select:focus, input:focus, textarea:focus, button:focus-visible, summary:focus-visible {
   border-color: var(--green-8);
   box-shadow: 0 0 0 2px var(--green-3);
   outline: none;
