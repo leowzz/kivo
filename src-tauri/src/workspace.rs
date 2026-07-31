@@ -97,6 +97,13 @@ impl Default for SettingsDocument {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct EditorSettingsPatch {
+    pub schema_version: u16,
+    pub editor_profile: Option<String>,
+    pub language: Language,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkspaceSnapshot {
     pub settings: SettingsDocument,
@@ -230,8 +237,14 @@ impl Workspace {
         Ok(())
     }
 
-    pub fn save_settings(&mut self, settings: SettingsDocument) -> Result<(), AppError> {
-        validate_settings(&settings, &self.profiles)?;
+    pub fn save_settings(&mut self, patch: EditorSettingsPatch) -> Result<(), AppError> {
+        validate_editor_settings_patch(&patch, &self.profiles)?;
+        let settings = SettingsDocument {
+            schema_version: patch.schema_version,
+            editor_profile: patch.editor_profile,
+            language: patch.language,
+            devices: self.settings.devices.clone(),
+        };
         self.persist_settings(&settings)?;
         self.settings = settings;
         Ok(())
@@ -519,6 +532,21 @@ fn validate_settings(
         if device.name.trim().is_empty() {
             return Err(AppError::new("invalid_device_name").with_param("device_id", id.as_str()));
         }
+    }
+    Ok(())
+}
+
+fn validate_editor_settings_patch(
+    patch: &EditorSettingsPatch,
+    profiles: &BTreeMap<String, DeviceProfile>,
+) -> Result<(), AppError> {
+    if patch.schema_version != SETTINGS_SCHEMA_VERSION {
+        return Err(AppError::new("unsupported_settings_schema"));
+    }
+    if let Some(editor_profile) = &patch.editor_profile
+        && !profiles.contains_key(editor_profile)
+    {
+        return Err(AppError::new("unknown_editor_profile").with_param("profile", editor_profile));
     }
     Ok(())
 }
@@ -971,6 +999,100 @@ mod tests {
             workspace.settings.devices[&id].runtime_assignment,
             Some(assignment)
         );
+    }
+
+    #[test]
+    fn editor_settings_patch_ignores_stale_device_mutations() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let removed_id = DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap();
+        let changed_id = DeviceId::new("luatos-esp32s3-aio", "654321FEDCBA").unwrap();
+        let added_id = DeviceId::new("luatos-esp32s3-aio", "ADDED123456").unwrap();
+        let assignment = RuntimeAssignment {
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        workspace.enroll_device(removed_id.clone()).unwrap();
+        workspace.enroll_device(changed_id.clone()).unwrap();
+        workspace
+            .set_assignment(&changed_id, assignment.clone())
+            .unwrap();
+        workspace
+            .rename_device(&changed_id, "Authoritative".into())
+            .unwrap();
+        let authoritative_devices = workspace.settings.devices.clone();
+
+        let mut stale = workspace.settings.clone();
+        stale.language = Language::EnUs;
+        stale.devices.remove(&removed_id);
+        stale.devices.get_mut(&changed_id).unwrap().name = "Stale rename".into();
+        stale
+            .devices
+            .get_mut(&changed_id)
+            .unwrap()
+            .runtime_assignment = None;
+        stale.devices.insert(
+            added_id.clone(),
+            DeviceRecord {
+                device_id: added_id,
+                name: "Stale addition".into(),
+                board_profile_id: "luatos-esp32s3-aio".into(),
+                runtime_assignment: Some(assignment),
+            },
+        );
+        let patch: EditorSettingsPatch =
+            serde_json::from_value(serde_json::to_value(stale).unwrap()).unwrap();
+
+        workspace.save_settings(patch).unwrap();
+
+        assert_eq!(workspace.settings.language, Language::EnUs);
+        assert_eq!(workspace.settings.devices, authoritative_devices);
+        assert_eq!(
+            Workspace::load_existing(&directory.0)
+                .unwrap()
+                .settings
+                .devices,
+            authoritative_devices
+        );
+    }
+
+    #[test]
+    fn invalid_editor_settings_patch_rolls_back_memory_and_disk() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let id = DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap();
+        workspace.enroll_device(id).unwrap();
+        let settings_before = workspace.settings.clone();
+        let settings_path = directory.path("data/settings.yaml");
+        let disk_before = fs::read(&settings_path).unwrap();
+
+        let error = workspace
+            .save_settings(EditorSettingsPatch {
+                schema_version: SETTINGS_SCHEMA_VERSION,
+                editor_profile: Some("missing-profile".into()),
+                language: Language::EnUs,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, "unknown_editor_profile");
+        assert_eq!(workspace.settings, settings_before);
+        assert_eq!(fs::read(settings_path).unwrap(), disk_before);
+    }
+
+    #[test]
+    fn editor_settings_patch_rejects_schema_v1() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+
+        let error = workspace
+            .save_settings(EditorSettingsPatch {
+                schema_version: 1,
+                editor_profile: Some("red-phone-v1".into()),
+                language: Language::EnUs,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, "unsupported_settings_schema");
     }
 
     #[test]

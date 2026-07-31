@@ -27,7 +27,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::Manager;
-use workspace::{AppError, BackupPreview, ImportPreview, Language, SettingsDocument, Workspace};
+use workspace::{AppError, BackupPreview, EditorSettingsPatch, ImportPreview, Language, Workspace};
 
 struct AppState {
     workspace: Arc<RwLock<Workspace>>,
@@ -133,7 +133,7 @@ fn save_profile_inner(state: &AppState, profile: DeviceProfile) -> Result<AppSna
 
 fn save_settings_inner(
     state: &AppState,
-    settings: SettingsDocument,
+    settings: EditorSettingsPatch,
 ) -> Result<AppSnapshot, AppError> {
     let mut workspace = state
         .workspace
@@ -259,7 +259,7 @@ fn save_device_profile(
 #[tauri::command]
 fn save_settings(
     state: tauri::State<'_, AppState>,
-    settings: SettingsDocument,
+    settings: EditorSettingsPatch,
 ) -> Result<AppSnapshot, AppError> {
     save_settings_inner(&state, settings)
 }
@@ -569,6 +569,43 @@ mod tests {
     }
 
     #[test]
+    fn workspace_command_saves_only_editor_preferences() {
+        let directory = TestDirectory::new();
+        let state = product_state(&directory.0, vec![product_profile()]);
+        let id = hardware::DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap();
+        {
+            let mut workspace = state.workspace.write().unwrap();
+            workspace.enroll_device(id.clone()).unwrap();
+            workspace
+                .set_assignment(
+                    &id,
+                    workspace::RuntimeAssignment {
+                        device_profile_id: "red-phone-v1".into(),
+                        hardware_profile_id: "esp-primary".into(),
+                    },
+                )
+                .unwrap();
+        }
+        let devices_before = state.workspace.read().unwrap().settings.devices.clone();
+
+        let snapshot = save_settings_inner(
+            &state,
+            EditorSettingsPatch {
+                schema_version: workspace::SETTINGS_SCHEMA_VERSION,
+                editor_profile: Some("red-phone-v1".into()),
+                language: Language::EnUs,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.language, Language::EnUs);
+        assert_eq!(
+            state.workspace.read().unwrap().settings.devices,
+            devices_before
+        );
+    }
+
+    #[test]
     fn snapshot_includes_editor_profile_metrics() {
         let directory = TestDirectory::new();
         let state = product_state(&directory.0, vec![product_profile()]);
@@ -658,8 +695,8 @@ mod tests {
     #[test]
     fn settings_reject_unknown_language() {
         assert!(
-            serde_yaml_ng::from_str::<SettingsDocument>(
-                "schema_version: 2\neditor_profile: null\nlanguage: fr-FR\ndevices: {}\n"
+            serde_yaml_ng::from_str::<EditorSettingsPatch>(
+                "schema_version: 2\neditor_profile: null\nlanguage: fr-FR\n"
             )
             .is_err()
         );
