@@ -96,6 +96,24 @@ def test_inventory_merges_duplicate_identity_and_prefers_cdc_port() -> None:
     ]
 
 
+def test_inventory_preserves_distinct_serialless_cdc_ports() -> None:
+    rows = [
+        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", None, "/dev/tty.a"),
+        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", None, "/dev/tty.b"),
+    ]
+
+    assert merge_rows(rows) == rows
+
+
+def test_inventory_preserves_serialless_profiler_rows_in_observation_order() -> None:
+    rows = [
+        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", None, None),
+        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", None, None),
+    ]
+
+    assert merge_rows(rows) == rows
+
+
 @pytest.mark.parametrize(
     ("runner", "error"),
     [

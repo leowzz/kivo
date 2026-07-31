@@ -89,12 +89,18 @@ def macos_uf2_rows(
 def merge_rows(
     rows: Iterator[tuple[str, tuple[int, int], str, str | None, str | None]],
 ) -> list[tuple[str, tuple[int, int], str, str | None, str | None]]:
-    merged: dict[
-        tuple[str, tuple[int, int], str, str | None],
-        tuple[str, tuple[int, int], str, str | None, str | None],
-    ] = {}
+    merged: dict[tuple[object, ...], tuple[str, tuple[int, int], str, str | None, str | None]] = {}
+    anonymous_index = 0
     for row in rows:
-        key = row[:4]
+        mode, usb_id, board, serial_number, port = row
+        if serial_number:
+            key = (mode, usb_id, board, "serial", serial_number)
+        elif port:
+            key = (mode, usb_id, board, "port", port)
+        else:
+            # Portless serialless profiler rows have no stable identity; keep observation order.
+            key = (mode, usb_id, board, "anonymous", anonymous_index)
+            anonymous_index += 1
         existing = merged.get(key)
         if existing is None or (existing[4] is None and row[4] is not None):
             merged[key] = row

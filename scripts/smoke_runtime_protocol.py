@@ -50,7 +50,12 @@ def validate_hello(line: str, family: str, board: str, build: str) -> None:
         pins = [int(pin) for pin in parts[6:]]
     except ValueError as error:
         raise RuntimeError(f"invalid HELLO: non-integer pin data in {line!r}") from error
-    if pin_count <= 0 or len(pins) != pin_count or len(set(pins)) != len(pins):
+    if (
+        pin_count <= 0
+        or len(pins) != pin_count
+        or len(set(pins)) != len(pins)
+        or any(pin > 255 for pin in pins)
+    ):
         raise RuntimeError(f"invalid HELLO: inconsistent pin list in {line!r}")
 
 

@@ -87,6 +87,7 @@ def test_smoke_rejects_wrong_hello() -> None:
         "HELLO 3 esp32s3 luatos-esp32s3-aio test-build 2 1 1",
         "HELLO 3 esp32s3 luatos-esp32s3-aio test-build 0",
         "HELLO 3 esp32s3 luatos-esp32s3-aio test-build 1 -1",
+        "HELLO 3 esp32s3 luatos-esp32s3-aio test-build 1 256",
     ],
 )
 def test_smoke_rejects_invalid_hello_v3(hello: str) -> None:
