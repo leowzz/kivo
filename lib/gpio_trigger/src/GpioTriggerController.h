@@ -32,11 +32,11 @@ enum class ResponseAction {
 class GpioTriggerController {
  public:
   static constexpr std::uint32_t kResponseTimeoutMs = 2000;
-  static constexpr auto kSupportedPins = kEsp32S3SafePins;
 
-  explicit GpioTriggerController(std::uint32_t startMs = 0);
+  explicit GpioTriggerController(const BoardProfile &profile,
+                                 std::uint32_t startMs = 0);
 
-  static bool isSupportedPin(std::uint8_t gpio);
+  bool isSupportedPin(std::uint8_t gpio) const;
   void configure(const RuntimeTopology &topology, std::uint32_t nowMs);
   std::optional<InputEvent> updatePin(std::uint8_t gpio, bool inputHigh,
                                       std::uint32_t nowMs);
@@ -88,6 +88,7 @@ class GpioTriggerController {
   bool createsContactCycle(std::size_t candidate) const;
 
   RuntimeTopology topology_;
+  const BoardProfile &profile_;
   std::vector<InputSlot> inputs_;
   std::optional<std::uint32_t> learningRevision_;
   std::vector<std::uint8_t> learningPins_;

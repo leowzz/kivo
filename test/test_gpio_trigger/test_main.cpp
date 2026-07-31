@@ -8,17 +8,17 @@ void setUp() {}
 void tearDown() {}
 
 GpioTriggerController directController(std::uint32_t startMs) {
-  TopologyBuilder builder;
+  TopologyBuilder builder(kLuatOsEsp32S3Aio);
   builder.begin(1, 30);
   builder.addDirect(1, 0, {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16,
                            17, 18});
-  GpioTriggerController controller;
+  GpioTriggerController controller(kLuatOsEsp32S3Aio, startMs);
   controller.configure(*builder.commit(1), startMs);
   return controller;
 }
 
 void test_commits_complete_matrix_topology_atomically() {
-  TopologyBuilder builder;
+  TopologyBuilder builder(kLuatOsEsp32S3Aio);
   TEST_ASSERT_TRUE(builder.begin(7, 30));
   TEST_ASSERT_TRUE(builder.addMatrix(7, 0, {1, 2}, {12, 13}));
 
@@ -29,11 +29,29 @@ void test_commits_complete_matrix_topology_atomically() {
   TEST_ASSERT_EQUAL_UINT8(2, topology->matrices[0].rows.size());
 }
 
+void test_board_profiles_enforce_exact_safe_pins() {
+  TEST_ASSERT_TRUE(kLuatOsEsp32S3Aio.supports(18));
+  TEST_ASSERT_FALSE(kLuatOsEsp32S3Aio.supports(19));
+  TEST_ASSERT_TRUE(kVccGndYdRp2040.supports(0));
+  TEST_ASSERT_TRUE(kVccGndYdRp2040.supports(22));
+  for (std::uint8_t pin = 23; pin <= 29; ++pin) {
+    TEST_ASSERT_FALSE(kVccGndYdRp2040.supports(pin));
+  }
+
+  TopologyBuilder rp2040(kVccGndYdRp2040);
+  TEST_ASSERT_TRUE(rp2040.begin(1, 30));
+  TEST_ASSERT_TRUE(rp2040.addDirect(1, 0, {0, 22}));
+
+  TopologyBuilder reserved(kVccGndYdRp2040);
+  TEST_ASSERT_TRUE(reserved.begin(1, 30));
+  TEST_ASSERT_FALSE(reserved.addDirect(1, 0, {23}));
+}
+
 void test_contact_edge_reports_unordered_pair_once_after_debounce() {
-  TopologyBuilder builder;
+  TopologyBuilder builder(kLuatOsEsp32S3Aio);
   TEST_ASSERT_TRUE(builder.begin(7, 30));
   TEST_ASSERT_TRUE(builder.addMatrix(7, 0, {1, 2}, {12, 13}));
-  GpioTriggerController controller;
+  GpioTriggerController controller(kLuatOsEsp32S3Aio, 0);
   controller.configure(*builder.commit(7), 0);
 
   TEST_ASSERT_FALSE(controller.updateContact(0, 1, 12, true, 10).has_value());
@@ -132,10 +150,10 @@ void test_action_steps_are_strictly_ordered() {
 }
 
 void test_learning_reports_contact_and_restores_runtime_topology() {
-  TopologyBuilder builder;
+  TopologyBuilder builder(kLuatOsEsp32S3Aio);
   builder.begin(7, 30);
   builder.addDirect(7, 0, {6});
-  GpioTriggerController controller;
+  GpioTriggerController controller(kLuatOsEsp32S3Aio, 0);
   controller.configure(*builder.commit(7), 0);
 
   TEST_ASSERT_FALSE(controller.beginLearning(4, {1, 10, 12}, 0));
@@ -153,10 +171,10 @@ void test_learning_reports_contact_and_restores_runtime_topology() {
 }
 
 void test_suppresses_new_contact_that_closes_a_ghost_cycle() {
-  TopologyBuilder builder;
+  TopologyBuilder builder(kLuatOsEsp32S3Aio);
   builder.begin(1, 1);
   builder.addMatrix(1, 0, {1, 2}, {12, 13});
-  GpioTriggerController controller;
+  GpioTriggerController controller(kLuatOsEsp32S3Aio, 0);
   controller.configure(*builder.commit(1), 0);
 
   for (const auto pair :
@@ -171,14 +189,15 @@ void test_suppresses_new_contact_that_closes_a_ghost_cycle() {
 }
 
 void test_exposes_supported_gpio_inputs() {
-  TEST_ASSERT_TRUE(GpioTriggerController::isSupportedPin(0));
-  TEST_ASSERT_TRUE(GpioTriggerController::isSupportedPin(1));
-  TEST_ASSERT_TRUE(GpioTriggerController::isSupportedPin(9));
-  TEST_ASSERT_TRUE(GpioTriggerController::isSupportedPin(12));
-  TEST_ASSERT_TRUE(GpioTriggerController::isSupportedPin(18));
-  TEST_ASSERT_FALSE(GpioTriggerController::isSupportedPin(10));
-  TEST_ASSERT_FALSE(GpioTriggerController::isSupportedPin(11));
-  TEST_ASSERT_FALSE(GpioTriggerController::isSupportedPin(19));
+  GpioTriggerController controller(kLuatOsEsp32S3Aio);
+  TEST_ASSERT_TRUE(controller.isSupportedPin(0));
+  TEST_ASSERT_TRUE(controller.isSupportedPin(1));
+  TEST_ASSERT_TRUE(controller.isSupportedPin(9));
+  TEST_ASSERT_TRUE(controller.isSupportedPin(12));
+  TEST_ASSERT_TRUE(controller.isSupportedPin(18));
+  TEST_ASSERT_FALSE(controller.isSupportedPin(10));
+  TEST_ASSERT_FALSE(controller.isSupportedPin(11));
+  TEST_ASSERT_FALSE(controller.isSupportedPin(19));
 }
 
 void test_stable_edges_emit_once_after_debounce() {
@@ -373,6 +392,7 @@ void test_matching_skip_response_clears_without_keypress() {
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_commits_complete_matrix_topology_atomically);
+  RUN_TEST(test_board_profiles_enforce_exact_safe_pins);
   RUN_TEST(test_contact_edge_reports_unordered_pair_once_after_debounce);
   RUN_TEST(test_parses_runtime_configuration_commands);
   RUN_TEST(test_parses_learning_and_ordered_action_commands);

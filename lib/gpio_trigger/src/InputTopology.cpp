@@ -34,8 +34,7 @@ bool TopologyBuilder::addPins(std::uint8_t sourceIndex,
     return false;
   }
   for (const auto pin : pins) {
-    if (std::find(kEsp32S3SafePins.begin(), kEsp32S3SafePins.end(), pin) ==
-            kEsp32S3SafePins.end() ||
+    if (!profile_.supports(pin) ||
         std::find(ownedPins_.begin(), ownedPins_.end(), pin) !=
             ownedPins_.end() ||
         std::count(pins.begin(), pins.end(), pin) != 1) {

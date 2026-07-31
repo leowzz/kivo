@@ -1,12 +1,10 @@
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <optional>
 #include <vector>
 
-constexpr std::array<std::uint8_t, 17> kEsp32S3SafePins = {
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18};
+#include "BoardProfile.h"
 
 enum class PhysicalInputKind {
   Direct,
@@ -45,6 +43,8 @@ struct RuntimeTopology {
 
 class TopologyBuilder {
  public:
+  explicit TopologyBuilder(const BoardProfile &profile) : profile_(profile) {}
+
   bool begin(std::uint32_t revision, std::uint16_t debounceMs);
   bool addDirect(std::uint32_t revision, std::uint8_t sourceIndex,
                  std::vector<std::uint8_t> pins);
@@ -59,6 +59,7 @@ class TopologyBuilder {
                const std::vector<std::uint8_t> &pins);
 
   std::optional<RuntimeTopology> pending_;
+  const BoardProfile &profile_;
   std::vector<std::uint8_t> sourceIndices_;
   std::vector<std::uint8_t> ownedPins_;
 };
