@@ -112,6 +112,12 @@ test("never renders metrics owned by another Device", () => {
   expect(screen.queryByText("2 / 8")).toBeNull();
 });
 
+test("marks the selected Device ID for constrained wrapping", () => {
+  renderManagement();
+
+  expect(screen.getByText("rp-a", { selector: "output" })).toHaveClass("device-id-value");
+});
+
 test("composes visible Board Profile search with non-All filters", async () => {
   const user = userEvent.setup();
   renderManagement();

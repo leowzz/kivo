@@ -191,6 +191,7 @@ select:focus, input:focus, textarea:focus, button:focus-visible { border-color: 
 .device-rename input { min-width: 0; height: 30px; padding: 0 7px; }
 .device-detail-field { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px; padding: 8px 0; border-bottom: 1px solid #edf0ee; color: #65706c; font-size: 11px; }
 .device-detail-field output { overflow-wrap: anywhere; color: #29332f; font-size: 12px; }
+.device-detail-field .device-id-value { max-width: 28ch; user-select: text; }
 .device-assignment { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; padding: 12px 0; border-bottom: 1px solid #edf0ee; }
 .device-assignment label { min-width: 0; display: grid; gap: 5px; color: #65706c; font-size: 11px; }
 .device-assignment select { min-width: 0; width: 100%; height: 32px; padding: 0 7px; }

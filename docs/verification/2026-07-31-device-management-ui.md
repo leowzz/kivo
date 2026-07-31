@@ -59,3 +59,11 @@ Fresh automated verification after the fixes:
 - `rtk npm test`: 114 passed across 9 files.
 - `rtk npm run build`: TypeScript and Vite passed; 1,800 modules transformed.
 - `rtk git diff --check`: passed.
+
+## Mobile Device ID Wrap Follow-up (2026-08-01)
+
+The selected Device ID now has a dedicated `28ch` maximum width while retaining `overflow-wrap:anywhere` and selectable text. At 760x560, Playwright measured the ID output as `201.59375x34px` with two text-line rectangles. Document and body widths both remained `760/760`.
+
+The refreshed `docs/verification/screenshots/device-management-760x560-detail-id-assignment.png` visibly shows the canonical ID wrapping across two lines above the assignment controls, with no overlap or page-level horizontal overflow.
+
+Final checks after this follow-up: `rtk npm test` passed 115 tests across 9 files, `rtk cargo test --manifest-path src-tauri/Cargo.toml` passed 107 tests across 3 suites, and `rtk npm run build` passed with 1,800 modules transformed.

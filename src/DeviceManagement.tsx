@@ -77,11 +77,11 @@ function status(device: DeviceStatus, language: Language) {
     `devices.status.${keys[primaryDeviceLabel(device)]}` as never,
   );
 }
-function Detail({ label, value }: { label: string; value: string }) {
+function Detail({ label, value, valueClassName }: { label: string; value: string; valueClassName?: string }) {
   return (
     <div className="device-detail-field">
       <span>{label}</span>
-      <output>{value}</output>
+      <output className={valueClassName}>{value}</output>
     </div>
   );
 }
@@ -529,6 +529,7 @@ export function DeviceManagement({
             <Detail
               label={t(language, "devices.id")}
               value={selectedDevice.deviceId}
+              valueClassName="device-id-value"
             />
             <Detail
               label={t(language, "devices.controller")}
