@@ -1,12 +1,13 @@
 use crate::{
-    device::{LearningSession, RuntimeActivity, RuntimeProfile},
+    device::{LearningTarget, RuntimeActivity, RuntimeProfileSnapshot},
     hardware::{
         BoardProfile, DeviceId, board_by_bootloader_usb, board_by_id, board_by_runtime_usb,
     },
     metrics::MetricAttribution,
     paste::PasteHandle,
+    profile::ProfileChange,
     protocol::{HelloCapabilities, InputState, PhysicalInput, validate_hello},
-    workspace::{AssignmentResolution, RuntimeAssignment, Workspace},
+    workspace::{AppError, AssignmentResolution, RuntimeAssignment, Workspace},
 };
 use nusb::MaybeFuture;
 use serde::Serialize;
@@ -111,7 +112,6 @@ pub enum AssignmentDimension {
 pub enum RuntimeDimension {
     Inactive,
     Configuring,
-    #[expect(dead_code, reason = "targeted learning is implemented in Task 6")]
     Learning,
     Ready,
     RuntimeError,
@@ -135,7 +135,7 @@ pub struct DeviceStatus {
     pub pins: Vec<u8>,
     pub runtime_assignment: Option<RuntimeAssignment>,
     pub latest_error: Option<String>,
-    pub learning: Option<LearningSession>,
+    pub learning: Option<LearningTarget>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -161,7 +161,16 @@ pub struct WorkerStart {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorkerCommand {
-    UpdateProfile(Option<Arc<RuntimeProfile>>),
+    UpdateSnapshot(Option<Arc<RuntimeProfileSnapshot>>),
+    Reconfigure {
+        snapshot: Option<Arc<RuntimeProfileSnapshot>>,
+        revision: u32,
+    },
+    BeginLearning(LearningTarget),
+    EndLearning {
+        snapshot: Option<Arc<RuntimeProfileSnapshot>>,
+        revision: u32,
+    },
     Input {
         receive_sequence: u64,
         event_id: u64,
@@ -216,6 +225,14 @@ pub trait WorkerLauncher: Send + Sync {
 struct WorkerSlot {
     worker: Box<dyn DeviceWorker>,
     port: String,
+    firmware_revision: u32,
+}
+
+impl WorkerSlot {
+    fn next_revision(&mut self) -> u32 {
+        self.firmware_revision = self.firmware_revision.wrapping_add(1).max(1);
+        self.firmware_revision
+    }
 }
 
 enum ClassifiedObservation {
@@ -427,6 +444,7 @@ impl RuntimeCoordinator {
                                 WorkerSlot {
                                     worker,
                                     port: observation.port.clone(),
+                                    firmware_revision: 0,
                                 },
                             );
                             if let Some(status) = self.devices.get_mut(&device_id) {
@@ -629,10 +647,15 @@ impl RuntimeCoordinator {
                 RuntimeDimension::Inactive
             };
         }
-        if let Some(slot) = self.workers.get(&device_id) {
-            let _ = slot
-                .worker
-                .send(WorkerCommand::UpdateProfile(profile.map(Arc::new)));
+        if profile.is_some() {
+            if let Err(error) = self.reconfigure_worker(&device_id, profile.map(Arc::new))
+                && let Some(status) = self.devices.get_mut(&device_id)
+            {
+                status.runtime = RuntimeDimension::RuntimeError;
+                status.latest_error = Some(error);
+            }
+        } else if let Some(slot) = self.workers.get(&device_id) {
+            let _ = slot.worker.send(WorkerCommand::UpdateSnapshot(None));
         }
         self.candidates
             .retain(|candidate| candidate.device_id.as_ref() != Some(&device_id));
@@ -701,30 +724,238 @@ impl RuntimeCoordinator {
         }
     }
 
+    fn reconfigure_worker(
+        &mut self,
+        id: &DeviceId,
+        snapshot: Option<Arc<RuntimeProfileSnapshot>>,
+    ) -> Result<u32, String> {
+        let slot = self
+            .workers
+            .get_mut(id)
+            .ok_or_else(|| "device_offline".to_owned())?;
+        let revision = slot.next_revision();
+        slot.worker
+            .send(WorkerCommand::Reconfigure { snapshot, revision })?;
+        Ok(revision)
+    }
+
+    pub fn apply_profile_change(&mut self, change: &ProfileChange) {
+        let updates = {
+            let workspace = self
+                .workspace
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            workspace
+                .settings
+                .devices
+                .iter()
+                .filter_map(|(id, device)| {
+                    let assignment = device.runtime_assignment.as_ref()?;
+                    (assignment.device_profile_id == change.device_profile_id).then(|| {
+                        (
+                            id.clone(),
+                            assignment.hardware_profile_id.clone(),
+                            runtime_profile(&workspace, id).map(Arc::new),
+                        )
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        for (id, hardware_profile_id, snapshot) in updates {
+            if !self.workers.contains_key(&id) {
+                continue;
+            }
+            if change
+                .topology_hardware_profile_ids
+                .contains(&hardware_profile_id)
+            {
+                match self.reconfigure_worker(&id, snapshot) {
+                    Ok(_) => {
+                        if let Some(status) = self.devices.get_mut(&id) {
+                            status.runtime = RuntimeDimension::Configuring;
+                            status.learning = None;
+                            status.latest_error = None;
+                        }
+                    }
+                    Err(error) => {
+                        if let Some(status) = self.devices.get_mut(&id) {
+                            status.runtime = RuntimeDimension::RuntimeError;
+                            status.latest_error = Some(error);
+                        }
+                    }
+                }
+            } else if change.host_mapping_changed
+                && let Some(slot) = self.workers.get(&id)
+                && let Err(error) = slot.worker.send(WorkerCommand::UpdateSnapshot(snapshot))
+                && let Some(status) = self.devices.get_mut(&id)
+            {
+                status.runtime = RuntimeDimension::RuntimeError;
+                status.latest_error = Some(error);
+            }
+        }
+        self.refresh_persisted_status();
+    }
+
+    pub fn begin_learning(
+        &mut self,
+        device_id: &DeviceId,
+        device_profile_id: &str,
+        hardware_profile_id: &str,
+        editing_revision: u64,
+        pins: Vec<u8>,
+    ) -> Result<LearningTarget, AppError> {
+        let status = self
+            .devices
+            .get(device_id)
+            .ok_or_else(|| AppError::new("unknown_device"))?
+            .clone();
+        if status.connection != ConnectionDimension::Online
+            || status.mode != Some(DeviceMode::Runtime)
+            || status.identity != IdentityDimension::Valid
+            || !self.workers.contains_key(device_id)
+        {
+            return Err(AppError::new("device_not_available"));
+        }
+        if status.learning.is_some() {
+            return Err(AppError::new("learning_session_active"));
+        }
+        let board = board_by_id(device_id.board_profile_id())
+            .ok_or_else(|| AppError::new("unknown_board_profile"))?;
+        {
+            let workspace = self
+                .workspace
+                .read()
+                .map_err(|_| AppError::new("workspace_unavailable"))?;
+            let profile = workspace
+                .profiles
+                .get(device_profile_id)
+                .ok_or_else(|| AppError::new("unknown_profile"))?;
+            let hardware = profile
+                .hardware_profile(hardware_profile_id)
+                .ok_or_else(|| AppError::new("unknown_hardware_profile"))?;
+            if hardware.board_profile_id != board.id {
+                return Err(AppError::new("learning_board_mismatch"));
+            }
+        }
+        let unique = pins.iter().copied().collect::<BTreeSet<_>>();
+        if pins.is_empty()
+            || unique.len() != pins.len()
+            || !unique.iter().all(|pin| board.safe_pins.contains(pin))
+            || !unique.iter().all(|pin| status.pins.contains(pin))
+        {
+            return Err(AppError::new("invalid_learning_pins"));
+        }
+        let slot = self
+            .workers
+            .get_mut(device_id)
+            .ok_or_else(|| AppError::new("device_not_available"))?;
+        let firmware_revision = slot.next_revision();
+        let target = LearningTarget {
+            device_id: device_id.clone(),
+            device_profile_id: device_profile_id.into(),
+            hardware_profile_id: hardware_profile_id.into(),
+            editing_revision,
+            firmware_revision,
+            pins,
+        };
+        slot.worker
+            .send(WorkerCommand::BeginLearning(target.clone()))
+            .map_err(|detail| AppError::new("learning_command_failed").with_detail(detail))?;
+        if let Some(status) = self.devices.get_mut(device_id) {
+            status.runtime = RuntimeDimension::Learning;
+            status.learning = Some(target.clone());
+            status.latest_error = None;
+        }
+        Ok(target)
+    }
+
+    pub fn end_learning(&mut self, device_id: &DeviceId) -> Result<(), AppError> {
+        if self
+            .devices
+            .get(device_id)
+            .and_then(|status| status.learning.as_ref())
+            .is_none()
+        {
+            return Err(AppError::new("no_learning_session"));
+        }
+        let snapshot = {
+            let workspace = self
+                .workspace
+                .read()
+                .map_err(|_| AppError::new("workspace_unavailable"))?;
+            runtime_profile(&workspace, device_id).map(Arc::new)
+        };
+        let has_assignment = snapshot.is_some();
+        let slot = self
+            .workers
+            .get_mut(device_id)
+            .ok_or_else(|| AppError::new("device_not_available"))?;
+        let revision = slot.next_revision();
+        slot.worker
+            .send(WorkerCommand::EndLearning { snapshot, revision })
+            .map_err(|detail| AppError::new("learning_command_failed").with_detail(detail))?;
+        if let Some(status) = self.devices.get_mut(device_id) {
+            status.learning = None;
+            status.runtime = if has_assignment {
+                RuntimeDimension::Configuring
+            } else {
+                RuntimeDimension::Inactive
+            };
+            status.latest_error = None;
+        }
+        Ok(())
+    }
+
+    pub fn cancel_learning(&mut self, device_id: &DeviceId) -> Result<(), AppError> {
+        self.end_learning(device_id)
+    }
+
     pub fn sync_profiles(&mut self) {
+        let updates = {
+            let workspace = self
+                .workspace
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            self.workers
+                .keys()
+                .map(|id| (id.clone(), runtime_profile(&workspace, id).map(Arc::new)))
+                .collect::<Vec<_>>()
+        };
+        for (id, snapshot) in updates {
+            let has_assignment = snapshot.is_some();
+            let result = self.reconfigure_worker(&id, snapshot);
+            if let Some(status) = self.devices.get_mut(&id) {
+                match result {
+                    Ok(_) => {
+                        status.learning = None;
+                        status.runtime = if has_assignment {
+                            RuntimeDimension::Configuring
+                        } else {
+                            RuntimeDimension::Inactive
+                        };
+                        status.latest_error = None;
+                    }
+                    Err(error) => {
+                        status.runtime = RuntimeDimension::RuntimeError;
+                        status.latest_error = Some(error);
+                    }
+                }
+            }
+        }
+        self.refresh_persisted_status();
+    }
+
+    fn refresh_persisted_status(&mut self) {
         let workspace = self
             .workspace
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        for (id, slot) in &self.workers {
-            let profile = runtime_profile(&workspace, id);
-            let _ = slot
-                .worker
-                .send(WorkerCommand::UpdateProfile(profile.map(Arc::new)));
-        }
         for (id, status) in &mut self.devices {
             if workspace.settings.devices.contains_key(id) {
                 let persisted = offline_status(&workspace, id);
                 status.name = persisted.name;
                 status.assignment = persisted.assignment;
                 status.runtime_assignment = persisted.runtime_assignment;
-                if status.connection == ConnectionDimension::Online {
-                    status.runtime = match status.assignment {
-                        AssignmentDimension::Valid => RuntimeDimension::Configuring,
-                        AssignmentDimension::Unassigned
-                        | AssignmentDimension::InvalidAssignment => RuntimeDimension::Inactive,
-                    };
-                }
             }
         }
     }
@@ -869,7 +1100,7 @@ fn offline_status(workspace: &Workspace, id: &DeviceId) -> DeviceStatus {
     }
 }
 
-fn runtime_profile(workspace: &Workspace, id: &DeviceId) -> Option<RuntimeProfile> {
+fn runtime_profile(workspace: &Workspace, id: &DeviceId) -> Option<RuntimeProfileSnapshot> {
     let AssignmentResolution::Valid {
         device,
         assignment,
@@ -879,7 +1110,7 @@ fn runtime_profile(workspace: &Workspace, id: &DeviceId) -> Option<RuntimeProfil
     else {
         return None;
     };
-    Some(RuntimeProfile {
+    Some(RuntimeProfileSnapshot {
         profile: profile.clone(),
         hardware_profile_id: assignment.hardware_profile_id.clone(),
         metric_attribution: MetricAttribution {
@@ -897,7 +1128,7 @@ mod tests {
     use crate::{
         hardware::DeviceId,
         paste::{ClipboardWriter, PasteCoordinator, PasteReply, PasteRequest},
-        profile::{DeviceProfile, HardwareProfile, PROFILE_SCHEMA_VERSION},
+        profile::{DeviceProfile, HardwareProfile, PROFILE_SCHEMA_VERSION, ProfileChange},
         protocol::HelloCapabilities,
         workspace::Workspace,
     };
@@ -975,6 +1206,19 @@ mod tests {
                     _ => None,
                 })
                 .collect()
+        }
+
+        fn clear_commands(&self) {
+            self.commands.lock().unwrap().clear();
+        }
+
+        fn commands_for(&self, device_id: &DeviceId) -> Vec<WorkerCommand> {
+            self.commands
+                .lock()
+                .unwrap()
+                .get(device_id)
+                .cloned()
+                .unwrap_or_default()
         }
     }
 
@@ -1579,5 +1823,222 @@ mod tests {
             receive_sequence: 1,
         });
         assert!(!coordinator.sequence_owners.contains_key(&1));
+    }
+
+    #[test]
+    fn live_update_action_only_swaps_both_assigned_snapshots_without_topology() {
+        let (_directory, enumerator, launcher, mut coordinator) = harness();
+        enumerator.set(
+            vec![
+                serial("/dev/a", 0x303a, 0x4002, Some("A")),
+                serial("/dev/b", 0x303a, 0x4002, Some("B")),
+            ],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+        let a = DeviceId::new("luatos-esp32s3-aio", "A").unwrap();
+        let b = DeviceId::new("luatos-esp32s3-aio", "B").unwrap();
+        {
+            let mut workspace = coordinator.workspace.write().unwrap();
+            for id in [&a, &b] {
+                workspace
+                    .set_assignment(
+                        id,
+                        RuntimeAssignment {
+                            device_profile_id: "red-phone-v1".into(),
+                            hardware_profile_id: "esp".into(),
+                        },
+                    )
+                    .unwrap();
+            }
+        }
+        coordinator.sync_profiles();
+        launcher.clear_commands();
+        let old = coordinator.workspace.read().unwrap().profiles["red-phone-v1"].clone();
+        let mut new = old.clone();
+        new.actions.insert(
+            "UP".into(),
+            vec![crate::profile::ButtonAction::Paste {
+                text: "updated".into(),
+            }],
+        );
+        coordinator
+            .workspace
+            .write()
+            .unwrap()
+            .save_profile(new.clone())
+            .unwrap();
+
+        coordinator.apply_profile_change(&ProfileChange::between(Some(&old), Some(&new)));
+
+        for id in [&a, &b] {
+            let commands = launcher.commands_for(id);
+            assert!(matches!(
+                commands.as_slice(),
+                [WorkerCommand::UpdateSnapshot(Some(_))]
+            ));
+        }
+    }
+
+    #[test]
+    fn live_update_topology_targets_exact_hardware_with_independent_nonzero_revisions() {
+        let (_directory, enumerator, launcher, mut coordinator) = harness();
+        let mut expanded = profile();
+        expanded.hardware_profiles.push(HardwareProfile {
+            id: "esp-secondary".into(),
+            name: "ESP secondary".into(),
+            board_profile_id: "luatos-esp32s3-aio".into(),
+            debounce_ms: 30,
+            inputs: Vec::new(),
+        });
+        coordinator
+            .workspace
+            .write()
+            .unwrap()
+            .save_profile(expanded.clone())
+            .unwrap();
+        enumerator.set(
+            vec![
+                serial("/dev/a", 0x303a, 0x4002, Some("A")),
+                serial("/dev/b", 0x303a, 0x4002, Some("B")),
+            ],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+        let a = DeviceId::new("luatos-esp32s3-aio", "A").unwrap();
+        let b = DeviceId::new("luatos-esp32s3-aio", "B").unwrap();
+        {
+            let mut workspace = coordinator.workspace.write().unwrap();
+            workspace
+                .set_assignment(
+                    &a,
+                    RuntimeAssignment {
+                        device_profile_id: "red-phone-v1".into(),
+                        hardware_profile_id: "esp".into(),
+                    },
+                )
+                .unwrap();
+            workspace
+                .set_assignment(
+                    &b,
+                    RuntimeAssignment {
+                        device_profile_id: "red-phone-v1".into(),
+                        hardware_profile_id: "esp-secondary".into(),
+                    },
+                )
+                .unwrap();
+        }
+        coordinator.sync_profiles();
+        launcher.clear_commands();
+
+        let mut changed_a = expanded.clone();
+        changed_a.hardware_profiles[0].debounce_ms = 40;
+        coordinator
+            .workspace
+            .write()
+            .unwrap()
+            .save_profile(changed_a.clone())
+            .unwrap();
+        coordinator
+            .apply_profile_change(&ProfileChange::between(Some(&expanded), Some(&changed_a)));
+
+        let a_revision = match launcher.commands_for(&a).as_slice() {
+            [WorkerCommand::Reconfigure { revision, .. }] => *revision,
+            commands => panic!("unexpected A commands: {commands:?}"),
+        };
+        assert!(a_revision > 0);
+        assert!(launcher.commands_for(&b).is_empty());
+
+        launcher.clear_commands();
+        let mut changed_b = changed_a.clone();
+        changed_b.hardware_profiles[1].debounce_ms = 50;
+        coordinator
+            .workspace
+            .write()
+            .unwrap()
+            .save_profile(changed_b.clone())
+            .unwrap();
+        coordinator
+            .apply_profile_change(&ProfileChange::between(Some(&changed_a), Some(&changed_b)));
+        let b_revision = match launcher.commands_for(&b).as_slice() {
+            [WorkerCommand::Reconfigure { revision, .. }] => *revision,
+            commands => panic!("unexpected B commands: {commands:?}"),
+        };
+        assert!(b_revision > 0);
+        assert!(launcher.commands_for(&a).is_empty());
+    }
+
+    #[test]
+    fn learning_targets_one_exact_device_keeps_draft_unpersisted_and_cancels_on_disconnect() {
+        let (_directory, enumerator, launcher, mut coordinator) = harness();
+        enumerator.set(
+            vec![
+                serial("/dev/a", 0x303a, 0x4002, Some("A")),
+                serial("/dev/b", 0x303a, 0x4002, Some("B")),
+            ],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+        let a = DeviceId::new("luatos-esp32s3-aio", "A").unwrap();
+        let b = DeviceId::new("luatos-esp32s3-aio", "B").unwrap();
+        let persisted = coordinator.workspace.read().unwrap().profiles["red-phone-v1"].clone();
+        launcher.clear_commands();
+
+        let target = coordinator
+            .begin_learning(&a, "red-phone-v1", "esp", 17, vec![6, 7])
+            .unwrap();
+
+        assert_eq!(target.device_id, a);
+        assert_eq!(target.device_profile_id, "red-phone-v1");
+        assert_eq!(target.hardware_profile_id, "esp");
+        assert_eq!(target.editing_revision, 17);
+        assert!(target.firmware_revision > 0);
+        assert!(matches!(
+            launcher.commands_for(&a).as_slice(),
+            [WorkerCommand::BeginLearning(sent)] if sent == &target
+        ));
+        assert!(launcher.commands_for(&b).is_empty());
+        assert_eq!(
+            coordinator.workspace.read().unwrap().profiles["red-phone-v1"],
+            persisted
+        );
+
+        launcher.clear_commands();
+        coordinator.cancel_learning(&a).unwrap();
+        assert!(matches!(
+            launcher.commands_for(&a).as_slice(),
+            [WorkerCommand::EndLearning { .. }]
+        ));
+        assert!(launcher.commands_for(&b).is_empty());
+
+        launcher.clear_commands();
+        coordinator
+            .begin_learning(&a, "red-phone-v1", "esp", 18, vec![6, 7])
+            .unwrap();
+        coordinator.handle_worker_event(WorkerEvent::Disconnected {
+            device_id: a.clone(),
+            error: None,
+        });
+        let statuses = coordinator.devices();
+        assert!(
+            statuses
+                .iter()
+                .find(|status| status.device_id == a)
+                .unwrap()
+                .learning
+                .is_none()
+        );
+        assert_eq!(
+            statuses
+                .iter()
+                .find(|status| status.device_id == b)
+                .unwrap()
+                .connection,
+            ConnectionDimension::Online
+        );
+        assert_eq!(
+            coordinator.workspace.read().unwrap().profiles["red-phone-v1"],
+            persisted
+        );
     }
 }

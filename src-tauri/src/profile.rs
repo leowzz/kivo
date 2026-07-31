@@ -63,6 +63,66 @@ pub struct DeviceProfile {
     pub actions: BTreeMap<String, Vec<ButtonAction>>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProfileChange {
+    pub device_profile_id: String,
+    pub host_mapping_changed: bool,
+    pub topology_hardware_profile_ids: BTreeSet<String>,
+}
+
+impl ProfileChange {
+    pub fn between(old: Option<&DeviceProfile>, new: Option<&DeviceProfile>) -> Self {
+        let device_profile_id = new
+            .or(old)
+            .expect("a profile change requires an old or new profile")
+            .profile
+            .id
+            .clone();
+        let host_mapping_changed = match (old, new) {
+            (Some(old), Some(new)) => old.profile != new.profile || old.actions != new.actions,
+            (None, Some(_)) | (Some(_), None) => true,
+            (None, None) => unreachable!("profile change has no source"),
+        };
+        let old_hardware = old
+            .into_iter()
+            .flat_map(|profile| &profile.hardware_profiles)
+            .map(|hardware| (hardware.id.as_str(), hardware))
+            .collect::<BTreeMap<_, _>>();
+        let new_hardware = new
+            .into_iter()
+            .flat_map(|profile| &profile.hardware_profiles)
+            .map(|hardware| (hardware.id.as_str(), hardware))
+            .collect::<BTreeMap<_, _>>();
+        let topology_hardware_profile_ids = old_hardware
+            .keys()
+            .chain(new_hardware.keys())
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter(|id| {
+                topology_signature(old_hardware.get(id).copied())
+                    != topology_signature(new_hardware.get(id).copied())
+            })
+            .map(str::to_owned)
+            .collect();
+        Self {
+            device_profile_id,
+            host_mapping_changed,
+            topology_hardware_profile_ids,
+        }
+    }
+}
+
+fn topology_signature(hardware: Option<&HardwareProfile>) -> Option<(&str, u16, &[InputSource])> {
+    hardware.map(|hardware| {
+        (
+            hardware.board_profile_id.as_str(),
+            hardware.debounce_ms,
+            hardware.inputs.as_slice(),
+        )
+    })
+}
+
 impl DeviceProfile {
     pub fn hardware_profile(&self, id: &str) -> Option<&HardwareProfile> {
         self.hardware_profiles
@@ -299,4 +359,72 @@ fn validate_bipartite(edges: &[(u8, u8)]) -> Result<(), AppError> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile() -> DeviceProfile {
+        DeviceProfile {
+            schema_version: PROFILE_SCHEMA_VERSION,
+            profile: serde_json::from_str(include_str!("../../models/red-phone-v1.json")).unwrap(),
+            hardware_profiles: vec![
+                HardwareProfile {
+                    id: "esp-primary".into(),
+                    name: "ESP primary".into(),
+                    board_profile_id: "luatos-esp32s3-aio".into(),
+                    debounce_ms: 30,
+                    inputs: vec![InputSource::Direct {
+                        id: "direct".into(),
+                        keys: BTreeMap::from([("UP".into(), 6)]),
+                    }],
+                },
+                HardwareProfile {
+                    id: "esp-secondary".into(),
+                    name: "ESP secondary".into(),
+                    board_profile_id: "luatos-esp32s3-aio".into(),
+                    debounce_ms: 30,
+                    inputs: vec![InputSource::Direct {
+                        id: "direct".into(),
+                        keys: BTreeMap::from([("UP".into(), 7)]),
+                    }],
+                },
+            ],
+            actions: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn live_update_classifies_action_only_changes_without_topology() {
+        let old = profile();
+        let mut new = old.clone();
+        new.actions.insert(
+            "UP".into(),
+            vec![ButtonAction::Paste {
+                text: "updated".into(),
+            }],
+        );
+
+        let change = ProfileChange::between(Some(&old), Some(&new));
+
+        assert!(change.host_mapping_changed);
+        assert!(change.topology_hardware_profile_ids.is_empty());
+        assert_eq!(change.device_profile_id, "red-phone-v1");
+    }
+
+    #[test]
+    fn live_update_classifies_only_the_changed_hardware_topology() {
+        let old = profile();
+        let mut new = old.clone();
+        new.hardware_profiles[1].debounce_ms = 45;
+
+        let change = ProfileChange::between(Some(&old), Some(&new));
+
+        assert!(!change.host_mapping_changed);
+        assert_eq!(
+            change.topology_hardware_profile_ids,
+            BTreeSet::from(["esp-secondary".to_owned()])
+        );
+    }
 }

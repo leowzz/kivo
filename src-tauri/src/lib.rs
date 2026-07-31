@@ -12,10 +12,10 @@ mod tray;
 mod workspace;
 
 use coordinator::{ConnectionDimension, RuntimeCoordinator};
-use device::{ConnectionState, ConnectionStatus, LearningSession, RuntimeActivity};
+use device::{ConnectionState, ConnectionStatus, LearningTarget, RuntimeActivity};
 use metrics::{HomeMetricsSnapshot, MetricsStore};
 use paste::PasteCoordinator;
-use profile::DeviceProfile;
+use profile::{DeviceProfile, ProfileChange};
 use serde::Serialize;
 use std::{
     collections::BTreeSet,
@@ -50,7 +50,7 @@ struct AppSnapshot {
     supported_gpios: Vec<u8>,
     connection: ConnectionStatus,
     runtime_error: Option<RuntimeActivity>,
-    learning: Option<LearningSession>,
+    learning: Option<LearningTarget>,
     home_metrics: Option<HomeMetricsSnapshot>,
 }
 
@@ -65,12 +65,12 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn sync_runtime(state: &AppState) -> Result<(), AppError> {
+fn apply_profile_change(state: &AppState, change: &ProfileChange) -> Result<(), AppError> {
     if let Some(coordinator) = &state.coordinator {
         coordinator
             .lock()
             .map_err(|_| state_error("coordinator_unavailable"))?
-            .sync_profiles();
+            .apply_profile_change(change);
     }
     Ok(())
 }
@@ -146,9 +146,13 @@ fn save_profile_inner(state: &AppState, profile: DeviceProfile) -> Result<AppSna
         .workspace
         .write()
         .map_err(|_| state_error("workspace_unavailable"))?;
+    let profile_id = profile.profile.id.clone();
+    let old = workspace.profiles.get(&profile_id).cloned();
     workspace.save_profile(profile)?;
+    let new = workspace.profiles.get(&profile_id).cloned();
+    let change = ProfileChange::between(old.as_ref(), new.as_ref());
     drop(workspace);
-    sync_runtime(state)?;
+    apply_profile_change(state, &change)?;
     snapshot(state)
 }
 
@@ -162,7 +166,6 @@ fn save_settings_inner(
         .map_err(|_| state_error("workspace_unavailable"))?;
     workspace.save_settings(settings)?;
     drop(workspace);
-    sync_runtime(state)?;
     snapshot(state)
 }
 
@@ -171,9 +174,18 @@ fn import_profile_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, Ap
         .workspace
         .write()
         .map_err(|_| state_error("workspace_unavailable"))?;
+    let old = workspace.profiles.clone();
     workspace.import_profile(path)?;
+    let changes = workspace
+        .profiles
+        .iter()
+        .filter(|(id, profile)| old.get(*id) != Some(*profile))
+        .map(|(id, profile)| ProfileChange::between(old.get(id), Some(profile)))
+        .collect::<Vec<_>>();
     drop(workspace);
-    sync_runtime(state)?;
+    for change in &changes {
+        apply_profile_change(state, change)?;
+    }
     snapshot(state)
 }
 
@@ -182,9 +194,11 @@ fn delete_profile_inner(state: &AppState, id: &str) -> Result<AppSnapshot, AppEr
         .workspace
         .write()
         .map_err(|_| state_error("workspace_unavailable"))?;
+    let old = workspace.profiles.get(id).cloned();
     workspace.delete_profile(id)?;
+    let change = ProfileChange::between(old.as_ref(), None);
     drop(workspace);
-    sync_runtime(state)?;
+    apply_profile_change(state, &change)?;
     snapshot(state)
 }
 
@@ -455,8 +469,8 @@ mod tests {
     use super::*;
     use crate::{
         coordinator::{
-            BootloaderObservation, DeviceWorker, SerialObservation, UsbEnumerator, WorkerEvent,
-            WorkerLauncher, WorkerStart,
+            BootloaderObservation, DeviceWorker, SerialObservation, UsbEnumerator, WorkerCommand,
+            WorkerEvent, WorkerLauncher, WorkerStart,
         },
         metrics::MetricAttribution,
         profile::{ButtonAction, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION},
@@ -559,6 +573,83 @@ mod tests {
         }
     }
 
+    struct SaveEnumerator;
+
+    impl UsbEnumerator for SaveEnumerator {
+        fn serial_ports(&self) -> Result<Vec<SerialObservation>, String> {
+            Ok(vec![
+                SerialObservation {
+                    port: "/dev/save-a".into(),
+                    vid: 0x303a,
+                    pid: 0x4002,
+                    serial_number: Some("SAVE-A".into()),
+                },
+                SerialObservation {
+                    port: "/dev/save-b".into(),
+                    vid: 0x303a,
+                    pid: 0x4002,
+                    serial_number: Some("SAVE-B".into()),
+                },
+            ])
+        }
+
+        fn usb_devices(&self) -> Result<Vec<BootloaderObservation>, String> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[derive(Default)]
+    struct SaveLauncher {
+        commands: Arc<Mutex<BTreeMap<hardware::DeviceId, Vec<WorkerCommand>>>>,
+    }
+
+    struct SaveWorker {
+        device_id: hardware::DeviceId,
+        commands: Arc<Mutex<BTreeMap<hardware::DeviceId, Vec<WorkerCommand>>>>,
+    }
+
+    impl DeviceWorker for SaveWorker {
+        fn send(&self, command: WorkerCommand) -> Result<(), String> {
+            self.commands
+                .lock()
+                .unwrap()
+                .entry(self.device_id.clone())
+                .or_default()
+                .push(command);
+            Ok(())
+        }
+
+        fn stop(&mut self) {}
+
+        fn join(&mut self) {}
+    }
+
+    impl WorkerLauncher for SaveLauncher {
+        fn start(
+            &self,
+            start: WorkerStart,
+            events: mpsc::Sender<WorkerEvent>,
+        ) -> Result<Box<dyn DeviceWorker>, String> {
+            let board = hardware::board_by_id(&start.board_profile_id).unwrap();
+            events
+                .send(WorkerEvent::HelloValidated {
+                    device_id: start.device_id.clone(),
+                    capabilities: protocol::HelloCapabilities {
+                        protocol: 3,
+                        controller_family_id: board.family_id.into(),
+                        board_profile_id: board.id.into(),
+                        firmware_build_id: "save-test".into(),
+                        pins: board.safe_pins.to_vec(),
+                    },
+                })
+                .unwrap();
+            Ok(Box::new(SaveWorker {
+                device_id: start.device_id,
+                commands: Arc::clone(&self.commands),
+            }))
+        }
+    }
+
     #[test]
     fn workspace_command_saves_profile_without_creating_a_runtime_assignment() {
         let directory = TestDirectory::new();
@@ -575,6 +666,51 @@ mod tests {
 
         assert_eq!(snapshot.profiles, vec![updated]);
         assert!(directory.path("data/profiles/red-phone-v1.yaml").exists());
+    }
+
+    #[test]
+    fn live_update_save_fans_changed_hardware_out_to_every_exact_assignment() {
+        let directory = TestDirectory::new();
+        let mut state = product_state(&directory.0, vec![product_profile()]);
+        let launcher = Arc::new(SaveLauncher::default());
+        let mut coordinator = RuntimeCoordinator::new(
+            Arc::new(SaveEnumerator),
+            launcher.clone(),
+            Arc::clone(&state.workspace),
+        );
+        coordinator.scan_once().unwrap();
+        coordinator.drain_worker_events();
+        let a = hardware::DeviceId::new("luatos-esp32s3-aio", "SAVE-A").unwrap();
+        let b = hardware::DeviceId::new("luatos-esp32s3-aio", "SAVE-B").unwrap();
+        {
+            let mut workspace = state.workspace.write().unwrap();
+            for id in [&a, &b] {
+                workspace
+                    .set_assignment(
+                        id,
+                        workspace::RuntimeAssignment {
+                            device_profile_id: "red-phone-v1".into(),
+                            hardware_profile_id: "esp-primary".into(),
+                        },
+                    )
+                    .unwrap();
+            }
+        }
+        coordinator.sync_profiles();
+        launcher.commands.lock().unwrap().clear();
+        state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
+        let mut updated = product_profile();
+        updated.hardware_profiles[0].debounce_ms = 55;
+
+        save_profile_inner(&state, updated).unwrap();
+
+        let commands = launcher.commands.lock().unwrap();
+        for id in [&a, &b] {
+            assert!(matches!(
+                commands.get(id).unwrap().as_slice(),
+                [WorkerCommand::Reconfigure { revision, .. }] if *revision > 0
+            ));
+        }
     }
 
     #[test]
