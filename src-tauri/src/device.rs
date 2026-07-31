@@ -1,6 +1,6 @@
 use crate::{
     hardware::{BoardProfile, board_by_runtime_usb},
-    metrics::{HomeMetricsSnapshot, MetricsStore},
+    metrics::{HomeMetricsSnapshot, MetricAttribution, MetricsStore},
     profile::DeviceProfile,
     protocol::{
         ActionSequence, DeviceMessage, HelloCapabilities, InputState, PhysicalInput, is_hello_line,
@@ -37,6 +37,14 @@ pub struct RuntimeActivity {
     pub detail: Option<String>,
     pub input: Option<PhysicalInput>,
     pub pressed: Option<bool>,
+    #[serde(skip)]
+    metric_press: Option<MetricPress>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MetricPress {
+    attribution: MetricAttribution,
+    button_id: String,
 }
 
 impl RuntimeActivity {
@@ -47,6 +55,7 @@ impl RuntimeActivity {
             detail: None,
             input: None,
             pressed: None,
+            metric_press: None,
         }
     }
 
@@ -82,6 +91,7 @@ pub struct DeviceSession {
 pub struct RuntimeProfile {
     pub profile: DeviceProfile,
     pub hardware_profile_id: String,
+    pub metric_attribution: MetricAttribution,
 }
 
 impl DeviceSession {
@@ -180,9 +190,22 @@ impl DeviceSession {
                 input,
                 state,
             } => {
+                let metric_press = (state == InputState::Down)
+                    .then_some(self.profile.as_ref())
+                    .flatten()
+                    .and_then(|runtime| {
+                        runtime
+                            .profile
+                            .button_for(&runtime.hardware_profile_id, &input)
+                            .map(|button_id| MetricPress {
+                                attribution: runtime.metric_attribution.clone(),
+                                button_id: button_id.into(),
+                            })
+                    });
                 output.activities.push(RuntimeActivity {
                     input: Some(input),
                     pressed: Some(state == InputState::Down),
+                    metric_press,
                     ..RuntimeActivity::new("input_state")
                 });
                 if state == InputState::Down {
@@ -482,29 +505,23 @@ pub struct RuntimeEvent {
 
 fn persist_metrics(
     metrics: &MetricsStore,
-    runtime: Option<&RuntimeProfile>,
     activity: &RuntimeActivity,
     timestamp_ms: u64,
 ) -> Result<Option<HomeMetricsSnapshot>, rusqlite::Error> {
-    if activity.code != "input_state" || activity.pressed != Some(true) {
-        return Ok(None);
-    }
-    let Some(runtime) = runtime else {
+    let Some(metric_press) = activity.metric_press.as_ref() else {
         return Ok(None);
     };
-    let Some(input) = activity.input.as_ref() else {
-        return Ok(None);
-    };
-    let Some(button_id) = runtime
-        .profile
-        .button_for(&runtime.hardware_profile_id, input)
-    else {
-        return Ok(None);
-    };
-    metrics.record_button_press(&runtime.profile.profile.id, button_id, timestamp_ms)?;
-    metrics.record_activity(timestamp_ms, "button", &format!("{button_id} pressed"))?;
+    metrics.record_button_press(
+        &metric_press.attribution,
+        &metric_press.button_id,
+        timestamp_ms,
+    )?;
     metrics
-        .home_snapshot(&runtime.profile.profile.id, timestamp_ms)
+        .home_snapshot(
+            &metric_press.attribution.device_profile_id,
+            None,
+            timestamp_ms,
+        )
         .map(Some)
 }
 
@@ -640,7 +657,6 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
                     &app,
                     &connection,
                     &runtime_error,
-                    &active_profile,
                     metrics.as_deref(),
                     device.get_mut(),
                     output,
@@ -661,7 +677,6 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
                     &app,
                     &connection,
                     &runtime_error,
-                    &active_profile,
                     metrics.as_deref(),
                     device.get_mut(),
                     output,
@@ -685,7 +700,6 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
                     &app,
                     &connection,
                     &runtime_error,
-                    &active_profile,
                     metrics.as_deref(),
                     device.get_mut(),
                     SessionOutput {
@@ -713,7 +727,6 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
                         &app,
                         &connection,
                         &runtime_error,
-                        &active_profile,
                         metrics.as_deref(),
                         device.get_mut(),
                         output,
@@ -753,7 +766,6 @@ fn write_output<W: Write + ?Sized>(
     app: &AppHandle,
     connection: &RwLock<ConnectionStatus>,
     runtime_error: &RwLock<Option<RuntimeActivity>>,
-    active_profile: &RwLock<Option<RuntimeProfile>>,
     metrics: Option<&MetricsStore>,
     writer: &mut W,
     output: SessionOutput,
@@ -770,22 +782,21 @@ fn write_output<W: Write + ?Sized>(
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
         }
         let timestamp_ms = now_ms();
-        let home_update = metrics.and_then(|metrics| {
-            let profile = active_profile
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            match persist_metrics(metrics, profile.as_ref(), &activity, timestamp_ms) {
-                Ok(update) => update,
-                Err(error) => {
-                    *runtime_error
-                        .write()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(
-                        RuntimeActivity::new("metrics_write_failed").with_detail(error.to_string()),
-                    );
-                    None
-                }
-            }
-        });
+        let home_update =
+            metrics.and_then(
+                |metrics| match persist_metrics(metrics, &activity, timestamp_ms) {
+                    Ok(update) => update,
+                    Err(error) => {
+                        *runtime_error
+                            .write()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(
+                            RuntimeActivity::new("metrics_write_failed")
+                                .with_detail(error.to_string()),
+                        );
+                        None
+                    }
+                },
+            );
         emit_activity_with_home_update(app, connection, level, activity, home_update);
     }
     let sent_action = output
@@ -963,7 +974,8 @@ fn wait(stop: &AtomicBool) {
 mod tests {
     use super::*;
     use crate::{
-        metrics::MetricsStore,
+        hardware::DeviceId,
+        metrics::{MetricAttribution, MetricsStore},
         model::{ButtonDefinition, ButtonGroup, ModelLayout},
         profile::{
             ButtonAction, DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION,
@@ -976,6 +988,12 @@ mod tests {
     fn runtime_model() -> RuntimeProfile {
         RuntimeProfile {
             hardware_profile_id: "esp-primary".into(),
+            metric_attribution: MetricAttribution {
+                device_id: DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap(),
+                device_name: "Desk".into(),
+                device_profile_id: "phone".into(),
+                hardware_profile_id: "esp-primary".into(),
+            },
             profile: DeviceProfile {
                 schema_version: PROFILE_SCHEMA_VERSION,
                 profile: ModelLayout {
@@ -1017,7 +1035,8 @@ mod tests {
 
     #[test]
     fn persists_a_mapped_button_press_as_metrics_and_activity() {
-        let model = runtime_model();
+        let mut session = DeviceSession::new(runtime_model());
+        session.ready = true;
         let path = std::env::temp_dir().join(format!(
             "kivo-device-metrics-{}-{}.sqlite3",
             std::process::id(),
@@ -1031,18 +1050,69 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        let activity = RuntimeActivity {
-            input: Some(PhysicalInput::Direct { gpio: 6 }),
-            pressed: Some(true),
-            ..RuntimeActivity::new("input_state")
-        };
+        let output = session.on_message(
+            DeviceMessage::State {
+                event_id: 1,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            &mut |_| Ok(()),
+        );
 
-        let update = persist_metrics(&store, Some(&model), &activity, timestamp)
+        let update = persist_metrics(&store, &output.activities[0], timestamp)
             .unwrap()
             .unwrap();
 
         assert_eq!(update.today_presses, 1);
         assert_eq!(update.logs[0].message, "A pressed");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn persists_the_session_profile_that_interpreted_the_event() {
+        let original = runtime_model();
+        let original_device = original.metric_attribution.device_id.clone();
+        let active_profile = RwLock::new(Some(original.clone()));
+        let mut session = DeviceSession::new(original);
+        session.ready = true;
+        let output = session.on_message(
+            DeviceMessage::State {
+                event_id: 1,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            &mut |_| Ok(()),
+        );
+        let mut reassigned = runtime_model();
+        reassigned.profile.profile.id = "console".into();
+        reassigned.metric_attribution.device_name = "Renamed desk".into();
+        reassigned.metric_attribution.device_profile_id = "console".into();
+        reassigned.metric_attribution.hardware_profile_id = "esp-alternate".into();
+        *active_profile.write().unwrap() = Some(reassigned);
+        let path = std::env::temp_dir().join(format!(
+            "kivo-device-attribution-{}-{}.sqlite3",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = MetricsStore::open(&path).unwrap();
+
+        persist_metrics(&store, &output.activities[0], 1_720_086_400_000).unwrap();
+
+        let original_snapshot = store
+            .home_snapshot("phone", Some(&original_device), 1_720_086_400_000)
+            .unwrap();
+        assert_eq!(original_snapshot.total_presses, 1);
+        assert_eq!(original_snapshot.logs[0].device_name, "Desk");
+        assert_eq!(
+            store
+                .home_snapshot("console", Some(&original_device), 1_720_086_400_000)
+                .unwrap()
+                .total_presses,
+            0
+        );
         std::fs::remove_file(path).unwrap();
     }
 

@@ -1,5 +1,6 @@
 use crate::{
     hardware::{DeviceId, board_by_id},
+    metrics::{MetricsBackup, MetricsStore},
     profile::{DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION},
     storage::atomic_write,
 };
@@ -108,6 +109,7 @@ pub struct EditorSettingsPatch {
 pub struct WorkspaceSnapshot {
     pub settings: SettingsDocument,
     pub profiles: BTreeMap<String, DeviceProfile>,
+    pub metrics: MetricsBackup,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -115,6 +117,7 @@ pub struct BackupDocument {
     pub schema_version: u16,
     pub settings: SettingsDocument,
     pub profiles: Vec<DeviceProfile>,
+    pub metrics: MetricsBackup,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -409,34 +412,105 @@ impl Workspace {
         })
     }
 
-    pub fn export_backup(&self, path: &Path) -> Result<(), AppError> {
+    pub fn export_backup(&self, path: &Path, metrics: &MetricsStore) -> Result<(), AppError> {
+        let metrics = metrics
+            .backup()
+            .map_err(|error| metrics_error("read_metrics_backup", error))?;
         write_yaml(
             path,
             &BackupDocument {
                 schema_version: BACKUP_SCHEMA_VERSION,
                 settings: self.settings.clone(),
                 profiles: self.profiles.values().cloned().collect(),
+                metrics,
             },
         )
     }
 
-    pub fn restore_backup(&mut self, path: &Path) -> Result<(), AppError> {
+    pub fn restore_backup(&mut self, path: &Path, metrics: &MetricsStore) -> Result<(), AppError> {
+        self.restore_backup_with_reopen(path, metrics, |store, path| {
+            store
+                .reopen(path)
+                .map_err(|error| metrics_error("reopen_metrics", error))
+        })
+    }
+
+    fn restore_backup_with_reopen(
+        &mut self,
+        path: &Path,
+        metrics: &MetricsStore,
+        reopen_metrics: impl FnOnce(&MetricsStore, &Path) -> Result<(), AppError>,
+    ) -> Result<(), AppError> {
         let snapshot = read_backup(path)?;
         let data_directory = self.data_directory();
         let next_directory = self.config_directory.join("data.next");
         let previous_directory = self.config_directory.join("data.previous");
         remove_directory_if_exists(&next_directory)?;
         remove_directory_if_exists(&previous_directory)?;
-        write_data_directory(&next_directory, &snapshot.settings, &snapshot.profiles)?;
-        fs::rename(&data_directory, &previous_directory)
-            .map_err(|error| io_error("stage_restore", &data_directory, error))?;
+        if let Err(error) =
+            write_data_directory(&next_directory, &snapshot.settings, &snapshot.profiles)
+        {
+            let _ = fs::remove_dir_all(&next_directory);
+            return Err(error);
+        }
+        let staged_metrics_path = next_directory.join("metrics.sqlite3");
+        let staged_metrics = match MetricsStore::open(&staged_metrics_path) {
+            Ok(metrics) => metrics,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&next_directory);
+                return Err(metrics_error("stage_metrics", error));
+            }
+        };
+        if let Err(error) = staged_metrics.replace_from_backup(&snapshot.metrics) {
+            drop(staged_metrics);
+            let _ = fs::remove_dir_all(&next_directory);
+            return Err(metrics_error("stage_metrics", error));
+        }
+        drop(staged_metrics);
+
+        metrics.close();
+        if let Err(error) = fs::rename(&data_directory, &previous_directory) {
+            let _ = metrics.reopen(&data_directory.join("metrics.sqlite3"));
+            let _ = fs::remove_dir_all(&next_directory);
+            return Err(io_error("stage_restore", &data_directory, error));
+        }
         if let Err(error) = fs::rename(&next_directory, &data_directory) {
-            let _ = fs::rename(&previous_directory, &data_directory);
+            fs::rename(&previous_directory, &data_directory).map_err(|rollback| {
+                io_error("rollback_previous_data", &previous_directory, rollback)
+            })?;
+            metrics
+                .reopen(&data_directory.join("metrics.sqlite3"))
+                .map_err(|reopen| metrics_error("reopen_rollback_metrics", reopen))?;
+            remove_directory_if_exists(&next_directory)?;
             return Err(io_error("activate_restore", &next_directory, error));
         }
-        self.settings = snapshot.settings;
-        self.profiles = snapshot.profiles;
-        let _ = fs::remove_dir_all(previous_directory);
+
+        let active_metrics_path = data_directory.join("metrics.sqlite3");
+        if let Err(error) = reopen_metrics(metrics, &active_metrics_path) {
+            rollback_data_swap(
+                &data_directory,
+                &next_directory,
+                &previous_directory,
+                metrics,
+            )?;
+            return Err(error);
+        }
+        let restored = match Self::load_existing(&self.config_directory) {
+            Ok(restored) => restored,
+            Err(error) => {
+                metrics.close();
+                rollback_data_swap(
+                    &data_directory,
+                    &next_directory,
+                    &previous_directory,
+                    metrics,
+                )?;
+                return Err(error);
+            }
+        };
+        self.settings = restored.settings;
+        self.profiles = restored.profiles;
+        let _ = fs::remove_dir_all(&previous_directory);
         Ok(())
     }
 
@@ -556,13 +630,18 @@ fn read_backup(path: &Path) -> Result<WorkspaceSnapshot, AppError> {
         path,
         BACKUP_SCHEMA_VERSION,
         "unsupported_backup_schema",
-        true,
+        false,
     )?;
     let profiles = collect_profiles(backup.profiles)?;
     validate_settings(&backup.settings, &profiles)?;
+    backup
+        .metrics
+        .validate()
+        .map_err(|error| metrics_error("invalid_backup_metrics", error))?;
     Ok(WorkspaceSnapshot {
         settings: backup.settings,
         profiles,
+        metrics: backup.metrics,
     })
 }
 
@@ -620,6 +699,30 @@ fn remove_directory_if_exists(path: &Path) -> Result<(), AppError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(io_error("remove_staging_directory", path, error)),
     }
+}
+
+fn rollback_data_swap(
+    data_directory: &Path,
+    next_directory: &Path,
+    previous_directory: &Path,
+    metrics: &MetricsStore,
+) -> Result<(), AppError> {
+    metrics.close();
+    fs::rename(data_directory, next_directory)
+        .map_err(|error| io_error("rollback_restored_data", data_directory, error))?;
+    if let Err(error) = fs::rename(previous_directory, data_directory) {
+        let _ = fs::rename(next_directory, data_directory);
+        let _ = metrics.reopen(&data_directory.join("metrics.sqlite3"));
+        return Err(io_error(
+            "rollback_previous_data",
+            previous_directory,
+            error,
+        ));
+    }
+    metrics
+        .reopen(&data_directory.join("metrics.sqlite3"))
+        .map_err(|error| metrics_error("reopen_rollback_metrics", error))?;
+    remove_directory_if_exists(next_directory)
 }
 
 fn write_data_directory(
@@ -705,10 +808,15 @@ fn io_error(code: &str, path: &Path, error: std::io::Error) -> AppError {
         .with_detail(error.to_string())
 }
 
+fn metrics_error(code: &str, error: rusqlite::Error) -> AppError {
+    AppError::new(code).with_detail(error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
+        metrics::{MetricAttribution, MetricsStore},
         model::{ButtonDefinition, ButtonGroup, ModelLayout},
         profile::ButtonAction,
     };
@@ -1193,6 +1301,89 @@ mod tests {
             ),
             Some("B")
         );
+    }
+
+    #[test]
+    fn failed_metrics_reopen_rolls_back_settings_profiles_and_metrics() {
+        let directory = TestDirectory::new();
+        let source_directory = directory.path("source");
+        let target_directory = directory.path("target");
+        let mut source = Workspace::create(&source_directory, vec![device_profile()]).unwrap();
+        source
+            .save_settings(EditorSettingsPatch {
+                schema_version: SETTINGS_SCHEMA_VERSION,
+                editor_profile: Some("red-phone-v1".into()),
+                language: Language::EnUs,
+            })
+            .unwrap();
+        let source_metrics =
+            MetricsStore::open(&source_directory.join("data/metrics.sqlite3")).unwrap();
+        let device = DeviceId::new("luatos-esp32s3-aio", "AAAAAAAAAAAA").unwrap();
+        let attribution = MetricAttribution {
+            device_id: device.clone(),
+            device_name: "Backup desk".into(),
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        source_metrics
+            .record_button_press(&attribution, "A", 1_720_086_400_000)
+            .unwrap();
+        let backup_path = directory.path("backup.yaml");
+        source.export_backup(&backup_path, &source_metrics).unwrap();
+
+        let mut target = Workspace::create(&target_directory, vec![device_profile()]).unwrap();
+        let target_metrics =
+            MetricsStore::open(&target_directory.join("data/metrics.sqlite3")).unwrap();
+        let original_attribution = MetricAttribution {
+            device_name: "Original desk".into(),
+            ..attribution
+        };
+        target_metrics
+            .record_button_press(&original_attribution, "B", 1_720_086_400_001)
+            .unwrap();
+        let original_settings = target.settings.clone();
+        let original_metrics = target_metrics.backup().unwrap();
+
+        let error = target
+            .restore_backup_with_reopen(&backup_path, &target_metrics, |_metrics, _path| {
+                Err(AppError::new("injected_metrics_reopen_failure"))
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, "injected_metrics_reopen_failure");
+        assert_eq!(target.settings, original_settings);
+        assert_eq!(target_metrics.backup().unwrap(), original_metrics);
+        assert_eq!(
+            Workspace::load_existing(&target_directory)
+                .unwrap()
+                .settings,
+            original_settings
+        );
+        assert!(!target_directory.join("data.previous").exists());
+        assert!(!target_directory.join("data.next").exists());
+    }
+
+    #[test]
+    fn full_backup_can_reopen_an_export_larger_than_the_profile_import_limit() {
+        let directory = TestDirectory::new();
+        let workspace = workspace(&directory);
+        let metrics = MetricsStore::open(&directory.path("data/metrics.sqlite3")).unwrap();
+        let attribution = MetricAttribution {
+            device_id: DeviceId::new("luatos-esp32s3-aio", "AAAAAAAAAAAA").unwrap(),
+            device_name: "D".repeat(MAX_IMPORT_BYTES as usize + 1),
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        metrics
+            .record_button_press(&attribution, "A", 1_720_086_400_000)
+            .unwrap();
+        let backup_path = directory.path("large-backup.yaml");
+        workspace.export_backup(&backup_path, &metrics).unwrap();
+        assert!(fs::metadata(&backup_path).unwrap().len() > MAX_IMPORT_BYTES);
+
+        let preview = workspace.preview_backup(&backup_path).unwrap();
+
+        assert_eq!(preview.profile_count, 1);
     }
 
     #[test]

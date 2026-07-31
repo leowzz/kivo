@@ -88,7 +88,7 @@ fn snapshot(state: &AppState) -> Result<AppSnapshot, AppError> {
             .settings
             .editor_profile
             .as_deref()
-            .and_then(|model_id| metrics.home_snapshot(model_id, now_ms()).ok())
+            .and_then(|profile_id| metrics.home_snapshot(profile_id, None, now_ms()).ok())
     });
     Ok(AppSnapshot {
         profiles,
@@ -172,8 +172,31 @@ fn restore_backup_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, Ap
         .workspace
         .write()
         .map_err(|_| state_error("workspace_unavailable"))?;
-    workspace.restore_backup(path)?;
-    sync_runtime(state, &workspace)?;
+    let mut runtime = state
+        .active_runtime_profile
+        .write()
+        .map_err(|_| state_error("runtime_profile_unavailable"))?;
+    let metrics = state
+        .metrics
+        .as_deref()
+        .ok_or_else(|| state_error("metrics_unavailable"))?;
+    workspace.restore_backup(path, metrics)?;
+    *runtime = None;
+    drop(runtime);
+    drop(workspace);
+    snapshot(state)
+}
+
+fn export_backup_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, AppError> {
+    let workspace = state
+        .workspace
+        .read()
+        .map_err(|_| state_error("workspace_unavailable"))?;
+    let metrics = state
+        .metrics
+        .as_deref()
+        .ok_or_else(|| state_error("metrics_unavailable"))?;
+    workspace.export_backup(path, metrics)?;
     drop(workspace);
     snapshot(state)
 }
@@ -317,12 +340,7 @@ fn preview_backup(
 
 #[tauri::command]
 fn export_backup(state: tauri::State<'_, AppState>, path: String) -> Result<AppSnapshot, AppError> {
-    state
-        .workspace
-        .read()
-        .map_err(|_| state_error("workspace_unavailable"))?
-        .export_backup(Path::new(&path))?;
-    snapshot(&state)
+    export_backup_inner(&state, Path::new(&path))
 }
 
 #[tauri::command]
@@ -355,7 +373,7 @@ pub fn run() {
             fs::create_dir_all(&config_directory)?;
             let bundled_profiles = app.path().resource_dir()?.join("models");
             let workspace = Workspace::load(&config_directory, &bundled_profiles)?;
-            let metrics = MetricsStore::open(&config_directory.join("metrics.sqlite3"))
+            let metrics = MetricsStore::open(&config_directory.join("data/metrics.sqlite3"))
                 .ok()
                 .map(Arc::new);
             let active_runtime_profile = Arc::new(RwLock::new(None));
@@ -473,7 +491,10 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::profile::{ButtonAction, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION};
+    use crate::{
+        metrics::MetricAttribution,
+        profile::{ButtonAction, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION},
+    };
     use std::{
         collections::BTreeMap,
         path::PathBuf,
@@ -539,7 +560,7 @@ mod tests {
             capabilities: Arc::new(RwLock::new(None)),
             runtime_error: Arc::new(RwLock::new(None)),
             learning: Arc::new(RwLock::new(None)),
-            metrics: MetricsStore::open(&directory.join("metrics.sqlite3"))
+            metrics: MetricsStore::open(&directory.join("data/metrics.sqlite3"))
                 .ok()
                 .map(Arc::new),
             next_learning_revision: Mutex::new(0),
@@ -613,11 +634,21 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
+        let device_id = hardware::DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap();
         state
             .metrics
             .as_ref()
             .unwrap()
-            .record_button_press("red-phone-v1", "UP", timestamp)
+            .record_button_press(
+                &MetricAttribution {
+                    device_id,
+                    device_name: "Desk".into(),
+                    device_profile_id: "red-phone-v1".into(),
+                    hardware_profile_id: "esp-primary".into(),
+                },
+                "UP",
+                timestamp,
+            )
             .unwrap();
 
         let snapshot = snapshot(&state).unwrap();
@@ -646,17 +677,41 @@ mod tests {
         let directory = TestDirectory::new();
         let state = product_state(&directory.0, vec![product_profile()]);
         let backup = directory.path("backup.yaml");
+        let timestamp = now_ms();
+        let attribution = MetricAttribution {
+            device_id: hardware::DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap(),
+            device_name: "Desk".into(),
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        state
+            .metrics
+            .as_deref()
+            .unwrap()
+            .record_button_press(&attribution, "UP", timestamp)
+            .unwrap();
         state
             .workspace
             .read()
             .unwrap()
-            .export_backup(&backup)
+            .export_backup(&backup, state.metrics.as_deref().unwrap())
+            .unwrap();
+        state
+            .metrics
+            .as_deref()
+            .unwrap()
+            .record_button_press(&attribution, "DOWN", timestamp + 1)
             .unwrap();
         delete_profile_inner(&state, "red-phone-v1").unwrap();
 
         let snapshot = restore_backup_inner(&state, &backup).unwrap();
 
         assert_eq!(snapshot.editor_profile.as_deref(), Some("red-phone-v1"));
+        assert_eq!(snapshot.home_metrics.as_ref().unwrap().total_presses, 1);
+        assert_eq!(
+            snapshot.home_metrics.unwrap().top_button.unwrap().button_id,
+            "UP"
+        );
         assert!(state.active_runtime_profile.read().unwrap().is_none());
     }
 
