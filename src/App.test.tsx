@@ -708,7 +708,7 @@ test("clears one runtime assignment through the authoritative snapshot", async (
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("clear_runtime_assignment", {
     deviceId: "device-front-desk",
   }));
-  expect(screen.getAllByText("-")).not.toHaveLength(0);
+  expect(screen.getByRole("button", { name: "清除运行分配" })).toBeDisabled();
 });
 
 test("forgets only the confirmed offline Device and keeps failure retryable", async () => {

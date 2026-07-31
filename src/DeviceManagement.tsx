@@ -46,6 +46,9 @@ function assignmentLabel(device: DeviceStatus, profiles: DeviceProfile[]) {
   const hardware = profile?.hardware_profiles.find(
     (item) => item.id === device.runtimeAssignment?.hardware_profile_id,
   );
+  if (device.assignment === "invalid_assignment") {
+    return `${device.runtimeAssignment.device_profile_id} / ${device.runtimeAssignment.hardware_profile_id}`;
+  }
   return `${profile?.profile.name ?? device.runtimeAssignment.device_profile_id} / ${hardware?.name ?? device.runtimeAssignment.hardware_profile_id}`;
 }
 function matches(values: string[], query: string) {
@@ -115,6 +118,7 @@ export function DeviceManagement({
   const previous = useRef<Row[]>([]);
   const pendingAssignment = useRef<RuntimeAssignment | null>(null);
   const pendingClearAssignment = useRef(false);
+  const assignmentMutationInFlight = useRef(false);
   const boards = useMemo(
     () => new Map(boardProfiles.map((board) => [board.id, board])),
     [boardProfiles],
@@ -279,9 +283,23 @@ export function DeviceManagement({
   const selectedDraftHardware = compatibleHardware.find(
     (item) => item.id === assignmentDraft.hardwareProfileId,
   );
+  const storedAssignmentProfile = deviceProfiles.find(
+    (profile) =>
+      profile.profile.id === selectedDevice?.runtimeAssignment?.device_profile_id,
+  );
+  const storedAssignmentHardware = storedAssignmentProfile?.hardware_profiles.find(
+    (hardware) =>
+      hardware.id === selectedDevice?.runtimeAssignment?.hardware_profile_id,
+  );
   const saveAssignment = async () => {
-    if (!selectedDevice || !selectedDraftProfile || !selectedDraftHardware) return;
+    if (
+      assignmentMutationInFlight.current ||
+      !selectedDevice ||
+      !selectedDraftProfile ||
+      !selectedDraftHardware
+    ) return;
     try {
+      assignmentMutationInFlight.current = true;
       setAssignmentSaving(true);
       setError(null);
       pendingAssignment.current = {
@@ -297,12 +315,14 @@ export function DeviceManagement({
       pendingAssignment.current = null;
       setError(String(reason));
     } finally {
+      assignmentMutationInFlight.current = false;
       setAssignmentSaving(false);
     }
   };
   const clearAssignment = async () => {
-    if (!selectedDevice) return;
+    if (assignmentMutationInFlight.current || !selectedDevice) return;
     try {
+      assignmentMutationInFlight.current = true;
       setAssignmentSaving(true);
       setError(null);
       pendingClearAssignment.current = true;
@@ -312,6 +332,7 @@ export function DeviceManagement({
       pendingClearAssignment.current = false;
       setError(String(reason));
     } finally {
+      assignmentMutationInFlight.current = false;
       setAssignmentSaving(false);
     }
   };
@@ -674,19 +695,24 @@ export function DeviceManagement({
             deviceProfile:
               (assignmentConfirmation === "save"
                 ? selectedDraftProfile?.profile.name
-                : undefined) ??
+                : selectedDevice.assignment === "invalid_assignment"
+                  ? undefined
+                  : storedAssignmentProfile?.profile.name) ??
               selectedDevice.runtimeAssignment?.device_profile_id ??
               "-",
             hardwareProfile:
               (assignmentConfirmation === "save"
                 ? selectedDraftHardware?.name
-                : undefined) ??
+                : selectedDevice.assignment === "invalid_assignment"
+                  ? undefined
+                  : storedAssignmentHardware?.name) ??
               selectedDevice.runtimeAssignment?.hardware_profile_id ??
               "-",
           })}
           confirmLabel={t(language, "common.confirm")}
           cancelLabel={t(language, "common.cancel")}
           danger={assignmentConfirmation === "clear"}
+          pending={assignmentSaving}
           onCancel={() => setAssignmentConfirmation(null)}
           onConfirm={() =>
             void (assignmentConfirmation === "save"

@@ -284,3 +284,80 @@ test("retains invalid stored IDs until repair or explicit clear", async () => {
   await user.click(within(dialog).getByRole("button", { name: "确认" }));
   expect(onClearRuntimeAssignment).toHaveBeenCalledWith("rp-a");
 });
+
+test("retains both raw IDs when only the stored Hardware Profile is missing", () => {
+  renderManagement({
+    devices: [device({
+      assignment: "invalid_assignment",
+      runtimeAssignment: {
+        device_profile_id: "profile-a",
+        hardware_profile_id: "missing-hardware",
+      },
+    })],
+  });
+
+  expect(screen.getAllByText("profile-a / missing-hardware")).toHaveLength(2);
+});
+
+test("retains both raw IDs when the stored Hardware Profile has the wrong Board Profile", () => {
+  renderManagement({
+    devices: [device({
+      assignment: "invalid_assignment",
+      runtimeAssignment: {
+        device_profile_id: "profile-b",
+        hardware_profile_id: "hardware-esp",
+      },
+    })],
+  });
+
+  expect(screen.getAllByText("profile-b / hardware-esp")).toHaveLength(2);
+});
+
+test("names resolved profiles when clearing a valid assignment", async () => {
+  const user = userEvent.setup();
+  renderManagement();
+
+  await user.click(screen.getByRole("button", { name: "清除运行分配" }));
+  const dialog = screen.getByRole("dialog", { name: "清除运行分配" });
+  expect(within(dialog).getByText(/RP2040 A/)).toBeInTheDocument();
+  expect(within(dialog).getByText(/Counter Profile/)).toBeInTheDocument();
+  expect(within(dialog).getByText(/Counter Hardware/)).toBeInTheDocument();
+});
+
+test("submits a pending save assignment exactly once", async () => {
+  const user = userEvent.setup();
+  let resolveSave!: () => void;
+  const onSaveRuntimeAssignment = vi.fn(
+    () => new Promise<void>((resolve) => { resolveSave = resolve; }),
+  );
+  renderManagement({ onSaveRuntimeAssignment });
+
+  await user.click(screen.getByRole("button", { name: "保存运行分配" }));
+  const dialog = screen.getByRole("dialog", { name: "保存运行分配" });
+  const confirm = within(dialog).getByRole("button", { name: "确认" });
+  await user.click(confirm);
+  expect(onSaveRuntimeAssignment).toHaveBeenCalledTimes(1);
+  expect(confirm).toBeDisabled();
+  await user.click(confirm);
+  expect(onSaveRuntimeAssignment).toHaveBeenCalledTimes(1);
+  resolveSave();
+});
+
+test("submits a pending clear assignment exactly once", async () => {
+  const user = userEvent.setup();
+  let resolveClear!: () => void;
+  const onClearRuntimeAssignment = vi.fn(
+    () => new Promise<void>((resolve) => { resolveClear = resolve; }),
+  );
+  renderManagement({ onClearRuntimeAssignment });
+
+  await user.click(screen.getByRole("button", { name: "清除运行分配" }));
+  const dialog = screen.getByRole("dialog", { name: "清除运行分配" });
+  const confirm = within(dialog).getByRole("button", { name: "确认" });
+  await user.click(confirm);
+  expect(onClearRuntimeAssignment).toHaveBeenCalledTimes(1);
+  expect(confirm).toBeDisabled();
+  await user.click(confirm);
+  expect(onClearRuntimeAssignment).toHaveBeenCalledTimes(1);
+  resolveClear();
+});
