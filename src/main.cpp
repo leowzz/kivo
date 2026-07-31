@@ -1,51 +1,35 @@
 #include <Arduino.h>
-#include <USB.h>
-#include <USBCDC.h>
-#include <USBHIDKeyboard.h>
 
 #include <string>
 #include <vector>
 
 #include "GpioTriggerController.h"
 #include "TriggerProtocol.h"
+#include "platform/Platform.h"
 
 namespace {
 constexpr std::size_t kMaxResponseLineLength = 255;
 constexpr const char *kHelloLine =
     "HELLO 2 esp32s3 17 0 1 2 3 4 5 6 7 8 9 12 13 14 15 16 17 18\n";
 
-USBCDC usbSerial;
-USBHIDKeyboard keyboard;
-GpioTriggerController controller(kLuatOsEsp32S3Aio);
+GpioTriggerController controller(platform::boardProfile());
 ResponseLineBuffer responseLines(kMaxResponseLineLength);
-TopologyBuilder topologyBuilder(kLuatOsEsp32S3Aio);
+TopologyBuilder topologyBuilder(platform::boardProfile());
 bool helperConnected = false;
 
 void writeLine(const std::string &line) {
-  usbSerial.write(line.c_str(), line.size());
-  usbSerial.flush();
+  platform::write(line.c_str(), line.size());
+  platform::flush();
 }
 
 void pasteClipboard() {
-  keyboard.press(KEY_LEFT_GUI);
-  keyboard.press('v');
-  delay(10);
-  keyboard.releaseAll();
-}
-
-void sendHotkey(std::uint8_t modifierMask, std::uint8_t keycode) {
-  KeyReport report{};
-  report.modifiers = modifierMask;
-  report.keys[0] = keycode;
-  keyboard.sendReport(&report);
-  delay(10);
-  keyboard.releaseAll();
+  platform::sendHotkey(0x08, 0x19);
 }
 
 void applyRuntimePinModes() {
-  for (std::size_t index = 0; index < kLuatOsEsp32S3Aio.safePinCount;
-       ++index) {
-    pinMode(kLuatOsEsp32S3Aio.safePins[index], INPUT);
+  const auto &profile = platform::boardProfile();
+  for (std::size_t index = 0; index < profile.safePinCount; ++index) {
+    pinMode(profile.safePins[index], INPUT);
   }
   for (const auto &source : controller.topology().directs) {
     for (const auto gpio : source.pins) pinMode(gpio, INPUT_PULLUP);
@@ -57,9 +41,9 @@ void applyRuntimePinModes() {
 }
 
 void applyLearningPinModes() {
-  for (std::size_t index = 0; index < kLuatOsEsp32S3Aio.safePinCount;
-       ++index) {
-    pinMode(kLuatOsEsp32S3Aio.safePins[index], INPUT);
+  const auto &profile = platform::boardProfile();
+  for (std::size_t index = 0; index < profile.safePinCount; ++index) {
+    pinMode(profile.safePins[index], INPUT);
   }
   for (const auto gpio : controller.learningPins()) {
     pinMode(gpio, INPUT_PULLUP);
@@ -144,14 +128,14 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
   if (command->kind == HelperCommandKind::Paste) {
     pasteClipboard();
   } else {
-    sendHotkey(command->modifierMask, command->keycode);
+    platform::sendHotkey(command->modifierMask, command->keycode);
   }
   writeLine(formatDone(command->eventId, command->step));
 }
 
 void readHelperResponses(std::uint32_t nowMs) {
-  while (usbSerial.available() > 0) {
-    const int value = usbSerial.read();
+  while (platform::available() > 0) {
+    const int value = platform::read();
     if (value < 0) {
       return;
     }
@@ -218,19 +202,12 @@ void scanLearningInputs(std::uint32_t nowMs) {
 }  // namespace
 
 void setup() {
-  USB.VID(0x303A);
-  USB.PID(0x4002);
-  USB.manufacturerName("Kivo");
-  USB.productName("Kivo Keyboard");
-
-  usbSerial.begin(115200);
-  keyboard.begin();
-  USB.begin();
+  platform::begin();
 }
 
 void loop() {
   const std::uint32_t nowMs = millis();
-  const bool connected = static_cast<bool>(usbSerial);
+  const bool connected = platform::connected();
   if (connected && !helperConnected) writeLine(kHelloLine);
   helperConnected = connected;
   controller.expire(nowMs);
@@ -240,5 +217,5 @@ void loop() {
   } else {
     scanRuntimeInputs(nowMs);
   }
-  delay(1);
+  platform::delayMs(1);
 }
