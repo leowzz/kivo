@@ -94,7 +94,7 @@ export function ActionEditor({ language, button, actions, onChange }: ActionEdit
         {actions.map((action, index) => (
           <section className="action-item" key={`${action.type}-${index}`}>
             <div className="action-item-header">
-              <span>{index + 1}. {t(language, action.type === "paste" ? "behavior.paste" : "behavior.hotkey")}</span>
+              <span>{action.type === "paste" ? <TextCursorInput size={13} /> : <Keyboard size={13} />}{index + 1}. {t(language, action.type === "paste" ? "behavior.paste" : "behavior.hotkey")}</span>
               <div className="icon-row">
                 <button
                   className="icon-button"

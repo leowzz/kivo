@@ -410,6 +410,7 @@ export default function App() {
             <>
               <div className="content-heading">
                 <div><span>{activeConfig.model.name}</span><h2>{t(language, view === "layout" ? "layout.title" : "behavior.title")}</h2></div>
+                {view === "behavior" && selectedButton && <span className="selected-crumb">{t(language, "behavior.selected", { label: selectedButton.label })}</span>}
                 {view === "layout" && <button className="primary-button" type="button" onClick={() => setLayoutEditorOpen(true)}><LayoutGrid size={16} />{t(language, "layout.edit")}</button>}
               </div>
               <div className="keypad-stage">
