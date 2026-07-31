@@ -40,6 +40,8 @@ pub struct RuntimeActivity {
     pub pressed: Option<bool>,
     pub learning_target: Option<LearningTarget>,
     #[serde(skip)]
+    context: Option<RuntimeEventContext>,
+    #[serde(skip)]
     metric_press: Option<MetricPress>,
 }
 
@@ -59,6 +61,7 @@ impl RuntimeActivity {
             input: None,
             pressed: None,
             learning_target: None,
+            context: None,
             metric_press: None,
         }
     }
@@ -70,6 +73,11 @@ impl RuntimeActivity {
 
     fn with_detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
+        self
+    }
+
+    fn with_context(mut self, context: Option<RuntimeEventContext>) -> Self {
+        self.context = context;
         self
     }
 }
@@ -89,6 +97,7 @@ pub struct PendingPaste {
     pub step: u16,
     pub total: u16,
     pub text: String,
+    context: Option<RuntimeEventContext>,
 }
 
 pub struct DeviceSession {
@@ -100,6 +109,7 @@ pub struct DeviceSession {
     ready: bool,
     active: Option<ActionSequence>,
     active_snapshot: Option<Arc<RuntimeProfileSnapshot>>,
+    active_context: Option<RuntimeEventContext>,
     queue: VecDeque<QueuedInput>,
     active_receive_sequence: Option<u64>,
     pending_paste: Option<PendingPaste>,
@@ -121,6 +131,7 @@ struct QueuedInput {
     event_id: u64,
     input: PhysicalInput,
     snapshot: Arc<RuntimeProfileSnapshot>,
+    context: Option<RuntimeEventContext>,
 }
 
 struct PendingReconfiguration {
@@ -145,6 +156,7 @@ impl DeviceSession {
             ready: false,
             active: None,
             active_snapshot: None,
+            active_context: None,
             queue: VecDeque::new(),
             active_receive_sequence: None,
             pending_paste: None,
@@ -164,6 +176,7 @@ impl DeviceSession {
             ready: false,
             active: None,
             active_snapshot: None,
+            active_context: None,
             queue: VecDeque::new(),
             active_receive_sequence: None,
             pending_paste: None,
@@ -276,9 +289,11 @@ impl DeviceSession {
             output.lines.push(format!("SKIP {event_id}\n"));
             let mut activity = RuntimeActivity::new(code);
             activity.detail = detail;
+            activity.context = self.active_context.clone();
             output.activities.push(activity);
             self.pending_paste = None;
             self.active_snapshot = None;
+            self.active_context = None;
             if let Some(receive_sequence) = self.active_receive_sequence.take() {
                 output.completed_receive_sequences.push(receive_sequence);
             }
@@ -352,6 +367,7 @@ impl DeviceSession {
                     occurred_at_ms,
                     snapshot,
                     action_snapshot,
+                    None,
                     &mut output,
                 );
             }
@@ -443,6 +459,7 @@ impl DeviceSession {
             captured.context.timestamp_ms,
             snapshot.clone(),
             snapshot,
+            Some(captured.context.clone()),
             &mut output,
         );
         output
@@ -458,6 +475,7 @@ impl DeviceSession {
         occurred_at_ms: u64,
         metric_snapshot: Option<Arc<RuntimeProfileSnapshot>>,
         action_snapshot: Option<Arc<RuntimeProfileSnapshot>>,
+        context: Option<RuntimeEventContext>,
         output: &mut SessionOutput,
     ) {
         let metric_press = (state == InputState::Down)
@@ -476,6 +494,7 @@ impl DeviceSession {
         output.activities.push(RuntimeActivity {
             input: Some(input),
             pressed: Some(state == InputState::Down),
+            context: context.clone(),
             metric_press,
             ..RuntimeActivity::new("input_state")
         });
@@ -486,6 +505,7 @@ impl DeviceSession {
                     event_id,
                     input,
                     snapshot,
+                    context: context.clone(),
                 });
                 self.start_next(output);
             } else {
@@ -493,7 +513,7 @@ impl DeviceSession {
                 output.completed_receive_sequences.push(receive_sequence);
                 output
                     .activities
-                    .push(RuntimeActivity::new("input_before_configuration"));
+                    .push(RuntimeActivity::new("input_before_configuration").with_context(context));
             }
         } else {
             output.completed_receive_sequences.push(receive_sequence);
@@ -602,6 +622,7 @@ impl DeviceSession {
         self.configuring = None;
         self.active = None;
         self.active_snapshot = None;
+        self.active_context = None;
         self.active_receive_sequence = None;
         self.pending_paste = None;
         self.queue.clear();
@@ -666,11 +687,14 @@ impl DeviceSession {
         if let Err(error) = sequence.acknowledge(event_id, step) {
             let active_event = sequence.event_id();
             output.lines.push(format!("SKIP {active_event}\n"));
-            output
-                .activities
-                .push(RuntimeActivity::new("invalid_action_acknowledgement").with_detail(error));
+            output.activities.push(
+                RuntimeActivity::new("invalid_action_acknowledgement")
+                    .with_detail(error)
+                    .with_context(self.active_context.clone()),
+            );
             self.active = None;
             self.active_snapshot = None;
+            self.active_context = None;
             self.pending_paste = None;
             if let Some(receive_sequence) = self.active_receive_sequence.take() {
                 output.completed_receive_sequences.push(receive_sequence);
@@ -681,6 +705,7 @@ impl DeviceSession {
         if sequence.is_complete() {
             self.active = None;
             self.active_snapshot = None;
+            self.active_context = None;
             self.pending_paste = None;
             if let Some(receive_sequence) = self.active_receive_sequence.take() {
                 output.completed_receive_sequences.push(receive_sequence);
@@ -716,7 +741,7 @@ impl DeviceSession {
                     .push(queued.receive_sequence);
                 output
                     .activities
-                    .push(RuntimeActivity::new("unmapped_input"));
+                    .push(RuntimeActivity::new("unmapped_input").with_context(queued.context));
                 continue;
             };
             let actions = runtime
@@ -730,13 +755,16 @@ impl DeviceSession {
                 output
                     .completed_receive_sequences
                     .push(queued.receive_sequence);
-                output
-                    .activities
-                    .push(RuntimeActivity::new("empty_action_list").with_param("button", button));
+                output.activities.push(
+                    RuntimeActivity::new("empty_action_list")
+                        .with_param("button", button)
+                        .with_context(queued.context),
+                );
                 continue;
             }
             self.active = Some(ActionSequence::new(queued.event_id, button, actions));
             self.active_snapshot = Some(queued.snapshot);
+            self.active_context = queued.context;
             self.active_receive_sequence = Some(queued.receive_sequence);
             self.emit_active_step(output);
         }
@@ -757,6 +785,7 @@ impl DeviceSession {
                     step: step.step,
                     total: step.total,
                     text: text.clone(),
+                    context: self.active_context.clone(),
                 };
                 self.pending_paste = Some(request.clone());
                 output.paste_requests.push(request);
@@ -770,10 +799,12 @@ impl DeviceSession {
                         RuntimeActivity::new("action_step_failed")
                             .with_param("button", step.button)
                             .with_param("step", step.step.to_string())
-                            .with_detail(error),
+                            .with_detail(error)
+                            .with_context(self.active_context.clone()),
                     );
                     self.active = None;
                     self.active_snapshot = None;
+                    self.active_context = None;
                     if let Some(receive_sequence) = self.active_receive_sequence.take() {
                         output.completed_receive_sequences.push(receive_sequence);
                     }
@@ -798,9 +829,10 @@ impl DeviceSession {
             ));
         } else {
             self.pending_paste = Some(request);
-            output
-                .activities
-                .push(RuntimeActivity::new("paste_grant_mismatch"));
+            output.activities.push(
+                RuntimeActivity::new("paste_grant_mismatch")
+                    .with_context(self.pending_paste.as_ref().unwrap().context.clone()),
+            );
         }
         output
     }
@@ -928,6 +960,19 @@ struct PendingPasteReply {
     replies: mpsc::Receiver<PasteReply>,
 }
 
+pub(crate) fn apply_worker_context_update(
+    current_port: &mut String,
+    current_context: &mut RuntimeEventContext,
+    command: &WorkerCommand,
+) -> bool {
+    let WorkerCommand::UpdatePort(port) = command else {
+        return false;
+    };
+    *current_port = port.clone();
+    current_context.port = Some(port.clone());
+    true
+}
+
 impl DeviceWorker for SystemDeviceWorker {
     fn send(&self, command: WorkerCommand) -> Result<(), String> {
         self.commands
@@ -1044,8 +1089,9 @@ fn run_isolated_worker_inner(
     let mut active_paste_ack = None;
     let mut action_deadline = None;
     let mut line = Vec::new();
+    let mut current_port = start.port.clone();
     let mut current_context =
-        RuntimeEventContext::unassigned(now_ms()).with_port(start.port.clone());
+        RuntimeEventContext::unassigned(now_ms()).with_port(current_port.clone());
     let initial = session.on_message_deferred(DeviceMessage::Hello(hello), 0, now_ms());
     write_isolated_output(
         start,
@@ -1063,17 +1109,21 @@ fn run_isolated_worker_inner(
 
     while !stop.load(Ordering::Relaxed) {
         for command in commands.try_iter() {
+            if apply_worker_context_update(&mut current_port, &mut current_context, &command) {
+                continue;
+            }
             let (output, context) = match command {
+                WorkerCommand::UpdatePort(_) => unreachable!("port updates are handled above"),
                 WorkerCommand::UpdateSnapshot(snapshot) => {
                     current_context =
                         RuntimeEventContext::from_snapshot(now_ms(), snapshot.as_deref())
-                            .with_port(start.port.clone());
+                            .with_port(current_port.clone());
                     (session.update_snapshot(snapshot), current_context.clone())
                 }
                 WorkerCommand::Reconfigure { snapshot, revision } => {
                     current_context =
                         RuntimeEventContext::from_snapshot(now_ms(), snapshot.as_deref())
-                            .with_port(start.port.clone());
+                            .with_port(current_port.clone());
                     (
                         session.reconfigure(snapshot, revision),
                         current_context.clone(),
@@ -1081,13 +1131,13 @@ fn run_isolated_worker_inner(
                 }
                 WorkerCommand::BeginLearning(target) => {
                     current_context = RuntimeEventContext::from_learning(now_ms(), &target)
-                        .with_port(start.port.clone());
+                        .with_port(current_port.clone());
                     (session.begin_learning(target), current_context.clone())
                 }
                 WorkerCommand::EndLearning { snapshot, revision } => {
                     current_context =
                         RuntimeEventContext::from_snapshot(now_ms(), snapshot.as_deref())
-                            .with_port(start.port.clone());
+                            .with_port(current_port.clone());
                     (
                         session.end_learning(snapshot, revision),
                         current_context.clone(),
@@ -1370,26 +1420,15 @@ fn write_isolated_output<W: Write + ?Sized>(
     context: &RuntimeEventContext,
     stop: &AtomicBool,
 ) -> Result<(), String> {
-    for activity in output.activities.drain(..) {
-        if let Some(metrics) = metrics {
-            let _operation = operation_barrier
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if stop.load(Ordering::Relaxed) {
-                return Ok(());
-            }
-            persist_metrics(metrics, &activity, now_ms())
-                .map_err(|error| format!("metrics_write_failed: {error}"))?;
-        }
-        events
-            .send(WorkerEvent::Activity {
-                generation: start.generation,
-                device_id: start.device_id.clone(),
-                context: context.clone(),
-                activity,
-            })
-            .map_err(|_| "coordinator_stopped".to_owned())?;
-    }
+    emit_worker_activities(
+        start,
+        events,
+        metrics,
+        operation_barrier,
+        &mut output.activities,
+        context,
+        stop,
+    )?;
     let completed_sequence = !output.completed_receive_sequences.is_empty();
     for receive_sequence in output.completed_receive_sequences.drain(..) {
         events
@@ -1437,6 +1476,59 @@ fn write_isolated_output<W: Write + ?Sized>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn emit_worker_activities(
+    start: &WorkerStart,
+    events: &mpsc::Sender<WorkerEvent>,
+    metrics: Option<&MetricsStore>,
+    operation_barrier: &RwLock<()>,
+    activities: &mut Vec<RuntimeActivity>,
+    context: &RuntimeEventContext,
+    stop: &AtomicBool,
+) -> Result<(), String> {
+    for activity in activities.drain(..) {
+        let event_context = activity.context.clone().unwrap_or_else(|| context.clone());
+        if let Some(metrics) = metrics {
+            let _operation = operation_barrier
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if stop.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+            persist_metrics(metrics, &activity, now_ms())
+                .map_err(|error| format!("metrics_write_failed: {error}"))?;
+        }
+        events
+            .send(WorkerEvent::Activity {
+                generation: start.generation,
+                device_id: start.device_id.clone(),
+                context: event_context,
+                activity,
+            })
+            .map_err(|_| "coordinator_stopped".to_owned())?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn emit_worker_activities_for_test(
+    start: &WorkerStart,
+    events: &mpsc::Sender<WorkerEvent>,
+    mut output: SessionOutput,
+    context: &RuntimeEventContext,
+) {
+    emit_worker_activities(
+        start,
+        events,
+        None,
+        &RwLock::new(()),
+        &mut output.activities,
+        context,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1451,6 +1543,7 @@ mod tests {
         hardware::DeviceId,
         metrics::{MetricAttribution, MetricsStore},
         model::{ButtonDefinition, ButtonGroup, ModelLayout},
+        paste::{ClipboardWriter, PasteCoordinator},
         profile::{
             ButtonAction, DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION,
         },
@@ -1746,6 +1839,7 @@ mod tests {
                 step: 1,
                 total: 2,
                 text: "global".into(),
+                context: None,
             }]
         );
 
@@ -1761,6 +1855,132 @@ mod tests {
         );
         assert_eq!(next.lines, ["HOTKEY 41 2 2 0 40\n"]);
         assert!(next.paste_requests.is_empty());
+    }
+
+    struct FailingClipboard;
+
+    impl ClipboardWriter for FailingClipboard {
+        fn write(&self, _text: &str) -> Result<(), String> {
+            Err("clipboard unavailable".into())
+        }
+    }
+
+    #[test]
+    fn deferred_paste_failure_keeps_captured_context_after_overtaking_reconfigure() {
+        let old = Arc::new(runtime_model());
+        let device_id = old.metric_attribution.device_id.clone();
+        let old_context = RuntimeEventContext::from_snapshot(10, Some(old.as_ref()))
+            .with_port("/dev/old-captured");
+        let mut session = DeviceSession::new((*old).clone());
+        let DeviceMessage::Hello(hello) = hello() else {
+            unreachable!();
+        };
+        session.on_message_deferred(DeviceMessage::Hello(hello), 0, 1);
+        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 2);
+        let captured = session.capture_input(
+            &old_context,
+            10,
+            70,
+            PhysicalInput::Direct { gpio: 6 },
+            InputState::Down,
+        );
+
+        let mut new = runtime_model();
+        new.profile.profile.id = "console".into();
+        new.profile.profile.name = "Console".into();
+        new.profile.hardware_profiles[0].id = "esp-new".into();
+        new.hardware_profile_id = "esp-new".into();
+        new.metric_attribution.device_profile_id = "console".into();
+        new.metric_attribution.hardware_profile_id = "esp-new".into();
+        let new = Arc::new(new);
+        let new_context = RuntimeEventContext::from_snapshot(20, Some(new.as_ref()))
+            .with_port("/dev/new-current");
+        session.reconfigure(Some(new), 2);
+        let queued = session.on_captured_input(&captured, 77);
+        assert!(queued.paste_requests.is_empty());
+        let configured =
+            session.on_message_deferred(DeviceMessage::ConfigOk { revision: 2 }, 0, 21);
+        assert_eq!(configured.paste_requests[0].text, "第一步");
+
+        let paste = PasteCoordinator::with_timeout(FailingClipboard, Duration::from_millis(100));
+        paste.handle().register_sequence(77).unwrap();
+        let start = WorkerStart {
+            generation: 9,
+            device_id: device_id.clone(),
+            port: "/dev/new-current".into(),
+            board_profile_id: device_id.board_profile_id().into(),
+        };
+        let (events, received_events) = mpsc::channel();
+        let mut writer = Vec::new();
+        let mut pending_paste = None;
+        let mut action_deadline = None;
+        let stop = AtomicBool::new(false);
+        let barrier = RwLock::new(());
+        write_isolated_output(
+            &start,
+            &events,
+            &paste.handle(),
+            None,
+            &barrier,
+            &mut writer,
+            configured,
+            &mut pending_paste,
+            &mut action_deadline,
+            &new_context,
+            &stop,
+        )
+        .unwrap();
+        let reply = pending_paste
+            .as_ref()
+            .unwrap()
+            .replies
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            reply,
+            PasteReply::ClipboardError("clipboard unavailable".into())
+        );
+        pending_paste = None;
+        let failed = session
+            .fail_active_deferred("action_step_failed", Some("clipboard unavailable".into()));
+        write_isolated_output(
+            &start,
+            &events,
+            &paste.handle(),
+            None,
+            &barrier,
+            &mut writer,
+            failed,
+            &mut pending_paste,
+            &mut action_deadline,
+            &new_context,
+            &stop,
+        )
+        .unwrap();
+        let event = received_events
+            .try_iter()
+            .find(|event| {
+                matches!(
+                    event,
+                    WorkerEvent::Activity { activity, .. }
+                        if activity.code == "action_step_failed"
+                )
+            })
+            .unwrap();
+        let WorkerEvent::Activity {
+            device_id: actual_device,
+            context,
+            ..
+        } = event
+        else {
+            unreachable!();
+        };
+
+        assert_eq!(actual_device, device_id);
+        assert_eq!(context.device_profile_id.as_deref(), Some("phone"));
+        assert_eq!(context.hardware_profile_id.as_deref(), Some("esp-primary"));
+        assert_eq!(context.port.as_deref(), Some("/dev/old-captured"));
+        paste.shutdown();
     }
 
     #[test]

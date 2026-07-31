@@ -253,6 +253,7 @@ pub struct WorkerStart {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorkerCommand {
+    UpdatePort(String),
     UpdateSnapshot(Option<Arc<RuntimeProfileSnapshot>>),
     Reconfigure {
         snapshot: Option<Arc<RuntimeProfileSnapshot>>,
@@ -575,6 +576,11 @@ impl RuntimeCoordinator {
                 ClassifiedObservation::Runtime { board, observation } => {
                     active_runtime.insert(device_id.clone());
                     if let Some(slot) = self.workers.get_mut(&device_id) {
+                        if slot.port != observation.port {
+                            let _ = slot
+                                .worker
+                                .send(WorkerCommand::UpdatePort(observation.port.clone()));
+                        }
                         slot.port = observation.port.clone();
                         if let Some(status) = self.devices.get_mut(&device_id) {
                             let identity = status.identity;
@@ -1927,6 +1933,110 @@ mod tests {
                 .connection,
             ConnectionDimension::Online
         );
+    }
+
+    #[test]
+    fn rediscovered_worker_captures_renamed_port_for_next_physical_input() {
+        let (_directory, enumerator, launcher, mut coordinator) = harness();
+        enumerator.set(
+            vec![serial("/dev/old", 0x303a, 0x4002, Some("PORT-A"))],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+        let device_id = DeviceId::new("luatos-esp32s3-aio", "PORT-A").unwrap();
+        {
+            let mut workspace = coordinator.workspace.write().unwrap();
+            workspace
+                .set_assignment(
+                    &device_id,
+                    RuntimeAssignment {
+                        device_profile_id: "red-phone-v1".into(),
+                        hardware_profile_id: "esp".into(),
+                    },
+                )
+                .unwrap();
+        }
+        coordinator.sync_profiles();
+        launcher.clear_commands();
+
+        let snapshot =
+            Arc::new(runtime_profile(&coordinator.workspace_revision, &device_id).unwrap());
+        let mut session = DeviceSession::new((*snapshot).clone());
+        let board = crate::hardware::board_by_id(device_id.board_profile_id()).unwrap();
+        session.on_message_deferred(
+            DeviceMessage::Hello(HelloCapabilities {
+                protocol: 3,
+                controller_family_id: board.family_id.into(),
+                board_profile_id: board.id.into(),
+                firmware_build_id: "test".into(),
+                pins: board.safe_pins.to_vec(),
+            }),
+            0,
+            1,
+        );
+        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 2);
+        let mut worker_port = "/dev/old".to_owned();
+        let mut worker_context =
+            RuntimeEventContext::from_snapshot(0, Some(snapshot.as_ref())).with_port(&worker_port);
+
+        enumerator.set(
+            vec![serial("/dev/renamed", 0x303a, 0x4002, Some("PORT-A"))],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+        let commands = launcher.commands_for(&device_id);
+        assert_eq!(commands.len(), 1);
+        crate::device::apply_worker_context_update(
+            &mut worker_port,
+            &mut worker_context,
+            &commands[0],
+        );
+
+        let captured = session.capture_input(
+            &worker_context,
+            1_720_086_400_321,
+            8,
+            PhysicalInput::Direct { gpio: 6 },
+            InputState::Down,
+        );
+        coordinator
+            .event_sender
+            .send(WorkerEvent::Input {
+                generation: coordinator.generation,
+                device_id: device_id.clone(),
+                captured,
+            })
+            .unwrap();
+        assert!(coordinator.drain_worker_events().is_empty());
+        let forwarded = launcher
+            .commands_for(&device_id)
+            .into_iter()
+            .find_map(|command| match command {
+                WorkerCommand::Input {
+                    receive_sequence,
+                    captured,
+                } => Some((receive_sequence, captured)),
+                _ => None,
+            })
+            .unwrap();
+        let output = session.on_captured_input(&forwarded.1, forwarded.0);
+        crate::device::emit_worker_activities_for_test(
+            &launcher.starts()[0],
+            &coordinator.event_sender,
+            output,
+            &forwarded.1.context,
+        );
+        let events = coordinator.drain_worker_events();
+
+        let event = events
+            .into_iter()
+            .find(|event| event.activity.code == "input_state")
+            .unwrap();
+        assert_eq!(event.device_id, device_id);
+        assert_eq!(event.port.as_deref(), Some("/dev/renamed"));
+        assert_eq!(event.device_profile_id.as_deref(), Some("red-phone-v1"));
+        assert_eq!(event.hardware_profile_id.as_deref(), Some("esp"));
+        assert_eq!(launcher.starts().len(), 1);
     }
 
     #[test]
