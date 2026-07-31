@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { Info, TriangleAlert, X } from "lucide-react";
 import type { ReactNode } from "react";
 
 interface ConfirmDialogProps {
@@ -28,7 +28,10 @@ export function ConfirmDialog({
     }}>
       <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
         <div className="confirm-header">
-          <h2 id="confirm-title">{title}</h2>
+          <div className={danger ? "confirm-title is-danger" : "confirm-title"}>
+            {danger ? <TriangleAlert size={17} /> : <Info size={17} />}
+            <h2 id="confirm-title">{title}</h2>
+          </div>
           <button className="icon-button" type="button" aria-label={cancelLabel} title={cancelLabel} onClick={onCancel}>
             <X size={17} />
           </button>
