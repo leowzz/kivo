@@ -94,7 +94,7 @@ export const previewSnapshot: AppSnapshot = {
   ],
   devices: [
     {
-      deviceId: "luatos-esp32s3-aio:ABCDEF123456",
+      deviceId: "18:luatos-esp32s3-aioABCDEF123456",
       name: "前台电话键盘",
       connection: "online",
       mode: "runtime",
@@ -115,7 +115,7 @@ export const previewSnapshot: AppSnapshot = {
       learning: null,
     },
     {
-      deviceId: "luatos-esp32s3-aio:654321FEDCBA",
+      deviceId: "18:luatos-esp32s3-aio654321FEDCBA",
       name: "备用电话键盘",
       connection: "offline",
       mode: null,
@@ -126,7 +126,7 @@ export const previewSnapshot: AppSnapshot = {
       port: null,
       controllerFamilyId: "esp32s3",
       boardProfileId: "luatos-esp32s3-aio",
-      firmwareBuildId: "esp32s3-20260728-c4",
+      firmwareBuildId: null,
       capabilities: [],
       runtimeAssignment: {
         device_profile_id: "operator-console",
@@ -136,7 +136,7 @@ export const previewSnapshot: AppSnapshot = {
       learning: null,
     },
     {
-      deviceId: "vccgnd-yd-rp2040:E0C9125B0D9B",
+      deviceId: "16:vccgnd-yd-rp2040E0C9125B0D9B",
       name: "工作台键盘",
       connection: "online",
       mode: "runtime",
@@ -157,7 +157,7 @@ export const previewSnapshot: AppSnapshot = {
       learning: null,
     },
     {
-      deviceId: "vccgnd-yd-rp2040:E0C9125B0E17",
+      deviceId: "16:vccgnd-yd-rp2040E0C9125B0E17",
       name: "主控快捷键盘",
       connection: "online",
       mode: "runtime",
@@ -180,7 +180,7 @@ export const previewSnapshot: AppSnapshot = {
   ],
   candidates: [
     {
-      key: "bootloader:2e8a:0003:1:7",
+      key: "bootloader:1:7",
       deviceId: null,
       mode: "bootloader",
       identity: "invalid_identity",
@@ -211,7 +211,7 @@ export const previewSnapshot: AppSnapshot = {
         timestampMs: 1785396000000,
         kind: "button",
         message: "DIGIT_2 pressed",
-        deviceId: "luatos-esp32s3-aio:ABCDEF123456",
+        deviceId: "18:luatos-esp32s3-aioABCDEF123456",
         deviceName: "前台电话键盘",
         deviceProfileId: "tel001",
         hardwareProfileId: "phone-esp-front-desk",
@@ -221,7 +221,7 @@ export const previewSnapshot: AppSnapshot = {
         timestampMs: 1785395940000,
         kind: "device",
         message: "Device connected",
-        deviceId: "vccgnd-yd-rp2040:E0C9125B0E17",
+        deviceId: "16:vccgnd-yd-rp2040E0C9125B0E17",
         deviceName: "主控快捷键盘",
         deviceProfileId: "operator-console",
         hardwareProfileId: "operator-rp-primary",

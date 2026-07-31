@@ -6,7 +6,13 @@ import {
   matchesDeviceFilter,
   primaryDeviceLabel,
 } from "./deviceStatus";
+import { previewSnapshot } from "./preview";
 import type { DeviceStatus, HardwareProfile } from "./types";
+
+function canonicalDeviceId(boardProfileId: string, hardwareSerial: string): string {
+  const boardIdByteLength = new TextEncoder().encode(boardProfileId).byteLength;
+  return `${boardIdByteLength}:${boardProfileId}${hardwareSerial}`;
+}
 
 function fixtureDevice(overrides: Partial<DeviceStatus> = {}): DeviceStatus {
   return {
@@ -129,4 +135,43 @@ test("matches Hardware Profiles by exact Board Profile ID", () => {
 test("intersects board safety with online capability and keeps board safety offline", () => {
   expect(editablePins([0, 1, 2, 22], [0, 2, 11])).toEqual([0, 2]);
   expect(editablePins([0, 1, 2, 22], null)).toEqual([0, 1, 2, 22]);
+});
+
+describe("preview fixture consistency", () => {
+  test("uses the Rust canonical DeviceId encoding for every enrolled device", () => {
+    for (const device of previewSnapshot.devices) {
+      expect(device.deviceId).toBe(
+        canonicalDeviceId(device.boardProfileId, device.hardwareSerial),
+      );
+    }
+  });
+
+  test("attributes every metric log to an enrolled device", () => {
+    const enrolledDeviceIds = new Set(previewSnapshot.devices.map(({ deviceId }) => deviceId));
+    const homeMetrics = previewSnapshot.homeMetrics;
+
+    expect(homeMetrics).not.toBeNull();
+    if (!homeMetrics) throw new Error("preview metrics fixture is required");
+    for (const log of homeMetrics.logs) {
+      expect(enrolledDeviceIds.has(log.deviceId)).toBe(true);
+    }
+  });
+
+  test("keeps firmware build identity absent for offline devices", () => {
+    const offlineDevices = previewSnapshot.devices.filter(({ connection }) => connection === "offline");
+
+    expect(offlineDevices.length).toBeGreaterThan(0);
+    for (const device of offlineDevices) {
+      expect(device.firmwareBuildId).toBeNull();
+    }
+  });
+
+  test("uses production bootloader observation keys", () => {
+    const bootloaderCandidates = previewSnapshot.candidates.filter(({ mode }) => mode === "bootloader");
+
+    expect(bootloaderCandidates.length).toBeGreaterThan(0);
+    for (const candidate of bootloaderCandidates) {
+      expect(candidate.key).toMatch(/^bootloader:\d+:\d+$/);
+    }
+  });
 });
