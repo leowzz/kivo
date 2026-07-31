@@ -18,9 +18,12 @@ button:disabled { cursor: default; opacity: .45; }
 .brand { height: 52px; display: flex; align-items: center; gap: 9px; padding: 0 16px; border-right: 1px solid #e2e6e4; }
 .brand img { width: 28px; height: 28px; border-radius: 6px; }
 .brand h1 { margin: 0; font-size: 17px; font-weight: 720; }
-.connection { justify-self: start; display: flex; align-items: center; gap: 7px; min-width: 0; padding: 0 17px; color: #69736f; font-size: 12px; }
-.connection.is-connected { color: #146b50; }
-.connection code { max-width: 280px; overflow: hidden; text-overflow: ellipsis; color: #87908d; font-size: 11px; white-space: nowrap; }
+.device-summary { justify-self: start; height: 32px; display: flex; align-items: center; gap: 9px; padding: 0 17px; color: #5f6965; font-size: 12px; white-space: nowrap; }
+.device-summary span { min-width: 76px; display: flex; align-items: center; gap: 6px; }
+.device-summary b { color: #b3bbb8; font-weight: 400; }
+.device-summary i { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: #87908d; }
+.device-summary .summary-ready i { background: #177457; }
+.device-summary .summary-attention i { background: #b77913; }
 .save-state { min-width: 130px; padding-right: 18px; text-align: right; color: #707976; font-size: 12px; }
 .save-state.is-error { color: #ad332d; }
 .save-state button { margin-left: 8px; border: 0; padding: 2px 0; color: inherit; background: transparent; text-decoration: underline; }
@@ -33,13 +36,14 @@ button:disabled { cursor: default; opacity: .45; }
 select, input, textarea { border: 1px solid #cbd3d0; border-radius: 5px; outline: none; background: #fff; }
 select { appearance: none; padding-right: 28px !important; background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%2369736f' d='m4 6 4 4 4-4z'/%3E%3C/svg%3E") no-repeat right 9px center / 12px; }
 select:focus, input:focus, textarea:focus, button:focus-visible { border-color: #177457; box-shadow: 0 0 0 2px rgba(23, 116, 87, .14); outline: none; }
-.home-nav-button, .sidebar nav button, .data-nav-button, .data-menu button { width: 100%; min-height: 34px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: 5px; padding: 7px 9px; color: #4f5a56; background: transparent; text-align: left; font-size: 13px; }
+.home-nav-button, .devices-nav-button, .sidebar nav button, .data-nav-button, .data-menu button { width: 100%; min-height: 34px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: 5px; padding: 7px 9px; color: #4f5a56; background: transparent; text-align: left; font-size: 13px; }
 .home-nav-button { margin-top: 15px; }
+.devices-nav-button { margin-top: 3px; }
 .sidebar nav, .data-menu { display: grid; gap: 3px; padding: 15px 0 0; }
 .sidebar nav { border-top: 1px solid #d5dcda; margin-top: 14px; }
 .sidebar nav > span, .data-menu > span { padding: 0 7px 6px; }
-.home-nav-button:hover, .sidebar nav button:hover, .data-nav-button:hover, .data-menu button:hover { background: #e1e8e5; }
-.home-nav-button.is-active, .sidebar nav button.is-active, .data-nav-button.is-active { color: #125f48; background: #dbe9e3; font-weight: 650; }
+.home-nav-button:hover, .devices-nav-button:hover, .sidebar nav button:hover, .data-nav-button:hover, .data-menu button:hover { background: #e1e8e5; }
+.home-nav-button.is-active, .devices-nav-button.is-active, .sidebar nav button.is-active, .data-nav-button.is-active { color: #125f48; background: #dbe9e3; font-weight: 650; }
 .sidebar button.is-danger { color: #a23832; }
 .data-nav-button { margin-top: 14px; border-top: 1px solid #d5dcda; padding-top: 15px; }
 
@@ -192,8 +196,8 @@ select:focus, input:focus, textarea:focus, button:focus-visible { border-color: 
   .product-shell { grid-template-rows: auto auto minmax(0, 1fr); }
   .topbar { min-height: 52px; grid-template-columns: 120px 1fr; }
   .brand { border-right: 0; }
-  .connection { justify-self: end; padding-right: 12px; }
-  .connection code { display: none; }
+  .device-summary { justify-self: end; gap: 5px; padding: 0 12px; font-size: 11px; }
+  .device-summary span { min-width: auto; }
   .save-state { grid-column: 1 / -1; min-height: 0; padding: 0 12px 6px; }
   .product-workspace { display: block; }
   .sidebar { display: grid; grid-template-columns: 1fr; border-right: 0; border-bottom: 1px solid #d9dfdc; }

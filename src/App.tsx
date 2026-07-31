@@ -11,8 +11,8 @@ import {
   Keyboard,
   LayoutGrid,
   Trash2,
-  Unplug,
   Upload,
+  Usb,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -23,25 +23,32 @@ import { HardwareMapping } from "./HardwareMapping";
 import { HomeDashboard } from "./HomeDashboard";
 import { Keypad } from "./Keypad";
 import { LayoutEditor } from "./LayoutEditor";
+import { deviceSummary } from "./deviceStatus";
 import { t } from "./i18n";
 import type {
   AppSnapshot,
   BackupPreview,
   ButtonAction,
+  DeviceProfile,
+  HardwareProfile,
   ImportPreview,
   InputSource,
   Language,
-  ModelConfig,
   PhysicalInput,
   RuntimeEvent,
 } from "./types";
 import { SerializedSaveQueue, useAutosave } from "./useAutosave";
 
-type View = "home" | "behavior" | "hardware" | "layout" | "data";
+type View = "home" | "devices" | "behavior" | "hardware" | "layout" | "data";
 type Confirmation =
   | { kind: "import"; path: string; preview: ImportPreview }
   | { kind: "restore"; path: string; preview: BackupPreview }
-  | { kind: "delete"; model: ModelConfig };
+  | { kind: "delete"; profile: DeviceProfile };
+
+type RegistryState = Pick<
+  AppSnapshot,
+  "deviceProfiles" | "editorProfile" | "boardProfiles" | "devices" | "candidates"
+>;
 
 const PREVIEW_MODE = import.meta.env.DEV && new URLSearchParams(window.location.search).has("preview");
 
@@ -51,19 +58,20 @@ function errorMessage(error: unknown) {
   return String(error);
 }
 
-function allButtons(model: ModelConfig | undefined) {
-  return model?.model.groups.flatMap((group) => group.buttons) ?? [];
+function allButtons(profile: DeviceProfile | undefined) {
+  return profile?.profile.groups.flatMap((group) => group.buttons) ?? [];
 }
 
-function isValidDraft(model: ModelConfig | undefined) {
-  return Boolean(model && Object.values(model.actions).every((actions) => actions.every((action) =>
+function isValidDraft(profile: DeviceProfile | undefined) {
+  return Boolean(profile && Object.values(profile.actions).every((actions) => actions.every((action) =>
     action.type === "paste" ? action.text.length > 0 : action.keys.length > 0
   )));
 }
 
-function resolveButton(model: ModelConfig, input: PhysicalInput) {
+function resolveButton(hardware: HardwareProfile | undefined, input: PhysicalInput) {
+  if (!hardware) return null;
   let runtimeSource = 0;
-  for (const source of model.hardware.inputs) {
+  for (const source of hardware.inputs) {
     if (Object.keys(source.keys).length === 0) continue;
     if (source.type === "direct" && input.type === "direct") {
       const match = Object.entries(source.keys).find(([, gpio]) => gpio === input.gpio);
@@ -79,8 +87,10 @@ function resolveButton(model: ModelConfig, input: PhysicalInput) {
   return null;
 }
 
-function learnInput(model: ModelConfig, buttonId: string, input: PhysicalInput): ModelConfig {
-  const inputs = model.hardware.inputs.map((source): InputSource => ({
+function learnInput(profile: DeviceProfile, hardwareProfileId: string, buttonId: string, input: PhysicalInput): DeviceProfile {
+  const hardware = profile.hardware_profiles.find((item) => item.id === hardwareProfileId);
+  if (!hardware) return profile;
+  const inputs = hardware.inputs.map((source): InputSource => ({
     ...source,
     keys: Object.fromEntries(Object.entries(source.keys).filter(([id]) => id !== buttonId)),
   })) as InputSource[];
@@ -113,19 +123,25 @@ function learnInput(model: ModelConfig, buttonId: string, input: PhysicalInput):
     }
   }
 
-  return { ...model, hardware: { ...model.hardware, inputs } };
+  return {
+    ...profile,
+    hardware_profiles: profile.hardware_profiles.map((item) =>
+      item.id === hardwareProfileId ? { ...item, inputs } : item
+    ),
+  };
 }
 
 export default function App() {
   const queue = useRef(new SerializedSaveQueue()).current;
-  const [models, setModels] = useState<ModelConfig[]>([]);
-  const [savedModels, setSavedModels] = useState<Record<string, string>>({});
-  const [activeModel, setActiveModel] = useState<string | null>(null);
+  const [registry, setRegistry] = useState<RegistryState>({
+    deviceProfiles: [],
+    editorProfile: null,
+    boardProfiles: [],
+    devices: [],
+    candidates: [],
+  });
+  const [savedDeviceProfiles, setSavedDeviceProfiles] = useState<Record<string, string>>({});
   const [language, setLanguage] = useState<Language>("zh-CN");
-  const [supportedGpios, setSupportedGpios] = useState<number[]>([]);
-  const [connection, setConnection] = useState<AppSnapshot["connection"]>({ state: "searching", port: null });
-  const [learning, setLearning] = useState<AppSnapshot["learning"]>(null);
-  const [runtimeError, setRuntimeError] = useState<AppSnapshot["runtimeError"]>(null);
   const [view, setView] = useState<View>("home");
   const [homeMetrics, setHomeMetrics] = useState<AppSnapshot["homeMetrics"]>(null);
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
@@ -135,45 +151,61 @@ export default function App() {
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [layoutEditorOpen, setLayoutEditorOpen] = useState(false);
 
-  const activeConfig = useMemo(
-    () => models.find((model) => model.model.id === activeModel),
-    [activeModel, models],
+  const { deviceProfiles, editorProfile, boardProfiles, devices, candidates } = registry;
+  const editorProfileConfig = useMemo(
+    () => deviceProfiles.find((profile) => profile.profile.id === editorProfile),
+    [deviceProfiles, editorProfile],
   );
-  const dirty = Boolean(activeConfig && savedModels[activeConfig.model.id] !== JSON.stringify(activeConfig));
+  const editorHardwareProfile = editorProfileConfig?.hardware_profiles[0];
+  const editorDevice = devices.find((device) =>
+    device.runtimeAssignment?.device_profile_id === editorProfile &&
+    device.runtimeAssignment.hardware_profile_id === editorHardwareProfile?.id
+  );
+  const editorBoardProfile = boardProfiles.find((board) => board.id === editorHardwareProfile?.board_profile_id);
+  const dirty = Boolean(editorProfileConfig &&
+    savedDeviceProfiles[editorProfileConfig.profile.id] !== JSON.stringify(editorProfileConfig));
+  const summary = deviceSummary(devices);
+  const attentionCount = summary.attention + candidates.length;
 
   const applySnapshot = useCallback((snapshot: AppSnapshot) => {
-    setModels(snapshot.models);
-    setSavedModels(Object.fromEntries(snapshot.models.map((model) => [model.model.id, JSON.stringify(model)])));
-    setActiveModel(snapshot.activeModel);
+    setRegistry({
+      deviceProfiles: snapshot.deviceProfiles,
+      editorProfile: snapshot.editorProfile,
+      boardProfiles: snapshot.boardProfiles,
+      devices: snapshot.devices,
+      candidates: snapshot.candidates,
+    });
+    setSavedDeviceProfiles(Object.fromEntries(snapshot.deviceProfiles.map((profile) =>
+      [profile.profile.id, JSON.stringify(profile)]
+    )));
     setLanguage("zh-CN");
-    setSupportedGpios(snapshot.supportedGpios);
-    setConnection(snapshot.connection);
-    setRuntimeError(snapshot.runtimeError);
-    setLearning(snapshot.learning);
     setHomeMetrics(snapshot.homeMetrics);
     setPressedButtonIds(new Set());
   }, []);
 
-  const saveActiveModel = useCallback(async (model: ModelConfig | undefined) => {
-    if (!model) return;
-    if (!PREVIEW_MODE) await invoke("save_model", { model });
-    setSavedModels((current) => ({ ...current, [model.model.id]: JSON.stringify(model) }));
+  const saveEditorProfile = useCallback(async (profile: DeviceProfile | undefined) => {
+    if (!profile) return;
+    if (!PREVIEW_MODE) await invoke("save_device_profile", { profile });
+    setSavedDeviceProfiles((current) => ({
+      ...current,
+      [profile.profile.id]: JSON.stringify(profile),
+    }));
   }, []);
 
   const autosave = useAutosave({
-    value: activeConfig,
-    valid: dirty && isValidDraft(activeConfig),
-    save: saveActiveModel,
+    value: editorProfileConfig,
+    valid: dirty && isValidDraft(editorProfileConfig),
+    save: saveEditorProfile,
     queue,
   });
 
-  const modelRef = useRef(activeConfig);
+  const profileRef = useRef(editorProfileConfig);
+  const hardwareRef = useRef(editorHardwareProfile);
   const selectedRef = useRef(selectedButtonId);
-  const learningRef = useRef(learning);
   const viewRef = useRef(view);
-  modelRef.current = activeConfig;
+  profileRef.current = editorProfileConfig;
+  hardwareRef.current = editorHardwareProfile;
   selectedRef.current = selectedButtonId;
-  learningRef.current = learning;
   viewRef.current = view;
 
   useEffect(() => {
@@ -187,17 +219,22 @@ export default function App() {
         }
         unlisten = await listen<RuntimeEvent>("runtime-event", ({ payload }) => {
           if (!active) return;
-          setConnection(payload.connection);
           if (payload.homeUpdate) setHomeMetrics(payload.homeUpdate);
           if (payload.input && payload.pressed !== null) {
-            const currentModel = modelRef.current;
-            if (payload.code === "learning_input" && payload.pressed && learningRef.current
-              && selectedRef.current && viewRef.current === "hardware" && currentModel) {
-              const learned = learnInput(currentModel, selectedRef.current, payload.input);
-              setModels((current) => current.map((model) => model.model.id === learned.model.id ? learned : model));
+            const currentProfile = profileRef.current;
+            const currentHardware = hardwareRef.current;
+            if (payload.code === "learning_input" && payload.pressed && payload.learningTarget
+              && selectedRef.current && viewRef.current === "hardware" && currentProfile && currentHardware) {
+              const learned = learnInput(currentProfile, currentHardware.id, selectedRef.current, payload.input);
+              setRegistry((current) => ({
+                ...current,
+                deviceProfiles: current.deviceProfiles.map((profile) =>
+                  profile.profile.id === learned.profile.id ? learned : profile
+                ),
+              }));
             }
-            if (currentModel) {
-              const buttonId = resolveButton(currentModel, payload.input);
+            if (currentProfile && payload.deviceProfileId === currentProfile.profile.id) {
+              const buttonId = resolveButton(currentHardware, payload.input);
               if (buttonId) {
                 setPressedButtonIds((current) => {
                   const next = new Set(current);
@@ -224,26 +261,31 @@ export default function App() {
   }, [applySnapshot]);
 
   useEffect(() => {
-    const buttons = allButtons(activeConfig);
+    const buttons = allButtons(editorProfileConfig);
     if (!buttons.some((button) => button.id === selectedButtonId)) {
       setSelectedButtonId(buttons[0]?.id ?? null);
     }
-  }, [activeConfig, selectedButtonId]);
+  }, [editorProfileConfig, selectedButtonId]);
 
-  const updateActive = (update: (model: ModelConfig) => ModelConfig) => {
-    if (!activeConfig) return;
-    setModels((current) => current.map((model) => model.model.id === activeConfig.model.id ? update(model) : model));
+  const updateEditorProfile = (update: (profile: DeviceProfile) => DeviceProfile) => {
+    if (!editorProfileConfig) return;
+    setRegistry((current) => ({
+      ...current,
+      deviceProfiles: current.deviceProfiles.map((profile) =>
+        profile.profile.id === editorProfileConfig.profile.id ? update(profile) : profile
+      ),
+    }));
   };
 
-  const saveSettings = async (nextActive: string | null, nextLanguage: Language) => {
+  const saveSettings = async (nextEditorProfile: string | null, nextLanguage: Language) => {
     await autosave.flush();
     if (PREVIEW_MODE) {
-      setActiveModel(nextActive);
+      setRegistry((current) => ({ ...current, editorProfile: nextEditorProfile }));
       setLanguage(nextLanguage);
       return;
     }
     const snapshot = await queue.enqueue(() => invoke<AppSnapshot>("save_settings", {
-      settings: { schema_version: 1, active_model: nextActive, language: nextLanguage },
+      settings: { schema_version: 2, editor_profile: nextEditorProfile, language: nextLanguage },
     }));
     applySnapshot(snapshot);
   };
@@ -261,7 +303,7 @@ export default function App() {
     await autosave.flush();
     const path = await open({ multiple: false, filters: [{ name: "Kivo", extensions: ["yaml", "yml"] }] });
     if (!path) return;
-    const preview = await invoke<ImportPreview>("preview_model_import", { path });
+    const preview = await invoke<ImportPreview>("preview_device_profile_import", { path });
     setConfirmation({ kind: "import", path, preview });
   });
 
@@ -281,27 +323,44 @@ export default function App() {
       t(language, current.kind === "restore" ? "error.restore" : current.kind === "delete" ? "error.delete" : "error.import"),
       async () => {
         const snapshot = current.kind === "import"
-          ? await invoke<AppSnapshot>("import_model", { path: current.path })
+          ? await invoke<AppSnapshot>("import_device_profile", { path: current.path })
           : current.kind === "restore"
             ? await invoke<AppSnapshot>("restore_backup", { path: current.path })
-            : await invoke<AppSnapshot>("delete_model", { id: current.model.model.id });
+            : await invoke<AppSnapshot>("delete_device_profile", { id: current.profile.profile.id });
         applySnapshot(snapshot);
       },
     );
   };
 
-  const selectedButton = allButtons(activeConfig).find((button) => button.id === selectedButtonId) ?? null;
-  const selectedActions = activeConfig && selectedButtonId ? activeConfig.actions[selectedButtonId] ?? [] : [];
-  const connected = connection.state === "connected";
+  const selectedButton = allButtons(editorProfileConfig).find((button) => button.id === selectedButtonId) ?? null;
+  const selectedActions = editorProfileConfig && selectedButtonId
+    ? editorProfileConfig.actions[selectedButtonId] ?? []
+    : [];
+  const connectedDevice = devices.find((device) => device.connection === "online");
+  const compatibilityConnection = connectedDevice
+    ? { state: "connected", port: connectedDevice.port }
+    : { state: "searching", port: null };
+  const compatibilityProfile = editorProfileConfig && editorHardwareProfile
+    ? {
+      model: editorProfileConfig.profile,
+      hardware: {
+        ...editorHardwareProfile,
+        controller: editorBoardProfile?.controllerFamilyId ?? "",
+      },
+      actions: editorProfileConfig.actions,
+    }
+    : undefined;
 
   return (
     <main className="product-shell">
       <header className="topbar">
         <div className="brand"><img src={brandIcon} alt="" /><h1>Kivo</h1></div>
-        <div className={connected ? "connection is-connected" : "connection"}>
-          {connected ? <Cable size={15} /> : <Unplug size={15} />}
-          <span>{t(language, connected ? "connection.connected" : "connection.searching")}</span>
-          {connection.port && <code>{connection.port}</code>}
+        <div className="device-summary" aria-label={t(language, "device.summary")}>
+          <span className="summary-ready"><i />{summary.ready} {t(language, "device.ready")}</span>
+          <b aria-hidden="true">{" · "}</b>
+          <span className="summary-attention"><i />{attentionCount} {t(language, "device.attention")}</span>
+          <b aria-hidden="true">{" · "}</b>
+          <span className="summary-offline"><i />{summary.offline} {t(language, "device.offline")}</span>
         </div>
         <div className={`save-state is-${autosave.status}`} aria-live="polite">
           {autosave.status === "saving" && t(language, "save.saving")}
@@ -311,20 +370,23 @@ export default function App() {
         </div>
       </header>
 
-      {(error || runtimeError) && (
+      {error && (
         <div className="error-banner" role="alert">
-          {error ?? runtimeError?.detail ?? runtimeError?.code}
+          {error}
           <button className="icon-button" type="button" aria-label={t(language, "common.close")} onClick={() => {
             setError(null);
-            setRuntimeError(null);
           }}><X size={16} /></button>
         </div>
       )}
 
-      <div className={view === "home" || view === "data" ? "product-workspace is-home" : "product-workspace"}>
+      <div className={view === "home" || view === "devices" || view === "data" ? "product-workspace is-home" : "product-workspace"}>
         <aside className="sidebar">
           <button className={`home-nav-button ${view === "home" ? "is-active" : ""}`} type="button" onClick={() => setView("home")}>
             <Home size={17} />{t(language, "nav.home")}
+          </button>
+
+          <button className={`devices-nav-button ${view === "devices" ? "is-active" : ""}`} type="button" onClick={() => setView("devices")}>
+            <Usb size={17} />{t(language, "nav.devices")}
           </button>
 
           <nav aria-label={t(language, "nav.configuration")}>
@@ -332,10 +394,10 @@ export default function App() {
             <button className={view === "behavior" ? "is-active" : ""} type="button" onClick={() => setView("behavior")}>
               <Keyboard size={17} />{t(language, "nav.behavior")}
             </button>
-            <button className={view === "hardware" ? "is-active" : ""} type="button" disabled={!activeConfig} onClick={() => setView("hardware")}>
+            <button className={view === "hardware" ? "is-active" : ""} type="button" disabled={!editorProfileConfig} onClick={() => setView("hardware")}>
               <Cable size={17} />{t(language, "nav.hardware")}
             </button>
-            <button className={view === "layout" ? "is-active" : ""} type="button" disabled={!activeConfig} onClick={() => setView("layout")}>
+            <button className={view === "layout" ? "is-active" : ""} type="button" disabled={!editorProfileConfig} onClick={() => setView("layout")}>
               <LayoutGrid size={17} />{t(language, "nav.layout")}
             </button>
           </nav>
@@ -353,68 +415,89 @@ export default function App() {
               <div className="data-page-body">
                 <label className="model-picker"><span>{t(language, "model.select")}</span><select
                   aria-label={t(language, "model.select")}
-                  value={activeModel ?? ""}
-                  disabled={!loaded || models.length === 0}
+                  value={editorProfile ?? ""}
+                  disabled={!loaded || deviceProfiles.length === 0}
                   onChange={(event) => void run(t(language, "error.save"), () => saveSettings(event.target.value, language))}
                 >
-                  {models.length === 0 && <option value="">{t(language, "model.empty")}</option>}
-                  {models.map((model) => <option value={model.model.id} key={model.model.id}>{model.model.name}</option>)}
+                  {deviceProfiles.length === 0 && <option value="">{t(language, "model.empty")}</option>}
+                  {deviceProfiles.map((profile) => <option value={profile.profile.id} key={profile.profile.id}>{profile.profile.name}</option>)}
                 </select></label>
                 <div className="data-menu">
             <button type="button" onClick={() => void chooseImport()}><FileInput size={16} />{t(language, "nav.import")}</button>
-            <button type="button" disabled={!activeConfig} onClick={() => void run(t(language, "error.export"), async () => {
+            <button type="button" disabled={!editorProfileConfig} onClick={() => void run(t(language, "error.export"), async () => {
               await autosave.flush();
-              const path = await saveFile({ defaultPath: `${activeConfig?.model.id ?? "model"}.yaml`, filters: [{ name: "Kivo", extensions: ["yaml"] }] });
-              if (path && activeConfig) await invoke("export_model", { id: activeConfig.model.id, path });
+              const path = await saveFile({ defaultPath: `${editorProfileConfig?.profile.id ?? "device-profile"}.yaml`, filters: [{ name: "Kivo", extensions: ["yaml"] }] });
+              if (path && editorProfileConfig) await invoke("export_device_profile", { id: editorProfileConfig.profile.id, path });
             })}><Upload size={16} />{t(language, "nav.export")}</button>
-            <button type="button" disabled={models.length === 0} onClick={() => void run(t(language, "error.export"), async () => {
+            <button type="button" disabled={deviceProfiles.length === 0} onClick={() => void run(t(language, "error.export"), async () => {
               await autosave.flush();
               const path = await saveFile({ defaultPath: "kivo-backup.yaml", filters: [{ name: "Kivo", extensions: ["yaml"] }] });
               if (path) await invoke("export_backup", { path });
             })}><DatabaseBackup size={16} />{t(language, "nav.backup")}</button>
             <button type="button" onClick={() => void chooseRestore()}><ArchiveRestore size={16} />{t(language, "nav.restore")}</button>
-            <button className="is-danger" type="button" disabled={!activeConfig} onClick={() => activeConfig && setConfirmation({ kind: "delete", model: activeConfig })}>
+            <button className="is-danger" type="button" disabled={!editorProfileConfig} onClick={() => editorProfileConfig && setConfirmation({ kind: "delete", profile: editorProfileConfig })}>
               <Trash2 size={16} />{t(language, "nav.delete")}
             </button>
                 </div>
               </div>
             </div>
+          ) : view === "devices" ? (
+            <div className="empty-workspace"><h2>{t(language, "nav.devices")}</h2></div>
           ) : view === "home" ? (
             <HomeDashboard
-              connection={connection}
+              connection={compatibilityConnection as never}
               language={language}
               metrics={homeMetrics}
-              model={activeConfig}
+              model={compatibilityProfile as never}
             />
-          ) : !activeConfig ? (
+          ) : !editorProfileConfig ? (
             <div className="empty-workspace">
               <Download size={28} />
               <h2>{t(language, "model.empty")}</h2>
               <div><button className="primary-button" type="button" onClick={() => void chooseImport()}>{t(language, "model.import")}</button><button type="button" onClick={() => void chooseRestore()}>{t(language, "model.restore")}</button></div>
             </div>
-          ) : view === "hardware" ? (
+          ) : view === "hardware" && editorHardwareProfile ? (
             <HardwareMapping
               language={language}
-              layout={activeConfig.model}
-              hardware={activeConfig.hardware}
-              supportedGpios={supportedGpios}
-              learning={learning}
+              layout={editorProfileConfig.profile}
+              hardware={compatibilityProfile?.hardware as never}
+              supportedGpios={editorBoardProfile?.safePins ?? []}
+              learning={editorDevice?.learning as never}
               selectedButtonId={selectedButtonId}
               onSelectButton={setSelectedButtonId}
-              onChange={(hardware) => updateActive((model) => ({ ...model, hardware }))}
-              onBeginLearning={(pins) => void run(t(language, "error.learning"), async () => applySnapshot(await invoke("begin_learning", { pins })))}
-              onEndLearning={() => void run(t(language, "error.learning"), async () => applySnapshot(await invoke("end_learning")))}
+              onChange={(hardware) => updateEditorProfile((profile) => ({
+                ...profile,
+                hardware_profiles: profile.hardware_profiles.map((item) => item.id === editorHardwareProfile.id
+                  ? { ...item, debounce_ms: hardware.debounce_ms, inputs: hardware.inputs }
+                  : item),
+              }))}
+              onBeginLearning={(pins) => {
+                if (!editorDevice) return;
+                void run(t(language, "error.learning"), async () => applySnapshot(await invoke("begin_learning", {
+                  deviceId: editorDevice.deviceId,
+                  deviceProfileId: editorProfileConfig.profile.id,
+                  hardwareProfileId: editorHardwareProfile.id,
+                  editingRevision: 0,
+                  pins,
+                })));
+              }}
+              onEndLearning={() => {
+                if (!editorDevice) return;
+                void run(t(language, "error.learning"), async () => applySnapshot(await invoke("end_learning", {
+                  deviceId: editorDevice.deviceId,
+                })));
+              }}
             />
           ) : (
             <>
               <div className="content-heading">
-                <div><span>{activeConfig.model.name}</span><h2>{t(language, view === "layout" ? "layout.title" : "behavior.title")}</h2></div>
+                <div><span>{editorProfileConfig.profile.name}</span><h2>{t(language, view === "layout" ? "layout.title" : "behavior.title")}</h2></div>
                 {view === "layout" && <button className="primary-button" type="button" onClick={() => setLayoutEditorOpen(true)}><LayoutGrid size={16} />{t(language, "layout.edit")}</button>}
               </div>
               <div className="keypad-stage">
                 <Keypad
-                  layout={activeConfig.model}
-                  actions={activeConfig.actions}
+                  layout={editorProfileConfig.profile}
+                  actions={editorProfileConfig.actions}
                   selectedButtonId={selectedButtonId}
                   pressedButtonIds={pressedButtonIds}
                   actionCountLabel={(count) => t(language, "model.actionCount", { count })}
@@ -425,31 +508,34 @@ export default function App() {
           )}
         </section>
 
-        {view !== "home" && view !== "data" && <ActionEditor
+        {view !== "home" && view !== "devices" && view !== "data" && <ActionEditor
           language={language}
           button={selectedButton}
           actions={selectedActions}
-          onChange={(actions: ButtonAction[]) => selectedButtonId && updateActive((model) => ({
-            ...model,
-            actions: { ...model.actions, [selectedButtonId]: actions },
+          onChange={(actions: ButtonAction[]) => selectedButtonId && updateEditorProfile((profile) => ({
+            ...profile,
+            actions: { ...profile.actions, [selectedButtonId]: actions },
           }))}
         />}
       </div>
 
       <LayoutEditor
-        layout={activeConfig?.model ?? null}
+        layout={editorProfileConfig?.profile ?? null}
         language={language}
         open={layoutEditorOpen}
         onCancel={() => setLayoutEditorOpen(false)}
         onApply={(layout) => {
-          updateActive((model) => {
+          updateEditorProfile((profile) => {
             const buttonIds = new Set(layout.groups.flatMap((group) => group.buttons.map((button) => button.id)));
-            const actions = Object.fromEntries(Object.entries(model.actions).filter(([id]) => buttonIds.has(id)));
-            const inputs = model.hardware.inputs.map((source) => ({
-              ...source,
-              keys: Object.fromEntries(Object.entries(source.keys).filter(([id]) => buttonIds.has(id))),
-            })) as InputSource[];
-            return { ...model, model: layout, actions, hardware: { ...model.hardware, inputs } };
+            const actions = Object.fromEntries(Object.entries(profile.actions).filter(([id]) => buttonIds.has(id)));
+            const hardwareProfiles = profile.hardware_profiles.map((hardware) => ({
+              ...hardware,
+              inputs: hardware.inputs.map((source) => ({
+                ...source,
+                keys: Object.fromEntries(Object.entries(source.keys).filter(([id]) => buttonIds.has(id))),
+              })) as InputSource[],
+            }));
+            return { ...profile, profile: layout, actions, hardware_profiles: hardwareProfiles };
           });
           setLayoutEditorOpen(false);
         }}
@@ -465,11 +551,11 @@ export default function App() {
           body={confirmation.kind === "restore"
             ? t(language, "dialog.restoreBody")
             : confirmation.kind === "delete"
-              ? t(language, "dialog.deleteBody", { name: confirmation.model.model.name })
+              ? t(language, "dialog.deleteBody", { name: confirmation.profile.profile.name })
               : t(language, confirmation.preview.replacesExisting ? "dialog.replaceBody" : "dialog.importBody")}
           summary={confirmation.kind === "restore"
             ? t(language, "dialog.backupSummary", {
-              models: confirmation.preview.modelCount,
+              models: confirmation.preview.profileCount,
               buttons: confirmation.preview.buttonCount,
               bindings: confirmation.preview.hardwareBindingCount,
               actions: confirmation.preview.actionCount,
@@ -480,7 +566,7 @@ export default function App() {
                 bindings: confirmation.preview.hardwareBindingCount,
                 actions: confirmation.preview.actionCount,
               })
-              : confirmation.model.model.name}
+              : confirmation.profile.profile.name}
           confirmLabel={t(language, "common.confirm")}
           cancelLabel={t(language, "common.cancel")}
           danger={confirmation.kind !== "import" || confirmation.preview.replacesExisting}
