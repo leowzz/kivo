@@ -49,8 +49,14 @@ type RegistryState = Pick<
   AppSnapshot,
   "deviceProfiles" | "editorProfile" | "boardProfiles" | "devices" | "candidates"
 >;
+type PressedOwner = {
+  deviceProfileId: string;
+  hardwareProfileId: string;
+  buttonIds: Set<string>;
+};
 
 const PREVIEW_MODE = import.meta.env.DEV && new URLSearchParams(window.location.search).has("preview");
+const REGISTRY_REFRESH_MS = 1_500;
 
 function errorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
@@ -131,6 +137,10 @@ function learnInput(profile: DeviceProfile, hardwareProfileId: string, buttonId:
   };
 }
 
+function pressedButtons(owners: Map<string, PressedOwner>) {
+  return new Set([...owners.values()].flatMap((owner) => [...owner.buttonIds]));
+}
+
 export default function App() {
   const queue = useRef(new SerializedSaveQueue()).current;
   const [registry, setRegistry] = useState<RegistryState>({
@@ -150,6 +160,11 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [layoutEditorOpen, setLayoutEditorOpen] = useState(false);
+  const pressedOwnersRef = useRef<Map<string, PressedOwner>>(new Map());
+  const mountedRef = useRef(true);
+  const registryEpochRef = useRef(0);
+  const refreshInFlightRef = useRef(false);
+  const refreshPendingRef = useRef(false);
 
   const { deviceProfiles, editorProfile, boardProfiles, devices, candidates } = registry;
   const editorProfileConfig = useMemo(
@@ -167,7 +182,30 @@ export default function App() {
   const summary = deviceSummary(devices);
   const attentionCount = summary.attention + candidates.length;
 
+  const replaceRegistrySnapshot = useCallback((snapshot: AppSnapshot) => {
+    registryEpochRef.current += 1;
+    setRegistry((current) => ({
+      ...current,
+      boardProfiles: snapshot.boardProfiles,
+      devices: snapshot.devices,
+      candidates: snapshot.candidates,
+    }));
+    const currentDevices = new Map(snapshot.devices.map((device) => [device.deviceId, device]));
+    const nextOwners = new Map(pressedOwnersRef.current);
+    for (const [deviceId, owner] of nextOwners) {
+      const currentDevice = currentDevices.get(deviceId);
+      if (currentDevice?.connection !== "online" ||
+        currentDevice.runtimeAssignment?.device_profile_id !== owner.deviceProfileId ||
+        currentDevice.runtimeAssignment.hardware_profile_id !== owner.hardwareProfileId) {
+        nextOwners.delete(deviceId);
+      }
+    }
+    pressedOwnersRef.current = nextOwners;
+    setPressedButtonIds(pressedButtons(nextOwners));
+  }, []);
+
   const applySnapshot = useCallback((snapshot: AppSnapshot) => {
+    registryEpochRef.current += 1;
     setRegistry({
       deviceProfiles: snapshot.deviceProfiles,
       editorProfile: snapshot.editorProfile,
@@ -180,17 +218,45 @@ export default function App() {
     )));
     setLanguage("zh-CN");
     setHomeMetrics(snapshot.homeMetrics);
+    pressedOwnersRef.current = new Map();
     setPressedButtonIds(new Set());
   }, []);
 
+  const refreshRegistry = useCallback(async function refreshRegistryTask(queueIfBusy = false) {
+    if (PREVIEW_MODE) return;
+    if (refreshInFlightRef.current) {
+      if (queueIfBusy) refreshPendingRef.current = true;
+      return;
+    }
+    refreshInFlightRef.current = true;
+    const requestEpoch = registryEpochRef.current;
+    try {
+      const snapshot = await invoke<AppSnapshot>("get_snapshot");
+      if (mountedRef.current && requestEpoch === registryEpochRef.current) {
+        replaceRegistrySnapshot(snapshot);
+      }
+    } catch {
+      // Runtime events and the interval provide the next refresh opportunity.
+    } finally {
+      refreshInFlightRef.current = false;
+      if (mountedRef.current && refreshPendingRef.current) {
+        refreshPendingRef.current = false;
+        void refreshRegistryTask();
+      }
+    }
+  }, [replaceRegistrySnapshot]);
+
   const saveEditorProfile = useCallback(async (profile: DeviceProfile | undefined) => {
     if (!profile) return;
-    if (!PREVIEW_MODE) await invoke("save_device_profile", { profile });
+    if (!PREVIEW_MODE) {
+      const snapshot = await invoke<AppSnapshot>("save_device_profile", { profile });
+      if (mountedRef.current) replaceRegistrySnapshot(snapshot);
+    }
     setSavedDeviceProfiles((current) => ({
       ...current,
       [profile.profile.id]: JSON.stringify(profile),
     }));
-  }, []);
+  }, [replaceRegistrySnapshot]);
 
   const autosave = useAutosave({
     value: editorProfileConfig,
@@ -200,17 +266,23 @@ export default function App() {
   });
 
   const profileRef = useRef(editorProfileConfig);
-  const hardwareRef = useRef(editorHardwareProfile);
+  const devicesRef = useRef(devices);
+  const editorDeviceRef = useRef(editorDevice);
   const selectedRef = useRef(selectedButtonId);
   const viewRef = useRef(view);
   profileRef.current = editorProfileConfig;
-  hardwareRef.current = editorHardwareProfile;
+  devicesRef.current = devices;
+  editorDeviceRef.current = editorDevice;
   selectedRef.current = selectedButtonId;
   viewRef.current = view;
 
   useEffect(() => {
+    mountedRef.current = true;
     let active = true;
     let unlisten: (() => void) | undefined;
+    const refreshTimer = PREVIEW_MODE ? undefined : setInterval(() => {
+      void refreshRegistry();
+    }, REGISTRY_REFRESH_MS);
     void (async () => {
       try {
         if (PREVIEW_MODE) {
@@ -222,10 +294,19 @@ export default function App() {
           if (payload.homeUpdate) setHomeMetrics(payload.homeUpdate);
           if (payload.input && payload.pressed !== null) {
             const currentProfile = profileRef.current;
-            const currentHardware = hardwareRef.current;
+            const currentEditorDevice = editorDeviceRef.current;
             if (payload.code === "learning_input" && payload.pressed && payload.learningTarget
-              && selectedRef.current && viewRef.current === "hardware" && currentProfile && currentHardware) {
-              const learned = learnInput(currentProfile, currentHardware.id, selectedRef.current, payload.input);
+              && selectedRef.current && viewRef.current === "hardware" && currentProfile && currentEditorDevice
+              && payload.deviceId === payload.learningTarget.deviceId
+              && payload.learningTarget.deviceId === currentEditorDevice.deviceId
+              && payload.learningTarget.deviceProfileId === currentProfile.profile.id
+              && payload.learningTarget.hardwareProfileId === currentProfile.hardware_profiles[0]?.id) {
+              const learned = learnInput(
+                currentProfile,
+                payload.learningTarget.hardwareProfileId,
+                selectedRef.current,
+                payload.input,
+              );
               setRegistry((current) => ({
                 ...current,
                 deviceProfiles: current.deviceProfiles.map((profile) =>
@@ -233,32 +314,61 @@ export default function App() {
                 ),
               }));
             }
-            if (currentProfile && payload.deviceProfileId === currentProfile.profile.id) {
-              const buttonId = resolveButton(currentHardware, payload.input);
+            const emittingDevice = devicesRef.current.find((device) => device.deviceId === payload.deviceId);
+            const assignment = emittingDevice?.runtimeAssignment;
+            if (currentProfile && payload.deviceProfileId === currentProfile.profile.id
+              && payload.hardwareProfileId
+              && assignment?.device_profile_id === payload.deviceProfileId
+              && assignment.hardware_profile_id === payload.hardwareProfileId) {
+              const eventHardware = currentProfile.hardware_profiles.find((hardware) =>
+                hardware.id === payload.hardwareProfileId
+              );
+              const buttonId = resolveButton(eventHardware, payload.input);
               if (buttonId) {
-                setPressedButtonIds((current) => {
-                  const next = new Set(current);
-                  if (payload.pressed) next.add(buttonId);
-                  else next.delete(buttonId);
-                  return next;
-                });
+                const nextOwners = new Map(pressedOwnersRef.current);
+                const currentOwner = nextOwners.get(payload.deviceId);
+                const owner = currentOwner?.deviceProfileId === payload.deviceProfileId
+                  && currentOwner.hardwareProfileId === payload.hardwareProfileId
+                  ? currentOwner
+                  : {
+                    deviceProfileId: payload.deviceProfileId,
+                    hardwareProfileId: payload.hardwareProfileId,
+                    buttonIds: new Set<string>(),
+                  };
+                const buttonIds = new Set(owner.buttonIds);
+                if (payload.pressed) buttonIds.add(buttonId);
+                else buttonIds.delete(buttonId);
+                if (buttonIds.size > 0) nextOwners.set(payload.deviceId, { ...owner, buttonIds });
+                else nextOwners.delete(payload.deviceId);
+                pressedOwnersRef.current = nextOwners;
+                setPressedButtonIds(pressedButtons(nextOwners));
               }
             }
           }
+          void refreshRegistry(true);
         });
+        refreshInFlightRef.current = true;
         const snapshot = await invoke<AppSnapshot>("get_snapshot");
         if (active) applySnapshot(snapshot);
       } catch (loadError) {
         if (active) setError(`${t("zh-CN", "error.load")}: ${errorMessage(loadError)}`);
       } finally {
+        refreshInFlightRef.current = false;
+        if (mountedRef.current && refreshPendingRef.current) {
+          refreshPendingRef.current = false;
+          void refreshRegistry();
+        }
         if (active) setLoaded(true);
       }
     })();
     return () => {
       active = false;
+      mountedRef.current = false;
+      refreshPendingRef.current = false;
+      if (refreshTimer) clearInterval(refreshTimer);
       unlisten?.();
     };
-  }, [applySnapshot]);
+  }, [applySnapshot, refreshRegistry]);
 
   useEffect(() => {
     const buttons = allButtons(editorProfileConfig);
@@ -336,7 +446,7 @@ export default function App() {
   const selectedActions = editorProfileConfig && selectedButtonId
     ? editorProfileConfig.actions[selectedButtonId] ?? []
     : [];
-  const connectedDevice = devices.find((device) => device.connection === "online");
+  const connectedDevice = editorDevice?.connection === "online" ? editorDevice : undefined;
   const compatibilityConnection = connectedDevice
     ? { state: "connected", port: connectedDevice.port }
     : { state: "searching", port: null };

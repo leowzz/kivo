@@ -1,11 +1,11 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import App from "./App";
-import type { AppSnapshot, DeviceProfile, DeviceStatus } from "./types";
+import type { AppSnapshot, DeviceProfile, DeviceStatus, RuntimeEvent } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
@@ -97,13 +97,40 @@ const baseSnapshot: AppSnapshot = {
 };
 
 let currentSnapshot: AppSnapshot;
+let emitRuntimeEvent: (event: RuntimeEvent) => void;
+
+function runtimeEvent(overrides: Partial<RuntimeEvent> = {}): RuntimeEvent {
+  return {
+    timestampMs: 1785396000000,
+    level: "info",
+    deviceId: "device-front-desk",
+    rawSerial: "ABC123",
+    controllerFamilyId: "esp32s3",
+    boardProfileId: "luatos-esp32s3-aio",
+    port: "/dev/cu.test",
+    deviceProfileId: deviceProfile.profile.id,
+    hardwareProfileId: "front-desk",
+    homeUpdate: null,
+    code: "input_state",
+    params: {},
+    detail: null,
+    input: { type: "direct", gpio: 6 },
+    pressed: true,
+    learningTarget: null,
+    ...overrides,
+  };
+}
 
 beforeEach(() => {
+  vi.useRealTimers();
   vi.clearAllMocks();
   currentSnapshot = structuredClone(baseSnapshot);
   HTMLDialogElement.prototype.showModal = function showModal() { this.setAttribute("open", ""); };
   HTMLDialogElement.prototype.close = function close() { this.removeAttribute("open"); };
-  vi.mocked(listen).mockResolvedValue(vi.fn());
+  vi.mocked(listen).mockImplementation(async (_event, handler) => {
+    emitRuntimeEvent = (event) => handler({ payload: event } as never);
+    return () => undefined;
+  });
   vi.mocked(open).mockResolvedValue(null);
   vi.mocked(save).mockResolvedValue(null);
   vi.mocked(invoke).mockImplementation(async (command, args) => {
@@ -123,6 +150,10 @@ beforeEach(() => {
     }
     return structuredClone(currentSnapshot);
   });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 test("does not override the WebView viewport height", async () => {
@@ -159,6 +190,71 @@ test("summarizes mixed devices and adds candidates only to attention", async () 
   render(<App />);
 
   expect(await screen.findByLabelText("设备状态汇总")).toHaveTextContent("1 就绪 · 2 需处理 · 1 离线");
+});
+
+test("uses the authoritative profile-save snapshot for the device status transition", async () => {
+  currentSnapshot.devices[0].runtime = "configuring";
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "save_device_profile") {
+      const saved = (args as { profile: DeviceProfile }).profile;
+      currentSnapshot.deviceProfiles = [saved];
+      currentSnapshot.devices[0].runtime = "ready";
+    }
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  expect(await screen.findByLabelText("设备状态汇总")).toHaveTextContent("0 就绪 · 0 需处理 · 0 离线");
+  await user.click(screen.getByRole("button", { name: "按键行为" }));
+  await user.click(screen.getByRole("button", { name: "按下按键" }));
+
+  await waitFor(() => expect(screen.getByLabelText("设备状态汇总"))
+    .toHaveTextContent("1 就绪 · 0 需处理 · 0 离线"), { timeout: 1600 });
+});
+
+test("refreshes authoritative registry state after a runtime event", async () => {
+  render(<App />);
+  expect(await screen.findByLabelText("设备状态汇总")).toHaveTextContent("1 就绪 · 0 需处理 · 0 离线");
+  currentSnapshot.devices[0] = device({ connection: "offline", mode: null, runtime: "inactive", port: null });
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({ code: "runtime_timeout", input: null, pressed: null })));
+
+  await waitFor(() => expect(screen.getByLabelText("设备状态汇总"))
+    .toHaveTextContent("0 就绪 · 0 需处理 · 1 离线"));
+});
+
+test("periodically refreshes candidates that produce no runtime event", async () => {
+  vi.useFakeTimers();
+  render(<App />);
+  await act(async () => undefined);
+  expect(screen.getByLabelText("设备状态汇总")).toHaveTextContent("1 就绪 · 0 需处理 · 0 离线");
+  currentSnapshot.candidates = [{
+    key: "candidate-runtime",
+    deviceId: null,
+    mode: "runtime",
+    identity: "invalid_identity",
+    rawSerial: null,
+    port: "/dev/cu.candidate",
+    controllerFamilyId: "rp2040",
+    boardProfileId: "vccgnd-yd-rp2040",
+    latestError: null,
+  }];
+
+  await act(async () => vi.advanceTimersByTimeAsync(2_000));
+
+  expect(screen.getByLabelText("设备状态汇总")).toHaveTextContent("1 就绪 · 1 需处理 · 0 离线");
+});
+
+test("preserves a dirty Device Profile draft across a registry refresh", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "按键行为" }));
+  await user.click(screen.getByRole("button", { name: "按下按键" }));
+  expect(screen.getByRole("button", { name: "2，1 项行为" })).toBeInTheDocument();
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({ code: "topology_active", input: null, pressed: null })));
+
+  expect(screen.getByRole("button", { name: "2，1 项行为" })).toBeInTheDocument();
 });
 
 test("keeps device management and configuration-file actions as separate work destinations", async () => {
@@ -236,6 +332,114 @@ test("renders seven-day metrics in model order with Chinese logs", async () => {
   expect(screen.getByText("按下 DIGIT_5")).toBeInTheDocument();
   expect(screen.queryByLabelText("当前编辑配置")).toBeNull();
   expect(screen.queryByLabelText("语言")).toBeNull();
+});
+
+test("shows Home as searching when only another profile's Device is online", async () => {
+  const secondProfile: DeviceProfile = {
+    ...structuredClone(deviceProfile),
+    profile: { ...deviceProfile.profile, id: "operator-console", name: "接线员控制台" },
+    hardware_profiles: [{
+      ...structuredClone(deviceProfile.hardware_profiles[0]),
+      id: "operator-hardware",
+    }],
+  };
+  currentSnapshot.deviceProfiles.push(secondProfile);
+  currentSnapshot.devices = [device({
+    deviceId: "device-operator-console",
+    port: "/dev/cu.unrelated",
+    runtimeAssignment: {
+      device_profile_id: secondProfile.profile.id,
+      hardware_profile_id: secondProfile.hardware_profiles[0].id,
+    },
+  })];
+
+  render(<App />);
+
+  expect(await screen.findByText("等待设备")).toBeInTheDocument();
+  expect(screen.queryByText("设备已连接")).toBeNull();
+  expect(screen.queryByText("/dev/cu.unrelated")).toBeNull();
+});
+
+test("isolates a shared pressed button by emitting Device", async () => {
+  currentSnapshot.devices.push(device({ deviceId: "device-second", hardwareSerial: "SECOND" }));
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "按键行为" }));
+  const enter = screen.getByRole("button", { name: "确认，0 项行为" });
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({ deviceId: "device-front-desk", pressed: true })));
+  await act(async () => emitRuntimeEvent(runtimeEvent({ deviceId: "device-second", rawSerial: "SECOND", pressed: true })));
+  await act(async () => emitRuntimeEvent(runtimeEvent({ deviceId: "device-front-desk", pressed: false })));
+  expect(enter).toHaveClass("is-pressed");
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({ deviceId: "device-second", rawSerial: "SECOND", pressed: false })));
+  expect(enter).not.toHaveClass("is-pressed");
+});
+
+test("resolves runtime input from the event Hardware Profile and rejects assignment mismatch", async () => {
+  currentSnapshot.deviceProfiles[0].hardware_profiles.push({
+    id: "alternate-hardware",
+    name: "备用硬件配置",
+    board_profile_id: "luatos-esp32s3-aio",
+    debounce_ms: 30,
+    inputs: [{ type: "direct", id: "alternate", keys: { ENTER: 7 } }],
+  });
+  currentSnapshot.devices[0].runtimeAssignment = {
+    device_profile_id: deviceProfile.profile.id,
+    hardware_profile_id: "alternate-hardware",
+  };
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "按键行为" }));
+  const enter = screen.getByRole("button", { name: "确认，0 项行为" });
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({ hardwareProfileId: "front-desk", input: { type: "direct", gpio: 6 } })));
+  expect(enter).not.toHaveClass("is-pressed");
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({ hardwareProfileId: "alternate-hardware", input: { type: "direct", gpio: 7 } })));
+  expect(enter).toHaveClass("is-pressed");
+});
+
+test("learns input only for the exact selected Device Profile and Hardware Profile target", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+  const digitA = screen.getByRole("combobox", { name: "2 A" });
+  const digitB = screen.getByRole("combobox", { name: "2 B" });
+  expect(digitA).toHaveValue("1");
+  expect(digitB).toHaveValue("12");
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    deviceId: "device-other",
+    rawSerial: "OTHER",
+    code: "learning_input",
+    input: { type: "contact", source: 1, pin_a: 2, pin_b: 13 },
+    learningTarget: {
+      deviceId: "device-other",
+      deviceProfileId: deviceProfile.profile.id,
+      hardwareProfileId: "front-desk",
+      editingRevision: 0,
+      firmwareRevision: 0,
+      pins: [2, 13],
+    },
+  })));
+  expect(digitA).toHaveValue("1");
+  expect(digitB).toHaveValue("12");
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    code: "learning_input",
+    input: { type: "contact", source: 1, pin_a: 2, pin_b: 13 },
+    learningTarget: {
+      deviceId: "device-front-desk",
+      deviceProfileId: deviceProfile.profile.id,
+      hardwareProfileId: "front-desk",
+      editingRevision: 0,
+      firmwareRevision: 0,
+      pins: [2, 13],
+    },
+  })));
+  expect(digitA).toHaveValue("2");
+  expect(digitB).toHaveValue("13");
 });
 
 test("builds an ordered action list and autosaves it", async () => {
