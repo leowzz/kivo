@@ -196,6 +196,23 @@ beforeEach(() => {
         editorProfile: null,
       };
     }
+    if (command === "begin_learning") {
+      const target = args as {
+        deviceId: string;
+        deviceProfileId: string;
+        hardwareProfileId: string;
+        editingRevision: number;
+        pins: number[];
+      };
+      const selected = currentSnapshot.devices.find(({ deviceId }) => deviceId === target.deviceId);
+      if (selected) selected.learning = { ...target, firmwareRevision: 0 };
+    }
+    if (command === "end_learning") {
+      const selected = currentSnapshot.devices.find(
+        ({ deviceId }) => deviceId === (args as { deviceId: string }).deviceId,
+      );
+      if (selected) selected.learning = null;
+    }
     return structuredClone(currentSnapshot);
   });
 });
@@ -995,6 +1012,15 @@ test("resolves runtime input from the event Hardware Profile and rejects assignm
 });
 
 test("learns input only for the exact selected Device Profile and Hardware Profile target", async () => {
+  const activeLearningTarget = {
+    deviceId: "device-front-desk",
+    deviceProfileId: deviceProfile.profile.id,
+    hardwareProfileId: "front-desk",
+    editingRevision: 7,
+    firmwareRevision: 11,
+    pins: [2, 13],
+  };
+  currentSnapshot.devices[0].learning = activeLearningTarget;
   const user = userEvent.setup();
   render(<App />);
   await user.click(await screen.findByRole("button", { name: "硬件配置" }));
@@ -1031,14 +1057,19 @@ test("learns input only for the exact selected Device Profile and Hardware Profi
       runtimeEvent({
         code: "learning_input",
         input: { type: "contact", source: 1, pin_a: 2, pin_b: 13 },
-        learningTarget: {
-          deviceId: "device-front-desk",
-          deviceProfileId: deviceProfile.profile.id,
-          hardwareProfileId: "front-desk",
-          editingRevision: 0,
-          firmwareRevision: 0,
-          pins: [2, 13],
-        },
+        learningTarget: { ...activeLearningTarget, editingRevision: 6 },
+      }),
+    ),
+  );
+  expect(digitA).toHaveValue("1");
+  expect(digitB).toHaveValue("12");
+
+  await act(async () =>
+    emitRuntimeEvent(
+      runtimeEvent({
+        code: "learning_input",
+        input: { type: "contact", source: 1, pin_a: 2, pin_b: 13 },
+        learningTarget: activeLearningTarget,
       }),
     ),
   );
@@ -1357,6 +1388,60 @@ test("deletes a Hardware Profile without repairing its Device assignment", async
     { timeout: 1600 },
   );
   expect(currentSnapshot.devices[0].runtimeAssignment).toEqual(assignment);
+});
+
+test("preserves an unsaved Device Profile draft when learning begins", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+
+  fireEvent.change(screen.getByLabelText("消抖"), { target: { value: "31" } });
+  await user.click(screen.getByText("适配新设备"));
+  await user.selectOptions(screen.getByLabelText("在线设备"), "device-front-desk");
+  await user.click(screen.getByRole("checkbox", { name: "键盘已与原电话电路及外部电压完全隔离" }));
+  await user.click(screen.getByRole("checkbox", { name: "GPIO 2" }));
+  await user.click(screen.getByRole("button", { name: "开始学习" }));
+
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("begin_learning", {
+    deviceId: "device-front-desk",
+    deviceProfileId: deviceProfile.profile.id,
+    hardwareProfileId: "front-desk",
+    editingRevision: 0,
+    pins: [2],
+  }));
+  expect(screen.getByLabelText("消抖")).toHaveValue(31);
+});
+
+test("preserves a captured mapping when learning ends before autosave", async () => {
+  const activeLearningTarget = {
+    deviceId: "device-front-desk",
+    deviceProfileId: deviceProfile.profile.id,
+    hardwareProfileId: "front-desk",
+    editingRevision: 3,
+    firmwareRevision: 5,
+    pins: [2, 13],
+  };
+  currentSnapshot.devices[0].learning = activeLearningTarget;
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+  await user.click(screen.getByText("适配新设备"));
+  await user.selectOptions(screen.getByLabelText("在线设备"), "device-front-desk");
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    code: "learning_input",
+    input: { type: "contact", source: 1, pin_a: 2, pin_b: 13 },
+    learningTarget: activeLearningTarget,
+  })));
+  expect(screen.getByRole("combobox", { name: "2 A" })).toHaveValue("2");
+  expect(screen.getByRole("combobox", { name: "2 B" })).toHaveValue("13");
+
+  await user.click(screen.getByRole("button", { name: "结束学习" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("end_learning", {
+    deviceId: "device-front-desk",
+  }));
+  expect(screen.getByRole("combobox", { name: "2 A" })).toHaveValue("2");
+  expect(screen.getByRole("combobox", { name: "2 B" })).toHaveValue("13");
 });
 
 test("targets learning and captured input to the explicitly selected non-first Hardware Profile and Device", async () => {

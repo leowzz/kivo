@@ -36,6 +36,7 @@ import type {
   ImportPreview,
   InputSource,
   Language,
+  LearningTarget,
   PhysicalInput,
   RuntimeAssignment,
   RuntimeEvent,
@@ -150,6 +151,16 @@ function learnInput(profile: DeviceProfile, hardwareProfileId: string, buttonId:
 
 function pressedButtons(owners: Map<string, PressedOwner>) {
   return new Set([...owners.values()].flatMap((owner) => [...owner.buttonIds]));
+}
+
+function learningTargetsMatch(left: LearningTarget, right: LearningTarget) {
+  return left.deviceId === right.deviceId &&
+    left.deviceProfileId === right.deviceProfileId &&
+    left.hardwareProfileId === right.hardwareProfileId &&
+    left.editingRevision === right.editingRevision &&
+    left.firmwareRevision === right.firmwareRevision &&
+    left.pins.length === right.pins.length &&
+    left.pins.every((pin, index) => pin === right.pins[index]);
 }
 
 export default function App() {
@@ -434,16 +445,20 @@ export default function App() {
           if (payload.input && payload.pressed !== null) {
             const currentProfile = profileRef.current;
             const currentEditorTarget = hardwareEditorTargetRef.current;
+            const activeLearningTarget = devicesRef.current.find(
+              ({ deviceId }) => deviceId === currentEditorTarget?.deviceId,
+            )?.learning;
             if (payload.code === "learning_input" && payload.pressed && payload.learningTarget
               && selectedRef.current && viewRef.current === "hardware" && currentProfile && currentEditorTarget?.deviceId
-              && payload.deviceId === payload.learningTarget.deviceId
-              && payload.learningTarget.deviceId === currentEditorTarget.deviceId
-              && payload.learningTarget.deviceProfileId === currentProfile.profile.id
-              && payload.learningTarget.deviceProfileId === currentEditorTarget.deviceProfileId
-              && payload.learningTarget.hardwareProfileId === currentEditorTarget.hardwareProfileId) {
+              && activeLearningTarget && learningTargetsMatch(payload.learningTarget, activeLearningTarget)
+              && payload.deviceId === activeLearningTarget.deviceId
+              && activeLearningTarget.deviceId === currentEditorTarget.deviceId
+              && activeLearningTarget.deviceProfileId === currentProfile.profile.id
+              && activeLearningTarget.deviceProfileId === currentEditorTarget.deviceProfileId
+              && activeLearningTarget.hardwareProfileId === currentEditorTarget.hardwareProfileId) {
               const learned = learnInput(
                 currentProfile,
-                payload.learningTarget.hardwareProfileId,
+                activeLearningTarget.hardwareProfileId,
                 selectedRef.current,
                 payload.input,
               );
@@ -746,7 +761,7 @@ export default function App() {
                   device.boardProfileId === hardware?.board_profile_id
                 );
                 if (!hardware || !selectedDevice) return;
-                void run(t(language, "error.learning"), async () => applySnapshot(await invoke("begin_learning", {
+                void run(t(language, "error.learning"), async () => replaceRegistrySnapshot(await invoke("begin_learning", {
                   deviceId: selectedDevice.deviceId,
                   deviceProfileId: editorProfileConfig.profile.id,
                   hardwareProfileId: hardware.id,
@@ -755,7 +770,7 @@ export default function App() {
                 })));
               }}
               onEndLearning={(deviceId) => {
-                void run(t(language, "error.learning"), async () => applySnapshot(await invoke("end_learning", {
+                void run(t(language, "error.learning"), async () => replaceRegistrySnapshot(await invoke("end_learning", {
                   deviceId,
                 })));
               }}

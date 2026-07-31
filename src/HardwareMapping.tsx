@@ -112,6 +112,7 @@ export function HardwareMapping({
   const [deleteTarget, setDeleteTarget] = useState<HardwareProfile | null>(null);
   const [selectedDeviceId, setSelectedDeviceId] = useState("");
   const pendingCreatedId = useRef<string | null>(null);
+  const renameOrigin = useRef<{ id: string; profile: string } | null>(null);
   const hardware = hardwareProfiles.find(({ id }) => id === selectedId) ?? hardwareProfiles[0];
   const board = boardProfiles.find(({ id }) => id === hardware?.board_profile_id);
   const compatibleDevices = devices.filter((device) =>
@@ -138,6 +139,16 @@ export function HardwareMapping({
     setRenaming(false);
     setRenameValue("");
   }, [hardwareProfiles, selectedId]);
+
+  useEffect(() => {
+    if (!renaming || !renameOrigin.current) return;
+    const current = hardwareProfiles.find(({ id }) => id === renameOrigin.current?.id);
+    if (selectedId !== renameOrigin.current.id || JSON.stringify(current) !== renameOrigin.current.profile) {
+      renameOrigin.current = null;
+      setRenaming(false);
+      setRenameValue("");
+    }
+  }, [hardwareProfiles, renaming, selectedId]);
 
   useEffect(() => {
     if (!compatibleDevices.some(({ deviceId }) => deviceId === selectedDeviceId)) {
@@ -229,6 +240,7 @@ export function HardwareMapping({
           </button>
           <button className="icon-button" type="button" aria-label={t(language, "hardware.renameProfile")} title={t(language, "hardware.renameProfile")} disabled={!hardware} onClick={() => {
             if (!hardware) return;
+            renameOrigin.current = { id: hardware.id, profile: JSON.stringify(hardware) };
             setRenameValue(hardware.name);
             setRenaming(true);
           }}>

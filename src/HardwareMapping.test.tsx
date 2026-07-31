@@ -423,6 +423,41 @@ test("settles a removed selection on the fallback and does not let a reappearing
   expect(onChange).not.toHaveBeenCalled();
 });
 
+test("cancels a rename only when authoritative props replace the selected profile under the same ID", async () => {
+  const user = userEvent.setup();
+  const onChange = vi.fn<(profiles: HardwareProfile[]) => void>();
+  const props = {
+    language: "zh-CN" as const,
+    layout,
+    boardProfiles,
+    devices: [] as DeviceStatus[],
+    selectedButtonId: null,
+    onSelectButton: vi.fn(),
+    onChange,
+    onSelectionChange: vi.fn(),
+    learning: null,
+    onBeginLearning: vi.fn(),
+    onEndLearning: vi.fn(),
+  };
+  const initial = structuredClone(hardwareProfiles);
+  const { rerender } = render(<HardwareMapping {...props} hardwareProfiles={initial} />);
+  await user.selectOptions(screen.getByRole("combobox", { name: "硬件配置" }), "back-desk");
+  await user.click(screen.getByRole("button", { name: "重命名硬件配置" }));
+  const rename = screen.getByRole("textbox", { name: "硬件配置名称" });
+  await user.clear(rename);
+  await user.type(rename, "Local draft");
+
+  rerender(<HardwareMapping {...props} hardwareProfiles={structuredClone(initial)} />);
+  expect(screen.getByRole("textbox", { name: "硬件配置名称" })).toHaveValue("Local draft");
+
+  const refreshed = structuredClone(initial);
+  refreshed[1].name = "Authoritative back desk";
+  rerender(<HardwareMapping {...props} hardwareProfiles={refreshed} />);
+  expect(screen.queryByRole("textbox", { name: "硬件配置名称" })).toBeNull();
+  expect(screen.getByRole("combobox", { name: "硬件配置" })).toHaveDisplayValue("Authoritative back desk");
+  expect(onChange).not.toHaveBeenCalled();
+});
+
 test("keeps a board-valid direct value visible when online capabilities narrow new choices", async () => {
   const user = userEvent.setup();
   renderMapping({ devices: [device({ capabilities: [1, 13] })] });
