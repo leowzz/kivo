@@ -199,11 +199,8 @@ fn begin_learning_inner(state: &AppState, mut pins: Vec<u8>) -> Result<AppSnapsh
         .map_err(|_| state_error("device_capabilities_unavailable"))?
         .clone()
         .ok_or_else(|| state_error("device_not_connected"))?;
-    if capabilities.protocol != 2 {
+    if capabilities.protocol != 3 {
         return Err(state_error("protocol_mismatch"));
-    }
-    if capabilities.platform != "esp32s3" {
-        return Err(state_error("unsupported_controller"));
     }
     if let Some(gpio) = pins.iter().find(|gpio| !capabilities.pins.contains(gpio)) {
         return Err(AppError::new("unsupported_gpio").with_param("gpio", gpio.to_string()));
@@ -666,8 +663,10 @@ mod tests {
         let directory = TestDirectory::new();
         let state = product_state(&directory.0, vec![product_model()]);
         *state.capabilities.write().unwrap() = Some(DeviceCapabilities {
-            protocol: 2,
-            platform: "esp32s3".into(),
+            protocol: 3,
+            controller_family_id: "esp32s3".into(),
+            board_profile_id: "luatos-esp32s3-aio".into(),
+            firmware_build_id: "test".into(),
             pins: vec![1, 2],
         });
 

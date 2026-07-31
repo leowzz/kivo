@@ -1,9 +1,11 @@
 use crate::{
+    hardware::{BoardProfile, board_by_runtime_usb},
     metrics::{HomeMetricsSnapshot, MetricsStore},
     protocol::{
-        ActionSequence, DeviceMessage, InputState, PhysicalInput, parse_device, topology_commands,
+        ActionSequence, DeviceMessage, HardwareProfile, HelloCapabilities, InputState,
+        PhysicalInput, parse_device, topology_commands, validate_hello,
     },
-    workspace::{InputSource, ModelConfig},
+    workspace::ModelConfig,
 };
 use serde::Serialize;
 use serialport::{SerialPortInfo, SerialPortType};
@@ -20,8 +22,6 @@ use std::{
 };
 use tauri::{AppHandle, Emitter};
 
-const USB_VENDOR_ID: u16 = 0x303a;
-const USB_PRODUCT_ID: u16 = 0x4002;
 const ACTION_ACK_TIMEOUT: Duration = Duration::from_millis(1800);
 const CLIPBOARD_COMMAND: &str = if cfg!(target_os = "windows") {
     "clip.exe"
@@ -69,7 +69,8 @@ pub struct SessionOutput {
 
 pub struct DeviceSession {
     model: Option<ModelConfig>,
-    hello: Option<(u16, String, Vec<u8>)>,
+    candidate_board: &'static BoardProfile,
+    hello: Option<HelloCapabilities>,
     revision: u32,
     configuring: Option<u32>,
     ready: bool,
@@ -82,6 +83,7 @@ impl DeviceSession {
     pub fn new(model: ModelConfig) -> Self {
         Self {
             model: Some(model),
+            candidate_board: crate::hardware::board_by_id("luatos-esp32s3-aio").unwrap(),
             hello: None,
             revision: 0,
             configuring: None,
@@ -91,9 +93,10 @@ impl DeviceSession {
         }
     }
 
-    pub fn without_model() -> Self {
+    pub fn without_model(candidate_board: &'static BoardProfile) -> Self {
         Self {
             model: None,
+            candidate_board,
             hello: None,
             revision: 0,
             configuring: None,
@@ -112,8 +115,8 @@ impl DeviceSession {
         self.ready = false;
         self.configuring = None;
         self.model = model;
-        if let Some((protocol, platform, pins)) = self.hello.clone() {
-            self.configure_for_hello(protocol, platform, pins, &mut output);
+        if let Some(hello) = self.hello.clone() {
+            self.configure_for_hello(hello, &mut output);
         }
         output
     }
@@ -148,11 +151,7 @@ impl DeviceSession {
     ) -> SessionOutput {
         let mut output = SessionOutput::default();
         match message {
-            DeviceMessage::Hello {
-                protocol,
-                platform,
-                pins,
-            } => self.configure_for_hello(protocol, platform, pins, &mut output),
+            DeviceMessage::Hello(hello) => self.configure_for_hello(hello, &mut output),
             DeviceMessage::ConfigOk { revision } if self.configuring == Some(revision) => {
                 self.configuring = None;
                 self.ready = true;
@@ -225,22 +224,16 @@ impl DeviceSession {
 
     fn configure_for_hello(
         &mut self,
-        protocol: u16,
-        platform: String,
-        pins: Vec<u8>,
+        hello: HelloCapabilities,
         output: &mut SessionOutput,
     ) {
-        self.hello = Some((protocol, platform.clone(), pins.clone()));
+        self.hello = Some(hello.clone());
         self.ready = false;
         self.configuring = None;
         self.active = None;
         self.queue.clear();
-        if protocol != 2 {
-            output.activities.push(
-                RuntimeActivity::new("protocol_mismatch")
-                    .with_param("expected", "2")
-                    .with_param("actual", protocol.to_string()),
-            );
+        if let Err(error) = validate_hello(self.candidate_board, &hello) {
+            output.activities.push(activity_from_error(error));
             return;
         }
         let Some(model) = self.model.as_ref() else {
@@ -249,33 +242,25 @@ impl DeviceSession {
                 .push(RuntimeActivity::new("no_active_model"));
             return;
         };
-        if platform != model.hardware.controller {
-            output.activities.push(
-                RuntimeActivity::new("controller_mismatch")
-                    .with_param("expected", &model.hardware.controller)
-                    .with_param("actual", platform),
-            );
+        if let Err(error) = model.validate() {
+            output.activities.push(RuntimeActivity::new("invalid_topology").with_detail(error.code));
             return;
         }
-        let allowed = pins.into_iter().collect::<BTreeSet<_>>();
-        if let Some(gpio) = model_pins(model)
-            .into_iter()
-            .find(|gpio| !allowed.contains(gpio))
-        {
-            output.activities.push(
-                RuntimeActivity::new("unsupported_gpio").with_param("gpio", gpio.to_string()),
-            );
-            return;
-        }
+        let hardware = match HardwareProfile::new(self.candidate_board, &model.hardware) {
+            Ok(hardware) => hardware,
+            Err(error) => {
+                output.activities.push(activity_from_error(error));
+                return;
+            }
+        };
+        let reported_pins = hello.pins.iter().copied().collect::<BTreeSet<_>>();
         self.revision = self.revision.wrapping_add(1).max(1);
-        match topology_commands(model, self.revision) {
+        match topology_commands(&hardware, self.revision, &reported_pins) {
             Ok(lines) => {
                 self.configuring = Some(self.revision);
                 output.lines = lines;
             }
-            Err(error) => output
-                .activities
-                .push(RuntimeActivity::new("invalid_topology").with_detail(error)),
+            Err(error) => output.activities.push(activity_from_error(error)),
         }
     }
 
@@ -372,16 +357,11 @@ impl DeviceSession {
     }
 }
 
-fn model_pins(model: &ModelConfig) -> BTreeSet<u8> {
-    model
-        .hardware
-        .inputs
-        .iter()
-        .flat_map(|source| match source {
-            InputSource::Direct { keys, .. } => keys.values().copied().collect::<Vec<_>>(),
-            InputSource::ContactMatrix { pins, .. } => pins.clone(),
-        })
-        .collect()
+fn activity_from_error(error: crate::workspace::AppError) -> RuntimeActivity {
+    let mut activity = RuntimeActivity::new(error.code);
+    activity.params = error.params;
+    activity.detail = error.detail;
+    activity
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -398,13 +378,7 @@ pub struct ConnectionStatus {
     pub port: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DeviceCapabilities {
-    pub protocol: u16,
-    pub platform: String,
-    pub pins: Vec<u8>,
-}
+pub type DeviceCapabilities = HelloCapabilities;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -488,9 +462,7 @@ fn persist_metrics(
 pub fn is_target_port(port: &SerialPortInfo) -> bool {
     matches!(
         &port.port_type,
-        SerialPortType::UsbPort(info)
-            if info.vid == USB_VENDOR_ID
-                && info.pid == USB_PRODUCT_ID
+        SerialPortType::UsbPort(info) if board_by_runtime_usb(info.vid, info.pid).is_some()
     )
 }
 
@@ -506,8 +478,13 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
         stop,
     } = state;
     while !stop.load(Ordering::Relaxed) {
-        let port = match serialport::available_ports() {
-            Ok(ports) => ports.into_iter().find(is_target_port),
+        let target = match serialport::available_ports() {
+            Ok(ports) => ports.into_iter().find_map(|port| match &port.port_type {
+                SerialPortType::UsbPort(info) => {
+                    board_by_runtime_usb(info.vid, info.pid).map(|board| (port, board))
+                }
+                _ => None,
+            }),
             Err(error) => {
                 emit_activity(
                     &app,
@@ -519,7 +496,7 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
                 continue;
             }
         };
-        let Some(port) = port else {
+        let Some((port, candidate_board)) = target else {
             clear_device_state(&capabilities, &learning, &controls);
             set_connection(
                 &app,
@@ -579,7 +556,7 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
             Some("device_connected"),
         );
         let mut device = BufReader::new(device);
-        let mut session = DeviceSession::without_model();
+        let mut session = DeviceSession::without_model(candidate_board);
         let mut loaded_model = None;
         let mut action_deadline = None;
         let mut line = Vec::new();
@@ -649,20 +626,11 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
                     let Some(message) = parse_device(text) else {
                         continue;
                     };
-                    if let DeviceMessage::Hello {
-                        protocol,
-                        platform,
-                        pins,
-                    } = &message
-                    {
+                    if let DeviceMessage::Hello(hello) = &message {
                         *capabilities
                             .write()
                             .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-                            Some(DeviceCapabilities {
-                                protocol: *protocol,
-                                platform: platform.clone(),
-                                pins: pins.clone(),
-                            });
+                            validate_hello(candidate_board, hello).ok().map(|()| hello.clone());
                     }
                     let output = session.on_message(message, &mut copy_to_clipboard);
                     match write_output(&app, &connection, &runtime_error, &active_model, metrics.as_deref(), device.get_mut(), output)
@@ -990,11 +958,13 @@ mod tests {
     }
 
     fn hello() -> DeviceMessage {
-        DeviceMessage::Hello {
-            protocol: 2,
-            platform: "esp32s3".into(),
+        DeviceMessage::Hello(HelloCapabilities {
+            protocol: 3,
+            controller_family_id: "esp32s3".into(),
+            board_profile_id: "luatos-esp32s3-aio".into(),
+            firmware_build_id: "test".into(),
             pins: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18],
-        }
+        })
     }
 
     #[test]
@@ -1065,16 +1035,18 @@ mod tests {
     fn rejects_unsupported_hello_without_sending_topology() {
         let mut session = DeviceSession::new(runtime_model());
         let output = session.on_message(
-            DeviceMessage::Hello {
-                protocol: 2,
-                platform: "esp32s3".into(),
+            DeviceMessage::Hello(HelloCapabilities {
+                protocol: 3,
+                controller_family_id: "esp32s3".into(),
+                board_profile_id: "luatos-esp32s3-aio".into(),
+                firmware_build_id: "test".into(),
                 pins: vec![1, 2],
-            },
+            }),
             &mut |_| Ok(()),
         );
 
         assert!(output.lines.is_empty());
-        assert_eq!(output.activities[0].code, "unsupported_gpio");
+        assert_eq!(output.activities[0].code, "capability_mismatch");
         assert_eq!(output.activities[0].params["gpio"], "6");
     }
 
@@ -1099,6 +1071,7 @@ mod tests {
             Some("USB Serial Device (COM3)")
         )));
         assert!(is_target_port(&usb_port(0x303a, 0x4002, None)));
+        assert!(is_target_port(&usb_port(0x2e8a, 0x102e, Some("Kivo Keyboard"))));
         assert!(!is_target_port(&usb_port(
             0x303b,
             0x4002,
