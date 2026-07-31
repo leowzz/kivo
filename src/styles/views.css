@@ -154,7 +154,11 @@
 .learning-panel summary:hover svg { color: var(--green-8); }
 .learning-panel[open] summary { margin-bottom: 10px; border-style: solid; border-color: var(--border-subtle); }
 .learning-controls { display: grid; gap: 13px; border: 1px solid var(--border-subtle); border-radius: var(--radius-10); padding: 14px; background: var(--bg-surface); box-shadow: var(--shadow-1); }
-.learning-controls.is-learning { border-color: var(--amber-border); background: var(--amber-bg); animation: pulse-dot 2s ease-in-out infinite; }
+@keyframes pulse-amber {
+  0%, 100% { box-shadow: var(--shadow-1), 0 0 0 0 rgba(194, 138, 27, .35); }
+  50% { box-shadow: var(--shadow-1), 0 0 0 4px rgba(194, 138, 27, 0); }
+}
+.learning-controls.is-learning { border-color: var(--amber-border); background: var(--amber-bg); animation: pulse-amber 2s ease-in-out infinite; }
 .learning-controls .compact-field { border: 0; padding: 0; }
 .safety-check { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px solid var(--amber-border); border-radius: var(--radius-8); color: var(--amber-text); background: var(--amber-bg); font-size: var(--text-12); line-height: 1.4; }
 .safety-check input { width: 16px; height: 16px; margin-top: 1px; }
