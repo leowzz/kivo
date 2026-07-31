@@ -576,12 +576,42 @@ impl RuntimeCoordinator {
                 ClassifiedObservation::Runtime { board, observation } => {
                     active_runtime.insert(device_id.clone());
                     if let Some(slot) = self.workers.get_mut(&device_id) {
-                        if slot.port != observation.port {
-                            let _ = slot
+                        let update_error = if slot.port != observation.port {
+                            match slot
                                 .worker
-                                .send(WorkerCommand::UpdatePort(observation.port.clone()));
+                                .send(WorkerCommand::UpdatePort(observation.port.clone()))
+                            {
+                                Ok(()) => {
+                                    slot.port = observation.port.clone();
+                                    None
+                                }
+                                Err(error) => Some(error),
+                            }
+                        } else {
+                            None
+                        };
+                        if let Some(error) = update_error {
+                            self.stop_worker(&device_id);
+                            if let Some(status) = self.devices.get_mut(&device_id) {
+                                status.connection = ConnectionDimension::Offline;
+                                status.mode = None;
+                                status.runtime = RuntimeDimension::Inactive;
+                                status.port = None;
+                                status.firmware_build_id = None;
+                                status.pins.clear();
+                                status.learning = None;
+                                status.latest_error = Some(runtime_error(error));
+                            } else {
+                                self.candidates.push(candidate_from_runtime(
+                                    board,
+                                    observation,
+                                    Some(device_id),
+                                    IdentityDimension::Validating,
+                                    Some(error),
+                                ));
+                            }
+                            continue;
                         }
-                        slot.port = observation.port.clone();
                         if let Some(status) = self.devices.get_mut(&device_id) {
                             let identity = status.identity;
                             set_runtime_observed(status, board, observation, identity);
@@ -1475,6 +1505,7 @@ mod tests {
     struct FakeLauncher {
         starts: Mutex<Vec<WorkerStart>>,
         failures: Mutex<BTreeMap<String, String>>,
+        update_port_failures: Arc<Mutex<BTreeSet<String>>>,
         hellos: Mutex<BTreeMap<String, HelloCapabilities>>,
         stopped: Arc<Mutex<Vec<DeviceId>>>,
         commands: Arc<Mutex<BTreeMap<DeviceId, Vec<WorkerCommand>>>>,
@@ -1486,6 +1517,13 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(port.into(), error.into());
+        }
+
+        fn fail_update_port(&self, port: &str) {
+            self.update_port_failures
+                .lock()
+                .unwrap()
+                .insert(port.into());
         }
 
         fn starts(&self) -> Vec<WorkerStart> {
@@ -1529,10 +1567,16 @@ mod tests {
         device_id: DeviceId,
         stopped: Arc<Mutex<Vec<DeviceId>>>,
         commands: Arc<Mutex<BTreeMap<DeviceId, Vec<WorkerCommand>>>>,
+        update_port_failures: Arc<Mutex<BTreeSet<String>>>,
     }
 
     impl DeviceWorker for FakeWorker {
         fn send(&self, command: WorkerCommand) -> Result<(), String> {
+            if let WorkerCommand::UpdatePort(port) = &command
+                && self.update_port_failures.lock().unwrap().contains(port)
+            {
+                return Err("device_worker_stopped".into());
+            }
             self.commands
                 .lock()
                 .unwrap()
@@ -1576,6 +1620,7 @@ mod tests {
                 device_id: start.device_id,
                 stopped: Arc::clone(&self.stopped),
                 commands: Arc::clone(&self.commands),
+                update_port_failures: Arc::clone(&self.update_port_failures),
             }))
         }
     }
@@ -2037,6 +2082,54 @@ mod tests {
         assert_eq!(event.device_profile_id.as_deref(), Some("red-phone-v1"));
         assert_eq!(event.hardware_profile_id.as_deref(), Some("esp"));
         assert_eq!(launcher.starts().len(), 1);
+    }
+
+    #[test]
+    fn failed_port_update_retires_worker_and_restarts_on_renamed_port() {
+        let (_directory, enumerator, launcher, mut coordinator) = harness();
+        enumerator.set(
+            vec![serial("/dev/old", 0x303a, 0x4002, Some("PORT-FAIL"))],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+        launcher.fail_update_port("/dev/renamed");
+
+        enumerator.set(
+            vec![serial("/dev/renamed", 0x303a, 0x4002, Some("PORT-FAIL"))],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+
+        let failed = coordinator
+            .devices()
+            .into_iter()
+            .find(|status| status.raw_serial == "PORT-FAIL")
+            .unwrap();
+        assert_eq!(failed.connection, ConnectionDimension::Offline);
+        assert_eq!(failed.port, None);
+        assert_eq!(failed.runtime, RuntimeDimension::Inactive);
+        assert_eq!(
+            failed
+                .latest_error
+                .as_ref()
+                .map(|error| error.code.as_str()),
+            Some("device_worker_stopped")
+        );
+        assert_eq!(launcher.starts().len(), 1);
+        assert_eq!(launcher.stopped.lock().unwrap().len(), 1);
+
+        scan(&mut coordinator);
+
+        let starts = launcher.starts();
+        assert_eq!(starts.len(), 2);
+        assert_eq!(starts[1].port, "/dev/renamed");
+        let recovered = coordinator
+            .devices()
+            .into_iter()
+            .find(|status| status.raw_serial == "PORT-FAIL")
+            .unwrap();
+        assert_eq!(recovered.connection, ConnectionDimension::Online);
+        assert_eq!(recovered.port.as_deref(), Some("/dev/renamed"));
     }
 
     #[test]
