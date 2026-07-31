@@ -1,7 +1,7 @@
 # RP2040 Parallel Device Support Design
 
 Date: 2026-07-31
-Status: Under grill review
+Status: Approved
 
 ## Goal
 
