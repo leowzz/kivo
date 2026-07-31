@@ -24,6 +24,7 @@ grep -Fq 'test -n "$(SERIAL)"' <<<"$require_serial_body"
 grep -Fq 'expected = ["HELLO", "3", family, board, build]' "$ROOT/scripts/verify_runtime_firmware.py"
 
 for target in upload-esp32s3 upload-rp2040; do
+  grep -Eq "^${target}:[[:space:]].*require-serial([[:space:]]|$)" "$MAKEFILE"
   body="$(target_body "$target")"
   grep -Fq 'scripts/verify_runtime_firmware.py' <<<"$body"
   grep -Fq -- '--build "$(BUILD_ID)"' <<<"$body"
@@ -34,7 +35,10 @@ rp2040_upload_body="$(target_body upload-rp2040)"
 test "$(grep -n -- '-t upload' <<<"$esp32_upload_body" | cut -d: -f1)" -lt "$(grep -n 'verify_runtime_firmware.py' <<<"$esp32_upload_body" | cut -d: -f1)"
 test "$(grep -n -- 'picotool load' <<<"$rp2040_upload_body" | cut -d: -f1)" -lt "$(grep -n 'verify_runtime_firmware.py' <<<"$rp2040_upload_body" | cut -d: -f1)"
 
-! grep -Eq '^upload:[[:space:]]+(upload-esp32s3|upload-rp2040)' "$MAKEFILE"
+grep -Eq '^upload:[[:space:]]*$' "$MAKEFILE"
+upload_body="$(target_body upload)"
+grep -Fq 'exit 2' <<<"$upload_body"
+! grep -Eq '(upload-esp32s3|upload-rp2040|enter_download_mode|picotool)' <<<"$upload_body"
 
 test_body="$(target_body test)"
 expected_test_commands=(
