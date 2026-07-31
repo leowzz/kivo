@@ -20,7 +20,7 @@ import brandIcon from "../src-tauri/icons/128x128.png";
 import { ActionEditor } from "./ActionEditor";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { DeviceManagement } from "./DeviceManagement";
-import { HardwareMapping } from "./HardwareMapping";
+import { HardwareMapping, hardwareProfilesAreValid } from "./HardwareMapping";
 import { HomeDashboard } from "./HomeDashboard";
 import { Keypad } from "./Keypad";
 import { LayoutEditor } from "./LayoutEditor";
@@ -71,10 +71,13 @@ function allButtons(profile: DeviceProfile | undefined) {
   return profile?.profile.groups.flatMap((group) => group.buttons) ?? [];
 }
 
-function isValidDraft(profile: DeviceProfile | undefined) {
+function isValidDraft(
+  profile: DeviceProfile | undefined,
+  boardProfiles: AppSnapshot["boardProfiles"],
+) {
   return Boolean(profile && Object.values(profile.actions).every((actions) => actions.every((action) =>
     action.type === "paste" ? action.text.length > 0 : action.keys.length > 0
-  )));
+  )) && hardwareProfilesAreValid(profile.hardware_profiles, boardProfiles));
 }
 
 function resolveButton(hardware: HardwareProfile | undefined, input: PhysicalInput) {
@@ -369,7 +372,7 @@ export default function App() {
 
   const autosave = useAutosave({
     value: editorProfileConfig,
-    valid: dirty && isValidDraft(editorProfileConfig),
+    valid: dirty && isValidDraft(editorProfileConfig, boardProfiles),
     save: saveEditorProfile,
     queue,
   });
@@ -691,23 +694,22 @@ export default function App() {
               <h2>{t(language, "model.empty")}</h2>
               <div><button className="primary-button" type="button" onClick={() => void chooseImport()}>{t(language, "model.import")}</button><button type="button" onClick={() => void chooseRestore()}>{t(language, "model.restore")}</button></div>
             </div>
-          ) : view === "hardware" && editorHardwareProfile ? (
+          ) : view === "hardware" ? (
             <HardwareMapping
               language={language}
               layout={editorProfileConfig.profile}
-              hardware={compatibilityProfile?.hardware as never}
-              supportedGpios={editorBoardProfile?.safePins ?? []}
-              learning={editorDevice?.learning as never}
+              hardwareProfiles={editorProfileConfig.hardware_profiles}
+              boardProfiles={boardProfiles}
+              devices={devices}
+              learning={editorDevice?.learning ?? null}
               selectedButtonId={selectedButtonId}
               onSelectButton={setSelectedButtonId}
-              onChange={(hardware) => updateEditorProfile((profile) => ({
+              onChange={(hardwareProfiles) => updateEditorProfile((profile) => ({
                 ...profile,
-                hardware_profiles: profile.hardware_profiles.map((item) => item.id === editorHardwareProfile.id
-                  ? { ...item, debounce_ms: hardware.debounce_ms, inputs: hardware.inputs }
-                  : item),
+                hardware_profiles: hardwareProfiles,
               }))}
               onBeginLearning={(pins) => {
-                if (!editorDevice) return;
+                if (!editorDevice || !editorHardwareProfile) return;
                 void run(t(language, "error.learning"), async () => applySnapshot(await invoke("begin_learning", {
                   deviceId: editorDevice.deviceId,
                   deviceProfileId: editorProfileConfig.profile.id,

@@ -121,6 +121,13 @@ select:focus, input:focus, textarea:focus, button:focus-visible { border-color: 
 .danger-button { border-color: #a83b34 !important; color: #fff; background: #a83b34 !important; }
 
 .hardware-view { min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.hardware-toolbar { min-height: 48px; display: flex; align-items: center; gap: 8px; padding: 7px 20px; border-bottom: 1px solid #e1e6e3; background: #f7f9f8; }
+.hardware-toolbar > label { min-width: 180px; display: grid; grid-template-columns: auto minmax(120px, 220px); align-items: center; gap: 8px; color: #65706c; font-size: 11px; }
+.hardware-toolbar select, .hardware-rename-input, .board-profile-field select { min-width: 0; height: 32px; padding: 0 8px; }
+.hardware-profile-actions { display: flex; align-items: center; gap: 2px; }
+.hardware-rename-input { width: min(220px, 100%); }
+.hardware-heading { flex-wrap: wrap; }
+.board-profile-field { display: grid; grid-template-columns: auto minmax(150px, 220px); align-items: center; gap: 7px; color: #65706c; font-size: 11px; }
 .debounce-field { display: grid; grid-template-columns: auto 64px auto; align-items: center; gap: 6px; color: #65706c; font-size: 11px; }
 .debounce-field input { width: 64px; height: 32px; padding: 0 6px; }
 .source-list { min-height: 0; flex: 1; overflow: auto; padding: 16px 20px 2px; }
@@ -138,7 +145,10 @@ select:focus, input:focus, textarea:focus, button:focus-visible { border-color: 
 .mapping-row:last-child { border-bottom: 0; }
 .mapping-row.is-selected { background: #edf6f2; }
 .mapping-row > button { align-self: stretch; border: 0; padding: 0 12px; background: transparent; text-align: left; }
-.mapping-row > input, .contact-inputs select { width: 68px; height: 28px; padding: 0 6px; }
+.mapping-row select, .contact-inputs select { width: 68px; height: 28px; padding: 0 6px; }
+.mapping-control { display: grid; gap: 2px; padding: 4px 0; }
+.mapping-control .field-error { max-width: 140px; font-size: 10px; }
+.source-editor [aria-invalid="true"] { border-color: #b94b45; background: #fff7f6; }
 .contact-inputs { display: flex; gap: 6px; }
 .source-actions { display: flex; gap: 8px; padding: 0 20px 16px; }
 .learning-panel { margin: 0 20px 24px; border-top: 1px solid #dce2df; }

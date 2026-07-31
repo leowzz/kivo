@@ -1281,3 +1281,78 @@ test("keeps key learning secondary and collapsed by default", async () => {
     "open",
   );
 });
+
+test("autosaves a newly added Hardware Profile with its compiled Board Profile", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+
+  await user.click(screen.getByRole("button", { name: "添加硬件配置" }));
+
+  await waitFor(
+    () => expect(invoke).toHaveBeenCalledWith("save_device_profile", {
+      profile: expect.objectContaining({
+        hardware_profiles: expect.arrayContaining([
+          expect.objectContaining({
+            id: "luatos-esp32s3-aio-hardware",
+            name: "LuatOS ESP32-S3 AIO 硬件配置",
+            board_profile_id: "luatos-esp32s3-aio",
+          }),
+        ]),
+      }),
+    }),
+    { timeout: 1600 },
+  );
+});
+
+test("blocks autosave while a Board Profile change leaves invalid mappings and permits revert", async () => {
+  currentSnapshot.boardProfiles.push({
+    id: "vccgnd-yd-rp2040",
+    controllerFamilyId: "rp2040",
+    displayName: "YD-RP2040",
+    runtimeUsb: "2e8a:000a",
+    bootloaderUsb: "2e8a:0003",
+    safePins: [0, 1, 2],
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+  vi.mocked(invoke).mockClear();
+
+  await user.selectOptions(screen.getByLabelText("板型"), "vccgnd-yd-rp2040");
+  expect(await screen.findByText("无效 GPIO 6")).toBeInTheDocument();
+  await new Promise((resolve) => setTimeout(resolve, 550));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_device_profile")).toBe(false);
+
+  await user.selectOptions(screen.getByLabelText("板型"), "luatos-esp32s3-aio");
+  expect(screen.queryByText("无效 GPIO 6")).toBeNull();
+  await new Promise((resolve) => setTimeout(resolve, 550));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_device_profile")).toBe(false);
+});
+
+test("deletes a Hardware Profile without repairing its Device assignment", async () => {
+  currentSnapshot.deviceProfiles[0].hardware_profiles.push({
+    id: "spare",
+    name: "备用硬件配置",
+    board_profile_id: "luatos-esp32s3-aio",
+    debounce_ms: 30,
+    inputs: [],
+  });
+  const assignment = structuredClone(currentSnapshot.devices[0].runtimeAssignment);
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+
+  await user.click(screen.getByRole("button", { name: "删除硬件配置" }));
+  await user.click(within(screen.getByRole("dialog", { name: "删除硬件配置" })).getByRole("button", { name: "确认" }));
+
+  await waitFor(
+    () => expect(invoke).toHaveBeenCalledWith("save_device_profile", {
+      profile: expect.objectContaining({
+        hardware_profiles: [expect.objectContaining({ id: "spare" })],
+      }),
+    }),
+    { timeout: 1600 },
+  );
+  expect(currentSnapshot.devices[0].runtimeAssignment).toEqual(assignment);
+});
