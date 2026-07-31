@@ -1,6 +1,10 @@
+#[cfg(test)]
+use crate::hardware::board_by_runtime_usb;
 use crate::{
-    hardware::{BoardProfile, board_by_runtime_usb},
+    coordinator::{DeviceWorker, WorkerCommand, WorkerEvent, WorkerLauncher, WorkerStart},
+    hardware::BoardProfile,
     metrics::{HomeMetricsSnapshot, MetricAttribution, MetricsStore},
+    paste::{PasteHandle, PasteReply, PasteRequest},
     profile::DeviceProfile,
     protocol::{
         ActionSequence, DeviceMessage, HelloCapabilities, InputState, PhysicalInput, is_hello_line,
@@ -8,27 +12,21 @@ use crate::{
     },
 };
 use serde::Serialize;
+#[cfg(test)]
 use serialport::{SerialPortInfo, SerialPortType};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     io::{BufRead, BufReader, ErrorKind, Write},
-    process::{Command, Stdio},
     sync::{
-        Arc, Mutex, RwLock,
+        Arc, RwLock,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
-    thread,
+    thread::{self, JoinHandle},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter};
 
 const ACTION_ACK_TIMEOUT: Duration = Duration::from_millis(1800);
-const CLIPBOARD_COMMAND: &str = if cfg!(target_os = "windows") {
-    "clip.exe"
-} else {
-    "/usr/bin/pbcopy"
-};
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeActivity {
@@ -49,7 +47,7 @@ struct MetricPress {
 }
 
 impl RuntimeActivity {
-    fn new(code: impl Into<String>) -> Self {
+    pub(crate) fn new(code: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             params: BTreeMap::new(),
@@ -75,6 +73,17 @@ impl RuntimeActivity {
 pub struct SessionOutput {
     pub lines: Vec<String>,
     pub activities: Vec<RuntimeActivity>,
+    pub paste_requests: Vec<PendingPaste>,
+    pub completed_receive_sequences: Vec<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingPaste {
+    pub receive_sequence: u64,
+    pub event_id: u64,
+    pub step: u16,
+    pub total: u16,
+    pub text: String,
 }
 
 pub struct DeviceSession {
@@ -85,7 +94,9 @@ pub struct DeviceSession {
     configuring: Option<u32>,
     ready: bool,
     active: Option<ActionSequence>,
-    queue: VecDeque<(u64, PhysicalInput)>,
+    queue: VecDeque<(u64, u64, PhysicalInput)>,
+    active_receive_sequence: Option<u64>,
+    pending_paste: Option<PendingPaste>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -107,6 +118,8 @@ impl DeviceSession {
             ready: false,
             active: None,
             queue: VecDeque::new(),
+            active_receive_sequence: None,
+            pending_paste: None,
         }
     }
 
@@ -120,6 +133,8 @@ impl DeviceSession {
             ready: false,
             active: None,
             queue: VecDeque::new(),
+            active_receive_sequence: None,
+            pending_paste: None,
         }
     }
 
@@ -128,7 +143,14 @@ impl DeviceSession {
         if let Some(sequence) = self.active.take() {
             output.lines.push(format!("SKIP {}\n", sequence.event_id()));
         }
+        if let Some(receive_sequence) = self.active_receive_sequence.take() {
+            output.completed_receive_sequences.push(receive_sequence);
+        }
+        output
+            .completed_receive_sequences
+            .extend(self.queue.iter().map(|(sequence, _, _)| *sequence));
         self.queue.clear();
+        self.pending_paste = None;
         self.ready = false;
         self.configuring = None;
         self.profile = profile;
@@ -142,12 +164,7 @@ impl DeviceSession {
         self.active.as_ref().is_some_and(ActionSequence::is_waiting)
     }
 
-    pub fn fail_active(
-        &mut self,
-        code: &str,
-        detail: Option<String>,
-        copy: &mut impl FnMut(&str) -> Result<(), String>,
-    ) -> SessionOutput {
+    pub fn fail_active_deferred(&mut self, code: &str, detail: Option<String>) -> SessionOutput {
         let mut output = SessionOutput::default();
         if let Some(mut sequence) = self.active.take() {
             let event_id = sequence.event_id();
@@ -156,7 +173,11 @@ impl DeviceSession {
             let mut activity = RuntimeActivity::new(code);
             activity.detail = detail;
             output.activities.push(activity);
-            self.start_next(&mut output, copy);
+            self.pending_paste = None;
+            if let Some(receive_sequence) = self.active_receive_sequence.take() {
+                output.completed_receive_sequences.push(receive_sequence);
+            }
+            self.start_next(&mut output);
         }
         output
     }
@@ -167,14 +188,28 @@ impl DeviceSession {
         message: DeviceMessage,
         copy: &mut impl FnMut(&str) -> Result<(), String>,
     ) -> SessionOutput {
-        self.on_message_at(message, now_ms(), copy)
+        let receive_sequence = message_event_id(&message).unwrap_or(0);
+        let output = self.on_message_deferred(message, receive_sequence, now_ms());
+        self.resolve_immediate(output, copy)
     }
 
+    #[cfg(test)]
     fn on_message_at(
         &mut self,
         message: DeviceMessage,
         occurred_at_ms: u64,
         copy: &mut impl FnMut(&str) -> Result<(), String>,
+    ) -> SessionOutput {
+        let receive_sequence = message_event_id(&message).unwrap_or(0);
+        let output = self.on_message_deferred(message, receive_sequence, occurred_at_ms);
+        self.resolve_immediate(output, copy)
+    }
+
+    pub fn on_message_deferred(
+        &mut self,
+        message: DeviceMessage,
+        receive_sequence: u64,
+        occurred_at_ms: u64,
     ) -> SessionOutput {
         let mut output = SessionOutput::default();
         match message {
@@ -222,19 +257,20 @@ impl DeviceSession {
                 });
                 if state == InputState::Down {
                     if self.ready {
-                        self.queue.push_back((event_id, input));
-                        self.start_next(&mut output, copy);
+                        self.queue.push_back((receive_sequence, event_id, input));
+                        self.start_next(&mut output);
                     } else {
                         output.lines.push(format!("SKIP {event_id}\n"));
+                        output.completed_receive_sequences.push(receive_sequence);
                         output
                             .activities
                             .push(RuntimeActivity::new("input_before_configuration"));
                     }
+                } else {
+                    output.completed_receive_sequences.push(receive_sequence);
                 }
             }
-            DeviceMessage::Done { event_id, step } => {
-                self.handle_done(event_id, step, &mut output, copy)
-            }
+            DeviceMessage::Done { event_id, step } => self.handle_done(event_id, step, &mut output),
             DeviceMessage::LearnOk { revision } => output.activities.push(
                 RuntimeActivity::new("learning_ready").with_param("revision", revision.to_string()),
             ),
@@ -269,17 +305,19 @@ impl DeviceSession {
         line: &str,
         copy: &mut impl FnMut(&str) -> Result<(), String>,
     ) -> SessionOutput {
-        self.on_line_at(line, now_ms(), copy)
+        let output = self.on_line_deferred(line, 0, now_ms());
+        self.resolve_immediate(output, copy)
     }
 
-    fn on_line_at(
+    #[cfg(test)]
+    pub fn on_line_deferred(
         &mut self,
         line: &str,
+        receive_sequence: u64,
         occurred_at_ms: u64,
-        copy: &mut impl FnMut(&str) -> Result<(), String>,
     ) -> SessionOutput {
         match parse_device(line) {
-            Some(message) => self.on_message_at(message, occurred_at_ms, copy),
+            Some(message) => self.on_message_deferred(message, receive_sequence, occurred_at_ms),
             None if is_hello_line(line) => self.invalidate_hello(),
             None => SessionOutput::default(),
         }
@@ -330,11 +368,13 @@ impl DeviceSession {
         }
     }
 
+    #[cfg(test)]
     fn invalidate_hello(&mut self) -> SessionOutput {
         self.clear_handshake();
         SessionOutput {
             lines: Vec::new(),
             activities: vec![RuntimeActivity::new("protocol_mismatch")],
+            ..SessionOutput::default()
         }
     }
 
@@ -343,16 +383,12 @@ impl DeviceSession {
         self.ready = false;
         self.configuring = None;
         self.active = None;
+        self.active_receive_sequence = None;
+        self.pending_paste = None;
         self.queue.clear();
     }
 
-    fn handle_done(
-        &mut self,
-        event_id: u64,
-        step: u16,
-        output: &mut SessionOutput,
-        copy: &mut impl FnMut(&str) -> Result<(), String>,
-    ) {
+    fn handle_done(&mut self, event_id: u64, step: u16, output: &mut SessionOutput) {
         let Some(sequence) = self.active.as_mut() else {
             output
                 .activities
@@ -366,28 +402,33 @@ impl DeviceSession {
                 .activities
                 .push(RuntimeActivity::new("invalid_action_acknowledgement").with_detail(error));
             self.active = None;
-            self.start_next(output, copy);
+            self.pending_paste = None;
+            if let Some(receive_sequence) = self.active_receive_sequence.take() {
+                output.completed_receive_sequences.push(receive_sequence);
+            }
+            self.start_next(output);
             return;
         }
         if sequence.is_complete() {
             self.active = None;
-            self.start_next(output, copy);
+            self.pending_paste = None;
+            if let Some(receive_sequence) = self.active_receive_sequence.take() {
+                output.completed_receive_sequences.push(receive_sequence);
+            }
+            self.start_next(output);
         } else {
-            self.emit_active_step(output, copy);
+            self.emit_active_step(output);
         }
     }
 
-    fn start_next(
-        &mut self,
-        output: &mut SessionOutput,
-        copy: &mut impl FnMut(&str) -> Result<(), String>,
-    ) {
+    fn start_next(&mut self, output: &mut SessionOutput) {
         while self.active.is_none() {
-            let Some((event_id, input)) = self.queue.pop_front() else {
+            let Some((receive_sequence, event_id, input)) = self.queue.pop_front() else {
                 return;
             };
             let Some(runtime) = self.profile.as_ref() else {
                 output.lines.push(format!("SKIP {event_id}\n"));
+                output.completed_receive_sequences.push(receive_sequence);
                 continue;
             };
             let Some(button) = runtime
@@ -396,6 +437,7 @@ impl DeviceSession {
                 .map(str::to_owned)
             else {
                 output.lines.push(format!("SKIP {event_id}\n"));
+                output.completed_receive_sequences.push(receive_sequence);
                 output
                     .activities
                     .push(RuntimeActivity::new("unmapped_input"));
@@ -409,43 +451,123 @@ impl DeviceSession {
                 .unwrap_or_default();
             if actions.is_empty() {
                 output.lines.push(format!("SKIP {event_id}\n"));
+                output.completed_receive_sequences.push(receive_sequence);
                 output
                     .activities
                     .push(RuntimeActivity::new("empty_action_list").with_param("button", button));
                 continue;
             }
             self.active = Some(ActionSequence::new(event_id, button, actions));
-            self.emit_active_step(output, copy);
+            self.active_receive_sequence = Some(receive_sequence);
+            self.emit_active_step(output);
         }
     }
 
-    fn emit_active_step(
-        &mut self,
-        output: &mut SessionOutput,
-        copy: &mut impl FnMut(&str) -> Result<(), String>,
-    ) {
+    fn emit_active_step(&mut self, output: &mut SessionOutput) {
         let Some(sequence) = self.active.as_mut() else {
             return;
         };
         let Some(step) = sequence.next_step() else {
             return;
         };
-        match step.command(|text| copy(text)) {
-            Ok(line) => output.lines.push(line),
-            Err(error) => {
-                sequence.abort();
-                output.lines.push(format!("SKIP {}\n", step.event_id));
-                output.activities.push(
-                    RuntimeActivity::new("action_step_failed")
-                        .with_param("button", step.button)
-                        .with_param("step", step.step.to_string())
-                        .with_detail(error),
-                );
-                self.active = None;
-                self.start_next(output, copy);
+        match &step.action {
+            crate::profile::ButtonAction::Paste { text } => {
+                let request = PendingPaste {
+                    receive_sequence: self.active_receive_sequence.unwrap_or_default(),
+                    event_id: step.event_id,
+                    step: step.step,
+                    total: step.total,
+                    text: text.clone(),
+                };
+                self.pending_paste = Some(request.clone());
+                output.paste_requests.push(request);
             }
+            crate::profile::ButtonAction::Hotkey { .. } => match step.command(|_| Ok(())) {
+                Ok(line) => output.lines.push(line),
+                Err(error) => {
+                    sequence.abort();
+                    output.lines.push(format!("SKIP {}\n", step.event_id));
+                    output.activities.push(
+                        RuntimeActivity::new("action_step_failed")
+                            .with_param("button", step.button)
+                            .with_param("step", step.step.to_string())
+                            .with_detail(error),
+                    );
+                    self.active = None;
+                    if let Some(receive_sequence) = self.active_receive_sequence.take() {
+                        output.completed_receive_sequences.push(receive_sequence);
+                    }
+                    self.start_next(output);
+                }
+            },
         }
     }
+
+    pub fn grant_paste(&mut self, event_id: u64, step: u16) -> SessionOutput {
+        let mut output = SessionOutput::default();
+        let Some(request) = self.pending_paste.take() else {
+            output
+                .activities
+                .push(RuntimeActivity::new("unexpected_paste_grant"));
+            return output;
+        };
+        if request.event_id == event_id && request.step == step {
+            output.lines.push(format!(
+                "PASTE {} {} {}\n",
+                request.event_id, request.step, request.total
+            ));
+        } else {
+            self.pending_paste = Some(request);
+            output
+                .activities
+                .push(RuntimeActivity::new("paste_grant_mismatch"));
+        }
+        output
+    }
+
+    #[cfg(test)]
+    fn resolve_immediate(
+        &mut self,
+        mut output: SessionOutput,
+        copy: &mut impl FnMut(&str) -> Result<(), String>,
+    ) -> SessionOutput {
+        let requests = std::mem::take(&mut output.paste_requests);
+        for request in requests {
+            match copy(&request.text) {
+                Ok(()) => merge_output(
+                    &mut output,
+                    self.grant_paste(request.event_id, request.step),
+                ),
+                Err(error) => {
+                    merge_output(
+                        &mut output,
+                        self.fail_active_deferred("action_step_failed", Some(error)),
+                    );
+                }
+            }
+        }
+        output
+    }
+}
+
+#[cfg(test)]
+fn message_event_id(message: &DeviceMessage) -> Option<u64> {
+    match message {
+        DeviceMessage::State { event_id, .. } | DeviceMessage::Done { event_id, .. } => {
+            Some(*event_id)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+fn merge_output(target: &mut SessionOutput, mut source: SessionOutput) {
+    target.lines.append(&mut source.lines);
+    target.activities.append(&mut source.activities);
+    target.paste_requests.append(&mut source.paste_requests);
+    target
+        .completed_receive_sequences
+        .append(&mut source.completed_receive_sequences);
 }
 
 fn activity_from_error(error: crate::workspace::AppError) -> RuntimeActivity {
@@ -469,8 +591,6 @@ pub struct ConnectionStatus {
     pub port: Option<String>,
 }
 
-pub type DeviceCapabilities = HelloCapabilities;
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LearningSession {
@@ -485,45 +605,6 @@ impl ConnectionStatus {
             port: None,
         }
     }
-
-    fn connected(port: String) -> Self {
-        Self {
-            state: ConnectionState::Connected,
-            port: Some(port),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum EventLevel {
-    Info,
-    Warning,
-    Error,
-}
-
-#[derive(Clone)]
-pub struct WorkerState {
-    pub active_profile: Arc<RwLock<Option<RuntimeProfile>>>,
-    pub operation_barrier: Arc<RwLock<()>>,
-    pub connection: Arc<RwLock<ConnectionStatus>>,
-    pub capabilities: Arc<RwLock<Option<DeviceCapabilities>>>,
-    pub runtime_error: Arc<RwLock<Option<RuntimeActivity>>>,
-    pub learning: Arc<RwLock<Option<LearningSession>>>,
-    pub metrics: Option<Arc<MetricsStore>>,
-    pub controls: Arc<Mutex<VecDeque<String>>>,
-    pub stop: Arc<AtomicBool>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeEvent {
-    pub timestamp_ms: u64,
-    pub level: EventLevel,
-    pub connection: ConnectionStatus,
-    pub home_update: Option<HomeMetricsSnapshot>,
-    #[serde(flatten)]
-    pub activity: RuntimeActivity,
 }
 
 fn persist_metrics(
@@ -548,6 +629,7 @@ fn persist_metrics(
         .map(Some)
 }
 
+#[cfg(test)]
 pub fn is_target_port(port: &SerialPortInfo) -> bool {
     matches!(
         &port.port_type,
@@ -555,459 +637,493 @@ pub fn is_target_port(port: &SerialPortInfo) -> bool {
     )
 }
 
-fn update_published_capabilities(
-    capabilities: &RwLock<Option<DeviceCapabilities>>,
-    candidate_board: &BoardProfile,
-    line: &str,
-) {
-    if !is_hello_line(line) {
-        return;
-    }
-    let capability = match parse_device(line) {
-        Some(DeviceMessage::Hello(hello)) if validate_hello(candidate_board, &hello).is_ok() => {
-            Some(hello)
-        }
-        _ => None,
-    };
-    *capabilities
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = capability;
+pub struct SystemWorkerLauncher {
+    paste: PasteHandle,
+    metrics: Option<Arc<MetricsStore>>,
+    operation_barrier: Arc<RwLock<()>>,
 }
 
-pub fn run_worker(app: AppHandle, state: WorkerState) {
-    let WorkerState {
-        active_profile,
-        operation_barrier,
-        connection,
-        capabilities,
-        runtime_error,
-        learning,
-        metrics,
-        controls,
-        stop,
-    } = state;
-    while !stop.load(Ordering::Relaxed) {
-        let target = match serialport::available_ports() {
-            Ok(ports) => ports.into_iter().find_map(|port| match &port.port_type {
-                SerialPortType::UsbPort(info) => {
-                    board_by_runtime_usb(info.vid, info.pid).map(|board| (port, board))
-                }
-                _ => None,
-            }),
-            Err(error) => {
-                emit_activity(
-                    &app,
-                    &connection,
-                    EventLevel::Warning,
-                    RuntimeActivity::new("serial_scan_failed").with_detail(error.to_string()),
-                );
-                wait(&stop);
-                continue;
-            }
-        };
-        let Some((port, candidate_board)) = target else {
-            clear_device_state(&capabilities, &learning, &controls);
-            set_connection(
-                &app,
-                &connection,
-                ConnectionStatus::searching(),
-                Some("device_searching"),
-            );
-            wait(&stop);
-            continue;
-        };
+impl SystemWorkerLauncher {
+    pub fn new(
+        paste: PasteHandle,
+        metrics: Option<Arc<MetricsStore>>,
+        operation_barrier: Arc<RwLock<()>>,
+    ) -> Self {
+        Self {
+            paste,
+            metrics,
+            operation_barrier,
+        }
+    }
+}
 
-        let mut device = match serialport::new(&port.port_name, 115_200)
-            .timeout(Duration::from_millis(500))
-            .open()
-        {
-            Ok(device) => device,
-            Err(error) => {
-                emit_activity(
-                    &app,
-                    &connection,
-                    EventLevel::Warning,
-                    RuntimeActivity::new("serial_open_failed")
-                        .with_param("port", &port.port_name)
-                        .with_detail(error.to_string()),
-                );
-                wait(&stop);
-                continue;
-            }
-        };
-        let handshake = device
-            .write_data_terminal_ready(true)
-            .and_then(|()| device.write_request_to_send(true))
-            .map_err(|error| error.to_string())
-            .and_then(|()| {
-                device
-                    .write_all(b"HELLO\n")
-                    .and_then(|()| device.flush())
-                    .map_err(|error| error.to_string())
-            });
-        if let Err(error) = handshake {
-            emit_activity(
-                &app,
-                &connection,
-                EventLevel::Warning,
-                RuntimeActivity::new("serial_handshake_failed")
-                    .with_param("port", &port.port_name)
-                    .with_detail(error),
-            );
-            wait(&stop);
-            continue;
+struct SystemDeviceWorker {
+    commands: mpsc::Sender<WorkerCommand>,
+    stop: Arc<AtomicBool>,
+    join: Option<JoinHandle<()>>,
+}
+
+struct PendingPasteReply {
+    request: PendingPaste,
+    replies: mpsc::Receiver<PasteReply>,
+}
+
+impl DeviceWorker for SystemDeviceWorker {
+    fn send(&self, command: WorkerCommand) -> Result<(), String> {
+        self.commands
+            .send(command)
+            .map_err(|_| "device_worker_stopped".into())
+    }
+
+    fn stop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = self.commands.send(WorkerCommand::Shutdown);
+    }
+
+    fn join(&mut self) {
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+impl WorkerLauncher for SystemWorkerLauncher {
+    fn start(
+        &self,
+        start: WorkerStart,
+        events: mpsc::Sender<WorkerEvent>,
+    ) -> Result<Box<dyn DeviceWorker>, String> {
+        let (commands, command_receiver) = mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let paste = self.paste.clone();
+        let metrics = self.metrics.clone();
+        let operation_barrier = Arc::clone(&self.operation_barrier);
+        let join = thread::Builder::new()
+            .name(format!("kivo-device-{}", start.device_id.as_str()))
+            .spawn(move || {
+                run_isolated_worker(
+                    start,
+                    command_receiver,
+                    events,
+                    paste,
+                    metrics,
+                    operation_barrier,
+                    thread_stop,
+                )
+            })
+            .map_err(|error| error.to_string())?;
+        Ok(Box::new(SystemDeviceWorker {
+            commands,
+            stop,
+            join: Some(join),
+        }))
+    }
+}
+
+fn run_isolated_worker(
+    start: WorkerStart,
+    commands: mpsc::Receiver<WorkerCommand>,
+    events: mpsc::Sender<WorkerEvent>,
+    paste: PasteHandle,
+    metrics: Option<Arc<MetricsStore>>,
+    operation_barrier: Arc<RwLock<()>>,
+    stop: Arc<AtomicBool>,
+) {
+    let result = run_isolated_worker_inner(
+        &start,
+        &commands,
+        &events,
+        &paste,
+        metrics.as_deref(),
+        &operation_barrier,
+        &stop,
+    );
+    let _ = paste.cancel_device(&start.device_id);
+    if !stop.load(Ordering::Relaxed) {
+        let _ = events.send(WorkerEvent::Disconnected {
+            device_id: start.device_id,
+            error: result.err(),
+        });
+    }
+}
+
+fn run_isolated_worker_inner(
+    start: &WorkerStart,
+    commands: &mpsc::Receiver<WorkerCommand>,
+    events: &mpsc::Sender<WorkerEvent>,
+    paste: &PasteHandle,
+    metrics: Option<&MetricsStore>,
+    operation_barrier: &RwLock<()>,
+    stop: &AtomicBool,
+) -> Result<(), String> {
+    let board = crate::hardware::board_by_id(&start.board_profile_id)
+        .ok_or_else(|| "unknown_board_profile".to_owned())?;
+    let mut port = serialport::new(&start.port, 115_200)
+        .timeout(Duration::from_millis(50))
+        .open()
+        .map_err(|error| format!("serial_open_failed: {error}"))?;
+    port.write_data_terminal_ready(true)
+        .and_then(|()| port.write_request_to_send(true))
+        .map_err(|error| format!("serial_handshake_failed: {error}"))?;
+    port.write_all(b"HELLO\n")
+        .and_then(|()| port.flush())
+        .map_err(|error| format!("serial_handshake_failed: {error}"))?;
+    let mut device = BufReader::new(port);
+    let hello = read_valid_hello(&mut device, board, stop)?;
+    events
+        .send(WorkerEvent::HelloValidated {
+            device_id: start.device_id.clone(),
+            capabilities: hello.clone(),
+        })
+        .map_err(|_| "coordinator_stopped".to_owned())?;
+    let mut session = DeviceSession::without_model(board);
+    let mut pending_paste: Option<PendingPasteReply> = None;
+    let mut active_paste_ack = None;
+    let mut action_deadline = None;
+    let mut line = Vec::new();
+    let initial = session.on_message_deferred(DeviceMessage::Hello(hello), 0, now_ms());
+    write_isolated_output(
+        start,
+        events,
+        paste,
+        metrics,
+        operation_barrier,
+        device.get_mut(),
+        initial,
+        &mut pending_paste,
+        &mut action_deadline,
+    )?;
+
+    while !stop.load(Ordering::Relaxed) {
+        for command in commands.try_iter() {
+            let output = match command {
+                WorkerCommand::UpdateProfile(profile) => {
+                    let _ = paste.cancel_device(&start.device_id);
+                    pending_paste = None;
+                    active_paste_ack = None;
+                    action_deadline = None;
+                    session.replace_profile(profile.as_deref().cloned())
+                }
+                WorkerCommand::Input {
+                    receive_sequence,
+                    event_id,
+                    input,
+                    state,
+                    occurred_at_ms,
+                } => session.on_message_deferred(
+                    DeviceMessage::State {
+                        event_id,
+                        input,
+                        state,
+                    },
+                    receive_sequence,
+                    occurred_at_ms,
+                ),
+                WorkerCommand::Shutdown => return Ok(()),
+            };
+            write_isolated_output(
+                start,
+                events,
+                paste,
+                metrics,
+                operation_barrier,
+                device.get_mut(),
+                output,
+                &mut pending_paste,
+                &mut action_deadline,
+            )?;
         }
 
-        set_connection(
-            &app,
-            &connection,
-            ConnectionStatus::connected(port.port_name.clone()),
-            Some("device_connected"),
-        );
-        let mut device = BufReader::new(device);
-        let mut session = DeviceSession::without_model(candidate_board);
-        let mut loaded_model = None;
-        let mut action_deadline = None;
-        let mut line = Vec::new();
-        while !stop.load(Ordering::Relaxed) {
-            let operation = operation_barrier
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let next_profile = active_profile
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clone();
-            if next_profile != loaded_model {
-                loaded_model = next_profile.clone();
-                let output = session.replace_profile(next_profile);
-                match write_output(
-                    &app,
-                    &connection,
-                    &runtime_error,
-                    metrics.as_deref(),
-                    device.get_mut(),
-                    output,
-                ) {
-                    Ok(sent_action) => {
-                        update_action_deadline(&mut action_deadline, &session, sent_action)
-                    }
-                    Err(error) => {
-                        emit_serial_write_error(&app, &connection, error);
-                        break;
-                    }
-                }
-            }
-            if action_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                let output =
-                    session.fail_active("action_ack_timeout", None, &mut copy_to_clipboard);
-                match write_output(
-                    &app,
-                    &connection,
-                    &runtime_error,
-                    metrics.as_deref(),
-                    device.get_mut(),
-                    output,
-                ) {
-                    Ok(sent_action) => {
-                        update_action_deadline(&mut action_deadline, &session, sent_action)
-                    }
-                    Err(error) => {
-                        emit_serial_write_error(&app, &connection, error);
-                        break;
-                    }
-                }
-            }
-            let control_lines = controls
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .drain(..)
-                .collect::<Vec<_>>();
-            if !control_lines.is_empty() {
-                match write_output(
-                    &app,
-                    &connection,
-                    &runtime_error,
-                    metrics.as_deref(),
-                    device.get_mut(),
-                    SessionOutput {
-                        lines: control_lines,
-                        activities: Vec::new(),
-                    },
-                ) {
-                    Ok(_) => {}
-                    Err(error) => {
-                        emit_serial_write_error(&app, &connection, error);
-                        break;
-                    }
-                }
-            }
-            drop(operation);
-            line.clear();
-            match device.read_until(b'\n', &mut line) {
-                Ok(0) => break,
-                Ok(_) => {
-                    let received_at_ms = now_ms();
-                    let Ok(text) = std::str::from_utf8(&line) else {
-                        continue;
-                    };
-                    let _operation = operation_barrier
-                        .read()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    let next_profile = active_profile
-                        .read()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .clone();
-                    if next_profile != loaded_model {
-                        loaded_model = next_profile.clone();
-                        let output = session.replace_profile(next_profile);
-                        match write_output(
-                            &app,
-                            &connection,
-                            &runtime_error,
-                            metrics.as_deref(),
-                            device.get_mut(),
-                            output,
-                        ) {
-                            Ok(sent_action) => {
-                                update_action_deadline(&mut action_deadline, &session, sent_action)
-                            }
-                            Err(error) => {
-                                emit_serial_write_error(&app, &connection, error);
-                                break;
-                            }
-                        }
-                    }
-                    update_published_capabilities(&capabilities, candidate_board, text);
-                    let output = session.on_line_at(text, received_at_ms, &mut copy_to_clipboard);
-                    match write_output(
-                        &app,
-                        &connection,
-                        &runtime_error,
-                        metrics.as_deref(),
+        if let Some(pending) = pending_paste.as_ref() {
+            match pending.replies.try_recv() {
+                Ok(PasteReply::Granted) => {
+                    let request = pending.request.clone();
+                    active_paste_ack = Some((request.event_id, request.step));
+                    let output = session.grant_paste(request.event_id, request.step);
+                    write_isolated_output(
+                        start,
+                        events,
+                        paste,
+                        metrics,
+                        operation_barrier,
                         device.get_mut(),
                         output,
-                    ) {
-                        Ok(sent_action) => {
-                            update_action_deadline(&mut action_deadline, &session, sent_action)
-                        }
-                        Err(error) => {
-                            emit_serial_write_error(&app, &connection, error);
-                            break;
-                        }
-                    }
+                        &mut pending_paste,
+                        &mut action_deadline,
+                    )?;
                 }
-                Err(error) if error.kind() == ErrorKind::TimedOut => continue,
-                Err(error) => {
-                    emit_activity(
-                        &app,
-                        &connection,
-                        EventLevel::Warning,
-                        RuntimeActivity::new("device_disconnected").with_detail(error.to_string()),
-                    );
-                    break;
+                Ok(PasteReply::TimedOut) => {
+                    pending_paste = None;
+                    active_paste_ack = None;
+                    let output = session.fail_active_deferred("action_ack_timeout", None);
+                    write_isolated_output(
+                        start,
+                        events,
+                        paste,
+                        metrics,
+                        operation_barrier,
+                        device.get_mut(),
+                        output,
+                        &mut pending_paste,
+                        &mut action_deadline,
+                    )?;
+                }
+                Ok(PasteReply::Cancelled) => {
+                    pending_paste = None;
+                    active_paste_ack = None;
+                    let output = session.fail_active_deferred("action_cancelled", None);
+                    write_isolated_output(
+                        start,
+                        events,
+                        paste,
+                        metrics,
+                        operation_barrier,
+                        device.get_mut(),
+                        output,
+                        &mut pending_paste,
+                        &mut action_deadline,
+                    )?;
+                }
+                Ok(PasteReply::ClipboardError(error)) => {
+                    pending_paste = None;
+                    active_paste_ack = None;
+                    let output = session.fail_active_deferred("action_step_failed", Some(error));
+                    write_isolated_output(
+                        start,
+                        events,
+                        paste,
+                        metrics,
+                        operation_barrier,
+                        device.get_mut(),
+                        output,
+                        &mut pending_paste,
+                        &mut action_deadline,
+                    )?;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    return Err("paste_coordinator_stopped".into());
                 }
             }
         }
-        clear_device_state(&capabilities, &learning, &controls);
-        set_connection(
-            &app,
-            &connection,
-            ConnectionStatus::searching(),
-            Some("device_searching"),
-        );
+
+        if action_deadline.is_some_and(|deadline| Instant::now() >= deadline)
+            && pending_paste.is_none()
+            && active_paste_ack.is_none()
+        {
+            let output = session.fail_active_deferred("action_ack_timeout", None);
+            write_isolated_output(
+                start,
+                events,
+                paste,
+                metrics,
+                operation_barrier,
+                device.get_mut(),
+                output,
+                &mut pending_paste,
+                &mut action_deadline,
+            )?;
+        }
+        if !session.is_awaiting_action() && pending_paste.is_none() {
+            action_deadline = None;
+        }
+
+        line.clear();
+        match device.read_until(b'\n', &mut line) {
+            Ok(0) => return Err("device_disconnected".into()),
+            Ok(_) => {
+                let received_at_ms = now_ms();
+                let Ok(text) = std::str::from_utf8(&line) else {
+                    continue;
+                };
+                let Some(message) = parse_device(text) else {
+                    if is_hello_line(text) {
+                        return Err("protocol_mismatch".into());
+                    }
+                    continue;
+                };
+                match message {
+                    DeviceMessage::State {
+                        event_id,
+                        input,
+                        state,
+                    } => {
+                        events
+                            .send(WorkerEvent::Input {
+                                device_id: start.device_id.clone(),
+                                event_id,
+                                input,
+                                state,
+                                occurred_at_ms: received_at_ms,
+                            })
+                            .map_err(|_| "coordinator_stopped".to_owned())?;
+                    }
+                    DeviceMessage::Done { event_id, step } => {
+                        if active_paste_ack == Some((event_id, step)) {
+                            if paste.complete(&start.device_id, event_id, step).is_err() {
+                                continue;
+                            }
+                            active_paste_ack = None;
+                            pending_paste = None;
+                        }
+                        let output = session.on_message_deferred(
+                            DeviceMessage::Done { event_id, step },
+                            0,
+                            received_at_ms,
+                        );
+                        write_isolated_output(
+                            start,
+                            events,
+                            paste,
+                            metrics,
+                            operation_barrier,
+                            device.get_mut(),
+                            output,
+                            &mut pending_paste,
+                            &mut action_deadline,
+                        )?;
+                    }
+                    DeviceMessage::Hello(ref capability) => {
+                        validate_hello(board, capability).map_err(|error| error.code.clone())?;
+                        let output = session.on_message_deferred(message, 0, received_at_ms);
+                        write_isolated_output(
+                            start,
+                            events,
+                            paste,
+                            metrics,
+                            operation_barrier,
+                            device.get_mut(),
+                            output,
+                            &mut pending_paste,
+                            &mut action_deadline,
+                        )?;
+                    }
+                    message => {
+                        let output = session.on_message_deferred(message, 0, received_at_ms);
+                        write_isolated_output(
+                            start,
+                            events,
+                            paste,
+                            metrics,
+                            operation_barrier,
+                            device.get_mut(),
+                            output,
+                            &mut pending_paste,
+                            &mut action_deadline,
+                        )?;
+                    }
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::TimedOut => {}
+            Err(error) => return Err(format!("serial_read_failed: {error}")),
+        }
     }
+    Ok(())
 }
 
-fn write_output<W: Write + ?Sized>(
-    app: &AppHandle,
-    connection: &RwLock<ConnectionStatus>,
-    runtime_error: &RwLock<Option<RuntimeActivity>>,
-    metrics: Option<&MetricsStore>,
-    writer: &mut W,
-    output: SessionOutput,
-) -> std::io::Result<bool> {
-    for activity in output.activities {
-        let level = activity_level(&activity.code);
-        if level == EventLevel::Error {
-            *runtime_error
-                .write()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(activity.clone());
-        } else if activity.code == "topology_active" {
-            *runtime_error
-                .write()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-        }
-        let timestamp_ms = now_ms();
-        let home_update =
-            metrics.and_then(
-                |metrics| match persist_metrics(metrics, &activity, timestamp_ms) {
-                    Ok(update) => update,
-                    Err(error) => {
-                        *runtime_error
-                            .write()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(
-                            RuntimeActivity::new("metrics_write_failed")
-                                .with_detail(error.to_string()),
-                        );
-                        None
+fn read_valid_hello<R: BufRead>(
+    reader: &mut R,
+    board: &BoardProfile,
+    stop: &AtomicBool,
+) -> Result<HelloCapabilities, String> {
+    let deadline = Instant::now() + ACTION_ACK_TIMEOUT;
+    let mut line = Vec::new();
+    while !stop.load(Ordering::Relaxed) && Instant::now() < deadline {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) => return Err("device_disconnected".into()),
+            Ok(_) => {
+                let Ok(text) = std::str::from_utf8(&line) else {
+                    continue;
+                };
+                match parse_device(text) {
+                    Some(DeviceMessage::Hello(hello)) => {
+                        validate_hello(board, &hello).map_err(|error| error.code)?;
+                        return Ok(hello);
                     }
-                },
-            );
-        emit_activity_with_home_update(app, connection, level, activity, home_update);
+                    _ if is_hello_line(text) => return Err("protocol_mismatch".into()),
+                    _ => {}
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::TimedOut => {}
+            Err(error) => return Err(format!("serial_handshake_failed: {error}")),
+        }
+    }
+    Err("serial_handshake_timeout".into())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_isolated_output<W: Write + ?Sized>(
+    start: &WorkerStart,
+    events: &mpsc::Sender<WorkerEvent>,
+    paste: &PasteHandle,
+    metrics: Option<&MetricsStore>,
+    operation_barrier: &RwLock<()>,
+    writer: &mut W,
+    mut output: SessionOutput,
+    pending_paste: &mut Option<PendingPasteReply>,
+    action_deadline: &mut Option<Instant>,
+) -> Result<(), String> {
+    for activity in output.activities.drain(..) {
+        if let Some(metrics) = metrics {
+            let _operation = operation_barrier
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            persist_metrics(metrics, &activity, now_ms())
+                .map_err(|error| format!("metrics_write_failed: {error}"))?;
+        }
+        events
+            .send(WorkerEvent::Activity {
+                device_id: start.device_id.clone(),
+                activity,
+            })
+            .map_err(|_| "coordinator_stopped".to_owned())?;
+    }
+    let completed_sequence = !output.completed_receive_sequences.is_empty();
+    for receive_sequence in output.completed_receive_sequences.drain(..) {
+        events
+            .send(WorkerEvent::SequenceFinished {
+                device_id: start.device_id.clone(),
+                receive_sequence,
+            })
+            .map_err(|_| "coordinator_stopped".to_owned())?;
+    }
+    for request in output.paste_requests.drain(..) {
+        if pending_paste.is_some() {
+            return Err("multiple_pending_paste_requests".into());
+        }
+        let (reply, replies) = mpsc::channel();
+        paste
+            .submit(PasteRequest {
+                receive_sequence: request.receive_sequence,
+                device_id: start.device_id.clone(),
+                event_id: request.event_id,
+                step: request.step,
+                text: request.text.clone(),
+                reply,
+            })
+            .map_err(|error| format!("paste_submit_failed: {error}"))?;
+        *pending_paste = Some(PendingPasteReply { request, replies });
     }
     let sent_action = output
         .lines
         .iter()
         .any(|line| line.starts_with("PASTE ") || line.starts_with("HOTKEY "));
     for line in output.lines {
-        writer.write_all(line.as_bytes())?;
+        writer
+            .write_all(line.as_bytes())
+            .map_err(|error| format!("serial_write_failed: {error}"))?;
     }
-    writer.flush()?;
-    Ok(sent_action)
-}
-
-fn activity_level(code: &str) -> EventLevel {
-    match code {
-        "topology_active" | "input_state" | "learning_ready" | "learning_input" => EventLevel::Info,
-        "input_before_configuration"
-        | "unexpected_action_acknowledgement"
-        | "unmapped_input"
-        | "empty_action_list"
-        | "no_runtime_assignment" => EventLevel::Warning,
-        _ => EventLevel::Error,
-    }
-}
-
-fn clear_device_state(
-    capabilities: &RwLock<Option<DeviceCapabilities>>,
-    learning: &RwLock<Option<LearningSession>>,
-    controls: &Mutex<VecDeque<String>>,
-) {
-    *capabilities
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-    *learning
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-    controls
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clear();
-}
-
-fn update_action_deadline(
-    deadline: &mut Option<Instant>,
-    session: &DeviceSession,
-    sent_action: bool,
-) {
+    writer
+        .flush()
+        .map_err(|error| format!("serial_write_failed: {error}"))?;
     if sent_action {
-        *deadline = Some(Instant::now() + ACTION_ACK_TIMEOUT);
-    } else if !session.is_awaiting_action() {
-        *deadline = None;
+        *action_deadline = Some(Instant::now() + ACTION_ACK_TIMEOUT);
+    } else if completed_sequence {
+        *action_deadline = None;
     }
-}
-
-fn emit_serial_write_error(
-    app: &AppHandle,
-    connection: &RwLock<ConnectionStatus>,
-    error: std::io::Error,
-) {
-    emit_activity(
-        app,
-        connection,
-        EventLevel::Error,
-        RuntimeActivity::new("serial_write_failed").with_detail(error.to_string()),
-    );
-}
-
-fn copy_to_clipboard(text: &str) -> Result<(), String> {
-    let mut child = clipboard_command()
-        .stdin(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("start clipboard command: {error}"))?;
-    child
-        .stdin
-        .take()
-        .ok_or_else(|| "open clipboard command stdin".to_owned())?
-        .write_all(text.as_bytes())
-        .map_err(|error| format!("write clipboard command: {error}"))?;
-    let status = child
-        .wait()
-        .map_err(|error| format!("wait for clipboard command: {error}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("clipboard command exited {status}"))
-    }
-}
-
-fn clipboard_command() -> Command {
-    let command = Command::new(CLIPBOARD_COMMAND);
-    #[cfg(target_os = "macos")]
-    let command = {
-        let mut command = command;
-        command.env("LC_CTYPE", "UTF-8");
-        command
-    };
-    command
-}
-
-fn set_connection(
-    app: &AppHandle,
-    connection: &RwLock<ConnectionStatus>,
-    next: ConnectionStatus,
-    code: Option<&str>,
-) {
-    let changed = {
-        let mut current = connection
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if *current == next {
-            false
-        } else {
-            *current = next.clone();
-            true
-        }
-    };
-    if changed {
-        #[cfg(target_os = "macos")]
-        crate::tray::update_connection(app, &next);
-        emit_activity(
-            app,
-            connection,
-            EventLevel::Info,
-            RuntimeActivity::new(code.unwrap_or("connection_changed")),
-        );
-    }
-}
-
-fn emit_activity(
-    app: &AppHandle,
-    connection: &RwLock<ConnectionStatus>,
-    level: EventLevel,
-    activity: RuntimeActivity,
-) {
-    emit_activity_with_home_update(app, connection, level, activity, None);
-}
-
-fn emit_activity_with_home_update(
-    app: &AppHandle,
-    connection: &RwLock<ConnectionStatus>,
-    level: EventLevel,
-    activity: RuntimeActivity,
-    home_update: Option<HomeMetricsSnapshot>,
-) {
-    let payload = RuntimeEvent {
-        timestamp_ms: now_ms(),
-        level,
-        connection: connection
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone(),
-        home_update,
-        activity,
-    };
-    let _ = app.emit("runtime-event", payload);
+    Ok(())
 }
 
 fn now_ms() -> u64 {
@@ -1015,15 +1131,6 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
-}
-
-fn wait(stop: &AtomicBool) {
-    for _ in 0..10 {
-        if stop.load(Ordering::Relaxed) {
-            return;
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
 }
 
 #[cfg(test)]
@@ -1293,6 +1400,110 @@ mod tests {
     }
 
     #[test]
+    fn deferred_paste_waits_for_global_grant_before_emitting_device_command() {
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            vec![
+                ButtonAction::Paste {
+                    text: "global".into(),
+                },
+                ButtonAction::Hotkey {
+                    keys: vec!["enter".into()],
+                },
+            ],
+        );
+        let mut session = DeviceSession::new(runtime);
+        session.ready = true;
+
+        let pending = session.on_message_deferred(
+            DeviceMessage::State {
+                event_id: 41,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            7,
+            123,
+        );
+
+        assert!(pending.lines.is_empty());
+        assert_eq!(
+            pending.paste_requests,
+            vec![PendingPaste {
+                receive_sequence: 7,
+                event_id: 41,
+                step: 1,
+                total: 2,
+                text: "global".into(),
+            }]
+        );
+
+        let granted = session.grant_paste(41, 1);
+        assert_eq!(granted.lines, ["PASTE 41 1 2\n"]);
+        let next = session.on_message_deferred(
+            DeviceMessage::Done {
+                event_id: 41,
+                step: 1,
+            },
+            0,
+            124,
+        );
+        assert_eq!(next.lines, ["HOTKEY 41 2 2 0 40\n"]);
+        assert!(next.paste_requests.is_empty());
+    }
+
+    #[test]
+    fn hotkey_only_action_bypasses_global_paste_coordinator() {
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            vec![ButtonAction::Hotkey {
+                keys: vec!["enter".into()],
+            }],
+        );
+        let mut session = DeviceSession::new(runtime);
+        session.ready = true;
+
+        let output = session.on_message_deferred(
+            DeviceMessage::State {
+                event_id: 42,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            8,
+            125,
+        );
+
+        assert_eq!(output.lines, ["HOTKEY 42 1 1 0 40\n"]);
+        assert!(output.paste_requests.is_empty());
+    }
+
+    #[test]
+    fn replacing_profile_completes_in_flight_receive_sequence() {
+        let mut session = DeviceSession::new(runtime_model());
+        session.ready = true;
+        let pending = session.on_message_deferred(
+            DeviceMessage::State {
+                event_id: 43,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            9,
+            126,
+        );
+        assert_eq!(pending.paste_requests.len(), 1);
+
+        let replaced = session.replace_profile(None);
+
+        assert_eq!(replaced.lines, ["SKIP 43\n"]);
+        assert_eq!(replaced.completed_receive_sequences, [9]);
+        assert_eq!(
+            session.grant_paste(43, 1).activities[0].code,
+            "unexpected_paste_grant"
+        );
+    }
+
+    #[test]
     fn rejects_unsupported_hello_without_sending_topology() {
         let mut session = DeviceSession::new(runtime_model());
         let output = session.on_message(
@@ -1312,9 +1523,8 @@ mod tests {
     }
 
     #[test]
-    fn invalid_hello_lines_clear_capabilities_and_ready_session() {
+    fn invalid_hello_lines_clear_ready_session() {
         let mut session = DeviceSession::new(runtime_model());
-        let capabilities = RwLock::new(None);
         let DeviceMessage::Hello(hello) = hello() else {
             unreachable!();
         };
@@ -1322,7 +1532,6 @@ mod tests {
 
         session.on_message(DeviceMessage::Hello(hello.clone()), &mut copy);
         session.on_message(DeviceMessage::ConfigOk { revision: 1 }, &mut copy);
-        *capabilities.write().unwrap() = Some(hello.clone());
         assert!(session.ready);
         session.on_message(
             DeviceMessage::State {
@@ -1334,9 +1543,7 @@ mod tests {
         );
         assert!(session.active.is_some());
 
-        update_published_capabilities(&capabilities, session.candidate_board, "HELLO 2 esp32s3");
         session.on_line("HELLO 2 esp32s3", &mut copy);
-        assert!(capabilities.read().unwrap().is_none());
         assert!(!session.ready);
         assert!(session.hello.is_none());
         assert!(session.configuring.is_none());
@@ -1354,29 +1561,16 @@ mod tests {
 
         session.on_message(DeviceMessage::Hello(hello.clone()), &mut copy);
         session.on_message(DeviceMessage::ConfigOk { revision: 2 }, &mut copy);
-        *capabilities.write().unwrap() = Some(hello.clone());
         assert!(session.ready);
 
-        update_published_capabilities(
-            &capabilities,
-            session.candidate_board,
-            "HELLO 3 esp32s3 luatos-esp32s3-aio build 2 0",
-        );
         session.on_line("HELLO 3 esp32s3 luatos-esp32s3-aio build 2 0", &mut copy);
-        assert!(capabilities.read().unwrap().is_none());
         assert!(!session.ready);
         assert!(session.hello.is_none());
 
         session.on_message(DeviceMessage::Hello(hello.clone()), &mut copy);
         session.on_message(DeviceMessage::ConfigOk { revision: 3 }, &mut copy);
-        *capabilities.write().unwrap() = Some(hello);
-        update_published_capabilities(
-            &capabilities,
-            session.candidate_board,
-            "HELLO 3 esp32s3 vccgnd-yd-rp2040 build 2 0 6",
-        );
+        let _ = hello;
         session.on_line("HELLO 3 esp32s3 vccgnd-yd-rp2040 build 2 0 6", &mut copy);
-        assert!(capabilities.read().unwrap().is_none());
         assert!(!session.ready);
         assert!(session.hello.is_none());
     }
@@ -1420,43 +1614,6 @@ mod tests {
         assert!(!is_target_port(&SerialPortInfo {
             port_name: "/dev/cu.Bluetooth".to_owned(),
             port_type: SerialPortType::BluetoothPort,
-        }));
-    }
-
-    #[test]
-    fn runtime_events_serialize_input_state_or_null() {
-        let event = RuntimeEvent {
-            timestamp_ms: 1,
-            level: EventLevel::Info,
-            connection: ConnectionStatus::searching(),
-            home_update: None,
-            activity: RuntimeActivity::new("device_searching"),
-        };
-        let value = serde_json::to_value(&event).unwrap();
-        assert_eq!(value["code"], "device_searching");
-        assert!(value["input"].is_null());
-        assert!(value["pressed"].is_null());
-
-        let down = RuntimeEvent {
-            activity: RuntimeActivity {
-                input: Some(PhysicalInput::Direct { gpio: 6 }),
-                pressed: Some(true),
-                ..RuntimeActivity::new("input_state")
-            },
-            ..event.clone()
-        };
-        let value = serde_json::to_value(down).unwrap();
-        assert_eq!(value["pressed"], true);
-        assert_eq!(value["input"]["gpio"], 6);
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn clipboard_command_uses_utf8_locale() {
-        let command = clipboard_command();
-
-        assert!(command.get_envs().any(|(key, value)| {
-            key == "LC_CTYPE" && value == Some(std::ffi::OsStr::new("UTF-8"))
         }));
     }
 }

@@ -1,7 +1,9 @@
+mod coordinator;
 mod device;
 pub mod hardware;
 mod metrics;
 mod model;
+mod paste;
 mod profile;
 mod protocol;
 mod storage;
@@ -9,14 +11,14 @@ mod storage;
 mod tray;
 mod workspace;
 
-use device::{
-    ConnectionStatus, DeviceCapabilities, LearningSession, RuntimeActivity, RuntimeProfile,
-};
+use coordinator::{ConnectionDimension, RuntimeCoordinator};
+use device::{ConnectionState, ConnectionStatus, LearningSession, RuntimeActivity};
 use metrics::{HomeMetricsSnapshot, MetricsStore};
+use paste::PasteCoordinator;
 use profile::DeviceProfile;
 use serde::Serialize;
 use std::{
-    collections::{BTreeSet, VecDeque},
+    collections::BTreeSet,
     fs,
     path::Path,
     sync::{
@@ -24,24 +26,19 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread::{self, JoinHandle},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::Manager;
 use workspace::{AppError, BackupPreview, EditorSettingsPatch, ImportPreview, Language, Workspace};
 
 struct AppState {
     workspace: Arc<RwLock<Workspace>>,
-    active_runtime_profile: Arc<RwLock<Option<RuntimeProfile>>>,
     operation_barrier: Arc<RwLock<()>>,
-    connection: Arc<RwLock<ConnectionStatus>>,
-    capabilities: Arc<RwLock<Option<DeviceCapabilities>>>,
-    runtime_error: Arc<RwLock<Option<RuntimeActivity>>>,
-    learning: Arc<RwLock<Option<LearningSession>>>,
     metrics: Option<Arc<MetricsStore>>,
-    next_learning_revision: Mutex<u32>,
-    device_controls: Arc<Mutex<VecDeque<String>>>,
+    coordinator: Option<Arc<Mutex<RuntimeCoordinator>>>,
+    paste: Option<Arc<PasteCoordinator>>,
     stop: Arc<AtomicBool>,
-    worker: Mutex<Option<JoinHandle<()>>>,
+    coordinator_thread: Mutex<Option<JoinHandle<()>>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -68,12 +65,13 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn sync_runtime(state: &AppState, workspace: &Workspace) -> Result<(), AppError> {
-    let _ = workspace;
-    *state
-        .active_runtime_profile
-        .write()
-        .map_err(|_| state_error("runtime_profile_unavailable"))? = None;
+fn sync_runtime(state: &AppState) -> Result<(), AppError> {
+    if let Some(coordinator) = &state.coordinator {
+        coordinator
+            .lock()
+            .map_err(|_| state_error("coordinator_unavailable"))?
+            .sync_profiles();
+    }
     Ok(())
 }
 
@@ -84,39 +82,61 @@ fn snapshot(state: &AppState) -> Result<AppSnapshot, AppError> {
         .map_err(|_| state_error("workspace_unavailable"))?;
     let mut profiles = workspace.profiles.values().cloned().collect::<Vec<_>>();
     profiles.sort_by(|left, right| left.profile.name.cmp(&right.profile.name));
+    let editor_profile = workspace.settings.editor_profile.clone();
+    let language = workspace.settings.language;
     let home_metrics = state.metrics.as_ref().and_then(|metrics| {
-        workspace
-            .settings
-            .editor_profile
+        editor_profile
             .as_deref()
             .and_then(|profile_id| metrics.home_snapshot(profile_id, None, now_ms()).ok())
     });
+    drop(workspace);
+    let devices = state
+        .coordinator
+        .as_ref()
+        .and_then(|coordinator| {
+            coordinator
+                .lock()
+                .ok()
+                .map(|coordinator| coordinator.devices())
+        })
+        .unwrap_or_default();
+    let supported_gpios = devices
+        .iter()
+        .filter(|device| device.connection == ConnectionDimension::Online)
+        .flat_map(|device| device.pins.iter().copied())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let online = devices
+        .iter()
+        .filter(|device| device.connection == ConnectionDimension::Online)
+        .collect::<Vec<_>>();
+    let connection = if online.is_empty() {
+        ConnectionStatus::searching()
+    } else {
+        ConnectionStatus {
+            state: ConnectionState::Connected,
+            port: (online.len() == 1)
+                .then(|| online[0].port.clone())
+                .flatten(),
+        }
+    };
+    let runtime_error = devices.iter().find_map(|device| {
+        device.latest_error.as_ref().map(|detail| {
+            let mut activity = RuntimeActivity::new("device_runtime_error");
+            activity.detail = Some(detail.clone());
+            activity
+        })
+    });
+    let learning = devices.iter().find_map(|device| device.learning.clone());
     Ok(AppSnapshot {
         profiles,
-        editor_profile: workspace.settings.editor_profile.clone(),
-        language: workspace.settings.language,
-        supported_gpios: state
-            .capabilities
-            .read()
-            .map_err(|_| state_error("device_capabilities_unavailable"))?
-            .as_ref()
-            .map(|capabilities| capabilities.pins.clone())
-            .unwrap_or_default(),
-        connection: state
-            .connection
-            .read()
-            .map_err(|_| state_error("connection_unavailable"))?
-            .clone(),
-        runtime_error: state
-            .runtime_error
-            .read()
-            .map_err(|_| state_error("runtime_error_unavailable"))?
-            .clone(),
-        learning: state
-            .learning
-            .read()
-            .map_err(|_| state_error("learning_state_unavailable"))?
-            .clone(),
+        editor_profile,
+        language,
+        supported_gpios,
+        connection,
+        runtime_error,
+        learning,
         home_metrics,
     })
 }
@@ -127,8 +147,8 @@ fn save_profile_inner(state: &AppState, profile: DeviceProfile) -> Result<AppSna
         .write()
         .map_err(|_| state_error("workspace_unavailable"))?;
     workspace.save_profile(profile)?;
-    sync_runtime(state, &workspace)?;
     drop(workspace);
+    sync_runtime(state)?;
     snapshot(state)
 }
 
@@ -141,8 +161,8 @@ fn save_settings_inner(
         .write()
         .map_err(|_| state_error("workspace_unavailable"))?;
     workspace.save_settings(settings)?;
-    sync_runtime(state, &workspace)?;
     drop(workspace);
+    sync_runtime(state)?;
     snapshot(state)
 }
 
@@ -152,8 +172,8 @@ fn import_profile_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, Ap
         .write()
         .map_err(|_| state_error("workspace_unavailable"))?;
     workspace.import_profile(path)?;
-    sync_runtime(state, &workspace)?;
     drop(workspace);
+    sync_runtime(state)?;
     snapshot(state)
 }
 
@@ -163,32 +183,40 @@ fn delete_profile_inner(state: &AppState, id: &str) -> Result<AppSnapshot, AppEr
         .write()
         .map_err(|_| state_error("workspace_unavailable"))?;
     workspace.delete_profile(id)?;
-    sync_runtime(state, &workspace)?;
     drop(workspace);
+    sync_runtime(state)?;
     snapshot(state)
 }
 
 fn restore_backup_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, AppError> {
+    let mut coordinator = state
+        .coordinator
+        .as_ref()
+        .map(|coordinator| {
+            coordinator
+                .lock()
+                .map_err(|_| state_error("coordinator_unavailable"))
+        })
+        .transpose()?;
+    let operation = state
+        .operation_barrier
+        .write()
+        .map_err(|_| state_error("operation_barrier_unavailable"))?;
     let mut workspace = state
         .workspace
         .write()
         .map_err(|_| state_error("workspace_unavailable"))?;
-    let _operation = state
-        .operation_barrier
-        .write()
-        .map_err(|_| state_error("operation_barrier_unavailable"))?;
-    let mut runtime = state
-        .active_runtime_profile
-        .write()
-        .map_err(|_| state_error("runtime_profile_unavailable"))?;
     let metrics = state
         .metrics
         .as_deref()
         .ok_or_else(|| state_error("metrics_unavailable"))?;
     workspace.restore_backup(path, metrics)?;
-    *runtime = None;
-    drop(runtime);
     drop(workspace);
+    if let Some(coordinator) = coordinator.as_mut() {
+        coordinator.sync_profiles();
+    }
+    drop(operation);
+    drop(coordinator);
     snapshot(state)
 }
 
@@ -203,71 +231,6 @@ fn export_backup_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, App
         .ok_or_else(|| state_error("metrics_unavailable"))?;
     workspace.export_backup(path, metrics)?;
     drop(workspace);
-    snapshot(state)
-}
-
-fn begin_learning_inner(state: &AppState, mut pins: Vec<u8>) -> Result<AppSnapshot, AppError> {
-    if pins.is_empty() || pins.iter().copied().collect::<BTreeSet<_>>().len() != pins.len() {
-        return Err(state_error("invalid_learning_pins"));
-    }
-    let capabilities = state
-        .capabilities
-        .read()
-        .map_err(|_| state_error("device_capabilities_unavailable"))?
-        .clone()
-        .ok_or_else(|| state_error("device_not_connected"))?;
-    if capabilities.protocol != 3 {
-        return Err(state_error("protocol_mismatch"));
-    }
-    if let Some(gpio) = pins.iter().find(|gpio| !capabilities.pins.contains(gpio)) {
-        return Err(AppError::new("unsupported_gpio").with_param("gpio", gpio.to_string()));
-    }
-    let mut learning = state
-        .learning
-        .write()
-        .map_err(|_| state_error("learning_state_unavailable"))?;
-    if learning.is_some() {
-        return Err(state_error("learning_already_active"));
-    }
-    pins.sort_unstable();
-    let mut revision = state
-        .next_learning_revision
-        .lock()
-        .map_err(|_| state_error("learning_revision_unavailable"))?;
-    *revision = revision.wrapping_add(1).max(1);
-    let session = LearningSession {
-        revision: *revision,
-        pins: pins.clone(),
-    };
-    state
-        .device_controls
-        .lock()
-        .map_err(|_| state_error("device_control_unavailable"))?
-        .push_back(format!(
-            "LEARN_BEGIN {} {} {}\n",
-            session.revision,
-            pins.len(),
-            pins.iter().map(u8::to_string).collect::<Vec<_>>().join(" ")
-        ));
-    *learning = Some(session);
-    drop(learning);
-    snapshot(state)
-}
-
-fn end_learning_inner(state: &AppState) -> Result<AppSnapshot, AppError> {
-    let mut learning = state
-        .learning
-        .write()
-        .map_err(|_| state_error("learning_state_unavailable"))?;
-    let session = learning
-        .take()
-        .ok_or_else(|| state_error("learning_not_active"))?;
-    state
-        .device_controls
-        .lock()
-        .map_err(|_| state_error("device_control_unavailable"))?
-        .push_back(format!("LEARN_END {}\n", session.revision));
-    drop(learning);
     snapshot(state)
 }
 
@@ -356,19 +319,6 @@ fn restore_backup(
     restore_backup_inner(&state, Path::new(&path))
 }
 
-#[tauri::command]
-fn begin_learning(
-    state: tauri::State<'_, AppState>,
-    pins: Vec<u8>,
-) -> Result<AppSnapshot, AppError> {
-    begin_learning_inner(&state, pins)
-}
-
-#[tauri::command]
-fn end_learning(state: tauri::State<'_, AppState>) -> Result<AppSnapshot, AppError> {
-    end_learning_inner(&state)
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -381,59 +331,61 @@ pub fn run() {
             let metrics = MetricsStore::open(&config_directory.join("data/metrics.sqlite3"))
                 .ok()
                 .map(Arc::new);
-            let active_runtime_profile = Arc::new(RwLock::new(None));
             let operation_barrier = Arc::new(RwLock::new(()));
             let workspace = Arc::new(RwLock::new(workspace));
-            let initial_connection = ConnectionStatus::searching();
             #[cfg(target_os = "macos")]
-            tray::setup(app, &initial_connection)?;
-            let connection = Arc::new(RwLock::new(initial_connection));
-            let capabilities = Arc::new(RwLock::new(None));
-            let runtime_error = Arc::new(RwLock::new(None));
-            let learning = Arc::new(RwLock::new(None));
-            let device_controls = Arc::new(Mutex::new(VecDeque::new()));
+            tray::setup(app, &[])?;
+            let paste = Arc::new(PasteCoordinator::system());
+            let launcher = Arc::new(device::SystemWorkerLauncher::new(
+                paste.handle(),
+                metrics.clone(),
+                Arc::clone(&operation_barrier),
+            ));
+            let coordinator = Arc::new(Mutex::new(RuntimeCoordinator::with_paste(
+                Arc::new(coordinator::SystemUsbEnumerator),
+                launcher,
+                Arc::clone(&workspace),
+                Some(paste.handle()),
+            )));
             let stop = Arc::new(AtomicBool::new(false));
-            let worker = {
-                let app_handle = app.handle().clone();
-                let active_runtime_profile = Arc::clone(&active_runtime_profile);
-                let operation_barrier = Arc::clone(&operation_barrier);
-                let connection = Arc::clone(&connection);
-                let capabilities = Arc::clone(&capabilities);
-                let runtime_error = Arc::clone(&runtime_error);
-                let learning = Arc::clone(&learning);
-                let metrics = metrics.clone();
-                let device_controls = Arc::clone(&device_controls);
+            let coordinator_thread = {
+                let coordinator = Arc::clone(&coordinator);
                 let stop = Arc::clone(&stop);
+                #[cfg(target_os = "macos")]
+                let app_handle = app.handle().clone();
                 thread::spawn(move || {
-                    device::run_worker(
-                        app_handle,
-                        device::WorkerState {
-                            active_profile: active_runtime_profile,
-                            operation_barrier,
-                            connection,
-                            capabilities,
-                            runtime_error,
-                            learning,
-                            metrics,
-                            controls: device_controls,
-                            stop,
-                        },
-                    )
+                    while !stop.load(Ordering::Relaxed) {
+                        let devices = {
+                            let mut coordinator = coordinator
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            let _ = coordinator.scan_once();
+                            coordinator.drain_worker_events();
+                            coordinator.devices()
+                        };
+                        #[cfg(target_os = "macos")]
+                        tray::update_registry(&app_handle, &devices);
+                        for _ in 0..10 {
+                            if stop.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            thread::sleep(Duration::from_millis(50));
+                        }
+                    }
+                    coordinator
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .shutdown();
                 })
             };
             app.manage(AppState {
                 workspace,
-                active_runtime_profile,
                 operation_barrier,
-                connection,
-                capabilities,
-                runtime_error,
-                learning,
                 metrics,
-                next_learning_revision: Mutex::new(0),
-                device_controls,
+                coordinator: Some(coordinator),
+                paste: Some(paste),
                 stop,
-                worker: Mutex::new(Some(worker)),
+                coordinator_thread: Mutex::new(Some(coordinator_thread)),
             });
             Ok(())
         })
@@ -448,8 +400,6 @@ pub fn run() {
             preview_backup,
             export_backup,
             restore_backup,
-            begin_learning,
-            end_learning,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Kivo");
@@ -484,13 +434,16 @@ pub fn run() {
         tauri::RunEvent::Exit => {
             let state = app_handle.state::<AppState>();
             state.stop.store(true, Ordering::Relaxed);
-            if let Some(worker) = state
-                .worker
+            if let Some(coordinator) = state
+                .coordinator_thread
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .take()
             {
-                let _ = worker.join();
+                let _ = coordinator.join();
+            }
+            if let Some(paste) = &state.paste {
+                paste.shutdown();
             }
         }
         _ => {}
@@ -501,6 +454,10 @@ pub fn run() {
 mod tests {
     use super::*;
     use crate::{
+        coordinator::{
+            BootloaderObservation, DeviceWorker, SerialObservation, UsbEnumerator, WorkerEvent,
+            WorkerLauncher, WorkerStart,
+        },
         metrics::MetricAttribution,
         profile::{ButtonAction, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION},
     };
@@ -511,7 +468,7 @@ mod tests {
             atomic::{AtomicBool as TestAtomicBool, AtomicU64, Ordering as AtomicOrdering},
             mpsc,
         },
-        time::{SystemTime, UNIX_EPOCH},
+        time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -567,19 +524,38 @@ mod tests {
         let workspace = Workspace::create(directory, profiles).unwrap();
         AppState {
             workspace: Arc::new(RwLock::new(workspace)),
-            active_runtime_profile: Arc::new(RwLock::new(None)),
             operation_barrier: Arc::new(RwLock::new(())),
-            connection: Arc::new(RwLock::new(ConnectionStatus::searching())),
-            capabilities: Arc::new(RwLock::new(None)),
-            runtime_error: Arc::new(RwLock::new(None)),
-            learning: Arc::new(RwLock::new(None)),
             metrics: MetricsStore::open(&directory.join("data/metrics.sqlite3"))
                 .ok()
                 .map(Arc::new),
-            next_learning_revision: Mutex::new(0),
-            device_controls: Arc::new(Mutex::new(VecDeque::new())),
+            coordinator: None,
+            paste: None,
             stop: Arc::new(AtomicBool::new(false)),
-            worker: Mutex::new(None),
+            coordinator_thread: Mutex::new(None),
+        }
+    }
+
+    struct EmptyEnumerator;
+
+    impl UsbEnumerator for EmptyEnumerator {
+        fn serial_ports(&self) -> Result<Vec<SerialObservation>, String> {
+            Ok(Vec::new())
+        }
+
+        fn usb_devices(&self) -> Result<Vec<BootloaderObservation>, String> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct UnusedLauncher;
+
+    impl WorkerLauncher for UnusedLauncher {
+        fn start(
+            &self,
+            _start: WorkerStart,
+            _events: mpsc::Sender<WorkerEvent>,
+        ) -> Result<Box<dyn DeviceWorker>, String> {
+            unreachable!("empty enumeration never starts a worker")
         }
     }
 
@@ -598,7 +574,6 @@ mod tests {
         let snapshot = save_profile_inner(&state, updated.clone()).unwrap();
 
         assert_eq!(snapshot.profiles, vec![updated]);
-        assert!(state.active_runtime_profile.read().unwrap().is_none());
         assert!(directory.path("data/profiles/red-phone-v1.yaml").exists());
     }
 
@@ -682,7 +657,6 @@ mod tests {
 
         assert!(snapshot.profiles.is_empty());
         assert_eq!(snapshot.editor_profile, None);
-        assert!(state.active_runtime_profile.read().unwrap().is_none());
     }
 
     #[test]
@@ -725,7 +699,6 @@ mod tests {
             snapshot.home_metrics.unwrap().top_button.unwrap().button_id,
             "UP"
         );
-        assert!(state.active_runtime_profile.read().unwrap().is_none());
     }
 
     #[test]
@@ -816,6 +789,36 @@ mod tests {
     }
 
     #[test]
+    fn restore_waiting_for_coordinator_does_not_hold_the_operation_barrier() {
+        let directory = TestDirectory::new();
+        let mut state = product_state(&directory.0, vec![product_profile()]);
+        let backup = directory.path("backup.yaml");
+        export_backup_inner(&state, &backup).unwrap();
+        let coordinator = Arc::new(Mutex::new(RuntimeCoordinator::new(
+            Arc::new(EmptyEnumerator),
+            Arc::new(UnusedLauncher),
+            Arc::clone(&state.workspace),
+        )));
+        state.coordinator = Some(Arc::clone(&coordinator));
+        let state = Arc::new(state);
+        let coordinator_guard = coordinator.lock().unwrap();
+        let restore_state = Arc::clone(&state);
+        let (started_tx, started_rx) = mpsc::channel();
+        let restore = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            restore_backup_inner(&restore_state, &backup)
+        });
+        started_rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        let barrier_available = state.operation_barrier.try_read().is_ok();
+        drop(coordinator_guard);
+        restore.join().unwrap().unwrap();
+
+        assert!(barrier_available);
+    }
+
+    #[test]
     fn workspace_command_import_replaces_same_id() {
         let directory = TestDirectory::new();
         let state = product_state(&directory.0, vec![product_profile()]);
@@ -827,24 +830,6 @@ mod tests {
         let snapshot = import_profile_inner(&state, &path).unwrap();
 
         assert_eq!(snapshot.profiles, vec![replacement]);
-    }
-
-    #[test]
-    fn workspace_command_rejects_learning_pin_outside_device_allowlist() {
-        let directory = TestDirectory::new();
-        let state = product_state(&directory.0, vec![product_profile()]);
-        *state.capabilities.write().unwrap() = Some(DeviceCapabilities {
-            protocol: 3,
-            controller_family_id: "esp32s3".into(),
-            board_profile_id: "luatos-esp32s3-aio".into(),
-            firmware_build_id: "test".into(),
-            pins: vec![1, 2],
-        });
-
-        let error = begin_learning_inner(&state, vec![1, 6]).unwrap_err();
-
-        assert_eq!(error.code, "unsupported_gpio");
-        assert!(state.device_controls.lock().unwrap().is_empty());
     }
 
     #[test]
