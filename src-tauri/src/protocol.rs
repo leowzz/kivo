@@ -1,7 +1,7 @@
 use crate::{
-    config::ButtonAction,
-    hardware::BoardProfile,
-    workspace::{AppError, HardwareConfig, InputSource},
+    hardware::{BoardProfile, board_by_id},
+    profile::{ButtonAction, HardwareProfile, InputSource},
+    workspace::AppError,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -85,22 +85,6 @@ pub fn validate_hello(
     Ok(())
 }
 
-pub struct HardwareProfile<'a> {
-    pub board: &'a BoardProfile,
-    pub config: &'a HardwareConfig,
-}
-
-impl<'a> HardwareProfile<'a> {
-    pub fn new(board: &'a BoardProfile, config: &'a HardwareConfig) -> Result<Self, AppError> {
-        if config.controller != board.family_id {
-            return Err(AppError::new("controller_family_mismatch")
-                .with_param("expected", board.family_id)
-                .with_param("actual", &config.controller));
-        }
-        Ok(Self { board, config })
-    }
-}
-
 pub fn parse_device(line: &str) -> Option<DeviceMessage> {
     if line.len() > 255 {
         return None;
@@ -168,7 +152,8 @@ pub fn parse_device(line: &str) -> Option<DeviceMessage> {
 }
 
 pub(crate) fn is_hello_line(line: &str) -> bool {
-    line.trim_start_matches(char::is_whitespace).starts_with("HELLO")
+    line.trim_start_matches(char::is_whitespace)
+        .starts_with("HELLO")
 }
 
 fn parse_hello(line: &str) -> Option<DeviceMessage> {
@@ -177,7 +162,9 @@ fn parse_hello(line: &str) -> Option<DeviceMessage> {
     if line.is_empty()
         || line.starts_with(' ')
         || line.ends_with(' ')
-        || line.chars().any(|character| character.is_whitespace() && character != ' ')
+        || line
+            .chars()
+            .any(|character| character.is_whitespace() && character != ' ')
     {
         return None;
     }
@@ -185,8 +172,15 @@ fn parse_hello(line: &str) -> Option<DeviceMessage> {
     if parts.iter().any(|part| part.is_empty()) {
         return None;
     }
-    let ["HELLO", "3", controller_family_id, board_profile_id, firmware_build_id, count, pins @ ..] =
-        parts.as_slice()
+    let [
+        "HELLO",
+        "3",
+        controller_family_id,
+        board_profile_id,
+        firmware_build_id,
+        count,
+        pins @ ..,
+    ] = parts.as_slice()
     else {
         return None;
     };
@@ -227,21 +221,25 @@ fn normalized_pair(left: u8, right: u8) -> (u8, u8) {
 }
 
 pub fn topology_commands(
-    hardware: &HardwareProfile<'_>,
+    hardware: &HardwareProfile,
     revision: u32,
     reported_pins: &BTreeSet<u8>,
 ) -> Result<Vec<String>, AppError> {
-    for pin in hardware_pins(hardware.config) {
-        if !hardware.board.safe_pins.contains(&pin) || !reported_pins.contains(&pin) {
+    let board = board_by_id(&hardware.board_profile_id).ok_or_else(|| {
+        AppError::new("unknown_board_profile")
+            .with_param("board_profile", &hardware.board_profile_id)
+    })?;
+    for pin in hardware_pins(hardware) {
+        if !board.safe_pins.contains(&pin) || !reported_pins.contains(&pin) {
             return Err(AppError::new("capability_mismatch").with_param("gpio", pin.to_string()));
         }
     }
     let mut lines = vec![format!(
         "CONFIG_BEGIN {revision} {}\n",
-        hardware.config.debounce_ms
+        hardware.debounce_ms
     )];
     let mut source_index = 0u8;
-    for input in &hardware.config.inputs {
+    for input in &hardware.inputs {
         match input {
             InputSource::Direct { keys, .. } if !keys.is_empty() => {
                 let pins = keys.values().copied().collect::<BTreeSet<_>>();
@@ -274,8 +272,8 @@ pub fn topology_commands(
     Ok(lines)
 }
 
-fn hardware_pins(config: &HardwareConfig) -> BTreeSet<u8> {
-    config
+fn hardware_pins(hardware: &HardwareProfile) -> BTreeSet<u8> {
+    hardware
         .inputs
         .iter()
         .flat_map(|input| match input {
@@ -490,14 +488,14 @@ mod tests {
     use crate::{
         hardware::board_by_id,
         model::{ButtonDefinition, ButtonGroup, ModelLayout},
-        workspace::{HardwareConfig, InputSource, MODEL_SCHEMA_VERSION, ModelConfig},
+        profile::{DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION},
     };
     use std::collections::BTreeMap;
 
-    fn model_config() -> ModelConfig {
-        ModelConfig {
-            schema_version: MODEL_SCHEMA_VERSION,
-            model: ModelLayout {
+    fn device_profile() -> DeviceProfile {
+        DeviceProfile {
+            schema_version: PROFILE_SCHEMA_VERSION,
+            profile: ModelLayout {
                 id: "phone".into(),
                 name: "电话".into(),
                 groups: vec![ButtonGroup {
@@ -515,15 +513,17 @@ mod tests {
                     ],
                 }],
             },
-            hardware: HardwareConfig {
-                controller: "esp32s3".into(),
+            hardware_profiles: vec![HardwareProfile {
+                id: "esp-primary".into(),
+                name: "ESP primary".into(),
+                board_profile_id: "luatos-esp32s3-aio".into(),
                 debounce_ms: 30,
                 inputs: vec![InputSource::ContactMatrix {
                     id: "matrix".into(),
                     pins: vec![1, 2, 12, 13],
                     keys: BTreeMap::from([("A".into(), [1, 12]), ("B".into(), [2, 13])]),
                 }],
-            },
+            }],
             actions: BTreeMap::from([(
                 "A".into(),
                 vec![
@@ -535,7 +535,6 @@ mod tests {
                     },
                 ],
             )]),
-            legacy: None,
         }
     }
 
@@ -564,10 +563,8 @@ mod tests {
 
     #[test]
     fn parses_protocol_v3_identity_and_build() {
-        let message = parse_device(
-            "HELLO 3 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 3 0 11 22",
-        )
-        .unwrap();
+        let message =
+            parse_device("HELLO 3 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 3 0 11 22").unwrap();
         assert_eq!(
             message,
             DeviceMessage::Hello(HelloCapabilities {
@@ -578,10 +575,9 @@ mod tests {
                 pins: vec![0, 11, 22],
             })
         );
-        assert!(parse_device(
-            "HELLO 3 esp32s3 luatos-esp32s3-aio 0.1.0+gabc1234 3 0 6 18",
-        )
-        .is_some());
+        assert!(
+            parse_device("HELLO 3 esp32s3 luatos-esp32s3-aio 0.1.0+gabc1234 3 0 6 18",).is_some()
+        );
         assert!(parse_device(
             "HELLO 3 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 23 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22",
         )
@@ -622,24 +618,36 @@ mod tests {
 
         let mut wrong_protocol = hello.clone();
         wrong_protocol.protocol = 2;
-        assert_eq!(validate_hello(board, &wrong_protocol).unwrap_err().code, "protocol_mismatch");
+        assert_eq!(
+            validate_hello(board, &wrong_protocol).unwrap_err().code,
+            "protocol_mismatch"
+        );
 
         let mut wrong_family = hello.clone();
         wrong_family.controller_family_id = "esp32s3".into();
-        assert_eq!(validate_hello(board, &wrong_family).unwrap_err().code, "controller_family_mismatch");
+        assert_eq!(
+            validate_hello(board, &wrong_family).unwrap_err().code,
+            "controller_family_mismatch"
+        );
 
         let mut wrong_board = hello.clone();
         wrong_board.board_profile_id = "luatos-esp32s3-aio".into();
-        assert_eq!(validate_hello(board, &wrong_board).unwrap_err().code, "board_profile_mismatch");
+        assert_eq!(
+            validate_hello(board, &wrong_board).unwrap_err().code,
+            "board_profile_mismatch"
+        );
 
         let mut unsafe_pin = hello;
         unsafe_pin.pins = vec![23];
-        assert_eq!(validate_hello(board, &unsafe_pin).unwrap_err().code, "capability_mismatch");
+        assert_eq!(
+            validate_hello(board, &unsafe_pin).unwrap_err().code,
+            "capability_mismatch"
+        );
     }
 
     #[test]
     fn waits_for_done_before_returning_the_next_action() {
-        let model = model_config();
+        let model = device_profile();
         let actions = model.actions["A"].clone();
         let mut sequence = ActionSequence::new(9, "A".into(), actions);
 
@@ -651,11 +659,11 @@ mod tests {
 
     #[test]
     fn builds_matrix_topology_and_resolves_normalized_contact() {
-        let model = model_config();
-        let hardware = HardwareProfile::new(board_by_id("luatos-esp32s3-aio").unwrap(), &model.hardware).unwrap();
+        let model = device_profile();
+        let hardware = model.hardware_profile("esp-primary").unwrap();
         let reported_pins = BTreeSet::from([1, 2, 12, 13]);
         assert_eq!(
-            topology_commands(&hardware, 7, &reported_pins).unwrap(),
+            topology_commands(hardware, 7, &reported_pins).unwrap(),
             vec![
                 "CONFIG_BEGIN 7 30\n",
                 "CONFIG_MATRIX 7 0 2 1 2 2 12 13\n",
@@ -663,17 +671,20 @@ mod tests {
             ]
         );
         assert_eq!(
-            topology_commands(&hardware, 7, &BTreeSet::from([1, 2, 12]))
+            topology_commands(hardware, 7, &BTreeSet::from([1, 2, 12]))
                 .unwrap_err()
                 .code,
             "capability_mismatch"
         );
         assert_eq!(
-            model.button_for(&PhysicalInput::Contact {
-                source: 0,
-                pin_a: 12,
-                pin_b: 1,
-            }),
+            model.button_for(
+                "esp-primary",
+                &PhysicalInput::Contact {
+                    source: 0,
+                    pin_a: 12,
+                    pin_b: 1,
+                },
+            ),
             Some("A")
         );
     }

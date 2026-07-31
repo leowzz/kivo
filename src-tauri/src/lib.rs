@@ -1,16 +1,19 @@
-mod config;
 mod device;
 pub mod hardware;
 mod metrics;
 mod model;
+mod profile;
 mod protocol;
 mod storage;
 #[cfg(target_os = "macos")]
 mod tray;
 mod workspace;
 
-use device::{ConnectionStatus, DeviceCapabilities, LearningSession, RuntimeActivity};
+use device::{
+    ConnectionStatus, DeviceCapabilities, LearningSession, RuntimeActivity, RuntimeProfile,
+};
 use metrics::{HomeMetricsSnapshot, MetricsStore};
+use profile::DeviceProfile;
 use serde::Serialize;
 use std::{
     collections::{BTreeSet, VecDeque},
@@ -24,14 +27,11 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::Manager;
-use workspace::{
-    AppError, BackupPreview, ImportPreview, Language, LegacyPaths, ModelConfig, SettingsDocument,
-    Workspace,
-};
+use workspace::{AppError, BackupPreview, ImportPreview, Language, SettingsDocument, Workspace};
 
 struct AppState {
     workspace: Arc<RwLock<Workspace>>,
-    active_runtime_model: Arc<RwLock<Option<ModelConfig>>>,
+    active_runtime_profile: Arc<RwLock<Option<RuntimeProfile>>>,
     connection: Arc<RwLock<ConnectionStatus>>,
     capabilities: Arc<RwLock<Option<DeviceCapabilities>>>,
     runtime_error: Arc<RwLock<Option<RuntimeActivity>>>,
@@ -46,8 +46,8 @@ struct AppState {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AppSnapshot {
-    models: Vec<ModelConfig>,
-    active_model: Option<String>,
+    profiles: Vec<DeviceProfile>,
+    editor_profile: Option<String>,
     language: Language,
     supported_gpios: Vec<u8>,
     connection: ConnectionStatus,
@@ -67,20 +67,12 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn active_model(workspace: &Workspace) -> Option<ModelConfig> {
-    workspace
-        .settings
-        .active_model
-        .as_ref()
-        .and_then(|id| workspace.models.get(id))
-        .cloned()
-}
-
 fn sync_runtime(state: &AppState, workspace: &Workspace) -> Result<(), AppError> {
+    let _ = workspace;
     *state
-        .active_runtime_model
+        .active_runtime_profile
         .write()
-        .map_err(|_| state_error("runtime_model_unavailable"))? = active_model(workspace);
+        .map_err(|_| state_error("runtime_profile_unavailable"))? = None;
     Ok(())
 }
 
@@ -89,21 +81,18 @@ fn snapshot(state: &AppState) -> Result<AppSnapshot, AppError> {
         .workspace
         .read()
         .map_err(|_| state_error("workspace_unavailable"))?;
-    let mut models = workspace.models.values().cloned().collect::<Vec<_>>();
-    models.sort_by(|left, right| left.model.name.cmp(&right.model.name));
-    let home_metrics = state
-        .metrics
-        .as_ref()
-        .and_then(|metrics| {
-            workspace
-                .settings
-                .active_model
-                .as_deref()
-                .and_then(|model_id| metrics.home_snapshot(model_id, now_ms()).ok())
-        });
+    let mut profiles = workspace.profiles.values().cloned().collect::<Vec<_>>();
+    profiles.sort_by(|left, right| left.profile.name.cmp(&right.profile.name));
+    let home_metrics = state.metrics.as_ref().and_then(|metrics| {
+        workspace
+            .settings
+            .editor_profile
+            .as_deref()
+            .and_then(|model_id| metrics.home_snapshot(model_id, now_ms()).ok())
+    });
     Ok(AppSnapshot {
-        models,
-        active_model: workspace.settings.active_model.clone(),
+        profiles,
+        editor_profile: workspace.settings.editor_profile.clone(),
         language: workspace.settings.language,
         supported_gpios: state
             .capabilities
@@ -131,12 +120,12 @@ fn snapshot(state: &AppState) -> Result<AppSnapshot, AppError> {
     })
 }
 
-fn save_model_inner(state: &AppState, model: ModelConfig) -> Result<AppSnapshot, AppError> {
+fn save_profile_inner(state: &AppState, profile: DeviceProfile) -> Result<AppSnapshot, AppError> {
     let mut workspace = state
         .workspace
         .write()
         .map_err(|_| state_error("workspace_unavailable"))?;
-    workspace.save_model(model)?;
+    workspace.save_profile(profile)?;
     sync_runtime(state, &workspace)?;
     drop(workspace);
     snapshot(state)
@@ -156,23 +145,23 @@ fn save_settings_inner(
     snapshot(state)
 }
 
-fn import_model_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, AppError> {
+fn import_profile_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, AppError> {
     let mut workspace = state
         .workspace
         .write()
         .map_err(|_| state_error("workspace_unavailable"))?;
-    workspace.import_model(path)?;
+    workspace.import_profile(path)?;
     sync_runtime(state, &workspace)?;
     drop(workspace);
     snapshot(state)
 }
 
-fn delete_model_inner(state: &AppState, id: &str) -> Result<AppSnapshot, AppError> {
+fn delete_profile_inner(state: &AppState, id: &str) -> Result<AppSnapshot, AppError> {
     let mut workspace = state
         .workspace
         .write()
         .map_err(|_| state_error("workspace_unavailable"))?;
-    workspace.delete_model(id)?;
+    workspace.delete_profile(id)?;
     sync_runtime(state, &workspace)?;
     drop(workspace);
     snapshot(state)
@@ -260,11 +249,11 @@ fn get_snapshot(state: tauri::State<'_, AppState>) -> Result<AppSnapshot, AppErr
 }
 
 #[tauri::command]
-fn save_model(
+fn save_device_profile(
     state: tauri::State<'_, AppState>,
-    model: ModelConfig,
+    profile: DeviceProfile,
 ) -> Result<AppSnapshot, AppError> {
-    save_model_inner(&state, model)
+    save_profile_inner(&state, profile)
 }
 
 #[tauri::command]
@@ -276,7 +265,7 @@ fn save_settings(
 }
 
 #[tauri::command]
-fn preview_model_import(
+fn preview_profile_import(
     state: tauri::State<'_, AppState>,
     path: String,
 ) -> Result<ImportPreview, AppError> {
@@ -284,16 +273,19 @@ fn preview_model_import(
         .workspace
         .read()
         .map_err(|_| state_error("workspace_unavailable"))?
-        .preview_model(Path::new(&path))
+        .preview_profile(Path::new(&path))
 }
 
 #[tauri::command]
-fn import_model(state: tauri::State<'_, AppState>, path: String) -> Result<AppSnapshot, AppError> {
-    import_model_inner(&state, Path::new(&path))
+fn import_profile(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<AppSnapshot, AppError> {
+    import_profile_inner(&state, Path::new(&path))
 }
 
 #[tauri::command]
-fn export_model(
+fn export_profile(
     state: tauri::State<'_, AppState>,
     id: String,
     path: String,
@@ -302,13 +294,13 @@ fn export_model(
         .workspace
         .read()
         .map_err(|_| state_error("workspace_unavailable"))?
-        .export_model(&id, Path::new(&path))?;
+        .export_profile(&id, Path::new(&path))?;
     snapshot(&state)
 }
 
 #[tauri::command]
-fn delete_model(state: tauri::State<'_, AppState>, id: String) -> Result<AppSnapshot, AppError> {
-    delete_model_inner(&state, &id)
+fn delete_profile(state: tauri::State<'_, AppState>, id: String) -> Result<AppSnapshot, AppError> {
+    delete_profile_inner(&state, &id)
 }
 
 #[tauri::command]
@@ -361,21 +353,12 @@ pub fn run() {
         .setup(|app| {
             let config_directory = app.path().app_config_dir()?;
             fs::create_dir_all(&config_directory)?;
-            let bundled_models = app.path().resource_dir()?.join("models");
-            let legacy_config = config_directory.join("config.yaml");
-            let legacy_models = config_directory.join("models");
-            let workspace = Workspace::load(
-                &config_directory,
-                &bundled_models,
-                LegacyPaths {
-                    config: Some(&legacy_config),
-                    models: Some(&legacy_models),
-                },
-            )?;
+            let bundled_profiles = app.path().resource_dir()?.join("models");
+            let workspace = Workspace::load(&config_directory, &bundled_profiles)?;
             let metrics = MetricsStore::open(&config_directory.join("metrics.sqlite3"))
                 .ok()
                 .map(Arc::new);
-            let active_runtime_model = Arc::new(RwLock::new(active_model(&workspace)));
+            let active_runtime_profile = Arc::new(RwLock::new(None));
             let workspace = Arc::new(RwLock::new(workspace));
             let initial_connection = ConnectionStatus::searching();
             #[cfg(target_os = "macos")]
@@ -388,7 +371,7 @@ pub fn run() {
             let stop = Arc::new(AtomicBool::new(false));
             let worker = {
                 let app_handle = app.handle().clone();
-                let active_runtime_model = Arc::clone(&active_runtime_model);
+                let active_runtime_profile = Arc::clone(&active_runtime_profile);
                 let connection = Arc::clone(&connection);
                 let capabilities = Arc::clone(&capabilities);
                 let runtime_error = Arc::clone(&runtime_error);
@@ -400,7 +383,7 @@ pub fn run() {
                     device::run_worker(
                         app_handle,
                         device::WorkerState {
-                            active_model: active_runtime_model,
+                            active_profile: active_runtime_profile,
                             connection,
                             capabilities,
                             runtime_error,
@@ -414,7 +397,7 @@ pub fn run() {
             };
             app.manage(AppState {
                 workspace,
-                active_runtime_model,
+                active_runtime_profile,
                 connection,
                 capabilities,
                 runtime_error,
@@ -429,12 +412,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_snapshot,
-            save_model,
+            save_device_profile,
             save_settings,
-            preview_model_import,
-            import_model,
-            export_model,
-            delete_model,
+            preview_profile_import,
+            import_profile,
+            export_profile,
+            delete_profile,
             preview_backup,
             export_backup,
             restore_backup,
@@ -490,10 +473,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::ButtonAction,
-        workspace::{HardwareConfig, InputSource, MODEL_SCHEMA_VERSION},
-    };
+    use crate::profile::{ButtonAction, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION};
     use std::{
         collections::BTreeMap,
         path::PathBuf,
@@ -531,35 +511,37 @@ mod tests {
         }
     }
 
-    fn product_model() -> ModelConfig {
+    fn product_profile() -> DeviceProfile {
         let layout = serde_json::from_str(include_str!("../../models/red-phone-v1.json")).unwrap();
-        ModelConfig {
-            schema_version: MODEL_SCHEMA_VERSION,
-            model: layout,
-            hardware: HardwareConfig {
-                controller: "esp32s3".into(),
+        DeviceProfile {
+            schema_version: PROFILE_SCHEMA_VERSION,
+            profile: layout,
+            hardware_profiles: vec![HardwareProfile {
+                id: "esp-primary".into(),
+                name: "ESP primary".into(),
+                board_profile_id: "luatos-esp32s3-aio".into(),
                 debounce_ms: 30,
                 inputs: vec![InputSource::Direct {
                     id: "direct".into(),
                     keys: BTreeMap::from([("UP".into(), 6)]),
                 }],
-            },
+            }],
             actions: BTreeMap::new(),
-            legacy: None,
         }
     }
 
-    fn product_state(directory: &Path, models: Vec<ModelConfig>) -> AppState {
-        let workspace = Workspace::create(directory, models).unwrap();
-        let runtime = active_model(&workspace);
+    fn product_state(directory: &Path, profiles: Vec<DeviceProfile>) -> AppState {
+        let workspace = Workspace::create(directory, profiles).unwrap();
         AppState {
             workspace: Arc::new(RwLock::new(workspace)),
-            active_runtime_model: Arc::new(RwLock::new(runtime)),
+            active_runtime_profile: Arc::new(RwLock::new(None)),
             connection: Arc::new(RwLock::new(ConnectionStatus::searching())),
             capabilities: Arc::new(RwLock::new(None)),
             runtime_error: Arc::new(RwLock::new(None)),
             learning: Arc::new(RwLock::new(None)),
-            metrics: MetricsStore::open(&directory.join("metrics.sqlite3")).ok().map(Arc::new),
+            metrics: MetricsStore::open(&directory.join("metrics.sqlite3"))
+                .ok()
+                .map(Arc::new),
             next_learning_revision: Mutex::new(0),
             device_controls: Arc::new(Mutex::new(VecDeque::new())),
             stop: Arc::new(AtomicBool::new(false)),
@@ -568,10 +550,10 @@ mod tests {
     }
 
     #[test]
-    fn workspace_command_saves_offline_and_updates_runtime_model() {
+    fn workspace_command_saves_profile_without_creating_a_runtime_assignment() {
         let directory = TestDirectory::new();
-        let state = product_state(&directory.0, vec![product_model()]);
-        let mut updated = product_model();
+        let state = product_state(&directory.0, vec![product_profile()]);
+        let mut updated = product_profile();
         updated.actions.insert(
             "UP".into(),
             vec![ButtonAction::Paste {
@@ -579,20 +561,17 @@ mod tests {
             }],
         );
 
-        let snapshot = save_model_inner(&state, updated.clone()).unwrap();
+        let snapshot = save_profile_inner(&state, updated.clone()).unwrap();
 
-        assert_eq!(snapshot.models, vec![updated.clone()]);
-        assert_eq!(
-            state.active_runtime_model.read().unwrap().as_ref(),
-            Some(&updated)
-        );
-        assert!(directory.path("data/models/red-phone-v1.yaml").exists());
+        assert_eq!(snapshot.profiles, vec![updated]);
+        assert!(state.active_runtime_profile.read().unwrap().is_none());
+        assert!(directory.path("data/profiles/red-phone-v1.yaml").exists());
     }
 
     #[test]
-    fn snapshot_includes_active_model_metrics() {
+    fn snapshot_includes_editor_profile_metrics() {
         let directory = TestDirectory::new();
-        let state = product_state(&directory.0, vec![product_model()]);
+        let state = product_state(&directory.0, vec![product_profile()]);
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -614,21 +593,21 @@ mod tests {
     }
 
     #[test]
-    fn workspace_command_deletes_last_model_and_clears_runtime() {
+    fn workspace_command_deletes_last_profile_and_clears_editor() {
         let directory = TestDirectory::new();
-        let state = product_state(&directory.0, vec![product_model()]);
+        let state = product_state(&directory.0, vec![product_profile()]);
 
-        let snapshot = delete_model_inner(&state, "red-phone-v1").unwrap();
+        let snapshot = delete_profile_inner(&state, "red-phone-v1").unwrap();
 
-        assert!(snapshot.models.is_empty());
-        assert_eq!(snapshot.active_model, None);
-        assert!(state.active_runtime_model.read().unwrap().is_none());
+        assert!(snapshot.profiles.is_empty());
+        assert_eq!(snapshot.editor_profile, None);
+        assert!(state.active_runtime_profile.read().unwrap().is_none());
     }
 
     #[test]
     fn workspace_command_restore_replaces_runtime_snapshot() {
         let directory = TestDirectory::new();
-        let state = product_state(&directory.0, vec![product_model()]);
+        let state = product_state(&directory.0, vec![product_profile()]);
         let backup = directory.path("backup.yaml");
         state
             .workspace
@@ -636,32 +615,32 @@ mod tests {
             .unwrap()
             .export_backup(&backup)
             .unwrap();
-        delete_model_inner(&state, "red-phone-v1").unwrap();
+        delete_profile_inner(&state, "red-phone-v1").unwrap();
 
         let snapshot = restore_backup_inner(&state, &backup).unwrap();
 
-        assert_eq!(snapshot.active_model.as_deref(), Some("red-phone-v1"));
-        assert!(state.active_runtime_model.read().unwrap().is_some());
+        assert_eq!(snapshot.editor_profile.as_deref(), Some("red-phone-v1"));
+        assert!(state.active_runtime_profile.read().unwrap().is_none());
     }
 
     #[test]
     fn workspace_command_import_replaces_same_id() {
         let directory = TestDirectory::new();
-        let state = product_state(&directory.0, vec![product_model()]);
-        let mut replacement = product_model();
-        replacement.model.name = "替换型号".into();
+        let state = product_state(&directory.0, vec![product_profile()]);
+        let mut replacement = product_profile();
+        replacement.profile.name = "替换型号".into();
         let path = directory.path("replacement.yaml");
         fs::write(&path, serde_yaml_ng::to_string(&replacement).unwrap()).unwrap();
 
-        let snapshot = import_model_inner(&state, &path).unwrap();
+        let snapshot = import_profile_inner(&state, &path).unwrap();
 
-        assert_eq!(snapshot.models, vec![replacement]);
+        assert_eq!(snapshot.profiles, vec![replacement]);
     }
 
     #[test]
     fn workspace_command_rejects_learning_pin_outside_device_allowlist() {
         let directory = TestDirectory::new();
-        let state = product_state(&directory.0, vec![product_model()]);
+        let state = product_state(&directory.0, vec![product_profile()]);
         *state.capabilities.write().unwrap() = Some(DeviceCapabilities {
             protocol: 3,
             controller_family_id: "esp32s3".into(),
@@ -680,7 +659,7 @@ mod tests {
     fn settings_reject_unknown_language() {
         assert!(
             serde_yaml_ng::from_str::<SettingsDocument>(
-                "schema_version: 1\nactive_model: null\nlanguage: fr-FR\n"
+                "schema_version: 2\neditor_profile: null\nlanguage: fr-FR\ndevices: {}\n"
             )
             .is_err()
         );

@@ -1,0 +1,43 @@
+schema_version: 2
+profile:
+  id: tel001
+  name: Tel001
+  groups:
+    - id: top
+      columns: 5
+      buttons:
+        - { id: UP, label: UP }
+        - { id: DOWN, label: DOWN }
+        - { id: BACK, label: BACK }
+        - { id: OUT, label: OUT }
+        - { id: DEL, label: DEL }
+    - id: digits
+      columns: 3
+      buttons:
+        - { id: DIGIT_1, label: "1" }
+        - { id: DIGIT_2, label: "2" }
+        - { id: DIGIT_3, label: "3" }
+        - { id: DIGIT_4, label: "4" }
+        - { id: DIGIT_5, label: "5" }
+        - { id: DIGIT_6, label: "6" }
+        - { id: DIGIT_7, label: "7" }
+        - { id: DIGIT_8, label: "8" }
+        - { id: DIGIT_9, label: "9" }
+        - { id: STAR, label: "*" }
+        - { id: DIGIT_0, label: "0" }
+        - { id: HASH, label: "#" }
+    - id: bottom
+      columns: 5
+      buttons:
+        - { id: R, label: R }
+        - { id: VOL, label: VOL }
+        - { id: FL_SET, label: FL/SET }
+        - { id: RD_PA, label: RD/PA }
+        - { id: SPEAKER, label: SPEAKER }
+hardware_profiles:
+  - id: luatos-esp32s3-aio
+    name: LuatOS ESP32-S3
+    board_profile_id: luatos-esp32s3-aio
+    debounce_ms: 30
+    inputs: []
+actions: {}

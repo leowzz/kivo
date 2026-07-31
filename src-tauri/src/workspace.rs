@@ -1,19 +1,17 @@
 use crate::{
-    config::{self, ButtonAction, MappingConfig},
-    model::{self, ModelLayout},
-    protocol::encode_hotkey,
+    hardware::{DeviceId, board_by_id},
+    profile::{DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION},
     storage::atomic_write,
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
 };
 
-pub const MODEL_SCHEMA_VERSION: u16 = 1;
-pub const SETTINGS_SCHEMA_VERSION: u16 = 1;
-pub const BACKUP_SCHEMA_VERSION: u16 = 1;
+pub const SETTINGS_SCHEMA_VERSION: u16 = 2;
+pub const BACKUP_SCHEMA_VERSION: u16 = 2;
 const MAX_IMPORT_BYTES: u64 = 10 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -66,295 +64,57 @@ pub enum Language {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct RuntimeAssignment {
+    pub device_profile_id: String,
+    pub hardware_profile_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct DeviceRecord {
+    pub device_id: DeviceId,
+    pub name: String,
+    pub board_profile_id: String,
+    pub runtime_assignment: Option<RuntimeAssignment>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct SettingsDocument {
     pub schema_version: u16,
-    pub active_model: Option<String>,
+    pub editor_profile: Option<String>,
     pub language: Language,
+    #[serde(default)]
+    pub devices: BTreeMap<DeviceId, DeviceRecord>,
 }
 
 impl Default for SettingsDocument {
     fn default() -> Self {
         Self {
             schema_version: SETTINGS_SCHEMA_VERSION,
-            active_model: None,
+            editor_profile: None,
             language: Language::ZhCn,
+            devices: BTreeMap::new(),
         }
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum InputSource {
-    Direct {
-        id: String,
-        keys: BTreeMap<String, u8>,
-    },
-    ContactMatrix {
-        id: String,
-        pins: Vec<u8>,
-        keys: BTreeMap<String, [u8; 2]>,
-    },
-}
-
-impl InputSource {
-    fn id(&self) -> &str {
-        match self {
-            Self::Direct { id, .. } | Self::ContactMatrix { id, .. } => id,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct HardwareConfig {
-    pub controller: String,
-    #[serde(default = "default_debounce_ms")]
-    pub debounce_ms: u16,
-    #[serde(default)]
-    pub inputs: Vec<InputSource>,
-}
-
-fn default_debounce_ms() -> u16 {
-    30
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
-pub struct LegacyConfig {
-    #[serde(default)]
-    pub unresolved_gpio_text: BTreeMap<u8, String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct ModelConfig {
-    pub schema_version: u16,
-    pub model: ModelLayout,
-    pub hardware: HardwareConfig,
-    #[serde(default)]
-    pub actions: BTreeMap<String, Vec<ButtonAction>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub legacy: Option<LegacyConfig>,
-}
-
-impl ModelConfig {
-    pub fn button_for(&self, input: &crate::protocol::PhysicalInput) -> Option<&str> {
-        let mut runtime_source = 0u8;
-        for source in &self.hardware.inputs {
-            match source {
-                InputSource::Direct { keys, .. } if !keys.is_empty() => {
-                    if let crate::protocol::PhysicalInput::Direct { gpio } = input
-                        && let Some((button, _)) = keys.iter().find(|(_, pin)| *pin == gpio)
-                    {
-                        return Some(button);
-                    }
-                    runtime_source = runtime_source.checked_add(1)?;
-                }
-                InputSource::ContactMatrix { keys, .. } if !keys.is_empty() => {
-                    if let crate::protocol::PhysicalInput::Contact {
-                        source,
-                        pin_a,
-                        pin_b,
-                    } = input
-                        && *source == runtime_source
-                    {
-                        let pair = normalized_pair(*pin_a, *pin_b);
-                        if let Some((button, _)) = keys
-                            .iter()
-                            .find(|(_, pins)| normalized_pair(pins[0], pins[1]) == pair)
-                        {
-                            return Some(button);
-                        }
-                    }
-                    runtime_source = runtime_source.checked_add(1)?;
-                }
-                InputSource::Direct { .. } | InputSource::ContactMatrix { .. } => {}
-            }
-        }
-        None
-    }
-
-    pub fn validate(&self) -> Result<(), AppError> {
-        if self.schema_version != MODEL_SCHEMA_VERSION {
-            return Err(AppError::new("unsupported_model_schema"));
-        }
-        self.model
-            .validate()
-            .map_err(|detail| AppError::new("invalid_layout").with_param("detail", detail))?;
-        if !valid_id(&self.model.id) {
-            return Err(AppError::new("invalid_model_id"));
-        }
-
-        let mut buttons = BTreeSet::new();
-        for group in &self.model.groups {
-            if !valid_id(&group.id) {
-                return Err(AppError::new("invalid_group_id").with_param("group", &group.id));
-            }
-            for button in &group.buttons {
-                if !valid_id(&button.id) {
-                    return Err(AppError::new("invalid_button_id").with_param("button", &button.id));
-                }
-                buttons.insert(button.id.as_str());
-            }
-        }
-
-        if !valid_id(&self.hardware.controller) {
-            return Err(AppError::new("invalid_controller"));
-        }
-        if !(1..=1000).contains(&self.hardware.debounce_ms) {
-            return Err(AppError::new("invalid_debounce"));
-        }
-
-        let mut source_ids = BTreeSet::new();
-        let mut owned_pins = BTreeSet::new();
-        let mut bound_buttons = BTreeSet::new();
-        for source in &self.hardware.inputs {
-            if !valid_id(source.id()) || !source_ids.insert(source.id()) {
-                return Err(AppError::new("invalid_input_source"));
-            }
-            match source {
-                InputSource::Direct { keys, .. } => {
-                    for (button, gpio) in keys {
-                        validate_binding(button, &buttons, &mut bound_buttons)?;
-                        if !owned_pins.insert(*gpio) {
-                            return Err(AppError::new("gpio_used_by_multiple_sources")
-                                .with_param("gpio", gpio.to_string()));
-                        }
-                    }
-                }
-                InputSource::ContactMatrix { pins, keys, .. } => {
-                    let unique_pins = pins.iter().copied().collect::<BTreeSet<_>>();
-                    if pins.len() < 2 || unique_pins.len() != pins.len() {
-                        return Err(AppError::new("invalid_matrix_pins"));
-                    }
-                    for pin in pins {
-                        if !owned_pins.insert(*pin) {
-                            return Err(AppError::new("gpio_used_by_multiple_sources")
-                                .with_param("gpio", pin.to_string()));
-                        }
-                    }
-                    let mut pairs = BTreeSet::new();
-                    let mut edges = Vec::new();
-                    for (button, pair) in keys {
-                        validate_binding(button, &buttons, &mut bound_buttons)?;
-                        let [left, right] = *pair;
-                        if left == right
-                            || !unique_pins.contains(&left)
-                            || !unique_pins.contains(&right)
-                        {
-                            return Err(AppError::new("invalid_contact_pair"));
-                        }
-                        let pair = normalized_pair(left, right);
-                        if !pairs.insert(pair) {
-                            return Err(AppError::new("duplicate_contact_pair"));
-                        }
-                        edges.push(pair);
-                    }
-                    validate_bipartite(&edges)?;
-                }
-            }
-        }
-
-        for (button, actions) in &self.actions {
-            if !buttons.contains(button.as_str()) {
-                return Err(AppError::new("unknown_action_button").with_param("button", button));
-            }
-            for action in actions {
-                match action {
-                    ButtonAction::Paste { text } if text.is_empty() => {
-                        return Err(AppError::new("empty_paste_text").with_param("button", button));
-                    }
-                    ButtonAction::Hotkey { keys } => {
-                        encode_hotkey(keys).map_err(|detail| {
-                            AppError::new("invalid_hotkey")
-                                .with_param("button", button)
-                                .with_param("detail", detail)
-                        })?;
-                    }
-                    ButtonAction::Paste { .. } => {}
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-fn valid_id(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-}
-
-fn validate_binding<'a>(
-    button: &'a str,
-    known: &BTreeSet<&str>,
-    bound: &mut BTreeSet<&'a str>,
-) -> Result<(), AppError> {
-    if !known.contains(button) {
-        return Err(AppError::new("unknown_hardware_button").with_param("button", button));
-    }
-    if !bound.insert(button) {
-        return Err(AppError::new("button_bound_multiple_times").with_param("button", button));
-    }
-    Ok(())
-}
-
-fn normalized_pair(left: u8, right: u8) -> (u8, u8) {
-    if left < right {
-        (left, right)
-    } else {
-        (right, left)
-    }
-}
-
-fn validate_bipartite(edges: &[(u8, u8)]) -> Result<(), AppError> {
-    let mut neighbors: BTreeMap<u8, Vec<u8>> = BTreeMap::new();
-    for &(left, right) in edges {
-        neighbors.entry(left).or_default().push(right);
-        neighbors.entry(right).or_default().push(left);
-    }
-    let mut colors = BTreeMap::new();
-    for &start in neighbors.keys() {
-        if colors.contains_key(&start) {
-            continue;
-        }
-        colors.insert(start, false);
-        let mut queue = VecDeque::from([start]);
-        while let Some(pin) = queue.pop_front() {
-            let color = colors[&pin];
-            for neighbor in &neighbors[&pin] {
-                match colors.get(neighbor) {
-                    Some(neighbor_color) if *neighbor_color == color => {
-                        return Err(AppError::new("matrix_not_bipartite"));
-                    }
-                    Some(_) => {}
-                    None => {
-                        colors.insert(*neighbor, !color);
-                        queue.push_back(*neighbor);
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkspaceSnapshot {
     pub settings: SettingsDocument,
-    pub models: BTreeMap<String, ModelConfig>,
+    pub profiles: BTreeMap<String, DeviceProfile>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct BackupDocument {
     pub schema_version: u16,
     pub settings: SettingsDocument,
-    pub models: Vec<ModelConfig>,
+    pub profiles: Vec<DeviceProfile>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportPreview {
-    pub model_id: String,
-    pub model_name: String,
+    pub profile_id: String,
+    pub profile_name: String,
     pub button_count: usize,
     pub hardware_binding_count: usize,
     pub action_count: usize,
@@ -364,209 +124,275 @@ pub struct ImportPreview {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupPreview {
-    pub model_count: usize,
+    pub profile_count: usize,
     pub button_count: usize,
     pub hardware_binding_count: usize,
     pub action_count: usize,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct LegacyPaths<'a> {
-    pub config: Option<&'a Path>,
-    pub models: Option<&'a Path>,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AssignmentResolution<'a> {
+    UnknownDevice,
+    Unassigned {
+        device: &'a DeviceRecord,
+    },
+    Valid {
+        device: &'a DeviceRecord,
+        assignment: &'a RuntimeAssignment,
+        profile: &'a DeviceProfile,
+        hardware: &'a HardwareProfile,
+    },
+    InvalidAssignment {
+        device: &'a DeviceRecord,
+        assignment: &'a RuntimeAssignment,
+    },
 }
 
-impl LegacyPaths<'_> {
-    #[cfg(test)]
-    pub fn none() -> Self {
-        Self::default()
-    }
-}
-
+#[derive(Debug)]
 pub struct Workspace {
     config_directory: PathBuf,
     pub settings: SettingsDocument,
-    pub models: BTreeMap<String, ModelConfig>,
+    pub profiles: BTreeMap<String, DeviceProfile>,
 }
 
 impl Workspace {
-    pub fn load(
-        config_directory: &Path,
-        bundled_models: &Path,
-        legacy: LegacyPaths<'_>,
-    ) -> Result<Self, AppError> {
+    pub fn load(config_directory: &Path, bundled_profiles: &Path) -> Result<Self, AppError> {
         if config_directory.join("data/settings.yaml").exists() {
-            return Self::load_existing(config_directory);
+            Self::load_existing(config_directory)
+        } else {
+            Self::create(config_directory, load_bundled_profiles(bundled_profiles)?)
         }
-
-        if let (Some(config_path), Some(model_directory)) = (legacy.config, legacy.models)
-            && config_path.exists()
-            && model_directory.exists()
-        {
-            let legacy_config = config::load(config_path)
-                .map_err(|detail| AppError::new("load_legacy_config").with_detail(detail))?;
-            let (layouts, errors) = model::load_all(model_directory);
-            if !errors.is_empty() {
-                return Err(AppError::new("load_legacy_models").with_detail(errors.join("; ")));
-            }
-            let snapshot = migrate_legacy(layouts, legacy_config)?;
-            write_new_data_directory(config_directory, &snapshot.settings, &snapshot.models)?;
-            return Ok(Self {
-                config_directory: config_directory.to_owned(),
-                settings: snapshot.settings,
-                models: snapshot.models,
-            });
-        }
-
-        let models = load_bundled_models(bundled_models)?;
-        Self::create(config_directory, models)
     }
 
-    pub fn create(config_directory: &Path, models: Vec<ModelConfig>) -> Result<Self, AppError> {
-        let models = models
-            .into_iter()
-            .map(|model| {
-                model.validate()?;
-                Ok((model.model.id.clone(), model))
-            })
-            .collect::<Result<BTreeMap<_, _>, AppError>>()?;
+    pub fn create(config_directory: &Path, profiles: Vec<DeviceProfile>) -> Result<Self, AppError> {
+        let profiles = collect_profiles(profiles)?;
         let settings = SettingsDocument {
-            active_model: models.keys().next().cloned(),
+            editor_profile: profiles.keys().next().cloned(),
             ..SettingsDocument::default()
         };
-        write_new_data_directory(config_directory, &settings, &models)?;
+        write_new_data_directory(config_directory, &settings, &profiles)?;
         Ok(Self {
             config_directory: config_directory.to_owned(),
             settings,
-            models,
+            profiles,
         })
     }
 
     pub fn load_existing(config_directory: &Path) -> Result<Self, AppError> {
         let data_directory = config_directory.join("data");
-        let settings: SettingsDocument = read_yaml(&data_directory.join("settings.yaml"))?;
-        if settings.schema_version != SETTINGS_SCHEMA_VERSION {
-            return Err(AppError::new("unsupported_settings_schema"));
-        }
-        let mut models = BTreeMap::new();
-        let model_directory = data_directory.join("models");
-        for entry in fs::read_dir(&model_directory)
-            .map_err(|error| io_error("read_models", &model_directory, error))?
-        {
-            let entry = entry.map_err(|error| io_error("read_models", &model_directory, error))?;
-            let path = entry.path();
-            if path.extension().and_then(|value| value.to_str()) != Some("yaml") {
-                continue;
-            }
-            let model: ModelConfig = read_yaml(&path)?;
-            model.validate()?;
-            let expected_name = format!("{}.yaml", model.model.id);
-            if path.file_name().and_then(|value| value.to_str()) != Some(&expected_name) {
-                return Err(
-                    AppError::new("model_filename_mismatch").with_param("model", &model.model.id)
-                );
-            }
-            if models.insert(model.model.id.clone(), model).is_some() {
-                return Err(AppError::new("duplicate_model"));
+        let settings = read_versioned_yaml(
+            &data_directory.join("settings.yaml"),
+            SETTINGS_SCHEMA_VERSION,
+            "unsupported_settings_schema",
+            false,
+        )?;
+        let mut profiles = BTreeMap::new();
+        let profile_directory = data_directory.join("profiles");
+        for path in yaml_files(&profile_directory, "read_profiles")? {
+            let profile: DeviceProfile = read_versioned_yaml(
+                &path,
+                PROFILE_SCHEMA_VERSION,
+                "unsupported_profile_schema",
+                false,
+            )?;
+            profile.validate()?;
+            validate_profile_filename(&path, &profile)?;
+            if profiles
+                .insert(profile.profile.id.clone(), profile)
+                .is_some()
+            {
+                return Err(AppError::new("duplicate_profile"));
             }
         }
-        validate_settings(&settings, &models)?;
+        validate_settings(&settings, &profiles)?;
         Ok(Self {
             config_directory: config_directory.to_owned(),
             settings,
-            models,
+            profiles,
         })
     }
 
-    pub fn save_model(&mut self, model: ModelConfig) -> Result<(), AppError> {
-        model.validate()?;
-        let path = self
-            .model_directory()
-            .join(format!("{}.yaml", model.model.id));
-        if self.models.is_empty() {
-            write_yaml(&path, &model)?;
-            let settings = SettingsDocument {
-                active_model: Some(model.model.id.clone()),
-                ..self.settings.clone()
-            };
-            if let Err(error) = write_yaml(&self.data_directory().join("settings.yaml"), &settings)
-            {
+    pub fn save_profile(&mut self, profile: DeviceProfile) -> Result<(), AppError> {
+        profile.validate()?;
+        let id = profile.profile.id.clone();
+        let path = self.profile_directory().join(format!("{id}.yaml"));
+        write_yaml(&path, &profile)?;
+        if self.profiles.is_empty() && self.settings.editor_profile.is_none() {
+            let mut settings = self.settings.clone();
+            settings.editor_profile = Some(id.clone());
+            if let Err(error) = self.persist_settings(&settings) {
                 let _ = fs::remove_file(path);
                 return Err(error);
             }
             self.settings = settings;
-            self.models.insert(model.model.id.clone(), model);
-            return Ok(());
         }
-        write_yaml(&path, &model)?;
-        self.models.insert(model.model.id.clone(), model);
+        self.profiles.insert(id, profile);
         Ok(())
     }
 
     pub fn save_settings(&mut self, settings: SettingsDocument) -> Result<(), AppError> {
-        validate_settings(&settings, &self.models)?;
-        write_yaml(&self.data_directory().join("settings.yaml"), &settings)?;
+        validate_settings(&settings, &self.profiles)?;
+        self.persist_settings(&settings)?;
         self.settings = settings;
         Ok(())
     }
 
-    pub fn preview_model(&self, path: &Path) -> Result<ImportPreview, AppError> {
-        let model: ModelConfig = read_yaml_limited(path)?;
-        model.validate()?;
+    pub fn preview_profile(&self, path: &Path) -> Result<ImportPreview, AppError> {
+        let profile = read_profile_limited(path)?;
+        profile.validate()?;
         Ok(ImportPreview {
-            model_id: model.model.id.clone(),
-            model_name: model.model.name.clone(),
-            button_count: button_count(&model),
-            hardware_binding_count: hardware_binding_count(&model),
-            action_count: action_count(&model),
-            replaces_existing: self.models.contains_key(&model.model.id),
+            profile_id: profile.profile.id.clone(),
+            profile_name: profile.profile.name.clone(),
+            button_count: button_count(&profile),
+            hardware_binding_count: hardware_binding_count(&profile),
+            action_count: action_count(&profile),
+            replaces_existing: self.profiles.contains_key(&profile.profile.id),
         })
     }
 
-    pub fn import_model(&mut self, path: &Path) -> Result<(), AppError> {
-        let model: ModelConfig = read_yaml_limited(path)?;
-        model.validate()?;
-        self.save_model(model)
+    pub fn import_profile(&mut self, path: &Path) -> Result<(), AppError> {
+        let profile = read_profile_limited(path)?;
+        profile.validate()?;
+        self.save_profile(profile)
     }
 
-    pub fn export_model(&self, id: &str, path: &Path) -> Result<(), AppError> {
-        let model = self
-            .models
+    pub fn export_profile(&self, id: &str, path: &Path) -> Result<(), AppError> {
+        let profile = self
+            .profiles
             .get(id)
-            .ok_or_else(|| AppError::new("unknown_model").with_param("model", id))?;
-        write_yaml(path, model)
+            .ok_or_else(|| AppError::new("unknown_profile").with_param("profile", id))?;
+        write_yaml(path, profile)
     }
 
-    pub fn delete_model(&mut self, id: &str) -> Result<(), AppError> {
-        if !self.models.contains_key(id) {
-            return Err(AppError::new("unknown_model").with_param("model", id));
+    pub fn delete_profile(&mut self, id: &str) -> Result<(), AppError> {
+        if !self.profiles.contains_key(id) {
+            return Err(AppError::new("unknown_profile").with_param("profile", id));
         }
-        let previous_settings = self.settings.clone();
-        let mut next_settings = previous_settings.clone();
-        if next_settings.active_model.as_deref() == Some(id) {
-            next_settings.active_model = self.models.keys().find(|key| key.as_str() != id).cloned();
+        let mut settings = self.settings.clone();
+        if settings.editor_profile.as_deref() == Some(id) {
+            settings.editor_profile = self
+                .profiles
+                .keys()
+                .find(|profile_id| profile_id.as_str() != id)
+                .cloned();
         }
-        write_yaml(&self.data_directory().join("settings.yaml"), &next_settings)?;
-        let path = self.model_directory().join(format!("{id}.yaml"));
+        self.persist_settings(&settings)?;
+        let path = self.profile_directory().join(format!("{id}.yaml"));
         if let Err(error) = fs::remove_file(&path) {
-            let _ = write_yaml(
-                &self.data_directory().join("settings.yaml"),
-                &previous_settings,
-            );
-            return Err(io_error("delete_model", &path, error));
+            let _ = self.persist_settings(&self.settings);
+            return Err(io_error("delete_profile", &path, error));
         }
-        self.models.remove(id);
-        self.settings = next_settings;
+        self.profiles.remove(id);
+        self.settings = settings;
         Ok(())
     }
 
+    pub fn enroll_device(&mut self, id: DeviceId) -> Result<&DeviceRecord, AppError> {
+        if !self.settings.devices.contains_key(&id) {
+            let board = board_by_id(id.board_profile_id()).ok_or_else(|| {
+                AppError::new("unknown_board_profile")
+                    .with_param("board_profile", id.board_profile_id())
+            })?;
+            let suffix = id
+                .hardware_serial()
+                .chars()
+                .rev()
+                .take(6)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>();
+            let record = DeviceRecord {
+                device_id: id.clone(),
+                name: format!("{} · {suffix}", board.display_name),
+                board_profile_id: board.id.into(),
+                runtime_assignment: None,
+            };
+            let mut settings = self.settings.clone();
+            settings.devices.insert(id.clone(), record);
+            self.persist_settings(&settings)?;
+            self.settings = settings;
+        }
+        Ok(&self.settings.devices[&id])
+    }
+
+    pub fn rename_device(&mut self, id: &DeviceId, name: String) -> Result<(), AppError> {
+        if name.trim().is_empty() {
+            return Err(AppError::new("invalid_device_name"));
+        }
+        self.update_device(id, |record| record.name = name)
+    }
+
+    pub fn set_assignment(
+        &mut self,
+        id: &DeviceId,
+        value: RuntimeAssignment,
+    ) -> Result<(), AppError> {
+        let device = self.device(id)?;
+        let profile = self.profiles.get(&value.device_profile_id).ok_or_else(|| {
+            AppError::new("unknown_profile").with_param("profile", &value.device_profile_id)
+        })?;
+        let hardware = profile
+            .hardware_profile(&value.hardware_profile_id)
+            .ok_or_else(|| {
+                AppError::new("unknown_hardware_profile")
+                    .with_param("hardware_profile", &value.hardware_profile_id)
+            })?;
+        if hardware.board_profile_id != device.board_profile_id {
+            return Err(AppError::new("assignment_board_mismatch")
+                .with_param("device_board_profile", &device.board_profile_id)
+                .with_param("hardware_board_profile", &hardware.board_profile_id));
+        }
+        self.update_device(id, |record| record.runtime_assignment = Some(value))
+    }
+
+    pub fn clear_assignment(&mut self, id: &DeviceId) -> Result<(), AppError> {
+        self.update_device(id, |record| record.runtime_assignment = None)
+    }
+
+    pub fn forget_offline_device(&mut self, id: &DeviceId, online: bool) -> Result<(), AppError> {
+        self.device(id)?;
+        if online {
+            return Err(AppError::new("device_online"));
+        }
+        let mut settings = self.settings.clone();
+        settings.devices.remove(id);
+        self.persist_settings(&settings)?;
+        self.settings = settings;
+        Ok(())
+    }
+
+    pub fn assignment_resolution(&self, id: &DeviceId) -> AssignmentResolution<'_> {
+        let Some(device) = self.settings.devices.get(id) else {
+            return AssignmentResolution::UnknownDevice;
+        };
+        let Some(assignment) = device.runtime_assignment.as_ref() else {
+            return AssignmentResolution::Unassigned { device };
+        };
+        let Some(profile) = self.profiles.get(&assignment.device_profile_id) else {
+            return AssignmentResolution::InvalidAssignment { device, assignment };
+        };
+        let Some(hardware) = profile.hardware_profile(&assignment.hardware_profile_id) else {
+            return AssignmentResolution::InvalidAssignment { device, assignment };
+        };
+        if hardware.board_profile_id != device.board_profile_id {
+            return AssignmentResolution::InvalidAssignment { device, assignment };
+        }
+        AssignmentResolution::Valid {
+            device,
+            assignment,
+            profile,
+            hardware,
+        }
+    }
+
     pub fn preview_backup(&self, path: &Path) -> Result<BackupPreview, AppError> {
-        let backup = read_backup(path)?;
+        let snapshot = read_backup(path)?;
         Ok(BackupPreview {
-            model_count: backup.models.len(),
-            button_count: backup.models.values().map(button_count).sum(),
-            hardware_binding_count: backup.models.values().map(hardware_binding_count).sum(),
-            action_count: backup.models.values().map(action_count).sum(),
+            profile_count: snapshot.profiles.len(),
+            button_count: snapshot.profiles.values().map(button_count).sum(),
+            hardware_binding_count: snapshot.profiles.values().map(hardware_binding_count).sum(),
+            action_count: snapshot.profiles.values().map(action_count).sum(),
         })
     }
 
@@ -576,7 +402,7 @@ impl Workspace {
             &BackupDocument {
                 schema_version: BACKUP_SCHEMA_VERSION,
                 settings: self.settings.clone(),
-                models: self.models.values().cloned().collect(),
+                profiles: self.profiles.values().cloned().collect(),
             },
         )
     }
@@ -588,7 +414,7 @@ impl Workspace {
         let previous_directory = self.config_directory.join("data.previous");
         remove_directory_if_exists(&next_directory)?;
         remove_directory_if_exists(&previous_directory)?;
-        write_data_directory(&next_directory, &snapshot.settings, &snapshot.models)?;
+        write_data_directory(&next_directory, &snapshot.settings, &snapshot.profiles)?;
         fs::rename(&data_directory, &previous_directory)
             .map_err(|error| io_error("stage_restore", &data_directory, error))?;
         if let Err(error) = fs::rename(&next_directory, &data_directory) {
@@ -596,77 +422,136 @@ impl Workspace {
             return Err(io_error("activate_restore", &next_directory, error));
         }
         self.settings = snapshot.settings;
-        self.models = snapshot.models;
+        self.profiles = snapshot.profiles;
         let _ = fs::remove_dir_all(previous_directory);
         Ok(())
+    }
+
+    fn update_device(
+        &mut self,
+        id: &DeviceId,
+        update: impl FnOnce(&mut DeviceRecord),
+    ) -> Result<(), AppError> {
+        self.device(id)?;
+        let mut settings = self.settings.clone();
+        update(settings.devices.get_mut(id).expect("device was checked"));
+        self.persist_settings(&settings)?;
+        self.settings = settings;
+        Ok(())
+    }
+
+    fn device(&self, id: &DeviceId) -> Result<&DeviceRecord, AppError> {
+        self.settings
+            .devices
+            .get(id)
+            .ok_or_else(|| AppError::new("unknown_device").with_param("device_id", id.as_str()))
+    }
+
+    fn persist_settings(&self, settings: &SettingsDocument) -> Result<(), AppError> {
+        write_yaml(&self.data_directory().join("settings.yaml"), settings)
     }
 
     fn data_directory(&self) -> PathBuf {
         self.config_directory.join("data")
     }
 
-    fn model_directory(&self) -> PathBuf {
-        self.data_directory().join("models")
+    fn profile_directory(&self) -> PathBuf {
+        self.data_directory().join("profiles")
     }
 }
 
-fn load_bundled_models(directory: &Path) -> Result<Vec<ModelConfig>, AppError> {
-    let mut models = Vec::new();
-    let entries = fs::read_dir(directory)
-        .map_err(|error| io_error("read_bundled_models", directory, error))?;
-    for entry in entries {
-        let entry = entry.map_err(|error| io_error("read_bundled_models", directory, error))?;
-        let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("yaml") {
-            continue;
+fn collect_profiles(
+    values: Vec<DeviceProfile>,
+) -> Result<BTreeMap<String, DeviceProfile>, AppError> {
+    let mut profiles = BTreeMap::new();
+    for profile in values {
+        profile.validate()?;
+        if profiles
+            .insert(profile.profile.id.clone(), profile)
+            .is_some()
+        {
+            return Err(AppError::new("duplicate_profile"));
         }
-        let model: ModelConfig = read_yaml_limited(&path)?;
-        model.validate()?;
-        let expected_name = format!("{}.yaml", model.model.id);
-        if path.file_name().and_then(|value| value.to_str()) != Some(&expected_name) {
-            return Err(
-                AppError::new("model_filename_mismatch").with_param("model", &model.model.id)
-            );
-        }
-        models.push(model);
     }
-    models.sort_by(|left, right| left.model.id.cmp(&right.model.id));
-    Ok(models)
+    Ok(profiles)
+}
+
+fn load_bundled_profiles(directory: &Path) -> Result<Vec<DeviceProfile>, AppError> {
+    let mut profiles = Vec::new();
+    for path in yaml_files(directory, "read_bundled_profiles")? {
+        let profile: DeviceProfile = read_versioned_yaml(
+            &path,
+            PROFILE_SCHEMA_VERSION,
+            "unsupported_profile_schema",
+            true,
+        )?;
+        profile.validate()?;
+        validate_profile_filename(&path, &profile)?;
+        profiles.push(profile);
+    }
+    profiles.sort_by(|left, right| left.profile.id.cmp(&right.profile.id));
+    Ok(profiles)
+}
+
+fn validate_settings(
+    settings: &SettingsDocument,
+    profiles: &BTreeMap<String, DeviceProfile>,
+) -> Result<(), AppError> {
+    if settings.schema_version != SETTINGS_SCHEMA_VERSION {
+        return Err(AppError::new("unsupported_settings_schema"));
+    }
+    if let Some(editor_profile) = &settings.editor_profile
+        && !profiles.contains_key(editor_profile)
+    {
+        return Err(AppError::new("unknown_editor_profile").with_param("profile", editor_profile));
+    }
+    for (id, device) in &settings.devices {
+        if id != &device.device_id {
+            return Err(AppError::new("device_id_mismatch").with_param("device_id", id.as_str()));
+        }
+        let board = board_by_id(&device.board_profile_id).ok_or_else(|| {
+            AppError::new("unknown_board_profile")
+                .with_param("board_profile", &device.board_profile_id)
+        })?;
+        if id.board_profile_id() != board.id {
+            return Err(AppError::new("device_board_mismatch").with_param("device_id", id.as_str()));
+        }
+        if device.name.trim().is_empty() {
+            return Err(AppError::new("invalid_device_name").with_param("device_id", id.as_str()));
+        }
+    }
+    Ok(())
 }
 
 fn read_backup(path: &Path) -> Result<WorkspaceSnapshot, AppError> {
-    let backup: BackupDocument = read_yaml_limited(path)?;
-    if backup.schema_version != BACKUP_SCHEMA_VERSION {
-        return Err(AppError::new("unsupported_backup_schema"));
-    }
-    let mut models = BTreeMap::new();
-    for model in backup.models {
-        model.validate()?;
-        if models.insert(model.model.id.clone(), model).is_some() {
-            return Err(AppError::new("duplicate_model"));
-        }
-    }
-    validate_settings(&backup.settings, &models)?;
+    let backup: BackupDocument = read_versioned_yaml(
+        path,
+        BACKUP_SCHEMA_VERSION,
+        "unsupported_backup_schema",
+        true,
+    )?;
+    let profiles = collect_profiles(backup.profiles)?;
+    validate_settings(&backup.settings, &profiles)?;
     Ok(WorkspaceSnapshot {
         settings: backup.settings,
-        models,
+        profiles,
     })
 }
 
-fn button_count(model: &ModelConfig) -> usize {
-    model
-        .model
+fn button_count(profile: &DeviceProfile) -> usize {
+    profile
+        .profile
         .groups
         .iter()
         .map(|group| group.buttons.len())
         .sum()
 }
 
-fn hardware_binding_count(model: &ModelConfig) -> usize {
-    model
-        .hardware
-        .inputs
+fn hardware_binding_count(profile: &DeviceProfile) -> usize {
+    profile
+        .hardware_profiles
         .iter()
+        .flat_map(|hardware| &hardware.inputs)
         .map(|input| match input {
             InputSource::Direct { keys, .. } => keys.len(),
             InputSource::ContactMatrix { keys, .. } => keys.len(),
@@ -674,8 +559,31 @@ fn hardware_binding_count(model: &ModelConfig) -> usize {
         .sum()
 }
 
-fn action_count(model: &ModelConfig) -> usize {
-    model.actions.values().map(Vec::len).sum()
+fn action_count(profile: &DeviceProfile) -> usize {
+    profile.actions.values().map(Vec::len).sum()
+}
+
+fn validate_profile_filename(path: &Path, profile: &DeviceProfile) -> Result<(), AppError> {
+    let expected = format!("{}.yaml", profile.profile.id);
+    if path.file_name().and_then(|value| value.to_str()) != Some(&expected) {
+        return Err(
+            AppError::new("profile_filename_mismatch").with_param("profile", &profile.profile.id)
+        );
+    }
+    Ok(())
+}
+
+fn yaml_files(directory: &Path, code: &str) -> Result<Vec<PathBuf>, AppError> {
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(directory).map_err(|error| io_error(code, directory, error))? {
+        let entry = entry.map_err(|error| io_error(code, directory, error))?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) == Some("yaml") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    Ok(paths)
 }
 
 fn remove_directory_if_exists(path: &Path) -> Result<(), AppError> {
@@ -686,99 +594,18 @@ fn remove_directory_if_exists(path: &Path) -> Result<(), AppError> {
     }
 }
 
-pub fn migrate_legacy(
-    layouts: Vec<ModelLayout>,
-    legacy: MappingConfig,
-) -> Result<WorkspaceSnapshot, AppError> {
-    let mut models = BTreeMap::new();
-    for layout in layouts {
-        let button_ids = layout
-            .groups
-            .iter()
-            .flat_map(|group| &group.buttons)
-            .map(|button| button.id.as_str())
-            .collect::<BTreeSet<_>>();
-        let direct_keys = legacy
-            .io_maps
-            .get(&layout.id)
-            .into_iter()
-            .flat_map(|mapping| mapping.iter())
-            .map(|(gpio, button)| (button.clone(), *gpio))
-            .collect::<BTreeMap<_, _>>();
-        let inputs = if direct_keys.is_empty() {
-            Vec::new()
-        } else {
-            vec![InputSource::Direct {
-                id: "legacy-direct".into(),
-                keys: direct_keys,
-            }]
-        };
-        let actions = legacy
-            .actions
-            .iter()
-            .filter(|(button, _)| button_ids.contains(button.as_str()))
-            .map(|(button, action)| (button.clone(), vec![action.clone()]))
-            .collect();
-        let legacy_config = (layout.id == legacy.active_model && !legacy.legacy_buttons.is_empty())
-            .then(|| LegacyConfig {
-                unresolved_gpio_text: legacy.legacy_buttons.clone(),
-            });
-        let model = ModelConfig {
-            schema_version: MODEL_SCHEMA_VERSION,
-            model: layout,
-            hardware: HardwareConfig {
-                controller: "esp32s3".into(),
-                debounce_ms: 30,
-                inputs,
-            },
-            actions,
-            legacy: legacy_config,
-        };
-        model.validate()?;
-        models.insert(model.model.id.clone(), model);
-    }
-    let active_model = if models.contains_key(&legacy.active_model) {
-        Some(legacy.active_model)
-    } else {
-        models.keys().next().cloned()
-    };
-    Ok(WorkspaceSnapshot {
-        settings: SettingsDocument {
-            schema_version: SETTINGS_SCHEMA_VERSION,
-            active_model,
-            language: Language::ZhCn,
-        },
-        models,
-    })
-}
-
-fn validate_settings(
-    settings: &SettingsDocument,
-    models: &BTreeMap<String, ModelConfig>,
-) -> Result<(), AppError> {
-    if settings.schema_version != SETTINGS_SCHEMA_VERSION {
-        return Err(AppError::new("unsupported_settings_schema"));
-    }
-    if let Some(active_model) = &settings.active_model
-        && !models.contains_key(active_model)
-    {
-        return Err(AppError::new("unknown_active_model").with_param("model", active_model));
-    }
-    Ok(())
-}
-
 fn write_data_directory(
     data_directory: &Path,
     settings: &SettingsDocument,
-    models: &BTreeMap<String, ModelConfig>,
+    profiles: &BTreeMap<String, DeviceProfile>,
 ) -> Result<(), AppError> {
-    let model_directory = data_directory.join("models");
-    fs::create_dir_all(&model_directory)
-        .map_err(|error| io_error("create_data", &model_directory, error))?;
-    for model in models.values() {
+    let profile_directory = data_directory.join("profiles");
+    fs::create_dir_all(&profile_directory)
+        .map_err(|error| io_error("create_data", &profile_directory, error))?;
+    for profile in profiles.values() {
         write_yaml(
-            &model_directory.join(format!("{}.yaml", model.model.id)),
-            model,
+            &profile_directory.join(format!("{}.yaml", profile.profile.id)),
+            profile,
         )?;
     }
     write_yaml(&data_directory.join("settings.yaml"), settings)
@@ -787,30 +614,52 @@ fn write_data_directory(
 fn write_new_data_directory(
     config_directory: &Path,
     settings: &SettingsDocument,
-    models: &BTreeMap<String, ModelConfig>,
+    profiles: &BTreeMap<String, DeviceProfile>,
 ) -> Result<(), AppError> {
     let next_directory = config_directory.join("data.next");
     remove_directory_if_exists(&next_directory)?;
-    write_data_directory(&next_directory, settings, models)?;
+    write_data_directory(&next_directory, settings, profiles)?;
     let data_directory = config_directory.join("data");
     fs::rename(&next_directory, &data_directory)
         .map_err(|error| io_error("activate_data", &data_directory, error))
 }
 
-fn read_yaml<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, AppError> {
-    let contents = fs::read_to_string(path).map_err(|error| io_error("read_file", path, error))?;
-    serde_yaml_ng::from_str(&contents)
-        .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))
+#[derive(Deserialize)]
+struct SchemaHeader {
+    schema_version: u16,
 }
 
-fn read_yaml_limited<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, AppError> {
-    let metadata = fs::metadata(path).map_err(|error| io_error("read_file", path, error))?;
-    if metadata.len() > MAX_IMPORT_BYTES {
-        return Err(
-            AppError::new("file_too_large").with_param("limit", MAX_IMPORT_BYTES.to_string())
-        );
+fn read_profile_limited(path: &Path) -> Result<DeviceProfile, AppError> {
+    read_versioned_yaml(
+        path,
+        PROFILE_SCHEMA_VERSION,
+        "unsupported_profile_schema",
+        true,
+    )
+}
+
+fn read_versioned_yaml<T: for<'de> Deserialize<'de>>(
+    path: &Path,
+    expected: u16,
+    unsupported_code: &str,
+    limited: bool,
+) -> Result<T, AppError> {
+    if limited {
+        let metadata = fs::metadata(path).map_err(|error| io_error("read_file", path, error))?;
+        if metadata.len() > MAX_IMPORT_BYTES {
+            return Err(
+                AppError::new("file_too_large").with_param("limit", MAX_IMPORT_BYTES.to_string())
+            );
+        }
     }
-    read_yaml(path)
+    let contents = fs::read_to_string(path).map_err(|error| io_error("read_file", path, error))?;
+    let header: SchemaHeader = serde_yaml_ng::from_str(&contents)
+        .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?;
+    if header.schema_version != expected {
+        return Err(AppError::new(unsupported_code));
+    }
+    serde_yaml_ng::from_str(&contents)
+        .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))
 }
 
 fn write_yaml(path: &Path, value: &impl Serialize) -> Result<(), AppError> {
@@ -832,13 +681,10 @@ fn io_error(code: &str, path: &Path, error: std::io::Error) -> AppError {
 mod tests {
     use super::*;
     use crate::{
-        config::{ButtonAction, MappingConfig},
         model::{ButtonDefinition, ButtonGroup, ModelLayout},
+        profile::ButtonAction,
     };
     use std::{
-        collections::BTreeMap,
-        fs,
-        path::PathBuf,
         sync::atomic::{AtomicU64, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -873,59 +719,109 @@ mod tests {
         }
     }
 
-    fn layout(button_ids: &[&str]) -> ModelLayout {
+    fn layout() -> ModelLayout {
         ModelLayout {
             id: "red-phone-v1".into(),
             name: "红色电话机".into(),
             groups: vec![ButtonGroup {
                 id: "digits".into(),
-                columns: button_ids.len(),
-                buttons: button_ids
-                    .iter()
+                columns: 3,
+                buttons: ["A", "B", "C"]
+                    .into_iter()
                     .map(|id| ButtonDefinition {
-                        id: (*id).into(),
-                        label: (*id).into(),
+                        id: id.into(),
+                        label: id.into(),
                     })
                     .collect(),
             }],
         }
     }
 
-    fn model_config(actions: Vec<ButtonAction>) -> ModelConfig {
-        ModelConfig {
-            schema_version: MODEL_SCHEMA_VERSION,
-            model: layout(&["A", "B", "C"]),
-            hardware: HardwareConfig {
-                controller: "esp32s3".into(),
-                debounce_ms: 30,
-                inputs: Vec::new(),
-            },
-            actions: BTreeMap::from([("A".into(), actions)]),
-            legacy: None,
+    fn hardware(id: &str, board_profile_id: &str) -> HardwareProfile {
+        HardwareProfile {
+            id: id.into(),
+            name: id.into(),
+            board_profile_id: board_profile_id.into(),
+            debounce_ms: 30,
+            inputs: Vec::new(),
         }
     }
 
-    #[test]
-    fn model_config_round_trips_unicode_and_action_order() {
-        let config = model_config(vec![
-            ButtonAction::Paste {
-                text: "你好\n".into(),
-            },
-            ButtonAction::Hotkey {
-                keys: vec!["enter".into()],
-            },
-        ]);
+    fn device_profile() -> DeviceProfile {
+        DeviceProfile {
+            schema_version: PROFILE_SCHEMA_VERSION,
+            profile: layout(),
+            hardware_profiles: vec![
+                hardware("esp-primary", "luatos-esp32s3-aio"),
+                hardware("esp-alternate", "luatos-esp32s3-aio"),
+                hardware("rp-primary", "vccgnd-yd-rp2040"),
+            ],
+            actions: BTreeMap::from([(
+                "A".into(),
+                vec![
+                    ButtonAction::Paste {
+                        text: "你好\n".into(),
+                    },
+                    ButtonAction::Hotkey {
+                        keys: vec!["enter".into()],
+                    },
+                ],
+            )]),
+        }
+    }
 
-        let yaml = serde_yaml_ng::to_string(&config).unwrap();
-        let loaded: ModelConfig = serde_yaml_ng::from_str(&yaml).unwrap();
-
-        assert_eq!(loaded, config);
+    fn workspace(directory: &TestDirectory) -> Workspace {
+        Workspace::create(&directory.0, vec![device_profile()]).unwrap()
     }
 
     #[test]
-    fn rejects_non_bipartite_contact_graph() {
-        let mut config = model_config(Vec::new());
-        config.hardware.inputs = vec![InputSource::ContactMatrix {
+    fn device_profile_round_trips_multiple_hardware_profiles_for_both_boards() {
+        let profile = device_profile();
+        profile.validate().unwrap();
+        let yaml = serde_yaml_ng::to_string(&profile).unwrap();
+        let loaded: DeviceProfile = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(loaded, profile);
+        assert_eq!(loaded.compatible_hardware("luatos-esp32s3-aio").len(), 2);
+        assert_eq!(loaded.compatible_hardware("vccgnd-yd-rp2040").len(), 1);
+    }
+
+    #[test]
+    fn profile_validation_rejects_duplicate_hardware_ids_and_unsafe_pins() {
+        let mut duplicate = device_profile();
+        duplicate.hardware_profiles[1].id = "esp-primary".into();
+        assert_eq!(
+            duplicate.validate().unwrap_err().code,
+            "duplicate_hardware_profile"
+        );
+        let mut unsafe_pin = device_profile();
+        unsafe_pin.hardware_profiles[2].inputs = vec![InputSource::Direct {
+            id: "direct".into(),
+            keys: BTreeMap::from([("A".into(), 23)]),
+        }];
+        assert_eq!(unsafe_pin.validate().unwrap_err().code, "unsupported_gpio");
+    }
+
+    #[test]
+    fn profile_validation_rejects_invalid_group_and_button_ids() {
+        let mut invalid_group = device_profile();
+        invalid_group.profile.groups[0].id = "bad group".into();
+        assert_eq!(
+            invalid_group.validate().unwrap_err().code,
+            "invalid_group_id"
+        );
+
+        let mut invalid_button = device_profile();
+        invalid_button.profile.groups[0].buttons[0].id = "bad button".into();
+        assert_eq!(
+            invalid_button.validate().unwrap_err().code,
+            "invalid_button_id"
+        );
+    }
+
+    #[test]
+    fn profile_validation_keeps_matrix_and_action_rules() {
+        let mut profile = device_profile();
+        profile.hardware_profiles[0].inputs = vec![InputSource::ContactMatrix {
             id: "keys".into(),
             pins: vec![1, 2, 3],
             keys: BTreeMap::from([
@@ -934,171 +830,288 @@ mod tests {
                 ("C".into(), [3, 1]),
             ]),
         }];
-
-        assert_eq!(config.validate().unwrap_err().code, "matrix_not_bipartite");
+        assert_eq!(profile.validate().unwrap_err().code, "matrix_not_bipartite");
     }
 
     #[test]
-    fn deleting_last_model_persists_an_empty_workspace() {
+    fn schema_v1_profiles_settings_and_backups_are_rejected() {
         let directory = TestDirectory::new();
-        let mut workspace =
-            Workspace::create(&directory.0, vec![model_config(Vec::new())]).unwrap();
-
-        workspace.delete_model("red-phone-v1").unwrap();
-
-        let reloaded = Workspace::load_existing(&directory.0).unwrap();
-        assert!(reloaded.models.is_empty());
-        assert_eq!(reloaded.settings.active_model, None);
+        let mut profile = device_profile();
+        profile.schema_version = 1;
+        assert_eq!(
+            profile.validate().unwrap_err().code,
+            "unsupported_profile_schema"
+        );
+        let old_profile_path = directory.path("old-profile.yaml");
+        fs::write(
+            &old_profile_path,
+            "schema_version: 1\nmodel: { id: old, name: Old, groups: [] }\nhardware: {}\n",
+        )
+        .unwrap();
+        let workspace = workspace(&directory);
+        assert_eq!(
+            workspace
+                .preview_profile(&old_profile_path)
+                .unwrap_err()
+                .code,
+            "unsupported_profile_schema"
+        );
+        let config_directory = directory.path("config");
+        let data_directory = config_directory.join("data");
+        fs::create_dir_all(data_directory.join("profiles")).unwrap();
+        fs::write(
+            data_directory.join("settings.yaml"),
+            "schema_version: 1\nactive_model: red-phone-v1\nlanguage: zh-CN\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Workspace::load_existing(&config_directory)
+                .unwrap_err()
+                .code,
+            "unsupported_settings_schema"
+        );
+        let backup_path = directory.path("backup.yaml");
+        fs::write(&backup_path, "schema_version: 1\nmodels: []\n").unwrap();
+        assert_eq!(
+            workspace.preview_backup(&backup_path).unwrap_err().code,
+            "unsupported_backup_schema"
+        );
     }
 
     #[test]
-    fn legacy_global_action_is_copied_per_model_and_unresolved_text_survives() {
-        let first = layout(&["A", "B"]);
-        let mut second = layout(&["A", "C"]);
-        second.id = "other-model".into();
-        second.name = "Other".into();
-        let legacy = MappingConfig {
-            active_model: first.id.clone(),
-            io_maps: BTreeMap::from([
-                (first.id.clone(), BTreeMap::from([(6, "A".into())])),
-                (second.id.clone(), BTreeMap::from([(7, "A".into())])),
-            ]),
-            actions: BTreeMap::from([(
-                "A".into(),
-                ButtonAction::Paste {
-                    text: "你好".into(),
+    fn settings_reject_mismatched_malformed_and_unknown_board_device_ids() {
+        let id = DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap();
+        let other = DeviceId::new("luatos-esp32s3-aio", "654321FEDCBA").unwrap();
+        let settings = SettingsDocument {
+            devices: BTreeMap::from([(
+                id,
+                DeviceRecord {
+                    device_id: other,
+                    name: "Desk".into(),
+                    board_profile_id: "luatos-esp32s3-aio".into(),
+                    runtime_assignment: None,
                 },
             )]),
-            legacy_buttons: BTreeMap::from([(8, "preserve".into())]),
+            ..SettingsDocument::default()
         };
-
-        let migrated = migrate_legacy(vec![first, second], legacy).unwrap();
-
-        assert_eq!(migrated.models["red-phone-v1"].actions["A"].len(), 1);
-        assert_eq!(migrated.models["other-model"].actions["A"].len(), 1);
         assert_eq!(
-            migrated.models["red-phone-v1"]
-                .legacy
-                .as_ref()
+            validate_settings(&settings, &BTreeMap::new())
+                .unwrap_err()
+                .code,
+            "device_id_mismatch"
+        );
+        let mut unknown = SettingsDocument::default();
+        let id = DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap();
+        unknown.devices.insert(
+            id.clone(),
+            DeviceRecord {
+                device_id: id,
+                name: "Desk".into(),
+                board_profile_id: "unknown-board".into(),
+                runtime_assignment: None,
+            },
+        );
+        assert_eq!(
+            validate_settings(&unknown, &BTreeMap::new())
+                .unwrap_err()
+                .code,
+            "unknown_board_profile"
+        );
+        assert!(serde_yaml_ng::from_str::<SettingsDocument>(
+            "schema_version: 2\neditor_profile: null\nlanguage: zh-CN\ndevices:\n  malformed:\n    device_id: malformed\n    name: Desk\n    board_profile_id: luatos-esp32s3-aio\n    runtime_assignment: null\n"
+        ).is_err());
+    }
+
+    #[test]
+    fn enrollment_is_idempotent_and_persists_a_default_name() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let id = DeviceId::new("vccgnd-yd-rp2040", "E0C9125B0D9B").unwrap();
+        let first = workspace.enroll_device(id.clone()).unwrap().clone();
+        let second = workspace.enroll_device(id.clone()).unwrap().clone();
+        assert_eq!(first, second);
+        assert_eq!(first.name, "VCC-GND YD-RP2040 · 5B0D9B");
+        assert_eq!(
+            Workspace::load_existing(&directory.0)
                 .unwrap()
-                .unresolved_gpio_text[&8],
-            "preserve",
+                .settings
+                .devices[&id],
+            first
         );
     }
 
     #[test]
-    fn same_id_import_replaces_only_that_model() {
+    fn assignments_require_exact_board_equality() {
         let directory = TestDirectory::new();
-        let mut workspace =
-            Workspace::create(&directory.0, vec![model_config(Vec::new())]).unwrap();
-        let mut replacement = model_config(vec![ButtonAction::Paste {
-            text: "替换".into(),
-        }]);
-        replacement.model.name = "替换型号".into();
-        let import_path = directory.path("incoming.kivo-model.yaml");
-        fs::write(
-            &import_path,
-            serde_yaml_ng::to_string(&replacement).unwrap(),
-        )
-        .unwrap();
-
-        let preview = workspace.preview_model(&import_path).unwrap();
-        assert!(preview.replaces_existing);
-        workspace.import_model(&import_path).unwrap();
-
-        assert_eq!(workspace.models["red-phone-v1"], replacement);
-    }
-
-    #[test]
-    fn backup_restore_replaces_the_complete_snapshot() {
-        let directory = TestDirectory::new();
-        let mut original = model_config(vec![ButtonAction::Paste {
-            text: "原始".into(),
-        }]);
-        original.model.name = "原始型号".into();
-        let mut workspace = Workspace::create(&directory.0, vec![original.clone()]).unwrap();
-        let backup_path = directory.path("backup.yaml");
-        workspace.export_backup(&backup_path).unwrap();
-        workspace.delete_model("red-phone-v1").unwrap();
-
-        workspace.restore_backup(&backup_path).unwrap();
-
+        let mut workspace = workspace(&directory);
+        let id = DeviceId::new("vccgnd-yd-rp2040", "E0C9125B0D9B").unwrap();
+        workspace.enroll_device(id.clone()).unwrap();
         assert_eq!(
-            workspace.models,
-            BTreeMap::from([("red-phone-v1".into(), original)])
+            workspace
+                .set_assignment(
+                    &id,
+                    RuntimeAssignment {
+                        device_profile_id: "red-phone-v1".into(),
+                        hardware_profile_id: "esp-primary".into(),
+                    }
+                )
+                .unwrap_err()
+                .code,
+            "assignment_board_mismatch"
+        );
+        let assignment = RuntimeAssignment {
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "rp-primary".into(),
+        };
+        workspace.set_assignment(&id, assignment.clone()).unwrap();
+        assert!(
+            matches!(workspace.assignment_resolution(&id), AssignmentResolution::Valid { hardware, .. } if hardware.id == "rp-primary")
         );
         assert_eq!(
-            workspace.settings.active_model.as_deref(),
-            Some("red-phone-v1")
+            workspace.settings.devices[&id].runtime_assignment,
+            Some(assignment)
         );
     }
 
     #[test]
-    fn deleted_bundled_models_are_not_reseeded() {
+    fn broken_assignments_are_retained_without_compatible_fallback() {
         let directory = TestDirectory::new();
-        let config_directory = directory.path("config");
-        let bundled_directory = directory.path("bundled");
-        fs::create_dir_all(&bundled_directory).unwrap();
-        let bundled = model_config(Vec::new());
-        fs::write(
-            bundled_directory.join("red-phone-v1.yaml"),
-            serde_yaml_ng::to_string(&bundled).unwrap(),
-        )
-        .unwrap();
-        let mut workspace =
-            Workspace::load(&config_directory, &bundled_directory, LegacyPaths::none()).unwrap();
-        workspace.delete_model("red-phone-v1").unwrap();
-
-        let reloaded =
-            Workspace::load(&config_directory, &bundled_directory, LegacyPaths::none()).unwrap();
-
-        assert!(reloaded.models.is_empty());
+        let mut workspace = workspace(&directory);
+        let id = DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap();
+        workspace.enroll_device(id.clone()).unwrap();
+        let assignment = RuntimeAssignment {
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        workspace.set_assignment(&id, assignment.clone()).unwrap();
+        let mut edited = device_profile();
+        edited.hardware_profiles.remove(0);
+        workspace.save_profile(edited).unwrap();
+        assert!(
+            matches!(workspace.assignment_resolution(&id), AssignmentResolution::InvalidAssignment { assignment: retained, .. } if retained == &assignment)
+        );
+        assert_eq!(
+            workspace.settings.devices[&id].runtime_assignment.as_ref(),
+            Some(&assignment)
+        );
+        let mut incompatible = device_profile();
+        incompatible.hardware_profiles[0].board_profile_id = "vccgnd-yd-rp2040".into();
+        workspace.save_profile(incompatible).unwrap();
+        assert!(matches!(
+            workspace.assignment_resolution(&id),
+            AssignmentResolution::InvalidAssignment { .. }
+        ));
     }
 
     #[test]
-    fn previews_counts_and_exports_the_complete_model() {
+    fn clear_rename_and_forget_are_durable_transactions() {
         let directory = TestDirectory::new();
-        let mut model = model_config(vec![
-            ButtonAction::Paste {
-                text: "中文".into(),
-            },
-            ButtonAction::Hotkey {
-                keys: vec!["cmd".into(), "k".into()],
-            },
-        ]);
-        model.hardware.inputs = vec![InputSource::Direct {
-            id: "direct".into(),
-            keys: BTreeMap::from([("A".into(), 6)]),
-        }];
-        let workspace = Workspace::create(&directory.0, vec![model.clone()]).unwrap();
-        let export_path = directory.path("red-phone-v1.kivo-model.yaml");
+        let mut workspace = workspace(&directory);
+        let id = DeviceId::new("luatos-esp32s3-aio", "ABCDEF123456").unwrap();
+        workspace.enroll_device(id.clone()).unwrap();
         workspace
-            .export_model("red-phone-v1", &export_path)
+            .set_assignment(
+                &id,
+                RuntimeAssignment {
+                    device_profile_id: "red-phone-v1".into(),
+                    hardware_profile_id: "esp-primary".into(),
+                },
+            )
             .unwrap();
+        workspace.rename_device(&id, "Front desk".into()).unwrap();
+        workspace.clear_assignment(&id).unwrap();
+        assert_eq!(
+            workspace.forget_offline_device(&id, true).unwrap_err().code,
+            "device_online"
+        );
+        workspace.forget_offline_device(&id, false).unwrap();
+        assert!(!workspace.settings.devices.contains_key(&id));
+        assert!(workspace.profiles.contains_key("red-phone-v1"));
+        let reloaded = Workspace::load_existing(&directory.0).unwrap();
+        assert!(!reloaded.settings.devices.contains_key(&id));
+        assert!(reloaded.profiles.contains_key("red-phone-v1"));
+    }
 
-        let preview = workspace.preview_model(&export_path).unwrap();
+    #[test]
+    fn preview_export_and_button_lookup_use_complete_profiles() {
+        let directory = TestDirectory::new();
+        let workspace = workspace(&directory);
+        let path = directory.path("red-phone-v1.yaml");
+        workspace.export_profile("red-phone-v1", &path).unwrap();
+        let preview = workspace.preview_profile(&path).unwrap();
         assert_eq!(
             (
                 preview.button_count,
                 preview.hardware_binding_count,
                 preview.action_count
             ),
-            (3, 1, 2)
+            (3, 0, 2)
         );
         assert!(preview.replaces_existing);
-        assert_eq!(read_yaml::<ModelConfig>(&export_path).unwrap(), model);
+        let mut profile = device_profile();
+        profile.hardware_profiles[0].inputs = vec![InputSource::Direct {
+            id: "direct".into(),
+            keys: BTreeMap::from([("A".into(), 6)]),
+        }];
+        profile.hardware_profiles[1].inputs = vec![InputSource::Direct {
+            id: "direct".into(),
+            keys: BTreeMap::from([("B".into(), 6)]),
+        }];
+        assert_eq!(
+            profile.button_for(
+                "esp-primary",
+                &crate::protocol::PhysicalInput::Direct { gpio: 6 }
+            ),
+            Some("A")
+        );
+        assert_eq!(
+            profile.button_for(
+                "esp-alternate",
+                &crate::protocol::PhysicalInput::Direct { gpio: 6 }
+            ),
+            Some("B")
+        );
+    }
+
+    #[test]
+    fn bundled_loader_accepts_only_yaml_v2_profiles() {
+        let directory = TestDirectory::new();
+        fs::write(directory.path("ignored.json"), "{}").unwrap();
+        fs::write(
+            directory.path("red-phone-v1.yaml"),
+            serde_yaml_ng::to_string(&device_profile()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            load_bundled_profiles(&directory.0).unwrap(),
+            vec![device_profile()]
+        );
+    }
+
+    #[test]
+    fn bundled_product_profile_is_valid_v2_yaml() {
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../models/prod");
+        let profiles = load_bundled_profiles(&directory).unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].profile.id, "tel001");
+        assert_eq!(profiles[0].hardware_profiles.len(), 1);
+        assert_eq!(
+            profiles[0].hardware_profiles[0].board_profile_id,
+            "luatos-esp32s3-aio"
+        );
     }
 
     #[test]
     fn rejects_imports_larger_than_ten_mibibytes() {
         let directory = TestDirectory::new();
-        let workspace = Workspace::create(&directory.0, vec![model_config(Vec::new())]).unwrap();
+        let workspace = workspace(&directory);
         let path = directory.path("too-large.yaml");
-        let file = fs::File::create(&path).unwrap();
-        file.set_len(MAX_IMPORT_BYTES + 1).unwrap();
-
+        fs::File::create(&path)
+            .unwrap()
+            .set_len(MAX_IMPORT_BYTES + 1)
+            .unwrap();
         assert_eq!(
-            workspace.preview_model(&path).unwrap_err().code,
+            workspace.preview_profile(&path).unwrap_err().code,
             "file_too_large"
         );
     }

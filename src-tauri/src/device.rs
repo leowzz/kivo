@@ -1,11 +1,11 @@
 use crate::{
     hardware::{BoardProfile, board_by_runtime_usb},
     metrics::{HomeMetricsSnapshot, MetricsStore},
+    profile::DeviceProfile,
     protocol::{
-        ActionSequence, DeviceMessage, HardwareProfile, HelloCapabilities, InputState,
-        PhysicalInput, is_hello_line, parse_device, topology_commands, validate_hello,
+        ActionSequence, DeviceMessage, HelloCapabilities, InputState, PhysicalInput, is_hello_line,
+        parse_device, topology_commands, validate_hello,
     },
-    workspace::ModelConfig,
 };
 use serde::Serialize;
 use serialport::{SerialPortInfo, SerialPortType};
@@ -68,7 +68,7 @@ pub struct SessionOutput {
 }
 
 pub struct DeviceSession {
-    model: Option<ModelConfig>,
+    profile: Option<RuntimeProfile>,
     candidate_board: &'static BoardProfile,
     hello: Option<HelloCapabilities>,
     revision: u32,
@@ -78,11 +78,17 @@ pub struct DeviceSession {
     queue: VecDeque<(u64, PhysicalInput)>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeProfile {
+    pub profile: DeviceProfile,
+    pub hardware_profile_id: String,
+}
+
 impl DeviceSession {
     #[cfg(test)]
-    pub fn new(model: ModelConfig) -> Self {
+    pub fn new(profile: RuntimeProfile) -> Self {
         Self {
-            model: Some(model),
+            profile: Some(profile),
             candidate_board: crate::hardware::board_by_id("luatos-esp32s3-aio").unwrap(),
             hello: None,
             revision: 0,
@@ -95,7 +101,7 @@ impl DeviceSession {
 
     pub fn without_model(candidate_board: &'static BoardProfile) -> Self {
         Self {
-            model: None,
+            profile: None,
             candidate_board,
             hello: None,
             revision: 0,
@@ -106,7 +112,7 @@ impl DeviceSession {
         }
     }
 
-    pub fn replace_model(&mut self, model: Option<ModelConfig>) -> SessionOutput {
+    pub fn replace_profile(&mut self, profile: Option<RuntimeProfile>) -> SessionOutput {
         let mut output = SessionOutput::default();
         if let Some(sequence) = self.active.take() {
             output.lines.push(format!("SKIP {}\n", sequence.event_id()));
@@ -114,7 +120,7 @@ impl DeviceSession {
         self.queue.clear();
         self.ready = false;
         self.configuring = None;
-        self.model = model;
+        self.profile = profile;
         if let Some(hello) = self.hello.clone() {
             self.configure_for_hello(hello, &mut output);
         }
@@ -234,37 +240,43 @@ impl DeviceSession {
         }
     }
 
-    fn configure_for_hello(
-        &mut self,
-        hello: HelloCapabilities,
-        output: &mut SessionOutput,
-    ) {
+    fn configure_for_hello(&mut self, hello: HelloCapabilities, output: &mut SessionOutput) {
         self.clear_handshake();
         if let Err(error) = validate_hello(self.candidate_board, &hello) {
             output.activities.push(activity_from_error(error));
             return;
         }
         self.hello = Some(hello.clone());
-        let Some(model) = self.model.as_ref() else {
+        let Some(runtime) = self.profile.as_ref() else {
             output
                 .activities
-                .push(RuntimeActivity::new("no_active_model"));
+                .push(RuntimeActivity::new("no_runtime_assignment"));
             return;
         };
-        if let Err(error) = model.validate() {
-            output.activities.push(RuntimeActivity::new("invalid_topology").with_detail(error.code));
+        if let Err(error) = runtime.profile.validate() {
+            output
+                .activities
+                .push(RuntimeActivity::new("invalid_topology").with_detail(error.code));
             return;
         }
-        let hardware = match HardwareProfile::new(self.candidate_board, &model.hardware) {
-            Ok(hardware) => hardware,
-            Err(error) => {
-                output.activities.push(activity_from_error(error));
-                return;
-            }
+        let Some(hardware) = runtime
+            .profile
+            .hardware_profile(&runtime.hardware_profile_id)
+        else {
+            output
+                .activities
+                .push(RuntimeActivity::new("invalid_assignment"));
+            return;
         };
+        if hardware.board_profile_id != self.candidate_board.id {
+            output
+                .activities
+                .push(RuntimeActivity::new("assignment_board_mismatch"));
+            return;
+        }
         let reported_pins = hello.pins.iter().copied().collect::<BTreeSet<_>>();
         self.revision = self.revision.wrapping_add(1).max(1);
-        match topology_commands(&hardware, self.revision, &reported_pins) {
+        match topology_commands(hardware, self.revision, &reported_pins) {
             Ok(lines) => {
                 self.configuring = Some(self.revision);
                 output.lines = lines;
@@ -329,18 +341,27 @@ impl DeviceSession {
             let Some((event_id, input)) = self.queue.pop_front() else {
                 return;
             };
-            let Some(model) = self.model.as_ref() else {
+            let Some(runtime) = self.profile.as_ref() else {
                 output.lines.push(format!("SKIP {event_id}\n"));
                 continue;
             };
-            let Some(button) = model.button_for(&input).map(str::to_owned) else {
+            let Some(button) = runtime
+                .profile
+                .button_for(&runtime.hardware_profile_id, &input)
+                .map(str::to_owned)
+            else {
                 output.lines.push(format!("SKIP {event_id}\n"));
                 output
                     .activities
                     .push(RuntimeActivity::new("unmapped_input"));
                 continue;
             };
-            let actions = model.actions.get(&button).cloned().unwrap_or_default();
+            let actions = runtime
+                .profile
+                .actions
+                .get(&button)
+                .cloned()
+                .unwrap_or_default();
             if actions.is_empty() {
                 output.lines.push(format!("SKIP {event_id}\n"));
                 output
@@ -438,7 +459,7 @@ pub enum EventLevel {
 
 #[derive(Clone)]
 pub struct WorkerState {
-    pub active_model: Arc<RwLock<Option<ModelConfig>>>,
+    pub active_profile: Arc<RwLock<Option<RuntimeProfile>>>,
     pub connection: Arc<RwLock<ConnectionStatus>>,
     pub capabilities: Arc<RwLock<Option<DeviceCapabilities>>>,
     pub runtime_error: Arc<RwLock<Option<RuntimeActivity>>>,
@@ -461,26 +482,29 @@ pub struct RuntimeEvent {
 
 fn persist_metrics(
     metrics: &MetricsStore,
-    model: Option<&ModelConfig>,
+    runtime: Option<&RuntimeProfile>,
     activity: &RuntimeActivity,
     timestamp_ms: u64,
 ) -> Result<Option<HomeMetricsSnapshot>, rusqlite::Error> {
     if activity.code != "input_state" || activity.pressed != Some(true) {
         return Ok(None);
     }
-    let Some(model) = model else {
+    let Some(runtime) = runtime else {
         return Ok(None);
     };
     let Some(input) = activity.input.as_ref() else {
         return Ok(None);
     };
-    let Some(button_id) = model.button_for(input) else {
+    let Some(button_id) = runtime
+        .profile
+        .button_for(&runtime.hardware_profile_id, input)
+    else {
         return Ok(None);
     };
-    metrics.record_button_press(&model.model.id, button_id, timestamp_ms)?;
+    metrics.record_button_press(&runtime.profile.profile.id, button_id, timestamp_ms)?;
     metrics.record_activity(timestamp_ms, "button", &format!("{button_id} pressed"))?;
     metrics
-        .home_snapshot(&model.model.id, timestamp_ms)
+        .home_snapshot(&runtime.profile.profile.id, timestamp_ms)
         .map(Some)
 }
 
@@ -512,7 +536,7 @@ fn update_published_capabilities(
 
 pub fn run_worker(app: AppHandle, state: WorkerState) {
     let WorkerState {
-        active_model,
+        active_profile,
         connection,
         capabilities,
         runtime_error,
@@ -605,14 +629,22 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
         let mut action_deadline = None;
         let mut line = Vec::new();
         while !stop.load(Ordering::Relaxed) {
-            let next_model = active_model
+            let next_profile = active_profile
                 .read()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .clone();
-            if next_model != loaded_model {
-                loaded_model = next_model.clone();
-                let output = session.replace_model(next_model);
-                match write_output(&app, &connection, &runtime_error, &active_model, metrics.as_deref(), device.get_mut(), output) {
+            if next_profile != loaded_model {
+                loaded_model = next_profile.clone();
+                let output = session.replace_profile(next_profile);
+                match write_output(
+                    &app,
+                    &connection,
+                    &runtime_error,
+                    &active_profile,
+                    metrics.as_deref(),
+                    device.get_mut(),
+                    output,
+                ) {
                     Ok(sent_action) => {
                         update_action_deadline(&mut action_deadline, &session, sent_action)
                     }
@@ -625,7 +657,15 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
             if action_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 let output =
                     session.fail_active("action_ack_timeout", None, &mut copy_to_clipboard);
-                match write_output(&app, &connection, &runtime_error, &active_model, metrics.as_deref(), device.get_mut(), output) {
+                match write_output(
+                    &app,
+                    &connection,
+                    &runtime_error,
+                    &active_profile,
+                    metrics.as_deref(),
+                    device.get_mut(),
+                    output,
+                ) {
                     Ok(sent_action) => {
                         update_action_deadline(&mut action_deadline, &session, sent_action)
                     }
@@ -645,7 +685,7 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
                     &app,
                     &connection,
                     &runtime_error,
-                    &active_model,
+                    &active_profile,
                     metrics.as_deref(),
                     device.get_mut(),
                     SessionOutput {
@@ -669,8 +709,15 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
                     };
                     update_published_capabilities(&capabilities, candidate_board, text);
                     let output = session.on_line(text, &mut copy_to_clipboard);
-                    match write_output(&app, &connection, &runtime_error, &active_model, metrics.as_deref(), device.get_mut(), output)
-                    {
+                    match write_output(
+                        &app,
+                        &connection,
+                        &runtime_error,
+                        &active_profile,
+                        metrics.as_deref(),
+                        device.get_mut(),
+                        output,
+                    ) {
                         Ok(sent_action) => {
                             update_action_deadline(&mut action_deadline, &session, sent_action)
                         }
@@ -706,7 +753,7 @@ fn write_output<W: Write + ?Sized>(
     app: &AppHandle,
     connection: &RwLock<ConnectionStatus>,
     runtime_error: &RwLock<Option<RuntimeActivity>>,
-    active_model: &RwLock<Option<ModelConfig>>,
+    active_profile: &RwLock<Option<RuntimeProfile>>,
     metrics: Option<&MetricsStore>,
     writer: &mut W,
     output: SessionOutput,
@@ -724,10 +771,10 @@ fn write_output<W: Write + ?Sized>(
         }
         let timestamp_ms = now_ms();
         let home_update = metrics.and_then(|metrics| {
-            let model = active_model
+            let profile = active_profile
                 .read()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            match persist_metrics(metrics, model.as_ref(), &activity, timestamp_ms) {
+            match persist_metrics(metrics, profile.as_ref(), &activity, timestamp_ms) {
                 Ok(update) => update,
                 Err(error) => {
                     *runtime_error
@@ -754,14 +801,12 @@ fn write_output<W: Write + ?Sized>(
 
 fn activity_level(code: &str) -> EventLevel {
     match code {
-        "topology_active" | "input_state" | "learning_ready" | "learning_input" => {
-            EventLevel::Info
-        }
+        "topology_active" | "input_state" | "learning_ready" | "learning_input" => EventLevel::Info,
         "input_before_configuration"
         | "unexpected_action_acknowledgement"
         | "unmapped_input"
         | "empty_action_list"
-        | "no_active_model" => EventLevel::Warning,
+        | "no_runtime_assignment" => EventLevel::Warning,
         _ => EventLevel::Error,
     }
 }
@@ -918,50 +963,55 @@ fn wait(stop: &AtomicBool) {
 mod tests {
     use super::*;
     use crate::{
-        config::ButtonAction,
         metrics::MetricsStore,
         model::{ButtonDefinition, ButtonGroup, ModelLayout},
+        profile::{
+            ButtonAction, DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION,
+        },
         protocol::{DeviceMessage, PhysicalInput},
-        workspace::{HardwareConfig, InputSource, MODEL_SCHEMA_VERSION, ModelConfig},
     };
     use serialport::{SerialPortInfo, SerialPortType, UsbPortInfo};
     use std::{cell::RefCell, collections::BTreeMap};
 
-    fn runtime_model() -> ModelConfig {
-        ModelConfig {
-            schema_version: MODEL_SCHEMA_VERSION,
-            model: ModelLayout {
-                id: "phone".into(),
-                name: "电话".into(),
-                groups: vec![ButtonGroup {
-                    id: "keys".into(),
-                    columns: 1,
-                    buttons: vec![ButtonDefinition {
-                        id: "A".into(),
-                        label: "甲".into(),
+    fn runtime_model() -> RuntimeProfile {
+        RuntimeProfile {
+            hardware_profile_id: "esp-primary".into(),
+            profile: DeviceProfile {
+                schema_version: PROFILE_SCHEMA_VERSION,
+                profile: ModelLayout {
+                    id: "phone".into(),
+                    name: "电话".into(),
+                    groups: vec![ButtonGroup {
+                        id: "keys".into(),
+                        columns: 1,
+                        buttons: vec![ButtonDefinition {
+                            id: "A".into(),
+                            label: "甲".into(),
+                        }],
+                    }],
+                },
+                hardware_profiles: vec![HardwareProfile {
+                    id: "esp-primary".into(),
+                    name: "ESP primary".into(),
+                    board_profile_id: "luatos-esp32s3-aio".into(),
+                    debounce_ms: 30,
+                    inputs: vec![InputSource::Direct {
+                        id: "direct".into(),
+                        keys: BTreeMap::from([("A".into(), 6)]),
                     }],
                 }],
+                actions: BTreeMap::from([(
+                    "A".into(),
+                    vec![
+                        ButtonAction::Paste {
+                            text: "第一步".into(),
+                        },
+                        ButtonAction::Paste {
+                            text: "第二步".into(),
+                        },
+                    ],
+                )]),
             },
-            hardware: HardwareConfig {
-                controller: "esp32s3".into(),
-                debounce_ms: 30,
-                inputs: vec![InputSource::Direct {
-                    id: "direct".into(),
-                    keys: BTreeMap::from([("A".into(), 6)]),
-                }],
-            },
-            actions: BTreeMap::from([(
-                "A".into(),
-                vec![
-                    ButtonAction::Paste {
-                        text: "第一步".into(),
-                    },
-                    ButtonAction::Paste {
-                        text: "第二步".into(),
-                    },
-                ],
-            )]),
-            legacy: None,
         }
     }
 
@@ -971,7 +1021,10 @@ mod tests {
         let path = std::env::temp_dir().join(format!(
             "kivo-device-metrics-{}-{}.sqlite3",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         let store = MetricsStore::open(&path).unwrap();
         let timestamp = SystemTime::now()
@@ -1137,10 +1190,7 @@ mod tests {
             session.candidate_board,
             "HELLO 3 esp32s3 luatos-esp32s3-aio build 2 0",
         );
-        session.on_line(
-            "HELLO 3 esp32s3 luatos-esp32s3-aio build 2 0",
-            &mut copy,
-        );
+        session.on_line("HELLO 3 esp32s3 luatos-esp32s3-aio build 2 0", &mut copy);
         assert!(capabilities.read().unwrap().is_none());
         assert!(!session.ready);
         assert!(session.hello.is_none());
@@ -1153,10 +1203,7 @@ mod tests {
             session.candidate_board,
             "HELLO 3 esp32s3 vccgnd-yd-rp2040 build 2 0 6",
         );
-        session.on_line(
-            "HELLO 3 esp32s3 vccgnd-yd-rp2040 build 2 0 6",
-            &mut copy,
-        );
+        session.on_line("HELLO 3 esp32s3 vccgnd-yd-rp2040 build 2 0 6", &mut copy);
         assert!(capabilities.read().unwrap().is_none());
         assert!(!session.ready);
         assert!(session.hello.is_none());
@@ -1183,7 +1230,11 @@ mod tests {
             Some("USB Serial Device (COM3)")
         )));
         assert!(is_target_port(&usb_port(0x303a, 0x4002, None)));
-        assert!(is_target_port(&usb_port(0x2e8a, 0x102e, Some("Kivo Keyboard"))));
+        assert!(is_target_port(&usb_port(
+            0x2e8a,
+            0x102e,
+            Some("Kivo Keyboard")
+        )));
         assert!(!is_target_port(&usb_port(
             0x303b,
             0x4002,
