@@ -92,6 +92,23 @@ void test_parses_runtime_configuration_commands() {
   TEST_ASSERT_EQUAL(HelperCommandKind::ConfigCommit, commit->kind);
 }
 
+void test_parses_extended_registered_board_pin_domain() {
+  const auto direct = parseHelperCommand("CONFIG_DIRECT 3 0 5 10 11 19 20 22\n");
+
+  TEST_ASSERT_TRUE(direct.has_value());
+  TEST_ASSERT_EQUAL_UINT8(5, direct->pins.size());
+  TEST_ASSERT_EQUAL_UINT8(10, direct->pins[0]);
+  TEST_ASSERT_EQUAL_UINT8(22, direct->pins[4]);
+
+  TopologyBuilder esp32(kLuatOsEsp32S3Aio);
+  TEST_ASSERT_TRUE(esp32.begin(3, 30));
+  TEST_ASSERT_FALSE(esp32.addDirect(3, 0, direct->pins));
+
+  TopologyBuilder rp2040(kVccGndYdRp2040);
+  TEST_ASSERT_TRUE(rp2040.begin(3, 30));
+  TEST_ASSERT_TRUE(rp2040.addDirect(3, 0, direct->pins));
+}
+
 void test_parses_learning_and_ordered_action_commands() {
   const auto begin = parseHelperCommand("LEARN_BEGIN 4 4 1 2 12 13\n");
   TEST_ASSERT_TRUE(begin.has_value());
@@ -168,6 +185,16 @@ void test_learning_reports_contact_and_restores_runtime_topology() {
   TEST_ASSERT_FALSE(controller.endLearning(5, 50));
   TEST_ASSERT_TRUE(controller.endLearning(4, 50));
   TEST_ASSERT_EQUAL_UINT32(7, controller.topology().revision);
+}
+
+void test_rp2040_learning_accepts_gpio22_and_rejects_gpio23() {
+  GpioTriggerController esp32(kLuatOsEsp32S3Aio, 0);
+  TEST_ASSERT_FALSE(esp32.beginLearning(4, {22}, 0));
+
+  GpioTriggerController rp2040(kVccGndYdRp2040, 0);
+  TEST_ASSERT_TRUE(rp2040.beginLearning(4, {22}, 0));
+  TEST_ASSERT_TRUE(rp2040.endLearning(4, 1));
+  TEST_ASSERT_FALSE(rp2040.beginLearning(5, {23}, 1));
 }
 
 void test_suppresses_new_contact_that_closes_a_ghost_cycle() {
@@ -395,10 +422,12 @@ int main(int, char **) {
   RUN_TEST(test_board_profiles_enforce_exact_safe_pins);
   RUN_TEST(test_contact_edge_reports_unordered_pair_once_after_debounce);
   RUN_TEST(test_parses_runtime_configuration_commands);
+  RUN_TEST(test_parses_extended_registered_board_pin_domain);
   RUN_TEST(test_parses_learning_and_ordered_action_commands);
   RUN_TEST(test_rejects_malformed_runtime_commands);
   RUN_TEST(test_action_steps_are_strictly_ordered);
   RUN_TEST(test_learning_reports_contact_and_restores_runtime_topology);
+  RUN_TEST(test_rp2040_learning_accepts_gpio22_and_rejects_gpio23);
   RUN_TEST(test_suppresses_new_contact_that_closes_a_ghost_cycle);
   RUN_TEST(test_exposes_supported_gpio_inputs);
   RUN_TEST(test_stable_edges_emit_once_after_debounce);

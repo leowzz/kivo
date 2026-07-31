@@ -16,9 +16,9 @@ constexpr const char *kHelloLine =
 
 USBCDC usbSerial;
 USBHIDKeyboard keyboard;
-GpioTriggerController controller;
+GpioTriggerController controller(kLuatOsEsp32S3Aio);
 ResponseLineBuffer responseLines(kMaxResponseLineLength);
-TopologyBuilder topologyBuilder;
+TopologyBuilder topologyBuilder(kLuatOsEsp32S3Aio);
 bool helperConnected = false;
 
 void writeLine(const std::string &line) {
@@ -43,8 +43,9 @@ void sendHotkey(std::uint8_t modifierMask, std::uint8_t keycode) {
 }
 
 void applyRuntimePinModes() {
-  for (const auto gpio : GpioTriggerController::kSupportedPins) {
-    pinMode(gpio, INPUT);
+  for (std::size_t index = 0; index < kLuatOsEsp32S3Aio.safePinCount;
+       ++index) {
+    pinMode(kLuatOsEsp32S3Aio.safePins[index], INPUT);
   }
   for (const auto &source : controller.topology().directs) {
     for (const auto gpio : source.pins) pinMode(gpio, INPUT_PULLUP);
@@ -56,8 +57,9 @@ void applyRuntimePinModes() {
 }
 
 void applyLearningPinModes() {
-  for (const auto gpio : GpioTriggerController::kSupportedPins) {
-    pinMode(gpio, INPUT);
+  for (std::size_t index = 0; index < kLuatOsEsp32S3Aio.safePinCount;
+       ++index) {
+    pinMode(kLuatOsEsp32S3Aio.safePins[index], INPUT);
   }
   for (const auto gpio : controller.learningPins()) {
     pinMode(gpio, INPUT_PULLUP);
