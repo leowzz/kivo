@@ -1,16 +1,33 @@
-.PHONY: all build download-mode upload test helper helper-kill helper-build release
+.PHONY: all build build-esp32s3 build-rp2040 download-mode upload upload-esp32s3 upload-rp2040 require-serial test helper helper-kill helper-build release
+
+BUILD_ID ?= 0.1.0+dev
 
 all: helper
 
-build:
-	uv run pio run -e esp32s3
+require-serial:
+	@test -n "$(SERIAL)" || { echo "SERIAL is required" >&2; exit 2; }
 
-download-mode:
-	uv run python scripts/enter_download_mode.py
+build: build-esp32s3
 
-upload: download-mode
-	uv run pio run -e esp32s3 -t upload
-	uv run pio pkg exec -p tool-esptoolpy -- esptool.py --chip esp32s3 run
+build-esp32s3:
+	KIVO_FIRMWARE_BUILD_ID="$(BUILD_ID)" uv run pio run -e esp32s3
+
+build-rp2040:
+	KIVO_FIRMWARE_BUILD_ID="$(BUILD_ID)" uv run pio run -e rp2040
+
+download-mode: require-serial
+	uv run python scripts/enter_download_mode.py --serial "$(SERIAL)"
+
+upload: upload-esp32s3
+
+upload-esp32s3: require-serial build-esp32s3
+	@download_port="$$(uv run python scripts/enter_download_mode.py --serial "$(SERIAL)")" || exit $$?; \
+	  KIVO_FIRMWARE_BUILD_ID="$(BUILD_ID)" uv run pio run -e esp32s3 -t upload --upload-port "$$download_port"
+	uv run python scripts/verify_runtime_firmware.py --serial "$(SERIAL)" --vid 0x303a --pid 0x4002 --family esp32s3 --board luatos-esp32s3-aio --build "$(BUILD_ID)"
+
+upload-rp2040: require-serial build-rp2040
+	uv run pio pkg exec -p tool-picotool-rp2040-earlephilhower -- picotool load -x .pio/build/rp2040/firmware.uf2 --ser "$(SERIAL)"
+	uv run python scripts/verify_runtime_firmware.py --serial "$(SERIAL)" --vid 0x2e8a --pid 0x102e --family rp2040 --board vccgnd-yd-rp2040 --build "$(BUILD_ID)"
 
 test:
 	bash test/test_release.sh
