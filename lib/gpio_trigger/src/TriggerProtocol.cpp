@@ -5,7 +5,6 @@
 
 namespace {
 constexpr std::size_t kMaxProtocolPinCount = 23;
-constexpr std::uint8_t kMaxProtocolPin = 22;
 
 std::optional<std::uint32_t> parseNumber(std::string_view value) {
   if (value.empty()) return std::nullopt;
@@ -40,7 +39,10 @@ bool takePins(std::string_view &line, std::size_t count,
   if (count == 0 || count > kMaxProtocolPinCount) return false;
   for (std::size_t index = 0; index < count; ++index) {
     const auto value = takeNumber(line);
-    if (!value.has_value() || *value > kMaxProtocolPin) return false;
+    if (!value.has_value() ||
+        *value > std::numeric_limits<std::uint8_t>::max()) {
+      return false;
+    }
     const auto pin = static_cast<std::uint8_t>(*value);
     if (std::find(pins.begin(), pins.end(), pin) != pins.end()) {
       return false;

@@ -669,6 +669,32 @@ mod tests {
     }
 
     #[test]
+    fn system_clock_preempts_a_later_deadline() {
+        let clock = SystemClock::default();
+        let (events, observed) = mpsc::channel();
+
+        let later_events = events.clone();
+        clock.schedule_deadline(
+            Instant::now() + Duration::from_millis(500),
+            Box::new(move || later_events.send("later").unwrap()),
+        );
+
+        clock.schedule_deadline(
+            Instant::now() + Duration::from_millis(20),
+            Box::new(move || events.send("earlier").unwrap()),
+        );
+
+        assert_eq!(
+            observed.recv_timeout(Duration::from_millis(250)).unwrap(),
+            "earlier"
+        );
+        assert_eq!(
+            observed.recv_timeout(Duration::from_secs(1)).unwrap(),
+            "later"
+        );
+    }
+
+    #[test]
     fn dropping_system_clock_joins_scheduler_and_discards_pending_deadlines() {
         let dropped = Arc::new(AtomicUsize::new(0));
         {

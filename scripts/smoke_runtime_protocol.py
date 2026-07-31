@@ -31,9 +31,15 @@ def read_line(device: LineTransport) -> str:
 
 
 def expect_tokens(device: LineTransport, expected: list[str]) -> None:
-    line = read_line(device)
-    if line.split() != expected:
+    for _ in range(32):
+        line = read_line(device)
+        tokens = line.split()
+        if tokens == expected:
+            return
+        if tokens and tokens[0] in {"HELLO", "STATE", "LEARN_DIRECT", "LEARN_CONTACT"}:
+            continue
         raise RuntimeError(f"expected {' '.join(expected)!r}, got {line!r}")
+    raise RuntimeError(f"expected {' '.join(expected)!r}, got too many asynchronous events")
 
 
 def validate_hello(line: str, family: str, board: str, build: str) -> None:

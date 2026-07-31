@@ -57,6 +57,29 @@ def test_smoke_requires_expected_protocol_responses() -> None:
     ]
 
 
+def test_smoke_ignores_duplicate_hello_before_command_ack() -> None:
+    hello = b"HELLO 3 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n"
+    device = FakeSerial(
+        [
+            hello,
+            hello,
+            b"CONFIG_OK 1\n",
+            b"CONFIG_ERROR 2 invalid_direct\n",
+            b"LEARN_OK 3\n",
+            b"LEARN_OK 3\n",
+        ]
+    )
+
+    run_smoke(
+        device,
+        family="esp32s3",
+        board="luatos-esp32s3-aio",
+        build="test-build",
+        valid_pins=[1, 2],
+        rejected_pins=[99],
+    )
+
+
 def test_smoke_rejects_wrong_hello() -> None:
     device = FakeSerial([b"HELLO 2 esp32s3 luatos-esp32s3-aio test-build\n"])
 

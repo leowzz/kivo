@@ -113,6 +113,7 @@ impl<'a> HardwareRegistry<'a> {
         board_profile_id: &str,
         hardware_serial: &str,
     ) -> Result<DeviceId, DeviceIdError> {
+        self.board_by_id(board_profile_id).ok_or(DeviceIdError)?;
         device_id_from_boards(self.boards, board_profile_id, hardware_serial)
     }
 
@@ -441,6 +442,13 @@ mod tests {
         assert!(DeviceId::new("unknown", "serial").is_err());
         assert!(DeviceId::new("vccgnd-yd-rp2040", " serial").is_err());
         assert!(DeviceId::parse("018:vccgnd-yd-rp2040serial").is_err());
+
+        let unregistered = HardwareRegistry::new(&[], BOARD_PROFILES);
+        assert!(
+            unregistered
+                .device_id("vccgnd-yd-rp2040", "serial")
+                .is_err()
+        );
     }
 
     #[test]

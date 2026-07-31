@@ -127,6 +127,23 @@ void test_parses_extended_registered_board_pin_domain() {
   TEST_ASSERT_TRUE(rp2040.addDirect(3, 0, direct->pins));
 }
 
+void test_parser_defers_unsupported_pins_to_board_validation() {
+  const auto direct = parseHelperCommand("CONFIG_DIRECT 3 0 2 23 29\n");
+
+  TEST_ASSERT_TRUE(direct.has_value());
+  TEST_ASSERT_EQUAL_UINT8(2, direct->pins.size());
+  TEST_ASSERT_EQUAL_UINT8(23, direct->pins[0]);
+  TEST_ASSERT_EQUAL_UINT8(29, direct->pins[1]);
+
+  TopologyBuilder esp32(kLuatOsEsp32S3Aio);
+  TEST_ASSERT_TRUE(esp32.begin(3, 30));
+  TEST_ASSERT_FALSE(esp32.addDirect(3, 0, direct->pins));
+
+  TopologyBuilder rp2040(kVccGndYdRp2040);
+  TEST_ASSERT_TRUE(rp2040.begin(3, 30));
+  TEST_ASSERT_FALSE(rp2040.addDirect(3, 0, direct->pins));
+}
+
 void test_parses_learning_and_ordered_action_commands() {
   const auto begin = parseHelperCommand("LEARN_BEGIN 4 4 1 2 12 13\n");
   TEST_ASSERT_TRUE(begin.has_value());
@@ -444,6 +461,7 @@ int main(int, char **) {
   RUN_TEST(test_contact_edge_reports_unordered_pair_once_after_debounce);
   RUN_TEST(test_parses_runtime_configuration_commands);
   RUN_TEST(test_parses_extended_registered_board_pin_domain);
+  RUN_TEST(test_parser_defers_unsupported_pins_to_board_validation);
   RUN_TEST(test_parses_learning_and_ordered_action_commands);
   RUN_TEST(test_rejects_malformed_runtime_commands);
   RUN_TEST(test_action_steps_are_strictly_ordered);

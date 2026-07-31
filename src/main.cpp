@@ -10,8 +10,7 @@
 
 namespace {
 constexpr std::size_t kMaxResponseLineLength = 255;
-const std::string helloLine =
-    formatHello(platform::boardProfile(), KIVO_FIRMWARE_BUILD_ID);
+std::string helloLine;
 
 GpioTriggerController controller(platform::boardProfile());
 ResponseLineBuffer responseLines(kMaxResponseLineLength);
@@ -203,6 +202,7 @@ void scanLearningInputs(std::uint32_t nowMs) {
 }  // namespace
 
 void setup() {
+  helloLine = formatHello(platform::boardProfile(), KIVO_FIRMWARE_BUILD_ID);
   platform::begin();
 }
 
