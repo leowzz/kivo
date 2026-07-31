@@ -254,6 +254,9 @@ select:focus, input:focus, textarea:focus, button:focus-visible { border-color: 
   .home-heading { align-items: flex-start; flex-direction: column; gap: 8px; }
   .keypad-stage { padding: 20px 14px; }
   .action-panel { min-height: 440px; }
+  .hardware-toolbar { align-items: stretch; flex-wrap: wrap; padding: 7px 14px; }
+  .hardware-toolbar > label { min-width: 0; flex: 1 1 100%; grid-template-columns: auto minmax(0, 1fr); }
+  .hardware-rename-input { width: 100%; flex: 1 1 100%; }
   .mapping-head, .mapping-row { grid-template-columns: minmax(90px, 1fr) 130px; }
   .layout-group-header, .layout-button-row { grid-template-columns: 1fr; align-items: stretch; }
 }

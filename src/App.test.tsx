@@ -998,6 +998,8 @@ test("learns input only for the exact selected Device Profile and Hardware Profi
   const user = userEvent.setup();
   render(<App />);
   await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+  await user.click(screen.getByText("适配新设备"));
+  await user.selectOptions(screen.getByLabelText("在线设备"), "device-front-desk");
   const digitA = screen.getByRole("combobox", { name: "2 A" });
   const digitB = screen.getByRole("combobox", { name: "2 B" });
   expect(digitA).toHaveValue("1");
@@ -1355,4 +1357,116 @@ test("deletes a Hardware Profile without repairing its Device assignment", async
     { timeout: 1600 },
   );
   expect(currentSnapshot.devices[0].runtimeAssignment).toEqual(assignment);
+});
+
+test("targets learning and captured input to the explicitly selected non-first Hardware Profile and Device", async () => {
+  currentSnapshot.deviceProfiles[0].hardware_profiles.push({
+    id: "alternate-hardware",
+    name: "备用硬件配置",
+    board_profile_id: "luatos-esp32s3-aio",
+    debounce_ms: 30,
+    inputs: [{
+      type: "contact_matrix",
+      id: "alternate-matrix",
+      pins: [1, 2, 12, 13],
+      keys: { DIGIT_2: [1, 13] },
+    }],
+  });
+  currentSnapshot.devices.push(device({
+    deviceId: "device-alternate",
+    name: "备用键盘",
+    hardwareSerial: "ALTERNATE",
+    port: "/dev/cu.alternate",
+    capabilities: [1, 2, 12, 13],
+    runtimeAssignment: {
+      device_profile_id: deviceProfile.profile.id,
+      hardware_profile_id: "alternate-hardware",
+    },
+  }));
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+  await user.selectOptions(screen.getByRole("combobox", { name: "硬件配置" }), "alternate-hardware");
+  await user.click(screen.getByRole("button", { name: "2" }));
+  await user.click(screen.getByText("适配新设备"));
+  await user.selectOptions(screen.getByLabelText("在线设备"), "device-alternate");
+  await user.click(screen.getByRole("checkbox", { name: "键盘已与原电话电路及外部电压完全隔离" }));
+  await user.click(screen.getByRole("checkbox", { name: "GPIO 2" }));
+  await user.click(screen.getByRole("checkbox", { name: "GPIO 12" }));
+  await user.click(screen.getByRole("button", { name: "开始学习" }));
+
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("begin_learning", {
+    deviceId: "device-alternate",
+    deviceProfileId: deviceProfile.profile.id,
+    hardwareProfileId: "alternate-hardware",
+    editingRevision: 0,
+    pins: [2, 12],
+  }));
+  const digitA = screen.getByRole("combobox", { name: "2 A" });
+  const digitB = screen.getByRole("combobox", { name: "2 B" });
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    code: "learning_input",
+    input: { type: "contact", source: 0, pin_a: 2, pin_b: 12 },
+    learningTarget: {
+      deviceId: "device-front-desk",
+      deviceProfileId: deviceProfile.profile.id,
+      hardwareProfileId: "alternate-hardware",
+      editingRevision: 0,
+      firmwareRevision: 0,
+      pins: [2, 12],
+    },
+  })));
+  expect(digitA).toHaveValue("1");
+  expect(digitB).toHaveValue("13");
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    deviceId: "device-alternate",
+    rawSerial: "ALTERNATE",
+    code: "learning_input",
+    input: { type: "contact", source: 0, pin_a: 2, pin_b: 12 },
+    hardwareProfileId: "alternate-hardware",
+    learningTarget: {
+      deviceId: "device-alternate",
+      deviceProfileId: deviceProfile.profile.id,
+      hardwareProfileId: "alternate-hardware",
+      editingRevision: 0,
+      firmwareRevision: 0,
+      pins: [2, 12],
+    },
+  })));
+  expect(digitA).toHaveValue("2");
+  expect(digitB).toHaveValue("12");
+});
+
+test("blocks autosave for a matrix pair endpoint missing from source pins until repaired", async () => {
+  currentSnapshot.deviceProfiles[0].hardware_profiles[0].inputs[1] = {
+    type: "contact_matrix",
+    id: "carbon",
+    pins: [1, 2],
+    keys: { DIGIT_2: [1, 13] },
+  };
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+  vi.mocked(invoke).mockClear();
+
+  fireEvent.change(screen.getByLabelText("消抖"), { target: { value: "31" } });
+  await new Promise((resolve) => setTimeout(resolve, 550));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_device_profile")).toBe(false);
+  const endpoint = screen.getByRole("combobox", { name: "2 B" });
+  expect(endpoint).toHaveValue("13");
+  expect(endpoint).toHaveAttribute("aria-invalid", "true");
+
+  await user.selectOptions(endpoint, "2");
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_device_profile", {
+    profile: expect.objectContaining({
+      hardware_profiles: [expect.objectContaining({
+        debounce_ms: 31,
+        inputs: expect.arrayContaining([
+          expect.objectContaining({ keys: { DIGIT_2: [1, 2] } }),
+        ]),
+      })],
+    }),
+  }), { timeout: 1600 });
 });

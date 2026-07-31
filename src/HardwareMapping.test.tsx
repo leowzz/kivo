@@ -1,13 +1,18 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+// Vitest runs this source assertion in Node, while the production tsconfig excludes Node globals.
+// @ts-expect-error Test-only Node module.
+import { readFileSync } from "node:fs";
 import { expect, test, vi } from "vitest";
-import { HardwareMapping } from "./HardwareMapping";
+import { HardwareMapping, hardwareProfilesAreValid } from "./HardwareMapping";
 import type {
   BoardProfileSummary,
   DeviceStatus,
   HardwareProfile,
   ModelLayout,
 } from "./types";
+
+const appCss = readFileSync("src/App.css", "utf8");
 
 const layout: ModelLayout = {
   id: "desk-phone",
@@ -105,6 +110,7 @@ function renderMapping(
       selectedButtonId={null}
       onSelectButton={vi.fn()}
       onChange={onChange}
+      onSelectionChange={vi.fn()}
       learning={null}
       onBeginLearning={vi.fn()}
       onEndLearning={vi.fn()}
@@ -124,6 +130,7 @@ test("adds a selected Hardware Profile with a stable ID, name, and compiled Boar
     selectedButtonId: null,
     onSelectButton: vi.fn(),
     onChange,
+    onSelectionChange: vi.fn(),
     learning: null,
     onBeginLearning: vi.fn(),
     onEndLearning: vi.fn(),
@@ -160,6 +167,7 @@ test("duplicates topology under a stable new ID and name, then renames only the 
       selectedButtonId={null}
       onSelectButton={vi.fn()}
       onChange={onChange}
+      onSelectionChange={vi.fn()}
       learning={null}
       onBeginLearning={vi.fn()}
       onEndLearning={vi.fn()}
@@ -185,6 +193,7 @@ test("duplicates topology under a stable new ID and name, then renames only the 
       selectedButtonId={null}
       onSelectButton={vi.fn()}
       onChange={onChange}
+      onSelectionChange={vi.fn()}
       learning={null}
       onBeginLearning={vi.fn()}
       onEndLearning={vi.fn()}
@@ -310,4 +319,151 @@ test("never exposes GPIO23 through GPIO29 for vccgnd-yd-rp2040", async () => {
   for (let pin = 23; pin <= 29; pin += 1) {
     expect(screen.queryByRole("checkbox", { name: `GPIO ${pin}` })).toBeNull();
   }
+});
+
+test("keeps repeated add names collision-free when custom names occupy generated suffixes", async () => {
+  const user = userEvent.setup();
+  const onChange = vi.fn<(profiles: HardwareProfile[]) => void>();
+  const occupied = [
+    ...structuredClone(hardwareProfiles),
+    { ...structuredClone(hardwareProfiles[1]), id: "custom-name", name: "ESP Board 硬件配置" },
+    { ...structuredClone(hardwareProfiles[1]), id: "custom-name-2", name: "ESP Board 硬件配置 2" },
+  ];
+  const props = {
+    language: "zh-CN" as const,
+    layout,
+    boardProfiles,
+    devices: [] as DeviceStatus[],
+    selectedButtonId: null,
+    onSelectButton: vi.fn(),
+    onChange,
+    onSelectionChange: vi.fn(),
+    learning: null,
+    onBeginLearning: vi.fn(),
+    onEndLearning: vi.fn(),
+  };
+  const { rerender } = render(<HardwareMapping {...props} hardwareProfiles={occupied} />);
+
+  await user.click(screen.getByRole("button", { name: "添加硬件配置" }));
+  const firstAdd = onChange.mock.calls.at(-1)?.[0] as HardwareProfile[];
+  expect(firstAdd.at(-1)).toMatchObject({
+    id: "esp-board-hardware",
+    name: "ESP Board 硬件配置 3",
+  });
+  rerender(<HardwareMapping {...props} hardwareProfiles={firstAdd} />);
+
+  await user.click(screen.getByRole("button", { name: "添加硬件配置" }));
+  expect((onChange.mock.calls.at(-1)?.[0] as HardwareProfile[]).at(-1)).toMatchObject({
+    id: "esp-board-hardware-2",
+    name: "ESP Board 硬件配置 4",
+  });
+});
+
+test("keeps duplicate names collision-free when custom names occupy generated suffixes", async () => {
+  const user = userEvent.setup();
+  const onChange = vi.fn<(profiles: HardwareProfile[]) => void>();
+  const occupied = [
+    ...structuredClone(hardwareProfiles),
+    { ...structuredClone(hardwareProfiles[1]), id: "custom-copy", name: "Front desk 副本" },
+    { ...structuredClone(hardwareProfiles[1]), id: "front-desk-copy", name: "Front desk 副本 2" },
+  ];
+  render(
+    <HardwareMapping
+      language="zh-CN"
+      layout={layout}
+      hardwareProfiles={occupied}
+      boardProfiles={boardProfiles}
+      devices={[]}
+      selectedButtonId={null}
+      onSelectButton={vi.fn()}
+      onChange={onChange}
+      onSelectionChange={vi.fn()}
+      learning={null}
+      onBeginLearning={vi.fn()}
+      onEndLearning={vi.fn()}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "复制硬件配置" }));
+
+  expect((onChange.mock.calls.at(-1)?.[0] as HardwareProfile[]).at(-1)).toMatchObject({
+    id: "front-desk-copy-2",
+    name: "Front desk 副本 3",
+  });
+});
+
+test("settles a removed selection on the fallback and does not let a reappearing ID steal it", async () => {
+  const user = userEvent.setup();
+  const onChange = vi.fn<(profiles: HardwareProfile[]) => void>();
+  const props = {
+    language: "zh-CN" as const,
+    layout,
+    boardProfiles,
+    devices: [] as DeviceStatus[],
+    selectedButtonId: null,
+    onSelectButton: vi.fn(),
+    onChange,
+    onSelectionChange: vi.fn(),
+    learning: null,
+    onBeginLearning: vi.fn(),
+    onEndLearning: vi.fn(),
+  };
+  const { rerender } = render(<HardwareMapping {...props} hardwareProfiles={structuredClone(hardwareProfiles)} />);
+  await user.selectOptions(screen.getByRole("combobox", { name: "硬件配置" }), "back-desk");
+  await user.click(screen.getByRole("button", { name: "重命名硬件配置" }));
+  await user.clear(screen.getByRole("textbox", { name: "硬件配置名称" }));
+  await user.type(screen.getByRole("textbox", { name: "硬件配置名称" }), "Stale draft");
+
+  rerender(<HardwareMapping {...props} hardwareProfiles={[structuredClone(hardwareProfiles[0])]} />);
+  expect(screen.getByRole("combobox", { name: "硬件配置" })).toHaveValue("front-desk");
+  expect(screen.queryByRole("textbox", { name: "硬件配置名称" })).toBeNull();
+
+  rerender(<HardwareMapping {...props} hardwareProfiles={structuredClone(hardwareProfiles)} />);
+  expect(screen.getByRole("combobox", { name: "硬件配置" })).toHaveValue("front-desk");
+  expect(onChange).not.toHaveBeenCalled();
+});
+
+test("keeps a board-valid direct value visible when online capabilities narrow new choices", async () => {
+  const user = userEvent.setup();
+  renderMapping({ devices: [device({ capabilities: [1, 13] })] });
+  await user.click(screen.getByText("适配新设备"));
+  await user.selectOptions(screen.getByLabelText("在线设备"), "device-front");
+
+  const direct = screen.getByRole("combobox", { name: "1 GPIO" });
+  expect(direct).toHaveValue("6");
+  expect(within(direct).getAllByRole("option").map((option) => option.getAttribute("value")))
+    .toEqual(["", "6", "1", "13"]);
+  expect(direct).not.toHaveAttribute("aria-invalid", "true");
+});
+
+test("renders and rejects matrix endpoints missing from source pins until repaired", async () => {
+  const user = userEvent.setup();
+  const inconsistent = structuredClone(hardwareProfiles);
+  inconsistent[0].inputs[1] = {
+    type: "contact_matrix",
+    id: "matrix",
+    pins: [1, 2],
+    keys: { TWO: [1, 13] },
+  };
+  const onChange = renderMapping({ profiles: inconsistent });
+
+  const endpoint = screen.getByRole("combobox", { name: "2 B" });
+  expect(endpoint).toHaveValue("13");
+  expect(endpoint).toHaveAttribute("aria-invalid", "true");
+  expect(within(endpoint).getByRole("option", { name: "13" })).toBeInTheDocument();
+  expect(hardwareProfilesAreValid(inconsistent, boardProfiles)).toBe(false);
+
+  await user.selectOptions(endpoint, "2");
+  const repaired = onChange.mock.calls.at(-1)?.[0] as HardwareProfile[];
+  expect(repaired[0].inputs[1]).toMatchObject({ keys: { TWO: [1, 2] } });
+  expect(hardwareProfilesAreValid(repaired, boardProfiles)).toBe(true);
+});
+
+test("stacks the Hardware Profile toolbar at compact widths", () => {
+  expect(appCss).toMatch(
+    /@media \(max-width: 680px\)[\s\S]*?\.hardware-toolbar\s*\{[^}]*flex-wrap:\s*wrap[^}]*\}/,
+  );
+  expect(appCss).toMatch(
+    /@media \(max-width: 680px\)[\s\S]*?\.hardware-toolbar > label\s*\{[^}]*min-width:\s*0[^}]*\}/,
+  );
 });

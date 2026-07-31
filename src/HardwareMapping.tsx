@@ -1,5 +1,5 @@
 import { Copy, Pencil, Plus, Radio, SquareStop, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { editablePins as selectEditablePins } from "./deviceStatus";
 import { t } from "./i18n";
@@ -23,8 +23,9 @@ interface HardwareMappingProps {
   selectedButtonId: string | null;
   onSelectButton(buttonId: string): void;
   onChange(hardwareProfiles: HardwareProfile[]): void;
-  onBeginLearning(pins: number[]): void;
-  onEndLearning(): void;
+  onSelectionChange(hardwareProfileId: string | null, deviceId: string | null): void;
+  onBeginLearning(hardwareProfileId: string, deviceId: string, pins: number[]): void;
+  onEndLearning(deviceId: string): void;
 }
 
 function sourceName(language: Language, source: InputSource) {
@@ -38,6 +39,13 @@ function uniqueValue(base: string, existing: Set<string>) {
   return `${base}-${suffix}`;
 }
 
+function uniqueName(base: string, existing: Set<string>) {
+  if (!existing.has(base)) return base;
+  let suffix = 2;
+  while (existing.has(`${base} ${suffix}`)) suffix += 1;
+  return `${base} ${suffix}`;
+}
+
 function boardSafePins(board: BoardProfileSummary | undefined) {
   if (!board) return [];
   return board.id === "vccgnd-yd-rp2040"
@@ -45,15 +53,28 @@ function boardSafePins(board: BoardProfileSummary | undefined) {
     : board.safePins;
 }
 
-function invalidPins(hardware: HardwareProfile, boardProfiles: readonly BoardProfileSummary[]) {
+function invalidBoardPins(hardware: HardwareProfile, boardProfiles: readonly BoardProfileSummary[]) {
   const board = boardProfiles.find(({ id }) => id === hardware.board_profile_id);
   if (!board) return new Set(hardware.inputs.flatMap((source) =>
-    source.type === "direct" ? Object.values(source.keys) : source.pins
+    source.type === "direct"
+      ? Object.values(source.keys)
+      : [...source.pins, ...Object.values(source.keys).flat()]
   ));
   const safe = new Set(boardSafePins(board));
   return new Set(hardware.inputs.flatMap((source) =>
-    (source.type === "direct" ? Object.values(source.keys) : source.pins).filter((pin) => !safe.has(pin))
+    (source.type === "direct"
+      ? Object.values(source.keys)
+      : [...source.pins, ...Object.values(source.keys).flat()]
+    ).filter((pin) => !safe.has(pin))
   ));
+}
+
+function hasInvalidContactPair(hardware: HardwareProfile) {
+  return hardware.inputs.some((source) => source.type === "contact_matrix" &&
+    Object.values(source.keys).some(([left, right]) =>
+      left === right || !source.pins.includes(left) || !source.pins.includes(right)
+    )
+  );
 }
 
 export function hardwareProfilesAreValid(
@@ -62,7 +83,8 @@ export function hardwareProfilesAreValid(
 ) {
   return profiles.every((profile) =>
     boardProfiles.some(({ id }) => id === profile.board_profile_id) &&
-    invalidPins(profile, boardProfiles).size === 0
+    invalidBoardPins(profile, boardProfiles).size === 0 &&
+    !hasInvalidContactPair(profile)
   );
 }
 
@@ -80,6 +102,7 @@ export function HardwareMapping({
   selectedButtonId,
   onSelectButton,
   onChange,
+  onSelectionChange,
   onBeginLearning,
   onEndLearning,
 }: HardwareMappingProps) {
@@ -88,6 +111,7 @@ export function HardwareMapping({
   const [renameValue, setRenameValue] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<HardwareProfile | null>(null);
   const [selectedDeviceId, setSelectedDeviceId] = useState("");
+  const pendingCreatedId = useRef<string | null>(null);
   const hardware = hardwareProfiles.find(({ id }) => id === selectedId) ?? hardwareProfiles[0];
   const board = boardProfiles.find(({ id }) => id === hardware?.board_profile_id);
   const compatibleDevices = devices.filter((device) =>
@@ -98,16 +122,32 @@ export function HardwareMapping({
   const selectedDevice = compatibleDevices.find(({ deviceId }) => deviceId === selectedDeviceId);
   const editablePins = selectEditablePins(boardSafePins(board), selectedDevice?.capabilities ?? null);
   const invalid = useMemo(
-    () => hardware ? invalidPins(hardware, boardProfiles) : new Set<number>(),
+    () => hardware ? invalidBoardPins(hardware, boardProfiles) : new Set<number>(),
     [boardProfiles, hardware],
   );
   const buttons = layout.groups.flatMap((group) => group.buttons);
+
+  useEffect(() => {
+    if (hardwareProfiles.some(({ id }) => id === selectedId)) {
+      pendingCreatedId.current = null;
+      return;
+    }
+    if (pendingCreatedId.current === selectedId) return;
+    setSelectedId(hardwareProfiles[0]?.id ?? "");
+    setSelectedDeviceId("");
+    setRenaming(false);
+    setRenameValue("");
+  }, [hardwareProfiles, selectedId]);
 
   useEffect(() => {
     if (!compatibleDevices.some(({ deviceId }) => deviceId === selectedDeviceId)) {
       setSelectedDeviceId("");
     }
   }, [compatibleDevices, selectedDeviceId]);
+
+  useEffect(() => {
+    onSelectionChange(hardware?.id ?? null, selectedDevice?.deviceId ?? null);
+  }, [hardware?.id, onSelectionChange, selectedDevice?.deviceId]);
 
   const replaceHardware = (next: HardwareProfile) => {
     onChange(hardwareProfiles.map((item) => item.id === next.id ? next : item));
@@ -126,14 +166,19 @@ export function HardwareMapping({
     if (!selectedBoard) return;
     const ids = new Set(hardwareProfiles.map(({ id }) => id));
     const id = uniqueValue(`${selectedBoard.id}-hardware`, ids);
-    const number = id === `${selectedBoard.id}-hardware` ? "" : ` ${id.split("-").at(-1)}`;
+    const names = new Set(hardwareProfiles.map(({ name }) => name));
+    const name = uniqueName(
+      `${selectedBoard.displayName} ${t(language, "hardware.profile")}`,
+      names,
+    );
     const next: HardwareProfile = {
       id,
-      name: `${selectedBoard.displayName} ${t(language, "hardware.profile")}${number}`,
+      name,
       board_profile_id: selectedBoard.id,
       debounce_ms: 30,
       inputs: [],
     };
+    pendingCreatedId.current = id;
     setSelectedId(id);
     onChange([...hardwareProfiles, next]);
   };
@@ -144,10 +189,9 @@ export function HardwareMapping({
     const id = uniqueValue(`${hardware.id}-copy`, ids);
     const baseName = `${hardware.name} ${t(language, "hardware.copySuffix")}`;
     const names = new Set(hardwareProfiles.map(({ name }) => name));
-    const name = names.has(baseName)
-      ? `${baseName} ${id.split("-").at(-1)}`
-      : baseName;
+    const name = uniqueName(baseName, names);
     const next = structuredClone({ ...hardware, id, name });
+    pendingCreatedId.current = id;
     setSelectedId(id);
     onChange([...hardwareProfiles, next]);
   };
@@ -296,7 +340,8 @@ export function HardwareMapping({
                       {source.type === "direct" ? (() => {
                         const current = source.keys[button.id];
                         const currentInvalid = current !== undefined && invalid.has(current);
-                        const options = currentInvalid ? [current, ...editablePins] : editablePins;
+                        const currentStale = current !== undefined && !editablePins.includes(current);
+                        const options = currentStale ? [current, ...editablePins] : editablePins;
                         return (
                           <div className="mapping-control">
                             <select
@@ -320,10 +365,15 @@ export function HardwareMapping({
                         <div className="contact-inputs">
                           {[0, 1].map((side) => {
                             const current = source.keys[button.id]?.[side];
+                            const currentInvalid = current !== undefined &&
+                              (invalid.has(current) || !source.pins.includes(current));
+                            const options = current !== undefined && !source.pins.includes(current)
+                              ? [current, ...source.pins]
+                              : source.pins;
                             return (
                               <select
                                 aria-label={`${button.label} ${side === 0 ? "A" : "B"}`}
-                                aria-invalid={current !== undefined && invalid.has(current)}
+                                aria-invalid={currentInvalid}
                                 value={current ?? ""}
                                 key={side}
                                 onChange={(event) => {
@@ -341,7 +391,7 @@ export function HardwareMapping({
                                 }}
                               >
                                 <option value="">-</option>
-                                {source.pins.map((pin) => <option value={pin} key={pin}>{pin}</option>)}
+                                {options.map((pin) => <option value={pin} key={pin}>{pin}</option>)}
                               </select>
                             );
                           })}
@@ -387,14 +437,16 @@ export function HardwareMapping({
                   ))}
                 </div>
               </fieldset>
-              {learning ? (
-                <button type="button" className="learning-button" onClick={onEndLearning}><SquareStop size={16} />{t(language, "hardware.stopLearning")}</button>
+              {learning && selectedDevice ? (
+                <button type="button" className="learning-button" onClick={() => onEndLearning(selectedDevice.deviceId)}><SquareStop size={16} />{t(language, "hardware.stopLearning")}</button>
               ) : (
-                <button type="button" className="learning-button" onClick={(event) => {
+                <button type="button" className="learning-button" disabled={!selectedDevice} onClick={(event) => {
                   const container = event.currentTarget.closest(".learning-controls");
                   const safe = container?.querySelector<HTMLInputElement>(".safety-check input")?.checked;
                   const pins = [...(container?.querySelectorAll<HTMLInputElement>('input[name="learning-pin"]:checked') ?? [])].map((input) => Number(input.value));
-                  if (safe && pins.length) onBeginLearning(pins);
+                  if (safe && pins.length && hardware && selectedDevice) {
+                    onBeginLearning(hardware.id, selectedDevice.deviceId, pins);
+                  }
                 }}><Radio size={16} />{t(language, "hardware.startLearning")}</button>
               )}
             </div>

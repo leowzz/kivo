@@ -57,6 +57,11 @@ type PressedOwner = {
   hardwareProfileId: string;
   buttonIds: Set<string>;
 };
+type HardwareEditorTarget = {
+  deviceProfileId: string;
+  hardwareProfileId: string;
+  deviceId: string | null;
+};
 
 const PREVIEW_MODE = import.meta.env.DEV && new URLSearchParams(window.location.search).has("preview");
 const REGISTRY_REFRESH_MS = 1_500;
@@ -162,6 +167,7 @@ export default function App() {
   const [homeMetrics, setHomeMetrics] = useState<AppSnapshot["homeMetrics"]>(null);
   const [deviceMetrics, setDeviceMetrics] = useState<{ deviceId: string; snapshot: HomeMetricsSnapshot } | null>(null);
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
+  const [hardwareEditorTarget, setHardwareEditorTarget] = useState<HardwareEditorTarget | null>(null);
   const [pressedButtonIds, setPressedButtonIds] = useState<Set<string>>(() => new Set());
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -178,6 +184,7 @@ export default function App() {
   const loadErrorMessageRef = useRef<string | null>(null);
   const selectedManagedDeviceIdRef = useRef<string | null>(null);
   const managedMetricsGenerationRef = useRef(0);
+  const hardwareEditorTargetRef = useRef<HardwareEditorTarget | null>(null);
 
   const { deviceProfiles, editorProfile, boardProfiles, devices, candidates } = registry;
   const editorProfileConfig = useMemo(
@@ -191,6 +198,9 @@ export default function App() {
     device.runtimeAssignment.hardware_profile_id === editorHardwareProfile?.id
   );
   const editorBoardProfile = boardProfiles.find((board) => board.id === editorHardwareProfile?.board_profile_id);
+  const selectedLearningDevice = hardwareEditorTarget?.deviceProfileId === editorProfile
+    ? devices.find((device) => device.deviceId === hardwareEditorTarget.deviceId)
+    : undefined;
   const dirty = Boolean(editorProfileConfig &&
     savedDeviceProfiles[editorProfileConfig.profile.id] !== JSON.stringify(editorProfileConfig));
   const summary = deviceSummary(devices);
@@ -370,6 +380,23 @@ export default function App() {
     void refreshManagedDeviceMetrics(deviceId);
   }, [refreshManagedDeviceMetrics]);
 
+  const handleHardwareEditorSelection = useCallback((
+    hardwareProfileId: string | null,
+    deviceId: string | null,
+  ) => {
+    const deviceProfileId = editorProfileConfig?.profile.id;
+    const next = hardwareProfileId && deviceProfileId
+      ? { deviceProfileId, hardwareProfileId, deviceId }
+      : null;
+    setHardwareEditorTarget((current) =>
+      current?.deviceProfileId === next?.deviceProfileId &&
+      current?.hardwareProfileId === next?.hardwareProfileId &&
+      current?.deviceId === next?.deviceId
+        ? current
+        : next
+    );
+  }, [editorProfileConfig?.profile.id]);
+
   const autosave = useAutosave({
     value: editorProfileConfig,
     valid: dirty && isValidDraft(editorProfileConfig, boardProfiles),
@@ -379,12 +406,11 @@ export default function App() {
 
   const profileRef = useRef(editorProfileConfig);
   const devicesRef = useRef(devices);
-  const editorDeviceRef = useRef(editorDevice);
   const selectedRef = useRef(selectedButtonId);
   const viewRef = useRef(view);
   profileRef.current = editorProfileConfig;
   devicesRef.current = devices;
-  editorDeviceRef.current = editorDevice;
+  hardwareEditorTargetRef.current = hardwareEditorTarget;
   selectedRef.current = selectedButtonId;
   viewRef.current = view;
 
@@ -407,13 +433,14 @@ export default function App() {
           if (payload.deviceId === selectedManagedDeviceIdRef.current) void refreshManagedDeviceMetrics(payload.deviceId);
           if (payload.input && payload.pressed !== null) {
             const currentProfile = profileRef.current;
-            const currentEditorDevice = editorDeviceRef.current;
+            const currentEditorTarget = hardwareEditorTargetRef.current;
             if (payload.code === "learning_input" && payload.pressed && payload.learningTarget
-              && selectedRef.current && viewRef.current === "hardware" && currentProfile && currentEditorDevice
+              && selectedRef.current && viewRef.current === "hardware" && currentProfile && currentEditorTarget?.deviceId
               && payload.deviceId === payload.learningTarget.deviceId
-              && payload.learningTarget.deviceId === currentEditorDevice.deviceId
+              && payload.learningTarget.deviceId === currentEditorTarget.deviceId
               && payload.learningTarget.deviceProfileId === currentProfile.profile.id
-              && payload.learningTarget.hardwareProfileId === currentProfile.hardware_profiles[0]?.id) {
+              && payload.learningTarget.deviceProfileId === currentEditorTarget.deviceProfileId
+              && payload.learningTarget.hardwareProfileId === currentEditorTarget.hardwareProfileId) {
               const learned = learnInput(
                 currentProfile,
                 payload.learningTarget.hardwareProfileId,
@@ -696,32 +723,40 @@ export default function App() {
             </div>
           ) : view === "hardware" ? (
             <HardwareMapping
+              key={editorProfileConfig.profile.id}
               language={language}
               layout={editorProfileConfig.profile}
               hardwareProfiles={editorProfileConfig.hardware_profiles}
               boardProfiles={boardProfiles}
               devices={devices}
-              learning={editorDevice?.learning ?? null}
+              learning={selectedLearningDevice?.learning ?? null}
               selectedButtonId={selectedButtonId}
               onSelectButton={setSelectedButtonId}
               onChange={(hardwareProfiles) => updateEditorProfile((profile) => ({
                 ...profile,
                 hardware_profiles: hardwareProfiles,
               }))}
-              onBeginLearning={(pins) => {
-                if (!editorDevice || !editorHardwareProfile) return;
+              onSelectionChange={handleHardwareEditorSelection}
+              onBeginLearning={(hardwareProfileId, deviceId, pins) => {
+                const hardware = editorProfileConfig.hardware_profiles.find(({ id }) => id === hardwareProfileId);
+                const selectedDevice = devices.find((device) =>
+                  device.deviceId === deviceId &&
+                  device.connection === "online" &&
+                  device.identity === "valid" &&
+                  device.boardProfileId === hardware?.board_profile_id
+                );
+                if (!hardware || !selectedDevice) return;
                 void run(t(language, "error.learning"), async () => applySnapshot(await invoke("begin_learning", {
-                  deviceId: editorDevice.deviceId,
+                  deviceId: selectedDevice.deviceId,
                   deviceProfileId: editorProfileConfig.profile.id,
-                  hardwareProfileId: editorHardwareProfile.id,
+                  hardwareProfileId: hardware.id,
                   editingRevision: 0,
                   pins,
                 })));
               }}
-              onEndLearning={() => {
-                if (!editorDevice) return;
+              onEndLearning={(deviceId) => {
                 void run(t(language, "error.learning"), async () => applySnapshot(await invoke("end_learning", {
-                  deviceId: editorDevice.deviceId,
+                  deviceId,
                 })));
               }}
             />
