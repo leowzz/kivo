@@ -154,6 +154,33 @@ select:focus, input:focus, textarea:focus, button:focus-visible { border-color: 
 .learning-button { justify-self: start !important; }
 
 .empty-workspace { min-height: 0; flex: 1; display: grid; place-items: center; align-content: center; gap: 10px; padding: 30px; color: #75807c; text-align: center; }
+.device-management { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 340px; overflow: hidden; }
+.device-list-region { min-width: 0; overflow: auto; padding: 18px; }
+.device-list-header { display: flex; align-items: end; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
+.device-list-header h2 { margin: 0 auto 0 0; color: #33403b; font-size: 17px; }
+.device-search { display: grid; gap: 5px; min-width: min(260px, 100%); color: #65706c; font-size: 11px; }
+.device-search input { height: 32px; padding: 0 8px; }
+.device-filter { display: flex; flex-wrap: wrap; gap: 2px; border: 1px solid #d4dbd8; border-radius: 5px; padding: 2px; }
+.device-filter button { min-width: 58px; height: 28px; border: 0; border-radius: 3px; padding: 0 8px; color: #53605b; background: transparent; font-size: 11px; }
+.device-filter button.is-active { color: #fff; background: #177457; }
+.device-table { min-width: 680px; border: 1px solid #d9dfdc; border-radius: 6px; overflow: hidden; }
+.device-table-head, .device-row { display: grid; grid-template-columns: minmax(130px, 1.1fr) minmax(135px, 1fr) 90px minmax(150px, 1.1fr) minmax(110px, .8fr); gap: 10px; align-items: center; }
+.device-table-head { min-height: 32px; padding: 0 12px; color: #75807c; background: #f4f7f5; font-size: 10px; font-weight: 650; }
+.device-row { width: 100%; min-height: 46px; border: 0; border-top: 1px solid #e7ebe9; padding: 7px 12px; color: #48524f; background: #fff; text-align: left; font-size: 12px; }
+.device-row:hover { background: #f5f9f7; }
+.device-row.is-selected { background: #e8f3ed; box-shadow: inset 3px 0 #177457; }
+.device-row strong, .device-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.candidate-section { min-width: 680px; margin-top: 18px; border-top: 2px solid #c28a1b; }
+.candidate-section h3 { margin: 10px 0 6px; color: #80590c; font-size: 12px; }
+.candidate-row { border: 1px solid #eadcbd; }
+.device-detail { min-width: 0; overflow: auto; border-left: 1px solid #d9dfdc; padding: 18px; background: #fff; }
+.device-detail h2 { margin: 0; color: #33403b; font-size: 16px; }
+.device-detail-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.device-rename { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px; margin-bottom: 12px; }
+.device-rename input { min-width: 0; height: 30px; padding: 0 7px; }
+.device-detail-field { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px; padding: 8px 0; border-bottom: 1px solid #edf0ee; color: #65706c; font-size: 11px; }
+.device-detail-field output { overflow-wrap: anywhere; color: #29332f; font-size: 12px; }
+.device-forget { margin-top: 14px; }
 .empty-workspace h2 { margin: 0; color: #33403b; font-size: 17px; }
 .empty-workspace > div { display: flex; gap: 8px; }
 
@@ -189,6 +216,8 @@ select:focus, input:focus, textarea:focus, button:focus-visible { border-color: 
   .action-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 10px; }
   .action-item { margin: 0; }
   .home-dashboard { min-height: 480px; flex: initial; grid-template-columns: 1fr; overflow: visible; }
+  .device-management { grid-template-columns: 1fr; overflow: visible; }
+  .device-detail { min-height: 340px; border-top: 1px solid #d9dfdc; border-left: 0; }
   .activity-log { min-height: 260px; border-top: 1px solid #d9dfdc; border-left: 0; }
 }
 

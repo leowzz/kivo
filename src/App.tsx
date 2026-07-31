@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import brandIcon from "../src-tauri/icons/128x128.png";
 import { ActionEditor } from "./ActionEditor";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { DeviceManagement } from "./DeviceManagement";
 import { HardwareMapping } from "./HardwareMapping";
 import { HomeDashboard } from "./HomeDashboard";
 import { Keypad } from "./Keypad";
@@ -154,6 +155,7 @@ export default function App() {
   const [language, setLanguage] = useState<Language>("zh-CN");
   const [view, setView] = useState<View>("home");
   const [homeMetrics, setHomeMetrics] = useState<AppSnapshot["homeMetrics"]>(null);
+  const [deviceMetrics, setDeviceMetrics] = useState<AppSnapshot["homeMetrics"]>(null);
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
   const [pressedButtonIds, setPressedButtonIds] = useState<Set<string>>(() => new Set());
   const [loaded, setLoaded] = useState(false);
@@ -169,6 +171,7 @@ export default function App() {
   const fullSnapshotRequiredRef = useRef(true);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const loadErrorMessageRef = useRef<string | null>(null);
+  const selectedManagedDeviceIdRef = useRef<string | null>(null);
 
   const { deviceProfiles, editorProfile, boardProfiles, devices, candidates } = registry;
   const editorProfileConfig = useMemo(
@@ -291,6 +294,34 @@ export default function App() {
     }));
   }, [replaceRegistrySnapshot]);
 
+  const renameManagedDevice = useCallback(async (deviceId: string, name: string) => {
+    const snapshot = await invoke<AppSnapshot>("rename_device", { deviceId, name });
+    if (mountedRef.current) replaceRegistrySnapshot(snapshot);
+  }, [replaceRegistrySnapshot]);
+
+  const forgetManagedDevice = useCallback(async (deviceId: string) => {
+    const snapshot = await invoke<AppSnapshot>("forget_device", { deviceId });
+    if (mountedRef.current) replaceRegistrySnapshot(snapshot);
+  }, [replaceRegistrySnapshot]);
+
+  const refreshManagedDeviceMetrics = useCallback(async (deviceId: string | null) => {
+    selectedManagedDeviceIdRef.current = deviceId;
+    if (!deviceId) {
+      setDeviceMetrics(null);
+      return;
+    }
+    try {
+      const metrics = await invoke<AppSnapshot["homeMetrics"]>("get_device_metrics", { deviceId });
+      if (mountedRef.current && selectedManagedDeviceIdRef.current === deviceId) setDeviceMetrics(metrics);
+    } catch {
+      if (mountedRef.current && selectedManagedDeviceIdRef.current === deviceId) setDeviceMetrics(null);
+    }
+  }, []);
+
+  const handleManagedMetricsChange = useCallback((deviceId: string | null) => {
+    void refreshManagedDeviceMetrics(deviceId);
+  }, [refreshManagedDeviceMetrics]);
+
   const autosave = useAutosave({
     value: editorProfileConfig,
     valid: dirty && isValidDraft(editorProfileConfig),
@@ -325,6 +356,7 @@ export default function App() {
         const registeredUnlisten = await listen<RuntimeEvent>("runtime-event", ({ payload }) => {
           if (!active) return;
           if (payload.homeUpdate) setHomeMetrics(payload.homeUpdate);
+          if (payload.deviceId === selectedManagedDeviceIdRef.current) void refreshManagedDeviceMetrics(payload.deviceId);
           if (payload.input && payload.pressed !== null) {
             const currentProfile = profileRef.current;
             const currentEditorDevice = editorDeviceRef.current;
@@ -404,7 +436,7 @@ export default function App() {
       if (refreshTimer) clearInterval(refreshTimer);
       unlisten?.();
     };
-  }, [applySnapshot, refreshRegistry]);
+  }, [applySnapshot, refreshManagedDeviceMetrics, refreshRegistry]);
 
   useEffect(() => {
     const buttons = allButtons(editorProfileConfig);
@@ -588,7 +620,16 @@ export default function App() {
               </div>
             </div>
           ) : view === "devices" ? (
-            <div className="empty-workspace"><h2>{t(language, "nav.devices")}</h2></div>
+            <DeviceManagement
+              language={language}
+              devices={devices}
+              candidates={candidates}
+              boardProfiles={boardProfiles}
+              metrics={deviceMetrics}
+              onRename={renameManagedDevice}
+              onForget={forgetManagedDevice}
+              onMetricsChange={handleManagedMetricsChange}
+            />
           ) : view === "home" ? (
             <HomeDashboard
               connection={compatibilityConnection as never}
