@@ -1719,6 +1719,112 @@ test("preserves a captured mapping when learning ends before autosave", async ()
   expect(screen.getByRole("combobox", { name: "2 B" })).toHaveValue("13");
 });
 
+test("keeps a captured draft through Editor Profile switches until an ordinary edit", async () => {
+  const secondProfile: DeviceProfile = {
+    ...structuredClone(deviceProfile),
+    profile: {
+      ...deviceProfile.profile,
+      id: "operator-console",
+      name: "接线员控制台",
+    },
+  };
+  const activeLearningTarget = {
+    deviceId: "device-front-desk",
+    deviceProfileId: deviceProfile.profile.id,
+    hardwareProfileId: "front-desk",
+    editingRevision: 17,
+    firmwareRevision: 5,
+    pins: [2, 13],
+  };
+  currentSnapshot.deviceProfiles.push(secondProfile);
+  currentSnapshot.devices[0].learning = activeLearningTarget;
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+  await user.click(screen.getByText("适配新设备"));
+  await user.selectOptions(screen.getByLabelText("在线设备"), "device-front-desk");
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    code: "learning_input",
+    input: { type: "contact", source: 1, pin_a: 2, pin_b: 13 },
+    learningTarget: activeLearningTarget,
+  })));
+  await user.click(screen.getByRole("button", { name: "结束学习" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("end_learning", {
+    deviceId: "device-front-desk",
+  }));
+
+  await user.click(screen.getByRole("button", { name: "配置文件" }));
+  await user.selectOptions(screen.getByLabelText("当前编辑配置"), secondProfile.profile.id);
+  await waitFor(() => expect(screen.getByLabelText("当前编辑配置")).toHaveValue(secondProfile.profile.id));
+  await user.selectOptions(screen.getByLabelText("当前编辑配置"), deviceProfile.profile.id);
+  await waitFor(() => expect(screen.getByLabelText("当前编辑配置")).toHaveValue(deviceProfile.profile.id));
+  await user.click(screen.getByRole("button", { name: "硬件配置" }));
+
+  expect(screen.getByRole("combobox", { name: "2 A" })).toHaveValue("2");
+  expect(screen.getByRole("combobox", { name: "2 B" })).toHaveValue("13");
+  await new Promise((resolve) => setTimeout(resolve, 550));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_device_profile")).toBe(false);
+
+  fireEvent.change(screen.getByLabelText("消抖"), { target: { value: "31" } });
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_device_profile", {
+    profile: expect.objectContaining({
+      hardware_profiles: [expect.objectContaining({
+        debounce_ms: 31,
+        inputs: expect.arrayContaining([
+          expect.objectContaining({ keys: { DIGIT_2: [2, 13] } }),
+        ]),
+      })],
+    }),
+  }), { timeout: 1600 });
+});
+
+test("keeps an older captured draft suppressed when a second begin fails", async () => {
+  const activeLearningTarget = {
+    deviceId: "device-front-desk",
+    deviceProfileId: deviceProfile.profile.id,
+    hardwareProfileId: "front-desk",
+    editingRevision: 23,
+    firmwareRevision: 5,
+    pins: [2, 13],
+  };
+  currentSnapshot.devices[0].learning = activeLearningTarget;
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "end_learning") {
+      currentSnapshot.devices[0].learning = null;
+      return structuredClone(currentSnapshot);
+    }
+    if (command === "begin_learning") throw new Error("learning unavailable");
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+  await user.click(screen.getByText("适配新设备"));
+  await user.selectOptions(screen.getByLabelText("在线设备"), "device-front-desk");
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    code: "learning_input",
+    input: { type: "contact", source: 1, pin_a: 2, pin_b: 13 },
+    learningTarget: activeLearningTarget,
+  })));
+  await user.click(screen.getByRole("button", { name: "结束学习" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("end_learning", {
+    deviceId: "device-front-desk",
+  }));
+
+  await user.click(screen.getByRole("checkbox", { name: "键盘已与原电话电路及外部电压完全隔离" }));
+  await user.click(screen.getByRole("checkbox", { name: "GPIO 2" }));
+  await user.click(screen.getByRole("checkbox", { name: "GPIO 13" }));
+  await user.click(screen.getByRole("button", { name: "开始学习" }));
+  expect(await screen.findByText("逐键学习失败: learning unavailable")).toHaveClass("error-banner");
+  await new Promise((resolve) => setTimeout(resolve, 550));
+
+  expect(screen.getByRole("combobox", { name: "2 A" })).toHaveValue("2");
+  expect(screen.getByRole("combobox", { name: "2 B" })).toHaveValue("13");
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_device_profile")).toBe(false);
+});
+
 test("targets learning and captured input to the explicitly selected non-first Hardware Profile and Device", async () => {
   currentSnapshot.deviceProfiles[0].hardware_profiles.push({
     id: "alternate-hardware",

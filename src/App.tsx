@@ -179,7 +179,8 @@ export default function App() {
   const [deviceMetrics, setDeviceMetrics] = useState<{ deviceId: string; snapshot: HomeMetricsSnapshot } | null>(null);
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
   const [hardwareEditorTarget, setHardwareEditorTarget] = useState<HardwareEditorTarget | null>(null);
-  const [learningDraftProfileId, setLearningDraftProfileId] = useState<string | null>(null);
+  const [capturedDraftProfileIds, setCapturedDraftProfileIds] = useState<Set<string>>(() => new Set());
+  const [tentativeLearningCounts, setTentativeLearningCounts] = useState<Map<string, number>>(() => new Map());
   const [pressedButtonIds, setPressedButtonIds] = useState<Set<string>>(() => new Set());
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -198,6 +199,7 @@ export default function App() {
   const managedMetricsGenerationRef = useRef(0);
   const hardwareEditorTargetRef = useRef<HardwareEditorTarget | null>(null);
   const learningEditingRevisionRef = useRef(0);
+  const profileDraftsRef = useRef<Map<string, DeviceProfile>>(new Map());
 
   const { deviceProfiles, editorProfile, boardProfiles, devices, candidates } = registry;
   const editorProfileConfig = useMemo(
@@ -244,10 +246,25 @@ export default function App() {
     setPressedButtonIds(pressedButtons(nextOwners));
   }, []);
 
-  const applySnapshot = useCallback((snapshot: AppSnapshot) => {
+  const applySnapshot = useCallback((snapshot: AppSnapshot, preserveDrafts = false) => {
     registryEpochRef.current += 1;
+    const snapshotProfileIds = new Set(snapshot.deviceProfiles.map((profile) => profile.profile.id));
+    if (preserveDrafts) {
+      for (const profileId of profileDraftsRef.current.keys()) {
+        if (!snapshotProfileIds.has(profileId)) profileDraftsRef.current.delete(profileId);
+      }
+      setCapturedDraftProfileIds((current) => {
+        const next = new Set([...current].filter((profileId) => snapshotProfileIds.has(profileId)));
+        return next.size === current.size ? current : next;
+      });
+    } else {
+      profileDraftsRef.current.clear();
+      setCapturedDraftProfileIds(new Set());
+    }
     setRegistry({
-      deviceProfiles: snapshot.deviceProfiles,
+      deviceProfiles: snapshot.deviceProfiles.map((profile) =>
+        preserveDrafts ? profileDraftsRef.current.get(profile.profile.id) ?? profile : profile
+      ),
       editorProfile: snapshot.editorProfile,
       boardProfiles: snapshot.boardProfiles,
       devices: snapshot.devices,
@@ -320,6 +337,13 @@ export default function App() {
       const snapshot = await invoke<AppSnapshot>("save_device_profile", { profile });
       if (mountedRef.current) replaceRegistrySnapshot(snapshot);
     }
+    profileDraftsRef.current.delete(profile.profile.id);
+    setCapturedDraftProfileIds((current) => {
+      if (!current.has(profile.profile.id)) return current;
+      const next = new Set(current);
+      next.delete(profile.profile.id);
+      return next;
+    });
     setSavedDeviceProfiles((current) => ({
       ...current,
       [profile.profile.id]: JSON.stringify(profile),
@@ -415,7 +439,9 @@ export default function App() {
 
   const autosave = useAutosave({
     value: editorProfileConfig,
-    valid: dirty && learningDraftProfileId !== editorProfileConfig?.profile.id &&
+    valid: dirty && !capturedDraftProfileIds.has(editorProfileConfig?.profile.id ?? "") &&
+      !tentativeLearningCounts.has(editorProfileConfig?.profile.id ?? "") &&
+      !editorLearningActive &&
       isValidDraft(editorProfileConfig, boardProfiles),
     save: saveEditorProfile,
     queue,
@@ -468,7 +494,8 @@ export default function App() {
                 selectedRef.current,
                 payload.input,
               );
-              setLearningDraftProfileId(learned.profile.id);
+              profileDraftsRef.current.set(learned.profile.id, learned);
+              setCapturedDraftProfileIds((current) => new Set(current).add(learned.profile.id));
               setRegistry((current) => ({
                 ...current,
                 deviceProfiles: current.deviceProfiles.map((profile) =>
@@ -545,13 +572,27 @@ export default function App() {
 
   const updateEditorProfile = (update: (profile: DeviceProfile) => DeviceProfile) => {
     if (!editorProfileConfig) return;
-    if (!editorLearningActive) setLearningDraftProfileId(null);
-    setRegistry((current) => ({
-      ...current,
-      deviceProfiles: current.deviceProfiles.map((profile) =>
-        profile.profile.id === editorProfileConfig.profile.id ? update(profile) : profile
-      ),
-    }));
+    const profileId = editorProfileConfig.profile.id;
+    if (!editorLearningActive) {
+      setCapturedDraftProfileIds((current) => {
+        if (!current.has(profileId)) return current;
+        const next = new Set(current);
+        next.delete(profileId);
+        return next;
+      });
+    }
+    setRegistry((current) => {
+      const currentProfile = current.deviceProfiles.find((profile) => profile.profile.id === profileId);
+      if (!currentProfile) return current;
+      const updatedProfile = update(currentProfile);
+      profileDraftsRef.current.set(profileId, updatedProfile);
+      return {
+        ...current,
+        deviceProfiles: current.deviceProfiles.map((profile) =>
+          profile.profile.id === profileId ? updatedProfile : profile
+        ),
+      };
+    });
   };
 
   const saveSettings = async (nextEditorProfile: string | null, nextLanguage: Language) => {
@@ -564,7 +605,7 @@ export default function App() {
     const snapshot = await queue.enqueue(() => invoke<AppSnapshot>("save_settings", {
       settings: { schema_version: 2, editor_profile: nextEditorProfile, language: nextLanguage },
     }));
-    applySnapshot(snapshot);
+    applySnapshot(snapshot, true);
   };
 
   const run = async (label: string, task: () => Promise<void>) => {
@@ -773,7 +814,11 @@ export default function App() {
                 if (!hardware || !selectedDevice) return;
                 const learningProfileId = editorProfileConfig.profile.id;
                 const editingRevision = ++learningEditingRevisionRef.current;
-                setLearningDraftProfileId(learningProfileId);
+                setTentativeLearningCounts((current) => {
+                  const next = new Map(current);
+                  next.set(learningProfileId, (next.get(learningProfileId) ?? 0) + 1);
+                  return next;
+                });
                 void run(t(language, "error.learning"), async () => {
                   try {
                     replaceRegistrySnapshot(await invoke("begin_learning", {
@@ -783,9 +828,14 @@ export default function App() {
                       editingRevision,
                       pins,
                     }));
-                  } catch (operationError) {
-                    setLearningDraftProfileId((current) => current === learningProfileId ? null : current);
-                    throw operationError;
+                  } finally {
+                    setTentativeLearningCounts((current) => {
+                      const next = new Map(current);
+                      const remaining = (next.get(learningProfileId) ?? 1) - 1;
+                      if (remaining > 0) next.set(learningProfileId, remaining);
+                      else next.delete(learningProfileId);
+                      return next;
+                    });
                   }
                 });
               }}
