@@ -52,7 +52,11 @@ const metrics: HomeMetricsSnapshot = {
   logs: [{ timestampMs: 1, kind: "button", message: "A pressed", deviceId: "rp-a", deviceName: "RP2040 A", deviceProfileId: "profile-a", hardwareProfileId: "hardware-a", buttonId: "A" }],
 };
 
-const profiles: DeviceProfile[] = [{ schema_version: 2, profile: { id: "profile-a", name: "Counter Profile", groups: [] }, hardware_profiles: [{ id: "hardware-a", name: "Counter Hardware", board_profile_id: "rp2040-pad", debounce_ms: 20, inputs: [] }], actions: {} }];
+const profiles: DeviceProfile[] = [
+  { schema_version: 2, profile: { id: "profile-a", name: "Counter Profile", groups: [] }, hardware_profiles: [{ id: "hardware-a", name: "Counter Hardware", board_profile_id: "rp2040-pad", debounce_ms: 20, inputs: [] }], actions: {} },
+  { schema_version: 2, profile: { id: "profile-b", name: "Timer Profile", groups: [] }, hardware_profiles: [{ id: "hardware-b", name: "Timer Hardware", board_profile_id: "rp2040-pad", debounce_ms: 20, inputs: [] }, { id: "hardware-b-alt", name: "Timer Hardware Alt", board_profile_id: "rp2040-pad", debounce_ms: 20, inputs: [] }, { id: "hardware-esp", name: "ESP Hardware", board_profile_id: "esp32-pad", debounce_ms: 20, inputs: [] }], actions: {} },
+  { schema_version: 2, profile: { id: "profile-esp", name: "ESP Profile", groups: [] }, hardware_profiles: [{ id: "hardware-esp-only", name: "ESP Only Hardware", board_profile_id: "esp32-pad", debounce_ms: 20, inputs: [] }], actions: {} },
+];
 
 function renderManagement(overrides: Partial<React.ComponentProps<typeof DeviceManagement>> = {}) {
   const props: React.ComponentProps<typeof DeviceManagement> = {
@@ -69,6 +73,8 @@ function renderManagement(overrides: Partial<React.ComponentProps<typeof DeviceM
     metrics: { deviceId: "rp-a", snapshot: metrics },
     onRename: vi.fn(),
     onForget: vi.fn(),
+    onSaveRuntimeAssignment: vi.fn(),
+    onClearRuntimeAssignment: vi.fn(),
     onMetricsChange: vi.fn(),
     ...overrides,
   };
@@ -189,4 +195,92 @@ test("closes stale forget confirmation when the device reconnects", async () => 
   rerender(<DeviceManagement {...props} devices={props.devices.map((item) => item.deviceId === "esp-offline" ? { ...item, connection: "online", mode: "runtime" } : item)} />);
   expect(screen.queryByRole("dialog", { name: "忘记设备" })).toBeNull();
   expect(onForget).not.toHaveBeenCalled();
+});
+
+test("stages one exact assignment for the selected Device and confirms its profiles", async () => {
+  const user = userEvent.setup();
+  const onSaveRuntimeAssignment = vi.fn();
+  renderManagement({ onSaveRuntimeAssignment });
+
+  await user.selectOptions(screen.getByRole("combobox", { name: "设备配置" }), "profile-b");
+  expect(screen.getByRole("combobox", { name: "硬件配置" })).toHaveValue("");
+  await user.selectOptions(screen.getByRole("combobox", { name: "硬件配置" }), "hardware-b");
+  await user.click(screen.getByRole("button", { name: "保存运行分配" }));
+
+  const dialog = screen.getByRole("dialog", { name: "保存运行分配" });
+  expect(within(dialog).getByText(/RP2040 A/)).toBeInTheDocument();
+  expect(within(dialog).getByText(/Timer Profile/)).toBeInTheDocument();
+  expect(within(dialog).getByText(/Timer Hardware/)).toBeInTheDocument();
+  await user.click(within(dialog).getByRole("button", { name: "确认" }));
+  expect(onSaveRuntimeAssignment).toHaveBeenCalledWith("rp-a", {
+    device_profile_id: "profile-b",
+    hardware_profile_id: "hardware-b",
+  });
+});
+
+test("does not fan an assignment out to another Device with the same Board Profile", async () => {
+  const user = userEvent.setup();
+  const onSaveRuntimeAssignment = vi.fn();
+  renderManagement({ onSaveRuntimeAssignment });
+
+  await user.selectOptions(screen.getByRole("combobox", { name: "设备配置" }), "profile-b");
+  await user.selectOptions(screen.getByRole("combobox", { name: "硬件配置" }), "hardware-b");
+  await user.click(screen.getByRole("button", { name: "保存运行分配" }));
+  await user.click(within(screen.getByRole("dialog", { name: "保存运行分配" })).getByRole("button", { name: "确认" }));
+  expect(onSaveRuntimeAssignment).toHaveBeenCalledTimes(1);
+  expect(screen.getAllByRole("button", { name: /Counter Profile \/ Counter Hardware/ })).toHaveLength(3);
+});
+
+test("shows no compatible hardware state without allowing save", async () => {
+  const user = userEvent.setup();
+  renderManagement();
+
+  await user.click(screen.getByRole("button", { name: /ESP32 A/ }));
+  await user.selectOptions(screen.getByRole("combobox", { name: "设备配置" }), "profile-a");
+  expect(screen.getByText("没有兼容的硬件配置")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "保存运行分配" })).toBeDisabled();
+});
+
+test("preselects the one exact-board hardware profile but still requires save", async () => {
+  const user = userEvent.setup();
+  const onSaveRuntimeAssignment = vi.fn();
+  renderManagement({ onSaveRuntimeAssignment });
+
+  await user.selectOptions(screen.getByRole("combobox", { name: "设备配置" }), "profile-a");
+  expect(screen.getByRole("combobox", { name: "硬件配置" })).toHaveValue("hardware-a");
+  expect(onSaveRuntimeAssignment).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", { name: "保存运行分配" }));
+  await user.click(within(screen.getByRole("dialog", { name: "保存运行分配" })).getByRole("button", { name: "确认" }));
+  expect(onSaveRuntimeAssignment).toHaveBeenCalledWith("rp-a", {
+    device_profile_id: "profile-a",
+    hardware_profile_id: "hardware-a",
+  });
+});
+
+test("retains invalid stored IDs until repair or explicit clear", async () => {
+  const user = userEvent.setup();
+  const onSaveRuntimeAssignment = vi.fn();
+  const onClearRuntimeAssignment = vi.fn();
+  renderManagement({
+    devices: [device({ assignment: "invalid_assignment", runtimeAssignment: { device_profile_id: "gone", hardware_profile_id: "missing" } })],
+    onSaveRuntimeAssignment,
+    onClearRuntimeAssignment,
+  });
+
+  expect(screen.getAllByText("gone / missing")).toHaveLength(2);
+  expect(screen.getByRole("combobox", { name: "设备配置" })).toHaveValue("");
+  await user.selectOptions(screen.getByRole("combobox", { name: "设备配置" }), "profile-a");
+  await user.click(screen.getByRole("button", { name: "保存运行分配" }));
+  await user.click(within(screen.getByRole("dialog", { name: "保存运行分配" })).getByRole("button", { name: "确认" }));
+  expect(onSaveRuntimeAssignment).toHaveBeenCalledWith("rp-a", {
+    device_profile_id: "profile-a",
+    hardware_profile_id: "hardware-a",
+  });
+  await user.click(screen.getByRole("button", { name: "清除运行分配" }));
+  const dialog = screen.getByRole("dialog", { name: "清除运行分配" });
+  expect(within(dialog).getByText(/RP2040 A/)).toBeInTheDocument();
+  expect(within(dialog).getByText(/gone/)).toBeInTheDocument();
+  expect(within(dialog).getByText(/missing/)).toBeInTheDocument();
+  await user.click(within(dialog).getByRole("button", { name: "确认" }));
+  expect(onClearRuntimeAssignment).toHaveBeenCalledWith("rp-a");
 });

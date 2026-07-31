@@ -37,6 +37,7 @@ import type {
   InputSource,
   Language,
   PhysicalInput,
+  RuntimeAssignment,
   RuntimeEvent,
 } from "./types";
 import { SerializedSaveQueue, useAutosave } from "./useAutosave";
@@ -312,6 +313,34 @@ export default function App() {
       if (mountedRef.current) replaceRegistrySnapshot(snapshot);
     } catch (operationError) {
       setError(`${t(language, "error.delete")}: ${errorMessage(operationError)}`);
+      throw operationError;
+    }
+  }, [language, replaceRegistrySnapshot]);
+
+  const saveManagedRuntimeAssignment = useCallback(async (
+    deviceId: string,
+    assignment: RuntimeAssignment,
+  ) => {
+    try {
+      const snapshot = await invoke<AppSnapshot>("save_runtime_assignment", {
+        deviceId,
+        assignment,
+      });
+      if (mountedRef.current) replaceRegistrySnapshot(snapshot);
+    } catch (operationError) {
+      setError(`${t(language, "error.save")}: ${errorMessage(operationError)}`);
+      throw operationError;
+    }
+  }, [language, replaceRegistrySnapshot]);
+
+  const clearManagedRuntimeAssignment = useCallback(async (deviceId: string) => {
+    try {
+      const snapshot = await invoke<AppSnapshot>("clear_runtime_assignment", {
+        deviceId,
+      });
+      if (mountedRef.current) replaceRegistrySnapshot(snapshot);
+    } catch (operationError) {
+      setError(`${t(language, "error.save")}: ${errorMessage(operationError)}`);
       throw operationError;
     }
   }, [language, replaceRegistrySnapshot]);
@@ -645,6 +674,8 @@ export default function App() {
               metrics={deviceMetrics}
               onRename={renameManagedDevice}
               onForget={forgetManagedDevice}
+              onSaveRuntimeAssignment={saveManagedRuntimeAssignment}
+              onClearRuntimeAssignment={clearManagedRuntimeAssignment}
               onMetricsChange={handleManagedMetricsChange}
             />
           ) : view === "home" ? (

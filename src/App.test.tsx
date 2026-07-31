@@ -626,6 +626,91 @@ test("renames one Device through the authoritative snapshot and reports failure"
   );
 });
 
+test("saves one runtime assignment through the authoritative snapshot without changing a same-board Device", async () => {
+  const secondProfile: DeviceProfile = {
+    ...deviceProfile,
+    profile: { ...deviceProfile.profile, id: "call-center", name: "呼叫中心键盘" },
+    hardware_profiles: [{ ...deviceProfile.hardware_profiles[0], id: "call-center-hardware", name: "呼叫中心硬件" }],
+  };
+  currentSnapshot.deviceProfiles.push(secondProfile);
+  currentSnapshot.devices.push(device({
+    deviceId: "device-back-desk",
+    name: "后台键盘",
+    hardwareSerial: "BACK456",
+    runtimeAssignment: { device_profile_id: deviceProfile.profile.id, hardware_profile_id: "front-desk" },
+  }));
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "get_device_metrics") return currentSnapshot.homeMetrics;
+    if (command === "save_runtime_assignment") {
+      expect(args).toEqual({
+        deviceId: "device-front-desk",
+        assignment: {
+          device_profile_id: "call-center",
+          hardware_profile_id: "call-center-hardware",
+        },
+      });
+      currentSnapshot.devices[0] = device({
+        runtimeAssignment: {
+          device_profile_id: "call-center",
+          hardware_profile_id: "call-center-hardware",
+        },
+      });
+    }
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "设备管理" }));
+  await user.selectOptions(screen.getByRole("combobox", { name: "设备配置" }), "call-center");
+  await user.click(screen.getByRole("button", { name: "保存运行分配" }));
+  await user.click(within(screen.getByRole("dialog", { name: "保存运行分配" })).getByRole("button", { name: "确认" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_runtime_assignment", {
+    deviceId: "device-front-desk",
+    assignment: {
+      device_profile_id: "call-center",
+      hardware_profile_id: "call-center-hardware",
+    },
+  }));
+  expect(screen.getAllByText("呼叫中心键盘 / 呼叫中心硬件")).toHaveLength(2);
+  expect(screen.getByRole("combobox", { name: "设备配置" })).toHaveValue("call-center");
+  expect(screen.getByRole("button", { name: /后台键盘.*碳膜电话键盘 \/ 前台硬件配置/ })).toBeInTheDocument();
+});
+
+test("keeps the existing assignment visible after runtime assignment rejection", async () => {
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "get_device_metrics") return currentSnapshot.homeMetrics;
+    if (command === "save_runtime_assignment") throw new Error("assignment denied");
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "设备管理" }));
+  await user.click(screen.getByRole("button", { name: "保存运行分配" }));
+  await user.click(within(screen.getByRole("dialog", { name: "保存运行分配" })).getByRole("button", { name: "确认" }));
+  expect(await screen.findByText("保存失败: assignment denied")).toHaveClass("error-banner");
+  expect(screen.getAllByText("碳膜电话键盘 / 前台硬件配置")).toHaveLength(2);
+});
+
+test("clears one runtime assignment through the authoritative snapshot", async () => {
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "get_device_metrics") return currentSnapshot.homeMetrics;
+    if (command === "clear_runtime_assignment") {
+      expect(args).toEqual({ deviceId: "device-front-desk" });
+      currentSnapshot.devices[0] = device({ runtimeAssignment: null, assignment: "unassigned" });
+    }
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "设备管理" }));
+  await user.click(screen.getByRole("button", { name: "清除运行分配" }));
+  await user.click(within(screen.getByRole("dialog", { name: "清除运行分配" })).getByRole("button", { name: "确认" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("clear_runtime_assignment", {
+    deviceId: "device-front-desk",
+  }));
+  expect(screen.getAllByText("-")).not.toHaveLength(0);
+});
+
 test("forgets only the confirmed offline Device and keeps failure retryable", async () => {
   currentSnapshot.devices[0] = device({
     connection: "offline",
