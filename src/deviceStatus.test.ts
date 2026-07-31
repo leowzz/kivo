@@ -168,10 +168,15 @@ describe("preview fixture consistency", () => {
 
   test("uses production bootloader observation keys", () => {
     const bootloaderCandidates = previewSnapshot.candidates.filter(({ mode }) => mode === "bootloader");
+    const missingSerialCandidate = bootloaderCandidates.find(
+      ({ identity, rawSerial }) => identity === "invalid_identity" && rawSerial === null,
+    );
 
     expect(bootloaderCandidates.length).toBeGreaterThan(0);
     for (const candidate of bootloaderCandidates) {
       expect(candidate.key).toMatch(/^bootloader:\d+:\d+$/);
     }
+    expect(missingSerialCandidate).toBeDefined();
+    expect(missingSerialCandidate?.latestError).toBeNull();
   });
 });

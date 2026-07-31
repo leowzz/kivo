@@ -188,7 +188,7 @@ export const previewSnapshot: AppSnapshot = {
       port: null,
       controllerFamilyId: "rp2040",
       boardProfileId: "vccgnd-yd-rp2040",
-      latestError: "bootloader_identity_missing",
+      latestError: null,
     },
   ],
   language: "zh-CN",
