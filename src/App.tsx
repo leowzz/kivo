@@ -206,13 +206,6 @@ export default function App() {
     () => deviceProfiles.find((profile) => profile.profile.id === editorProfile),
     [deviceProfiles, editorProfile],
   );
-  const editorHardwareProfile = editorProfileConfig?.hardware_profiles[0];
-  const editorDevice = devices.find((device) =>
-    device.connection === "online" &&
-    device.runtimeAssignment?.device_profile_id === editorProfile &&
-    device.runtimeAssignment.hardware_profile_id === editorHardwareProfile?.id
-  );
-  const editorBoardProfile = boardProfiles.find((board) => board.id === editorHardwareProfile?.board_profile_id);
   const selectedLearningDevice = hardwareEditorTarget?.deviceProfileId === editorProfile
     ? devices.find((device) => device.deviceId === hardwareEditorTarget.deviceId)
     : undefined;
@@ -654,20 +647,6 @@ export default function App() {
   const selectedActions = editorProfileConfig && selectedButtonId
     ? editorProfileConfig.actions[selectedButtonId] ?? []
     : [];
-  const connectedDevice = editorDevice?.connection === "online" ? editorDevice : undefined;
-  const compatibilityConnection = connectedDevice
-    ? { state: "connected", port: connectedDevice.port }
-    : { state: "searching", port: null };
-  const compatibilityProfile = editorProfileConfig && editorHardwareProfile
-    ? {
-      model: editorProfileConfig.profile,
-      hardware: {
-        ...editorHardwareProfile,
-        controller: editorBoardProfile?.controllerFamilyId ?? "",
-      },
-      actions: editorProfileConfig.actions,
-    }
-    : undefined;
 
   return (
     <main className="product-shell">
@@ -775,10 +754,10 @@ export default function App() {
             />
           ) : view === "home" ? (
             <HomeDashboard
-              connection={compatibilityConnection as never}
+              devices={devices}
               language={language}
               metrics={homeMetrics}
-              model={compatibilityProfile as never}
+              profile={editorProfileConfig}
             />
           ) : !editorProfileConfig ? (
             <div className="empty-workspace">
@@ -916,6 +895,10 @@ export default function App() {
               buttons: confirmation.preview.buttonCount,
               bindings: confirmation.preview.hardwareBindingCount,
               actions: confirmation.preview.actionCount,
+              devices: confirmation.preview.deviceCount,
+              assignments: confirmation.preview.assignmentCount,
+              metricRows: confirmation.preview.metricRowCount,
+              activity: confirmation.preview.activityCount,
             })
             : confirmation.kind === "import"
               ? t(language, "dialog.modelSummary", {

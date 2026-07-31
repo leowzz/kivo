@@ -135,6 +135,34 @@ test("uses assignment display names, retains missing IDs, and shows selected act
   expect(screen.getAllByText("gone / missing")).toHaveLength(2);
 });
 
+test("shows compact selected-Device metrics with event-time activity attribution", () => {
+  renderManagement({
+    devices: [device({ name: "Current Device Name" })],
+    metrics: {
+      deviceId: "rp-a",
+      snapshot: {
+        ...metrics,
+        activeButtonCount: 3,
+        topButton: { buttonId: "A", presses: 8 },
+        logs: [{
+          ...metrics.logs[0],
+          deviceName: "Event-time Device Name",
+          message: "A pressed before rename",
+        }],
+      },
+    },
+  });
+
+  const summary = screen.getByLabelText("设备指标");
+  expect(summary).toHaveTextContent("今日按下2");
+  expect(summary).toHaveTextContent("累计按下8");
+  expect(summary).toHaveTextContent("活跃按键3");
+  expect(summary).toHaveTextContent("最常用A");
+  const activity = screen.getByText("A pressed before rename").closest("tr");
+  expect(activity).toHaveTextContent("Event-time Device Name");
+  expect(activity).not.toHaveTextContent("Current Device Name");
+});
+
 test("preserves selected device identity across live replacements", () => {
   const { rerender, props } = renderManagement();
   screen.getByRole("button", { name: /ESP32 A/ }).click();

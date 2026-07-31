@@ -222,4 +222,8 @@ export interface BackupPreview {
   buttonCount: number;
   hardwareBindingCount: number;
   actionCount: number;
+  deviceCount: number;
+  assignmentCount: number;
+  metricRowCount: number;
+  activityCount: number;
 }

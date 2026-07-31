@@ -138,6 +138,10 @@ pub struct BackupPreview {
     pub button_count: usize,
     pub hardware_binding_count: usize,
     pub action_count: usize,
+    pub device_count: usize,
+    pub assignment_count: usize,
+    pub metric_row_count: usize,
+    pub activity_count: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -448,6 +452,16 @@ impl Workspace {
             button_count: snapshot.profiles.values().map(button_count).sum(),
             hardware_binding_count: snapshot.profiles.values().map(hardware_binding_count).sum(),
             action_count: snapshot.profiles.values().map(action_count).sum(),
+            device_count: snapshot.settings.devices.len(),
+            assignment_count: snapshot
+                .settings
+                .devices
+                .values()
+                .filter(|device| device.runtime_assignment.is_some())
+                .count(),
+            metric_row_count: snapshot.metrics.button_metrics.len()
+                + snapshot.metrics.button_metric_days.len(),
+            activity_count: snapshot.metrics.activity_logs.len(),
         })
     }
 
@@ -1799,6 +1813,51 @@ mod tests {
         let preview = workspace.preview_backup(&backup_path).unwrap();
 
         assert_eq!(preview.profile_count, 1);
+    }
+
+    #[test]
+    fn full_backup_preview_counts_devices_assignments_metric_rows_and_activity() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let assigned =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "AAAAAAAAAAAA")
+                .unwrap();
+        let unassigned =
+            DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "BBBBBBBBBBBB")
+                .unwrap();
+        workspace.enroll_device(assigned.clone()).unwrap();
+        workspace.enroll_device(unassigned).unwrap();
+        workspace
+            .set_assignment(
+                &assigned,
+                RuntimeAssignment {
+                    device_profile_id: "red-phone-v1".into(),
+                    hardware_profile_id: "esp-primary".into(),
+                },
+            )
+            .unwrap();
+        let metrics = MetricsStore::open(&directory.path("data/metrics.sqlite3")).unwrap();
+        metrics
+            .record_button_press(
+                &MetricAttribution {
+                    device_id: assigned,
+                    device_name: "Backup desk".into(),
+                    device_profile_id: "red-phone-v1".into(),
+                    hardware_profile_id: "esp-primary".into(),
+                },
+                "A",
+                1_720_086_400_000,
+            )
+            .unwrap();
+        let backup_path = directory.path("counted-backup.yaml");
+        workspace.export_backup(&backup_path, &metrics).unwrap();
+
+        let preview = workspace.preview_backup(&backup_path).unwrap();
+
+        assert_eq!(preview.device_count, 2);
+        assert_eq!(preview.assignment_count, 1);
+        assert_eq!(preview.metric_row_count, 2);
+        assert_eq!(preview.activity_count, 1);
     }
 
     #[test]

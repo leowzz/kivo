@@ -1355,6 +1355,9 @@ test("previews a device profile before importing it", async () => {
   expect(
     within(dialog).getByText("22 个按键，22 项硬件配置，8 项行为"),
   ).toBeInTheDocument();
+  expect(dialog).not.toHaveTextContent("设备，");
+  expect(dialog).not.toHaveTextContent("指标行");
+  expect(dialog).not.toHaveTextContent("动态");
   await user.click(within(dialog).getByRole("button", { name: "确认" }));
 
   await waitFor(() =>
@@ -1374,6 +1377,10 @@ test("previews a full backup before restoring it", async () => {
         buttonCount: 44,
         hardwareBindingCount: 40,
         actionCount: 19,
+        deviceCount: 4,
+        assignmentCount: 3,
+        metricRowCount: 12,
+        activityCount: 9,
       };
     return structuredClone(currentSnapshot);
   });
@@ -1385,7 +1392,7 @@ test("previews a full backup before restoring it", async () => {
   const dialog = await screen.findByRole("dialog", { name: "恢复全量备份" });
   expect(
     within(dialog).getByText(
-      "3 个设备配置，44 个按键，40 项硬件配置，19 项行为",
+      "3 个设备配置，44 个按键，40 项硬件配置，19 项行为，4 台设备，3 项运行分配，12 行指标，9 条动态",
     ),
   ).toBeInTheDocument();
   await user.click(within(dialog).getByRole("button", { name: "确认" }));

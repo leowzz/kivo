@@ -45,6 +45,8 @@ const zhCN = {
   "devices.pins": "上报引脚",
   "devices.error": "最新错误",
   "devices.metrics": "今日 / 累计按下",
+  "devices.metricsSummary": "设备指标",
+  "devices.activity": "设备动态",
   "devices.rename": "重命名设备",
   "devices.confirmRename": "确认重命名",
   "devices.forget": "忘记设备",
@@ -137,7 +139,7 @@ const zhCN = {
   "dialog.modelSummary":
     "{buttons} 个按键，{bindings} 项硬件配置，{actions} 项行为",
   "dialog.backupSummary":
-    "{models} 个设备配置，{buttons} 个按键，{bindings} 项硬件配置，{actions} 项行为",
+    "{models} 个设备配置，{buttons} 个按键，{bindings} 项硬件配置，{actions} 项行为，{devices} 台设备，{assignments} 项运行分配，{metricRows} 行指标，{activity} 条动态",
   "error.load": "载入失败",
   "error.import": "导入失败",
   "error.export": "导出失败",
@@ -204,6 +206,8 @@ const enUS: Record<MessageKey, string> = {
   "devices.pins": "Reported pins",
   "devices.error": "Latest error",
   "devices.metrics": "Today / total presses",
+  "devices.metricsSummary": "Device metrics",
+  "devices.activity": "Device activity",
   "devices.rename": "Rename device",
   "devices.confirmRename": "Confirm rename",
   "devices.forget": "Forget device",
@@ -301,7 +305,7 @@ const enUS: Record<MessageKey, string> = {
   "dialog.modelSummary":
     "{buttons} keys, {bindings} hardware bindings, {actions} actions",
   "dialog.backupSummary":
-    "{models} models, {buttons} keys, {bindings} hardware bindings, {actions} actions",
+    "{models} models, {buttons} keys, {bindings} hardware bindings, {actions} actions, {devices} devices, {assignments} runtime assignments, {metricRows} metric rows, {activity} activity rows",
   "error.load": "Load failed",
   "error.import": "Import failed",
   "error.export": "Export failed",

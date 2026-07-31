@@ -561,7 +561,7 @@ export function DeviceManagement({
               label={t(language, "devices.assignment")}
               value={assignmentLabel(selectedDevice, deviceProfiles)}
             />
-            <section aria-label={t(language, "devices.assignment")}>
+            <section className="device-assignment" aria-label={t(language, "devices.assignment")}>
               <label>
                 {t(language, "model.label")}
                 <select
@@ -637,22 +637,28 @@ export function DeviceManagement({
               label={t(language, "devices.error")}
               value={selectedDevice.latestError?.detail ?? "-"}
             />
-            <Detail
-              label={t(language, "devices.metrics")}
-              value={
-                selectedMetrics
-                  ? `${selectedMetrics.todayPresses} / ${selectedMetrics.totalPresses}`
-                  : "-"
-              }
-            />
             {selectedMetrics && (
-              <ul className="device-activity">
-                {selectedMetrics.logs.map((log) => (
-                  <li key={`${log.timestampMs}:${log.message}`}>
-                    {log.message}
-                  </li>
-                ))}
-              </ul>
+              <>
+                <section className="device-metrics" aria-label={t(language, "devices.metricsSummary")}>
+                  <div><span>{t(language, "home.todayPresses")}</span><strong>{selectedMetrics.todayPresses}</strong></div>
+                  <div><span>{t(language, "home.totalPresses")}</span><strong>{selectedMetrics.totalPresses}</strong></div>
+                  <div><span>{t(language, "home.activeButtons")}</span><strong>{selectedMetrics.activeButtonCount}</strong></div>
+                  <div><span>{t(language, "home.topButton")}</span><strong>{selectedMetrics.topButton?.buttonId ?? "-"}</strong></div>
+                </section>
+                <div className="device-activity-wrap">
+                  <table className="device-activity" aria-label={t(language, "devices.activity")}>
+                    <tbody>
+                      {selectedMetrics.logs.map((log) => (
+                        <tr key={`${log.timestampMs}:${log.deviceId}:${log.message}`}>
+                          <td><time>{new Date(log.timestampMs).toLocaleTimeString()}</time></td>
+                          <td>{log.deviceName}</td>
+                          <td>{log.message}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
             {error && (
               <p className="field-error" role="alert">
