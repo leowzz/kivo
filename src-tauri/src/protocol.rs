@@ -105,27 +105,11 @@ pub fn parse_device(line: &str) -> Option<DeviceMessage> {
     if line.len() > 255 {
         return None;
     }
+    if is_hello_line(line) {
+        return parse_hello(line);
+    }
     let parts = line.split_whitespace().collect::<Vec<_>>();
     match parts.as_slice() {
-        ["HELLO", "3", controller_family_id, board_profile_id, firmware_build_id, count, pins @ ..] => {
-            let protocol = 3;
-            let count = count.parse::<usize>().ok()?;
-            let pins = pins
-                .iter()
-                .map(|pin| pin.parse::<u8>())
-                .collect::<Result<Vec<_>, _>>()
-                .ok()?;
-            (count > 0
-                && count == pins.len()
-                && pins.iter().copied().collect::<BTreeSet<_>>().len() == count)
-                .then(|| DeviceMessage::Hello(HelloCapabilities {
-                    protocol,
-                    controller_family_id: (*controller_family_id).to_owned(),
-                    board_profile_id: (*board_profile_id).to_owned(),
-                    firmware_build_id: (*firmware_build_id).to_owned(),
-                    pins,
-                }))
-        }
         ["CONFIG_OK", revision] => Some(DeviceMessage::ConfigOk {
             revision: revision.parse().ok()?,
         }),
@@ -181,6 +165,49 @@ pub fn parse_device(line: &str) -> Option<DeviceMessage> {
         }
         _ => None,
     }
+}
+
+pub(crate) fn is_hello_line(line: &str) -> bool {
+    line.trim_start_matches(char::is_whitespace).starts_with("HELLO")
+}
+
+fn parse_hello(line: &str) -> Option<DeviceMessage> {
+    let line = line.strip_suffix('\n').unwrap_or(line);
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    if line.is_empty()
+        || line.starts_with(' ')
+        || line.ends_with(' ')
+        || line.chars().any(|character| character.is_whitespace() && character != ' ')
+    {
+        return None;
+    }
+    let parts = line.split(' ').collect::<Vec<_>>();
+    if parts.iter().any(|part| part.is_empty()) {
+        return None;
+    }
+    let ["HELLO", "3", controller_family_id, board_profile_id, firmware_build_id, count, pins @ ..] =
+        parts.as_slice()
+    else {
+        return None;
+    };
+    let count = count.parse::<usize>().ok()?;
+    let pins = pins
+        .iter()
+        .map(|pin| pin.parse::<u8>())
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    (count > 0
+        && count == pins.len()
+        && pins.iter().copied().collect::<BTreeSet<_>>().len() == count)
+        .then(|| {
+            DeviceMessage::Hello(HelloCapabilities {
+                protocol: 3,
+                controller_family_id: (*controller_family_id).to_owned(),
+                board_profile_id: (*board_profile_id).to_owned(),
+                firmware_build_id: (*firmware_build_id).to_owned(),
+                pins,
+            })
+        })
 }
 
 fn parse_state(value: &str) -> Option<InputState> {
@@ -564,7 +591,11 @@ mod tests {
     #[test]
     fn rejects_non_v3_or_malformed_hello_capabilities() {
         assert!(parse_device("HELLO 2 esp32s3 luatos-esp32s3-aio build 2 1 2").is_none());
-        assert!(parse_device("HELLO 3 rp2040 vccgnd-yd-rp2040   \t").is_none());
+        assert!(parse_device("HELLO 3 rp2040 vccgnd-yd-rp2040  3 2 0 1").is_none());
+        assert!(parse_device("HELLO\t3\trp2040\tvccgnd-yd-rp2040\tbuild\t2\t0\t1").is_none());
+        assert!(parse_device(" HELLO 3 rp2040 vccgnd-yd-rp2040 build 2 0 1").is_none());
+        assert!(parse_device("HELLO 3 rp2040 vccgnd-yd-rp2040 build 2 0 1 ").is_none());
+        assert!(parse_device("HELLO 3 rp2040 vccgnd-yd-rp2040 build 2 0 1\n").is_some());
         assert!(parse_device("HELLO 3 rp2040 vccgnd-yd-rp2040 build 2 1").is_none());
         assert!(parse_device("HELLO 3 rp2040 vccgnd-yd-rp2040 build 0").is_none());
         assert!(parse_device("HELLO 3 rp2040 vccgnd-yd-rp2040 build 2 1 1").is_none());

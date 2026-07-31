@@ -3,7 +3,7 @@ use crate::{
     metrics::{HomeMetricsSnapshot, MetricsStore},
     protocol::{
         ActionSequence, DeviceMessage, HardwareProfile, HelloCapabilities, InputState,
-        PhysicalInput, parse_device, topology_commands, validate_hello,
+        PhysicalInput, is_hello_line, parse_device, topology_commands, validate_hello,
     },
     workspace::ModelConfig,
 };
@@ -222,20 +222,29 @@ impl DeviceSession {
         output
     }
 
+    pub fn on_line(
+        &mut self,
+        line: &str,
+        copy: &mut impl FnMut(&str) -> Result<(), String>,
+    ) -> SessionOutput {
+        match parse_device(line) {
+            Some(message) => self.on_message(message, copy),
+            None if is_hello_line(line) => self.invalidate_hello(),
+            None => SessionOutput::default(),
+        }
+    }
+
     fn configure_for_hello(
         &mut self,
         hello: HelloCapabilities,
         output: &mut SessionOutput,
     ) {
-        self.hello = Some(hello.clone());
-        self.ready = false;
-        self.configuring = None;
-        self.active = None;
-        self.queue.clear();
+        self.clear_handshake();
         if let Err(error) = validate_hello(self.candidate_board, &hello) {
             output.activities.push(activity_from_error(error));
             return;
         }
+        self.hello = Some(hello.clone());
         let Some(model) = self.model.as_ref() else {
             output
                 .activities
@@ -262,6 +271,22 @@ impl DeviceSession {
             }
             Err(error) => output.activities.push(activity_from_error(error)),
         }
+    }
+
+    fn invalidate_hello(&mut self) -> SessionOutput {
+        self.clear_handshake();
+        SessionOutput {
+            lines: Vec::new(),
+            activities: vec![RuntimeActivity::new("protocol_mismatch")],
+        }
+    }
+
+    fn clear_handshake(&mut self) {
+        self.hello = None;
+        self.ready = false;
+        self.configuring = None;
+        self.active = None;
+        self.queue.clear();
     }
 
     fn handle_done(
@@ -466,6 +491,25 @@ pub fn is_target_port(port: &SerialPortInfo) -> bool {
     )
 }
 
+fn update_published_capabilities(
+    capabilities: &RwLock<Option<DeviceCapabilities>>,
+    candidate_board: &BoardProfile,
+    line: &str,
+) {
+    if !is_hello_line(line) {
+        return;
+    }
+    let capability = match parse_device(line) {
+        Some(DeviceMessage::Hello(hello)) if validate_hello(candidate_board, &hello).is_ok() => {
+            Some(hello)
+        }
+        _ => None,
+    };
+    *capabilities
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = capability;
+}
+
 pub fn run_worker(app: AppHandle, state: WorkerState) {
     let WorkerState {
         active_model,
@@ -623,16 +667,8 @@ pub fn run_worker(app: AppHandle, state: WorkerState) {
                     let Ok(text) = std::str::from_utf8(&line) else {
                         continue;
                     };
-                    let Some(message) = parse_device(text) else {
-                        continue;
-                    };
-                    if let DeviceMessage::Hello(hello) = &message {
-                        *capabilities
-                            .write()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-                            validate_hello(candidate_board, hello).ok().map(|()| hello.clone());
-                    }
-                    let output = session.on_message(message, &mut copy_to_clipboard);
+                    update_published_capabilities(&capabilities, candidate_board, text);
+                    let output = session.on_line(text, &mut copy_to_clipboard);
                     match write_output(&app, &connection, &runtime_error, &active_model, metrics.as_deref(), device.get_mut(), output)
                     {
                         Ok(sent_action) => {
@@ -1048,6 +1084,82 @@ mod tests {
         assert!(output.lines.is_empty());
         assert_eq!(output.activities[0].code, "capability_mismatch");
         assert_eq!(output.activities[0].params["gpio"], "6");
+    }
+
+    #[test]
+    fn invalid_hello_lines_clear_capabilities_and_ready_session() {
+        let mut session = DeviceSession::new(runtime_model());
+        let capabilities = RwLock::new(None);
+        let DeviceMessage::Hello(hello) = hello() else {
+            unreachable!();
+        };
+        let mut copy = |_: &str| -> Result<(), String> { Ok(()) };
+
+        session.on_message(DeviceMessage::Hello(hello.clone()), &mut copy);
+        session.on_message(DeviceMessage::ConfigOk { revision: 1 }, &mut copy);
+        *capabilities.write().unwrap() = Some(hello.clone());
+        assert!(session.ready);
+        session.on_message(
+            DeviceMessage::State {
+                event_id: 8,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            &mut copy,
+        );
+        assert!(session.active.is_some());
+
+        update_published_capabilities(&capabilities, session.candidate_board, "HELLO 2 esp32s3");
+        session.on_line("HELLO 2 esp32s3", &mut copy);
+        assert!(capabilities.read().unwrap().is_none());
+        assert!(!session.ready);
+        assert!(session.hello.is_none());
+        assert!(session.configuring.is_none());
+        assert!(session.active.is_none());
+        assert!(session.queue.is_empty());
+        let state = session.on_message(
+            DeviceMessage::State {
+                event_id: 9,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            &mut copy,
+        );
+        assert_eq!(state.lines, ["SKIP 9\n"]);
+
+        session.on_message(DeviceMessage::Hello(hello.clone()), &mut copy);
+        session.on_message(DeviceMessage::ConfigOk { revision: 2 }, &mut copy);
+        *capabilities.write().unwrap() = Some(hello.clone());
+        assert!(session.ready);
+
+        update_published_capabilities(
+            &capabilities,
+            session.candidate_board,
+            "HELLO 3 esp32s3 luatos-esp32s3-aio build 2 0",
+        );
+        session.on_line(
+            "HELLO 3 esp32s3 luatos-esp32s3-aio build 2 0",
+            &mut copy,
+        );
+        assert!(capabilities.read().unwrap().is_none());
+        assert!(!session.ready);
+        assert!(session.hello.is_none());
+
+        session.on_message(DeviceMessage::Hello(hello.clone()), &mut copy);
+        session.on_message(DeviceMessage::ConfigOk { revision: 3 }, &mut copy);
+        *capabilities.write().unwrap() = Some(hello);
+        update_published_capabilities(
+            &capabilities,
+            session.candidate_board,
+            "HELLO 3 esp32s3 vccgnd-yd-rp2040 build 2 0 6",
+        );
+        session.on_line(
+            "HELLO 3 esp32s3 vccgnd-yd-rp2040 build 2 0 6",
+            &mut copy,
+        );
+        assert!(capabilities.read().unwrap().is_none());
+        assert!(!session.ready);
+        assert!(session.hello.is_none());
     }
 
     fn usb_port(vid: u16, pid: u16, product: Option<&str>) -> SerialPortInfo {
