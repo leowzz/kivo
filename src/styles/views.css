@@ -181,7 +181,7 @@
 .data-card.is-danger > h3 { color: var(--red-text); }
 .model-picker { display: grid; gap: 7px; color: var(--gray-10); font-size: var(--text-12); }
 .model-picker select { width: 100%; height: 34px; padding: 0 9px; }
-.data-menu { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.data-menu { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-8); }
 .data-card.is-danger .data-menu { grid-template-columns: 1fr; }
 .data-menu button { min-height: 38px; display: flex; align-items: center; gap: 9px; border: 1px solid var(--border-default); border-radius: var(--radius-8); padding: 7px 10px; color: var(--gray-11); background: var(--bg-surface); font-size: var(--text-13); transition: border-color .15s ease, box-shadow .15s ease; }
 .data-menu button:hover { border-color: var(--gray-7); box-shadow: var(--shadow-1); }
