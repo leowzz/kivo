@@ -24,7 +24,7 @@ interface DeviceManagementProps {
   candidates: CandidateStatus[];
   boardProfiles: BoardProfileSummary[];
   deviceProfiles: DeviceProfile[];
-  metrics: HomeMetricsSnapshot | null;
+  metrics: { deviceId: string; snapshot: HomeMetricsSnapshot } | null;
   onRename(deviceId: string, name: string): void | Promise<void>;
   onForget(deviceId: string): void | Promise<void>;
   onMetricsChange(deviceId: string | null): void;
@@ -165,6 +165,10 @@ export function DeviceManagement({
   const selectedCandidate =
     selection?.kind === "candidate"
       ? (candidates.find((candidate) => candidate.key === selection.id) ?? null)
+      : null;
+  const selectedMetrics =
+    selectedDevice && metrics?.deviceId === selectedDevice.deviceId
+      ? metrics.snapshot
       : null;
   const confirmDevice = confirmId
     ? (devices.find(
@@ -437,14 +441,14 @@ export function DeviceManagement({
             <Detail
               label={t(language, "devices.metrics")}
               value={
-                metrics
-                  ? `${metrics.todayPresses} / ${metrics.totalPresses}`
+                selectedMetrics
+                  ? `${selectedMetrics.todayPresses} / ${selectedMetrics.totalPresses}`
                   : "-"
               }
             />
-            {metrics && (
+            {selectedMetrics && (
               <ul className="device-activity">
-                {metrics.logs.map((log) => (
+                {selectedMetrics.logs.map((log) => (
                   <li key={`${log.timestampMs}:${log.message}`}>
                     {log.message}
                   </li>

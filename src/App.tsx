@@ -32,6 +32,7 @@ import type {
   ButtonAction,
   DeviceProfile,
   HardwareProfile,
+  HomeMetricsSnapshot,
   ImportPreview,
   InputSource,
   Language,
@@ -155,7 +156,7 @@ export default function App() {
   const [language, setLanguage] = useState<Language>("zh-CN");
   const [view, setView] = useState<View>("home");
   const [homeMetrics, setHomeMetrics] = useState<AppSnapshot["homeMetrics"]>(null);
-  const [deviceMetrics, setDeviceMetrics] = useState<AppSnapshot["homeMetrics"]>(null);
+  const [deviceMetrics, setDeviceMetrics] = useState<{ deviceId: string; snapshot: HomeMetricsSnapshot } | null>(null);
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
   const [pressedButtonIds, setPressedButtonIds] = useState<Set<string>>(() => new Set());
   const [loaded, setLoaded] = useState(false);
@@ -326,7 +327,7 @@ export default function App() {
     try {
       const metrics = await invoke<AppSnapshot["homeMetrics"]>("get_device_metrics", { deviceId });
       if (mountedRef.current && selectedManagedDeviceIdRef.current === deviceId && generation === managedMetricsGenerationRef.current) {
-        setDeviceMetrics(metrics && "logs" in metrics ? metrics : null);
+        setDeviceMetrics(metrics && "logs" in metrics ? { deviceId, snapshot: metrics } : null);
       }
     } catch {
       if (mountedRef.current && selectedManagedDeviceIdRef.current === deviceId && generation === managedMetricsGenerationRef.current) setDeviceMetrics(null);

@@ -66,7 +66,7 @@ function renderManagement(overrides: Partial<React.ComponentProps<typeof DeviceM
     candidates,
     boardProfiles: boards,
     deviceProfiles: profiles,
-    metrics,
+    metrics: { deviceId: "rp-a", snapshot: metrics },
     onRename: vi.fn(),
     onForget: vi.fn(),
     onMetricsChange: vi.fn(),
@@ -98,6 +98,12 @@ test("keeps same-board devices as separate selectable rows across filters and se
   await user.clear(screen.getByRole("searchbox", { name: "搜索设备" }));
   await user.type(screen.getByRole("searchbox", { name: "搜索设备" }), "RP2040 Pad");
   expect(screen.getAllByRole("button", { name: /RP2040/ })).toHaveLength(2);
+});
+
+test("never renders metrics owned by another Device", () => {
+  renderManagement({ metrics: { deviceId: "rp-b", snapshot: metrics } });
+  expect(screen.queryByText("A pressed")).toBeNull();
+  expect(screen.queryByText("2 / 8")).toBeNull();
 });
 
 test("composes visible Board Profile search with non-All filters", async () => {
