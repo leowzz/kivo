@@ -137,7 +137,13 @@ test("uses assignment display names, retains missing IDs, and shows selected act
 
 test("shows compact selected-Device metrics with event-time activity attribution", () => {
   renderManagement({
-    devices: [device({ name: "Current Device Name" })],
+    devices: [device({
+      name: "Current Device Name",
+      runtimeAssignment: {
+        device_profile_id: "profile-b",
+        hardware_profile_id: "hardware-b",
+      },
+    })],
     metrics: {
       deviceId: "rp-a",
       snapshot: {
@@ -147,6 +153,8 @@ test("shows compact selected-Device metrics with event-time activity attribution
         logs: [{
           ...metrics.logs[0],
           deviceName: "Event-time Device Name",
+          deviceProfileId: "profile-a",
+          hardwareProfileId: "hardware-a",
           message: "A pressed before rename",
         }],
       },
@@ -160,7 +168,11 @@ test("shows compact selected-Device metrics with event-time activity attribution
   expect(summary).toHaveTextContent("最常用A");
   const activity = screen.getByText("A pressed before rename").closest("tr");
   expect(activity).toHaveTextContent("Event-time Device Name");
+  expect(activity).toHaveTextContent("profile-a");
+  expect(activity).toHaveTextContent("hardware-a");
   expect(activity).not.toHaveTextContent("Current Device Name");
+  expect(activity).not.toHaveTextContent("profile-b");
+  expect(activity).not.toHaveTextContent("hardware-b");
 });
 
 test("preserves selected device identity across live replacements", () => {

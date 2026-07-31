@@ -649,9 +649,11 @@ export function DeviceManagement({
                   <table className="device-activity" aria-label={t(language, "devices.activity")}>
                     <tbody>
                       {selectedMetrics.logs.map((log) => (
-                        <tr key={`${log.timestampMs}:${log.deviceId}:${log.message}`}>
+                        <tr key={`${log.timestampMs}:${log.deviceId}:${log.deviceProfileId}:${log.hardwareProfileId}:${log.message}`}>
                           <td><time>{new Date(log.timestampMs).toLocaleTimeString()}</time></td>
                           <td>{log.deviceName}</td>
+                          <td>{log.deviceProfileId}</td>
+                          <td>{log.hardwareProfileId}</td>
                           <td>{log.message}</td>
                         </tr>
                       ))}

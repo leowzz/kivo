@@ -1021,7 +1021,7 @@ test("clears pressed feedback only for the disconnected Device regardless of the
   await waitFor(() => expect(enter).not.toHaveClass("is-pressed"));
 });
 
-test("attributes keypad feedback by event Device Profile while retaining metrics and activity", async () => {
+test("keeps Home scoped to the Editor Profile while retaining Device metrics and runtime attribution", async () => {
   const otherProfile: DeviceProfile = {
     ...structuredClone(deviceProfile),
     profile: { ...deviceProfile.profile, id: "other-profile", name: "其他键盘" },
@@ -1047,8 +1047,19 @@ test("attributes keypad feedback by event Device Profile while retaining metrics
       message: "other-profile activity",
     }],
   };
+  let metricRequests = 0;
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "get_device_metrics") {
+      metricRequests += 1;
+      return structuredClone(baseSnapshot.homeMetrics!);
+    }
+    return structuredClone(currentSnapshot);
+  });
   const user = userEvent.setup();
   render(<App />);
+  await user.click(await screen.findByRole("button", { name: "设备管理" }));
+  await user.click(screen.getByRole("button", { name: /其他设备/ }));
+  await waitFor(() => expect(metricRequests).toBe(2));
   await user.click(await screen.findByRole("button", { name: "按键行为" }));
   const enter = screen.getByRole("button", { name: "确认，0 项行为" });
 
@@ -1059,10 +1070,13 @@ test("attributes keypad feedback by event Device Profile while retaining metrics
     homeUpdate: otherMetrics,
   })));
   expect(enter).not.toHaveClass("is-pressed");
+  await waitFor(() => expect(metricRequests).toBe(3));
 
   await user.click(screen.getByRole("button", { name: "首页" }));
-  expect(screen.getByText("累计按下: 99")).toBeInTheDocument();
-  expect(screen.getByText("other-profile activity")).toBeInTheDocument();
+  expect(screen.getByText("累计按下: 12")).toBeInTheDocument();
+  expect(screen.getByText("按下 DIGIT_2")).toBeInTheDocument();
+  expect(screen.queryByText("累计按下: 99")).toBeNull();
+  expect(screen.queryByText("other-profile activity")).toBeNull();
 
   await user.click(screen.getByRole("button", { name: "按键行为" }));
   await act(async () => emitRuntimeEvent(runtimeEvent()));

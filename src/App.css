@@ -200,10 +200,11 @@ select:focus, input:focus, textarea:focus, button:focus-visible { border-color: 
 .device-metrics div { min-width: 0; display: flex; align-items: baseline; justify-content: space-between; gap: 6px; padding: 8px 0; color: #65706c; font-size: 10px; }
 .device-metrics strong { overflow-wrap: anywhere; color: #29332f; font-size: 14px; }
 .device-activity-wrap { max-width: 100%; overflow-x: auto; margin-top: 10px; }
-.device-activity { width: 100%; border-collapse: collapse; color: #53605b; font-size: 11px; }
+.device-activity { width: 100%; min-width: 560px; border-collapse: collapse; color: #53605b; font-size: 11px; }
 .device-activity td { padding: 6px 5px; border-bottom: 1px solid #edf0ee; vertical-align: top; overflow-wrap: anywhere; }
 .device-activity td:first-child { padding-left: 0; color: #89928e; white-space: nowrap; }
-.device-activity td:nth-child(2) { width: 30%; }
+.device-activity td:nth-child(2) { width: 22%; }
+.device-activity td:nth-child(3), .device-activity td:nth-child(4) { width: 18%; }
 .device-activity td:last-child { padding-right: 0; }
 .device-forget { margin-top: 14px; }
 .empty-workspace h2 { margin: 0; color: #33403b; font-size: 17px; }

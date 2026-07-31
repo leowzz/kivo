@@ -30,3 +30,32 @@ Screenshots:
 - `docs/verification/screenshots/device-management-760x560.png`
 
 Pixel inspection found no overlapping text or controls, clipped filter/assignment controls, decorative/nested cards, or page-level horizontal overflow. At 760px the detail follows the list and remains reachable through the Device Management workspace scroll.
+
+## Important Fix Follow-up (2026-08-01)
+
+System Google Chrome was launched directly with Playwright 1.62.1 against `http://127.0.0.1:1420/?preview`. The checked-in preview data supplied the registry, while the browser command boundary returned a selected-Device snapshot containing two stored event-time assignments. The existing initial viewport screenshots above were retained.
+
+| Viewport | Page width | Detail geometry | Selected ID | Activity |
+| --- | --- | --- | --- | --- |
+| 1120x760 | document/body `1120/1120` | `340x708`, `scrollHeight=805` | `191/191`, `overflow-wrap:anywhere`, `user-select:auto` | wrapper contains a `560px` scan table |
+| 760x560 | document/body `760/760` | stacked at `y=472`, internal scroller `508/1174` | `444/444`, `overflow-wrap:anywhere`, `user-select:auto` | metrics at `y=1007`, activity at `y=1092` |
+
+Both viewports kept all five Device/candidate rows at exactly `46px`. At 760x560 the list ended at `y=472` and detail began at `y=472`; the assignment section measured `556x122`. The opened confirmation dialog measured `420x192` at `(170,184)` with right/bottom `(590,376)`, fully inside the viewport.
+
+Additional inspected screenshots:
+
+- `docs/verification/screenshots/device-management-1120x760-detail.png`
+- `docs/verification/screenshots/device-management-760x560-detail-id-assignment.png`
+- `docs/verification/screenshots/device-management-760x560-detail-metrics-activity.png`
+- `docs/verification/screenshots/device-management-760x560-assignment-dialog.png`
+
+The mobile detail captures show the long copyable Device ID, current assignment controls, compact metrics, and activity rows with their stored Device name, Device Profile ID, and Hardware Profile ID. Pixel inspection at original resolution found no overlap, clipped controls, or page-level horizontal overflow. The activity table's small horizontal overflow remains contained by its dedicated scroll wrapper. The dialog capture shows both actions and its content without clipping.
+
+Fresh automated verification after the fixes:
+
+- Focused metrics tests: 6 passed; focused command-boundary tests: 2 passed.
+- `rtk npm test -- src/App.test.tsx src/DeviceManagement.test.tsx`: 72 passed.
+- `rtk cargo test --manifest-path src-tauri/Cargo.toml`: 107 passed across 3 suites.
+- `rtk npm test`: 114 passed across 9 files.
+- `rtk npm run build`: TypeScript and Vite passed; 1,800 modules transformed.
+- `rtk git diff --check`: passed.

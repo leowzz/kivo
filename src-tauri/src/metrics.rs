@@ -288,6 +288,23 @@ impl MetricsStore {
         device_id: Option<&DeviceId>,
         now_ms: u64,
     ) -> Result<HomeMetricsSnapshot, rusqlite::Error> {
+        self.snapshot(Some(device_profile_id), device_id, now_ms)
+    }
+
+    pub fn device_snapshot(
+        &self,
+        device_id: &DeviceId,
+        now_ms: u64,
+    ) -> Result<HomeMetricsSnapshot, rusqlite::Error> {
+        self.snapshot(None, Some(device_id), now_ms)
+    }
+
+    fn snapshot(
+        &self,
+        device_profile_id: Option<&str>,
+        device_id: Option<&DeviceId>,
+        now_ms: u64,
+    ) -> Result<HomeMetricsSnapshot, rusqlite::Error> {
         let connection = self
             .connection
             .lock()
@@ -299,7 +316,8 @@ impl MetricsStore {
             "
             SELECT COALESCE(SUM(total_presses), 0)
             FROM button_metrics
-            WHERE device_profile_id = ?1 AND (?2 IS NULL OR device_id = ?2)
+            WHERE (?1 IS NULL OR device_profile_id = ?1)
+              AND (?2 IS NULL OR device_id = ?2)
             ",
             params![device_profile_id, device_id],
             |row| nonnegative(row, 0),
@@ -308,7 +326,7 @@ impl MetricsStore {
             "
             SELECT COALESCE(SUM(presses), 0)
             FROM button_metric_days
-            WHERE device_profile_id = ?1
+            WHERE (?1 IS NULL OR device_profile_id = ?1)
               AND (?2 IS NULL OR device_id = ?2)
               AND day = strftime('%Y-%m-%d', ?3 / 1000, 'unixepoch', 'localtime')
             ",
@@ -319,7 +337,7 @@ impl MetricsStore {
             "
             SELECT COUNT(DISTINCT button_id)
             FROM button_metric_days
-            WHERE device_profile_id = ?1
+            WHERE (?1 IS NULL OR device_profile_id = ?1)
               AND (?2 IS NULL OR device_id = ?2)
               AND day = strftime('%Y-%m-%d', ?3 / 1000, 'unixepoch', 'localtime')
             ",
@@ -331,7 +349,8 @@ impl MetricsStore {
                 "
                 SELECT button_id, SUM(total_presses) AS presses
                 FROM button_metrics
-                WHERE device_profile_id = ?1 AND (?2 IS NULL OR device_id = ?2)
+                WHERE (?1 IS NULL OR device_profile_id = ?1)
+                  AND (?2 IS NULL OR device_id = ?2)
                 GROUP BY button_id
                 ORDER BY presses DESC, button_id ASC
                 LIMIT 1
@@ -349,7 +368,7 @@ impl MetricsStore {
             "
             SELECT button_id, day, SUM(presses)
             FROM button_metric_days
-            WHERE device_profile_id = ?1
+            WHERE (?1 IS NULL OR device_profile_id = ?1)
               AND (?2 IS NULL OR device_id = ?2)
               AND day >= date(?3 / 1000, 'unixepoch', 'localtime', '-6 days')
               AND day <= date(?3 / 1000, 'unixepoch', 'localtime')
@@ -375,15 +394,6 @@ impl MetricsStore {
             heatmap,
             logs: logs(connection, device_profile_id, device_id)?,
         })
-    }
-
-    pub fn device_snapshot(
-        &self,
-        device_profile_id: &str,
-        device_id: &DeviceId,
-        now_ms: u64,
-    ) -> Result<HomeMetricsSnapshot, rusqlite::Error> {
-        self.home_snapshot(device_profile_id, Some(device_id), now_ms)
     }
 
     pub fn backup(&self) -> Result<MetricsBackup, rusqlite::Error> {
@@ -544,7 +554,7 @@ fn trim_activity_logs(transaction: &rusqlite::Transaction<'_>) -> Result<(), rus
 
 fn logs(
     connection: &Connection,
-    device_profile_id: &str,
+    device_profile_id: Option<&str>,
     device_id: Option<&str>,
 ) -> Result<Vec<ActivityLog>, rusqlite::Error> {
     let mut statement = connection.prepare(
@@ -552,7 +562,8 @@ fn logs(
         SELECT occurred_at_ms, kind, message, device_id, device_name,
                device_profile_id, hardware_profile_id, button_id
         FROM activity_logs
-        WHERE device_profile_id = ?1 AND (?2 IS NULL OR device_id = ?2)
+        WHERE (?1 IS NULL OR device_profile_id = ?1)
+          AND (?2 IS NULL OR device_id = ?2)
         ORDER BY id DESC
         LIMIT 500
         ",
@@ -789,6 +800,34 @@ mod tests {
             .unwrap();
         assert_eq!(reassigned_snapshot.total_presses, 1);
         assert_eq!(reassigned_snapshot.logs[0].device_name, "Renamed A");
+
+        let complete_device_snapshot = store.device_snapshot(&device_a, today + 1).unwrap();
+        assert_eq!(complete_device_snapshot.total_presses, 3);
+        assert_eq!(complete_device_snapshot.today_presses, 2);
+        assert_eq!(complete_device_snapshot.active_button_count, 2);
+        assert_eq!(
+            complete_device_snapshot
+                .top_button
+                .as_ref()
+                .map(|button| (button.button_id.as_str(), button.presses)),
+            Some(("ONE", 2))
+        );
+        assert_eq!(complete_device_snapshot.logs.len(), 3);
+        assert_eq!(complete_device_snapshot.logs[0].device_name, "Renamed A");
+        assert_eq!(
+            complete_device_snapshot.logs[0].device_profile_id,
+            "console"
+        );
+        assert_eq!(
+            complete_device_snapshot.logs[0].hardware_profile_id,
+            "esp-alternate"
+        );
+        assert_eq!(complete_device_snapshot.logs[2].device_name, "Desk A");
+        assert_eq!(complete_device_snapshot.logs[2].device_profile_id, "phone");
+        assert_eq!(
+            complete_device_snapshot.logs[2].hardware_profile_id,
+            "esp-primary"
+        );
     }
 
     #[test]

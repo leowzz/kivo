@@ -465,7 +465,9 @@ export default function App() {
         }
         const registeredUnlisten = await listen<RuntimeEvent>("runtime-event", ({ payload }) => {
           if (!active) return;
-          if (payload.homeUpdate) setHomeMetrics(payload.homeUpdate);
+          if (payload.homeUpdate && payload.deviceProfileId === profileRef.current?.profile.id) {
+            setHomeMetrics(payload.homeUpdate);
+          }
           if (payload.deviceId === selectedManagedDeviceIdRef.current) void refreshManagedDeviceMetrics(payload.deviceId);
           if (payload.input && payload.pressed !== null) {
             const currentProfile = profileRef.current;

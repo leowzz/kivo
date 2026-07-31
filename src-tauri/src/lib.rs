@@ -295,21 +295,19 @@ fn get_device_metrics_inner(
         .workspace
         .read()
         .map_err(|_| state_error("workspace_unavailable"))?;
-    let device_profile_id = match workspace.assignment_resolution(device_id) {
+    match workspace.assignment_resolution(device_id) {
         AssignmentResolution::UnknownDevice => return Err(state_error("unknown_device")),
-        AssignmentResolution::Unassigned { .. } => return Err(state_error("device_unassigned")),
-        AssignmentResolution::Valid { assignment, .. }
-        | AssignmentResolution::InvalidAssignment { assignment, .. } => {
-            assignment.device_profile_id.clone()
-        }
-    };
+        AssignmentResolution::Unassigned { .. }
+        | AssignmentResolution::Valid { .. }
+        | AssignmentResolution::InvalidAssignment { .. } => {}
+    }
     drop(workspace);
     drop(coordinator);
     state
         .metrics
         .as_deref()
         .ok_or_else(|| state_error("metrics_unavailable"))?
-        .device_snapshot(&device_profile_id, device_id, now_ms())
+        .device_snapshot(device_id, now_ms())
         .map_err(|error| state_error("metrics_unavailable").with_detail(error.to_string()))
 }
 
@@ -1136,6 +1134,21 @@ mod tests {
         );
 
         let timestamp = now_ms();
+        state
+            .metrics
+            .as_deref()
+            .unwrap()
+            .record_button_press(
+                &MetricAttribution {
+                    device_id: a.clone(),
+                    device_name: "Archived Primary".into(),
+                    device_profile_id: "archived-profile".into(),
+                    hardware_profile_id: "archived-hardware".into(),
+                },
+                "UP",
+                timestamp.saturating_sub(1),
+            )
+            .unwrap();
         for (device_id, button_id) in [(&a, "UP"), (&b, "OTHER")] {
             state
                 .metrics
@@ -1154,7 +1167,11 @@ mod tests {
                 .unwrap();
         }
         let metrics = get_device_metrics_inner(&state, &a).unwrap();
-        assert_eq!(metrics.total_presses, 1);
+        assert_eq!(metrics.total_presses, 2);
+        assert_eq!(metrics.logs.len(), 2);
+        assert_eq!(metrics.logs[1].device_name, "Archived Primary");
+        assert_eq!(metrics.logs[1].device_profile_id, "archived-profile");
+        assert_eq!(metrics.logs[1].hardware_profile_id, "archived-hardware");
         assert_eq!(metrics.top_button.unwrap().button_id, "UP");
 
         begin_learning_inner(&state, &a, "red-phone-v1", "esp-primary", 42, vec![6]).unwrap();
@@ -1177,6 +1194,9 @@ mod tests {
             state.workspace.read().unwrap().settings.devices[&b].runtime_assignment,
             None
         );
+        let unassigned_metrics = get_device_metrics_inner(&state, &a).unwrap();
+        assert_eq!(unassigned_metrics.total_presses, 2);
+        assert_eq!(unassigned_metrics.logs.len(), 2);
 
         assert_eq!(
             forget_device_inner(&state, &b).unwrap_err().code,
