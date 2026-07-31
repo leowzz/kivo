@@ -3,166 +3,35 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { matchesDeviceFilter, primaryDeviceLabel, type DeviceFilter } from "./deviceStatus";
 import { t } from "./i18n";
-import type { BoardProfileSummary, CandidateStatus, DeviceStatus, HomeMetricsSnapshot, Language } from "./types";
+import type { BoardProfileSummary, CandidateStatus, DeviceProfile, DeviceStatus, HomeMetricsSnapshot, Language } from "./types";
 
-type Selection = { kind: "device"; id: string } | { kind: "candidate"; id: string };
-type Row = { selection: Selection; label: string };
+type Selection = { kind: "device" | "candidate"; id: string };
+type Row = { selection: Selection };
+interface DeviceManagementProps { language: Language; devices: DeviceStatus[]; candidates: CandidateStatus[]; boardProfiles: BoardProfileSummary[]; deviceProfiles: DeviceProfile[]; metrics: HomeMetricsSnapshot | null; onRename(deviceId: string, name: string): void | Promise<void>; onForget(deviceId: string): void | Promise<void>; onMetricsChange(deviceId: string | null): void; }
 
-interface DeviceManagementProps {
-  language: Language;
-  devices: DeviceStatus[];
-  candidates: CandidateStatus[];
-  boardProfiles: BoardProfileSummary[];
-  metrics: HomeMetricsSnapshot | null;
-  onRename(deviceId: string, name: string): void | Promise<void>;
-  onForget(deviceId: string): void | Promise<void>;
-  onMetricsChange(deviceId: string | null): void;
+function assignmentLabel(device: DeviceStatus, profiles: DeviceProfile[]) {
+  if (!device.runtimeAssignment) return "-";
+  const profile = profiles.find((item) => item.profile.id === device.runtimeAssignment?.device_profile_id);
+  const hardware = profile?.hardware_profiles.find((item) => item.id === device.runtimeAssignment?.hardware_profile_id);
+  return `${profile?.profile.name ?? device.runtimeAssignment.device_profile_id} / ${hardware?.name ?? device.runtimeAssignment.hardware_profile_id}`;
 }
-
-function assignmentLabel(device: DeviceStatus) {
-  return device.runtimeAssignment
-    ? `${device.runtimeAssignment.device_profile_id} / ${device.runtimeAssignment.hardware_profile_id}`
-    : "-";
+function matches(values: string[], query: string) { const term = query.trim().toLocaleLowerCase(); return !term || values.some((value) => value.toLocaleLowerCase().includes(term)); }
+function status(device: DeviceStatus, language: Language) {
+  const keys: Record<string, string> = { "设备身份冲突": "identityConflict", "设备身份无效": "identityInvalid", "分配需要修复": "assignmentInvalid", "运行错误": "runtimeError", "引导加载模式": "bootloader", "未分配": "unassigned", "离线": "offline", "正在验证": "validating", "正在配置": "configuring", "正在学习": "learning", "就绪": "ready", "未运行": "inactive" };
+  return t(language, `devices.status.${keys[primaryDeviceLabel(device)]}` as never);
 }
+function Detail({ label, value }: { label: string; value: string }) { return <div className="device-detail-field"><span>{label}</span><output>{value}</output></div>; }
 
-function candidateMatches(candidate: CandidateStatus, query: string) {
-  const normalized = query.trim().toLocaleLowerCase();
-  return !normalized || [candidate.rawSerial ?? "", candidate.boardProfileId, candidate.port ?? "", candidate.controllerFamilyId]
-    .some((value) => value.toLocaleLowerCase().includes(normalized));
-}
-
-export function DeviceManagement({
-  language,
-  devices,
-  candidates,
-  boardProfiles,
-  metrics,
-  onRename,
-  onForget,
-  onMetricsChange,
-}: DeviceManagementProps) {
-  const [filter, setFilter] = useState<DeviceFilter>("all");
-  const [query, setQuery] = useState("");
-  const [selection, setSelection] = useState<Selection | null>(null);
-  const [renaming, setRenaming] = useState(false);
-  const [name, setName] = useState("");
-  const [confirmForget, setConfirmForget] = useState<DeviceStatus | null>(null);
-  const previousRows = useRef<Row[]>([]);
-  const boardById = useMemo(() => new Map(boardProfiles.map((board) => [board.id, board])), [boardProfiles]);
-  const visibleDevices = useMemo(() => devices.filter((device) => matchesDeviceFilter(device, filter, query)), [devices, filter, query]);
-  const visibleCandidates = useMemo(() => (filter === "all" || filter === "attention")
-    ? candidates.filter((candidate) => candidateMatches(candidate, query)) : [], [candidates, filter, query]);
-  const rows = useMemo<Row[]>(() => [
-    ...visibleDevices.map((device) => ({ selection: { kind: "device" as const, id: device.deviceId }, label: device.name })),
-    ...visibleCandidates.map((candidate) => ({ selection: { kind: "candidate" as const, id: candidate.key }, label: candidate.rawSerial ?? candidate.key })),
-  ], [visibleDevices, visibleCandidates]);
-
-  useEffect(() => {
-    const present = selection && rows.some((row) => row.selection.kind === selection.kind && row.selection.id === selection.id);
-    if (!present) {
-      const priorIndex = selection ? previousRows.current.findIndex((row) =>
-        row.selection.kind === selection.kind && row.selection.id === selection.id
-      ) : -1;
-      setSelection(rows[Math.max(0, Math.min(priorIndex < 0 ? 0 : priorIndex, rows.length - 1))]?.selection ?? null);
-    }
-    previousRows.current = rows;
-  }, [rows, selection]);
-
-  const selectedDevice = selection?.kind === "device" ? devices.find((device) => device.deviceId === selection.id) ?? null : null;
-  const selectedCandidate = selection?.kind === "candidate" ? candidates.find((candidate) => candidate.key === selection.id) ?? null : null;
-
-  useEffect(() => {
-    onMetricsChange(selectedDevice?.deviceId ?? null);
-  }, [onMetricsChange, selectedDevice?.deviceId]);
-
-  useEffect(() => {
-    setRenaming(false);
-    setName(selectedDevice?.name ?? "");
-  }, [selectedDevice?.deviceId]);
-
-  const select = (next: Selection) => setSelection(next);
-  const saveName = async () => {
-    if (!selectedDevice || !name.trim()) return;
-    await onRename(selectedDevice.deviceId, name.trim());
-    setRenaming(false);
-  };
-
-  return (
-    <div className="device-management">
-      <section className="device-list-region" aria-label={t(language, "devices.list")}>
-        <header className="device-list-header">
-          <h2>{t(language, "nav.devices")}</h2>
-          <label className="device-search"><span>{t(language, "devices.search")}</span><input
-            type="search"
-            aria-label={t(language, "devices.search")}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          /></label>
-          <div className="device-filter" role="group" aria-label={t(language, "devices.filters")}>
-            {(["all", "attention", "ready", "offline"] as const).map((item) => <button
-              key={item}
-              type="button"
-              className={filter === item ? "is-active" : ""}
-              aria-pressed={filter === item}
-              onClick={() => setFilter(item)}
-            >{t(language, `devices.filter.${item}`)}</button>)}
-          </div>
-        </header>
-        <div className="device-table" role="list">
-          <div className="device-table-head" aria-hidden="true"><span>{t(language, "devices.name")}</span><span>{t(language, "devices.board")}</span><span>{t(language, "devices.status")}</span><span>{t(language, "devices.assignment")}</span><span>{t(language, "devices.port")}</span></div>
-          {visibleDevices.map((device) => <button
-            className={`device-row ${selection?.kind === "device" && selection.id === device.deviceId ? "is-selected" : ""}`}
-            key={device.deviceId}
-            type="button"
-            aria-pressed={selection?.kind === "device" && selection.id === device.deviceId}
-            onClick={() => select({ kind: "device", id: device.deviceId })}
-          ><strong>{device.name}</strong><span>{boardById.get(device.boardProfileId)?.displayName ?? device.boardProfileId}</span><span>{primaryDeviceLabel(device)}</span><span>{assignmentLabel(device)}</span><span>{device.port ?? "-"}</span></button>)}
-        </div>
-        {visibleCandidates.length > 0 && <section className="candidate-section" aria-label={t(language, "devices.attentionSection")}>
-          <h3>{t(language, "devices.attentionSection")}</h3>
-          {visibleCandidates.map((candidate) => <button
-            className={`device-row candidate-row ${selection?.kind === "candidate" && selection.id === candidate.key ? "is-selected" : ""}`}
-            key={candidate.key}
-            type="button"
-            aria-pressed={selection?.kind === "candidate" && selection.id === candidate.key}
-            onClick={() => select({ kind: "candidate", id: candidate.key })}
-          ><strong>{candidate.rawSerial ?? candidate.key}</strong><span>{boardById.get(candidate.boardProfileId)?.displayName ?? candidate.boardProfileId}</span><span>{t(language, "devices.filter.attention")}</span><span>-</span><span>{candidate.port ?? "-"}</span></button>)}
-        </section>}
-      </section>
-
-      <aside className="device-detail" aria-label={t(language, "devices.detail")}>
-        {!selectedDevice && !selectedCandidate && <p className="panel-empty">{t(language, "devices.select")}</p>}
-        {selectedCandidate && <>
-          <h2>{t(language, "devices.diagnostics")}</h2>
-          <Detail label={t(language, "devices.serial")} value={selectedCandidate.rawSerial ?? "-"} />
-          <Detail label={t(language, "devices.board")} value={boardById.get(selectedCandidate.boardProfileId)?.displayName ?? selectedCandidate.boardProfileId} />
-          <Detail label={t(language, "devices.controller")} value={selectedCandidate.controllerFamilyId} />
-          <Detail label={t(language, "devices.mode")} value={selectedCandidate.mode} />
-          <Detail label={t(language, "devices.port")} value={selectedCandidate.port ?? "-"} />
-          <Detail label={t(language, "devices.error")} value={selectedCandidate.latestError ?? "-"} />
-        </>}
-        {selectedDevice && <>
-          <div className="device-detail-title"><h2>{renaming ? t(language, "devices.rename") : selectedDevice.name}</h2>{!renaming && <button className="icon-button" type="button" aria-label={t(language, "devices.rename")} title={t(language, "devices.rename")} onClick={() => setRenaming(true)}><Pencil size={16} /></button>}</div>
-          {renaming && <div className="device-rename"><input aria-label={t(language, "devices.name")} value={name} onChange={(event) => setName(event.target.value)} /><button className="icon-button" type="button" aria-label={t(language, "devices.confirmRename")} title={t(language, "devices.confirmRename")} onClick={() => void saveName()}><Check size={16} /></button><button className="icon-button" type="button" aria-label={t(language, "common.cancel")} title={t(language, "common.cancel")} onClick={() => { setName(selectedDevice.name); setRenaming(false); }}><X size={16} /></button></div>}
-          <Detail label={t(language, "devices.serial")} value={selectedDevice.hardwareSerial} />
-          <Detail label={t(language, "devices.id")} value={selectedDevice.deviceId} />
-          <Detail label={t(language, "devices.controller")} value={selectedDevice.controllerFamilyId} />
-          <Detail label={t(language, "devices.board")} value={boardById.get(selectedDevice.boardProfileId)?.displayName ?? selectedDevice.boardProfileId} />
-          <Detail label={t(language, "devices.mode")} value={selectedDevice.mode ?? "-"} />
-          <Detail label={t(language, "devices.port")} value={selectedDevice.port ?? "-"} />
-          <Detail label={t(language, "devices.firmware")} value={selectedDevice.firmwareBuildId ?? "-"} />
-          <Detail label={t(language, "devices.pins")} value={selectedDevice.capabilities.join(", ") || "-"} />
-          <Detail label={t(language, "devices.assignment")} value={assignmentLabel(selectedDevice)} />
-          <Detail label={t(language, "devices.error")} value={selectedDevice.latestError?.detail ?? "-"} />
-          <Detail label={t(language, "devices.metrics")} value={metrics ? `${metrics.todayPresses} / ${metrics.totalPresses}` : "-"} />
-          <button className="icon-button is-danger device-forget" type="button" aria-label={t(language, "devices.forget")} title={t(language, "devices.forget")} disabled={selectedDevice.connection !== "offline"} onClick={() => setConfirmForget(selectedDevice)}><Trash2 size={16} /></button>
-        </>}
-      </aside>
-      {confirmForget && <ConfirmDialog title={t(language, "devices.forget")} body={t(language, "devices.forgetBody", { name: confirmForget.name })} confirmLabel={t(language, "common.confirm")} cancelLabel={t(language, "common.cancel")} danger onCancel={() => setConfirmForget(null)} onConfirm={() => { void onForget(confirmForget.deviceId); setConfirmForget(null); }} />}
-    </div>
-  );
-}
-
-function Detail({ label, value }: { label: string; value: string }) {
-  return <div className="device-detail-field"><span>{label}</span><output>{value}</output></div>;
+export function DeviceManagement({ language, devices, candidates, boardProfiles, deviceProfiles, metrics, onRename, onForget, onMetricsChange }: DeviceManagementProps) {
+  const [filter, setFilter] = useState<DeviceFilter>("all"); const [query, setQuery] = useState(""); const [selection, setSelection] = useState<Selection | null>(null); const [renaming, setRenaming] = useState(false); const [name, setName] = useState(""); const [confirmId, setConfirmId] = useState<string | null>(null); const [error, setError] = useState<string | null>(null); const [forgetting, setForgetting] = useState(false); const previous = useRef<Row[]>([]);
+  const boards = useMemo(() => new Map(boardProfiles.map((board) => [board.id, board])), [boardProfiles]);
+  const visibleDevices = devices.filter((device) => matchesDeviceFilter(device, filter, query) || (filter === "all" && matches([boards.get(device.boardProfileId)?.displayName ?? ""], query)));
+  const visibleCandidates = (filter === "all" || filter === "attention") ? candidates.filter((candidate) => matches([candidate.rawSerial ?? "", candidate.deviceId ?? "", candidate.boardProfileId, boards.get(candidate.boardProfileId)?.displayName ?? "", candidate.port ?? ""], query)) : [];
+  const rows = useMemo<Row[]>(() => [...visibleDevices.map((device) => ({ selection: { kind: "device" as const, id: device.deviceId } })), ...visibleCandidates.map((candidate) => ({ selection: { kind: "candidate" as const, id: candidate.key } }))], [visibleDevices, visibleCandidates]);
+  useEffect(() => { const exists = selection && rows.some((row) => row.selection.kind === selection.kind && row.selection.id === selection.id); if (!exists) { const index = selection ? previous.current.findIndex((row) => row.selection.kind === selection.kind && row.selection.id === selection.id) : 0; setSelection(rows[Math.max(0, Math.min(index, rows.length - 1))]?.selection ?? null); } previous.current = rows; }, [rows, selection]);
+  const selectedDevice = selection?.kind === "device" ? devices.find((device) => device.deviceId === selection.id) ?? null : null; const selectedCandidate = selection?.kind === "candidate" ? candidates.find((candidate) => candidate.key === selection.id) ?? null : null; const confirmDevice = confirmId ? devices.find((device) => device.deviceId === confirmId && device.connection === "offline") ?? null : null;
+  useEffect(() => { onMetricsChange(selectedDevice?.deviceId ?? null); }, [onMetricsChange, selectedDevice?.deviceId]); useEffect(() => { setRenaming(false); setName(selectedDevice?.name ?? ""); }, [selectedDevice?.deviceId]); useEffect(() => { if (confirmId && !confirmDevice) setConfirmId(null); }, [confirmDevice, confirmId]);
+  const rename = async () => { if (!selectedDevice || !name.trim()) return; try { setError(null); await onRename(selectedDevice.deviceId, name.trim()); setRenaming(false); } catch (reason) { setError(String(reason)); } };
+  const forget = async () => { if (!confirmDevice || forgetting) return; try { setForgetting(true); setError(null); await onForget(confirmDevice.deviceId); setConfirmId(null); } catch (reason) { setError(String(reason)); } finally { setForgetting(false); } };
+  return <div className="device-management"><section className="device-list-region" aria-label={t(language, "devices.list")}><header className="device-list-header"><h2>{t(language, "nav.devices")}</h2><label className="device-search"><span>{t(language, "devices.search")}</span><input type="search" aria-label={t(language, "devices.search")} value={query} onChange={(event) => setQuery(event.target.value)} /></label><div className="device-filter" role="group" aria-label={t(language, "devices.filters")}>{(["all", "attention", "ready", "offline"] as const).map((item) => <button key={item} type="button" className={filter === item ? "is-active" : ""} aria-pressed={filter === item} onClick={() => setFilter(item)}>{t(language, `devices.filter.${item}`)}</button>)}</div></header><div className="device-table"><div className="device-table-head" aria-hidden="true"><span>{t(language, "devices.name")}</span><span>{t(language, "devices.board")}</span><span>{t(language, "devices.status")}</span><span>{t(language, "devices.assignment")}</span><span>{t(language, "devices.port")}</span></div><ul>{visibleDevices.map((device) => <li key={device.deviceId}><button className={`device-row ${selection?.kind === "device" && selection.id === device.deviceId ? "is-selected" : ""}`} type="button" aria-pressed={selection?.kind === "device" && selection.id === device.deviceId} onClick={() => setSelection({ kind: "device", id: device.deviceId })}><strong>{device.name}</strong><span>{boards.get(device.boardProfileId)?.displayName ?? device.boardProfileId}</span><span>{status(device, language)}</span><span>{assignmentLabel(device, deviceProfiles)}</span><span>{device.port ?? "-"}</span></button></li>)}</ul></div>{visibleCandidates.length > 0 && <section className="candidate-section" aria-label={t(language, "devices.attentionSection")}><h3>{t(language, "devices.attentionSection")}</h3><ul>{visibleCandidates.map((candidate) => <li key={candidate.key}><button className={`device-row candidate-row ${selection?.kind === "candidate" && selection.id === candidate.key ? "is-selected" : ""}`} type="button" aria-pressed={selection?.kind === "candidate" && selection.id === candidate.key} onClick={() => setSelection({ kind: "candidate", id: candidate.key })}><strong>{candidate.rawSerial ?? candidate.key}</strong><span>{boards.get(candidate.boardProfileId)?.displayName ?? candidate.boardProfileId}</span><span>{t(language, "devices.filter.attention")}</span><span>-</span><span>{candidate.port ?? "-"}</span></button></li>)}</ul></section>}</section><aside className="device-detail" aria-label={t(language, "devices.detail")}>{!selectedDevice && !selectedCandidate && <p className="panel-empty">{t(language, "devices.select")}</p>}{selectedCandidate && <><h2>{t(language, "devices.diagnostics")}</h2><Detail label={t(language, "devices.serial")} value={selectedCandidate.rawSerial ?? "-"} /><Detail label={t(language, "devices.board")} value={boards.get(selectedCandidate.boardProfileId)?.displayName ?? selectedCandidate.boardProfileId} /><Detail label={t(language, "devices.controller")} value={selectedCandidate.controllerFamilyId} /><Detail label={t(language, "devices.mode")} value={selectedCandidate.mode} /><Detail label={t(language, "devices.port")} value={selectedCandidate.port ?? "-"} /><Detail label={t(language, "devices.error")} value={selectedCandidate.latestError ?? "-"} /></>}{selectedDevice && <><div className="device-detail-title"><h2>{renaming ? t(language, "devices.rename") : selectedDevice.name}</h2>{!renaming && <button className="icon-button" type="button" aria-label={t(language, "devices.rename")} onClick={() => setRenaming(true)}><Pencil size={16} /></button>}</div>{renaming && <div className="device-rename"><input aria-label={t(language, "devices.name")} value={name} onChange={(event) => setName(event.target.value)} /><button className="icon-button" type="button" aria-label={t(language, "devices.confirmRename")} onClick={() => void rename()}><Check size={16} /></button><button className="icon-button" type="button" aria-label={t(language, "common.cancel")} onClick={() => setRenaming(false)}><X size={16} /></button></div>}<Detail label={t(language, "devices.serial")} value={selectedDevice.hardwareSerial} /><Detail label={t(language, "devices.id")} value={selectedDevice.deviceId} /><Detail label={t(language, "devices.controller")} value={selectedDevice.controllerFamilyId} /><Detail label={t(language, "devices.board")} value={boards.get(selectedDevice.boardProfileId)?.displayName ?? selectedDevice.boardProfileId} /><Detail label={t(language, "devices.mode")} value={selectedDevice.mode ?? "-"} /><Detail label={t(language, "devices.port")} value={selectedDevice.port ?? "-"} /><Detail label={t(language, "devices.firmware")} value={selectedDevice.firmwareBuildId ?? "-"} /><Detail label={t(language, "devices.pins")} value={selectedDevice.capabilities.join(", ") || "-"} /><Detail label={t(language, "devices.assignment")} value={assignmentLabel(selectedDevice, deviceProfiles)} /><Detail label={t(language, "devices.error")} value={selectedDevice.latestError?.detail ?? "-"} /><Detail label={t(language, "devices.metrics")} value={metrics ? `${metrics.todayPresses} / ${metrics.totalPresses}` : "-"} />{metrics && <ul className="device-activity">{metrics.logs.map((log) => <li key={`${log.timestampMs}:${log.message}`}>{log.message}</li>)}</ul>}{error && <p className="field-error" role="alert">{error}</p>}<button className="icon-button is-danger device-forget" type="button" aria-label={t(language, "devices.forget")} disabled={selectedDevice.connection !== "offline"} onClick={() => setConfirmId(selectedDevice.deviceId)}><Trash2 size={16} /></button></>}</aside>{confirmDevice && <ConfirmDialog title={t(language, "devices.forget")} body={t(language, "devices.forgetBody", { name: confirmDevice.name })} confirmLabel={t(language, "common.confirm")} cancelLabel={t(language, "common.cancel")} danger onCancel={() => setConfirmId(null)} onConfirm={() => void forget()} />}</div>;
 }

@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { DeviceManagement } from "./DeviceManagement";
-import type { BoardProfileSummary, CandidateStatus, DeviceStatus, HomeMetricsSnapshot } from "./types";
+import type { BoardProfileSummary, CandidateStatus, DeviceProfile, DeviceStatus, HomeMetricsSnapshot } from "./types";
 
 const boards: BoardProfileSummary[] = [
   { id: "rp2040-pad", controllerFamilyId: "rp2040", displayName: "RP2040 Pad", runtimeUsb: "2e8a:000a", bootloaderUsb: null, safePins: [1, 2] },
@@ -49,8 +49,10 @@ const metrics: HomeMetricsSnapshot = {
   activeButtonCount: 1,
   topButton: { buttonId: "A", presses: 8 },
   heatmap: [],
-  logs: [],
+  logs: [{ timestampMs: 1, kind: "button", message: "A pressed", deviceId: "rp-a", deviceName: "RP2040 A", deviceProfileId: "profile-a", hardwareProfileId: "hardware-a", buttonId: "A" }],
 };
+
+const profiles: DeviceProfile[] = [{ schema_version: 2, profile: { id: "profile-a", name: "Counter Profile", groups: [] }, hardware_profiles: [{ id: "hardware-a", name: "Counter Hardware", board_profile_id: "rp2040-pad", debounce_ms: 20, inputs: [] }], actions: {} }];
 
 function renderManagement(overrides: Partial<React.ComponentProps<typeof DeviceManagement>> = {}) {
   const props: React.ComponentProps<typeof DeviceManagement> = {
@@ -63,6 +65,7 @@ function renderManagement(overrides: Partial<React.ComponentProps<typeof DeviceM
     ],
     candidates,
     boardProfiles: boards,
+    deviceProfiles: profiles,
     metrics,
     onRename: vi.fn(),
     onForget: vi.fn(),
@@ -93,8 +96,19 @@ test("keeps same-board devices as separate selectable rows across filters and se
   await user.type(screen.getByRole("searchbox", { name: "搜索设备" }), "ESP-A-003");
   expect(screen.getByRole("button", { name: /ESP32 A/ })).toBeInTheDocument();
   await user.clear(screen.getByRole("searchbox", { name: "搜索设备" }));
-  await user.type(screen.getByRole("searchbox", { name: "搜索设备" }), "rp2040-pad");
+  await user.type(screen.getByRole("searchbox", { name: "搜索设备" }), "RP2040 Pad");
   expect(screen.getAllByRole("button", { name: /RP2040/ })).toHaveLength(2);
+});
+
+test("uses assignment display names, retains missing IDs, and shows selected activity", async () => {
+  const user = userEvent.setup();
+  renderManagement();
+  expect(screen.getAllByRole("button", { name: /Counter Profile \/ Counter Hardware/ })).toHaveLength(3);
+  expect(screen.getByText("A pressed")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: /ESP32 A/ }));
+  expect(screen.getAllByText("Counter Profile / Counter Hardware")).toHaveLength(4);
+  renderManagement({ devices: [device({ runtimeAssignment: { device_profile_id: "gone", hardware_profile_id: "missing" } })] });
+  expect(screen.getAllByText("gone / missing")).toHaveLength(2);
 });
 
 test("preserves selected device identity across live replacements", () => {
@@ -146,4 +160,15 @@ test("permits forget only after offline confirmation naming that device", async 
   await user.click(within(dialog).getByRole("button", { name: "确认" }));
   expect(onForget).toHaveBeenCalledWith("esp-offline");
   expect(screen.queryByRole("checkbox")).toBeNull();
+});
+
+test("closes stale forget confirmation when the device reconnects", async () => {
+  const user = userEvent.setup();
+  const onForget = vi.fn();
+  const { rerender, props } = renderManagement({ onForget });
+  await user.click(screen.getByRole("button", { name: /ESP32 Offline/ }));
+  await user.click(screen.getByRole("button", { name: "忘记设备" }));
+  rerender(<DeviceManagement {...props} devices={props.devices.map((item) => item.deviceId === "esp-offline" ? { ...item, connection: "online", mode: "runtime" } : item)} />);
+  expect(screen.queryByRole("dialog", { name: "忘记设备" })).toBeNull();
+  expect(onForget).not.toHaveBeenCalled();
 });

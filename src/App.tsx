@@ -172,6 +172,7 @@ export default function App() {
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const loadErrorMessageRef = useRef<string | null>(null);
   const selectedManagedDeviceIdRef = useRef<string | null>(null);
+  const managedMetricsGenerationRef = useRef(0);
 
   const { deviceProfiles, editorProfile, boardProfiles, devices, candidates } = registry;
   const editorProfileConfig = useMemo(
@@ -295,26 +296,39 @@ export default function App() {
   }, [replaceRegistrySnapshot]);
 
   const renameManagedDevice = useCallback(async (deviceId: string, name: string) => {
-    const snapshot = await invoke<AppSnapshot>("rename_device", { deviceId, name });
-    if (mountedRef.current) replaceRegistrySnapshot(snapshot);
-  }, [replaceRegistrySnapshot]);
+    try {
+      const snapshot = await invoke<AppSnapshot>("rename_device", { deviceId, name });
+      if (mountedRef.current) replaceRegistrySnapshot(snapshot);
+    } catch (operationError) {
+      setError(`${t(language, "error.save")}: ${errorMessage(operationError)}`);
+      throw operationError;
+    }
+  }, [language, replaceRegistrySnapshot]);
 
   const forgetManagedDevice = useCallback(async (deviceId: string) => {
-    const snapshot = await invoke<AppSnapshot>("forget_device", { deviceId });
-    if (mountedRef.current) replaceRegistrySnapshot(snapshot);
-  }, [replaceRegistrySnapshot]);
+    try {
+      const snapshot = await invoke<AppSnapshot>("forget_device", { deviceId });
+      if (mountedRef.current) replaceRegistrySnapshot(snapshot);
+    } catch (operationError) {
+      setError(`${t(language, "error.delete")}: ${errorMessage(operationError)}`);
+      throw operationError;
+    }
+  }, [language, replaceRegistrySnapshot]);
 
   const refreshManagedDeviceMetrics = useCallback(async (deviceId: string | null) => {
     selectedManagedDeviceIdRef.current = deviceId;
+    const generation = ++managedMetricsGenerationRef.current;
     if (!deviceId) {
       setDeviceMetrics(null);
       return;
     }
     try {
       const metrics = await invoke<AppSnapshot["homeMetrics"]>("get_device_metrics", { deviceId });
-      if (mountedRef.current && selectedManagedDeviceIdRef.current === deviceId) setDeviceMetrics(metrics);
+      if (mountedRef.current && selectedManagedDeviceIdRef.current === deviceId && generation === managedMetricsGenerationRef.current) {
+        setDeviceMetrics(metrics && "logs" in metrics ? metrics : null);
+      }
     } catch {
-      if (mountedRef.current && selectedManagedDeviceIdRef.current === deviceId) setDeviceMetrics(null);
+      if (mountedRef.current && selectedManagedDeviceIdRef.current === deviceId && generation === managedMetricsGenerationRef.current) setDeviceMetrics(null);
     }
   }, []);
 
@@ -625,6 +639,7 @@ export default function App() {
               devices={devices}
               candidates={candidates}
               boardProfiles={boardProfiles}
+              deviceProfiles={deviceProfiles}
               metrics={deviceMetrics}
               onRename={renameManagedDevice}
               onForget={forgetManagedDevice}

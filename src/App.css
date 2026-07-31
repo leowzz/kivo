@@ -164,6 +164,7 @@ select:focus, input:focus, textarea:focus, button:focus-visible { border-color: 
 .device-filter button { min-width: 58px; height: 28px; border: 0; border-radius: 3px; padding: 0 8px; color: #53605b; background: transparent; font-size: 11px; }
 .device-filter button.is-active { color: #fff; background: #177457; }
 .device-table { min-width: 680px; border: 1px solid #d9dfdc; border-radius: 6px; overflow: hidden; }
+.device-table ul, .candidate-section ul, .device-activity { margin: 0; padding: 0; list-style: none; }
 .device-table-head, .device-row { display: grid; grid-template-columns: minmax(130px, 1.1fr) minmax(135px, 1fr) 90px minmax(150px, 1.1fr) minmax(110px, .8fr); gap: 10px; align-items: center; }
 .device-table-head { min-height: 32px; padding: 0 12px; color: #75807c; background: #f4f7f5; font-size: 10px; font-weight: 650; }
 .device-row { width: 100%; min-height: 46px; border: 0; border-top: 1px solid #e7ebe9; padding: 7px 12px; color: #48524f; background: #fff; text-align: left; font-size: 12px; }
@@ -181,6 +182,7 @@ select:focus, input:focus, textarea:focus, button:focus-visible { border-color: 
 .device-detail-field { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px; padding: 8px 0; border-bottom: 1px solid #edf0ee; color: #65706c; font-size: 11px; }
 .device-detail-field output { overflow-wrap: anywhere; color: #29332f; font-size: 12px; }
 .device-forget { margin-top: 14px; }
+.device-activity { display: grid; gap: 5px; margin-top: 10px; color: #53605b; font-size: 12px; }
 .empty-workspace h2 { margin: 0; color: #33403b; font-size: 17px; }
 .empty-workspace > div { display: flex; gap: 8px; }
 
@@ -216,10 +218,10 @@ select:focus, input:focus, textarea:focus, button:focus-visible { border-color: 
   .action-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 10px; }
   .action-item { margin: 0; }
   .home-dashboard { min-height: 480px; flex: initial; grid-template-columns: 1fr; overflow: visible; }
-  .device-management { grid-template-columns: 1fr; overflow: visible; }
-  .device-detail { min-height: 340px; border-top: 1px solid #d9dfdc; border-left: 0; }
   .activity-log { min-height: 260px; border-top: 1px solid #d9dfdc; border-left: 0; }
 }
+
+@media (max-width: 899px) { .device-management { grid-template-columns: 1fr; overflow: visible; } .device-detail { min-height: 340px; border-top: 1px solid #d9dfdc; border-left: 0; } }
 
 @media (max-width: 680px) {
   .product-shell { grid-template-rows: auto auto minmax(0, 1fr); }
