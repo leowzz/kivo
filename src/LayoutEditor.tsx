@@ -96,7 +96,10 @@ export function LayoutEditor({ layout, language, open, onCancel, onApply }: Layo
       onCancel();
     }}>
       <div className="layout-editor-header">
-        <h2 id="layout-editor-title">{t(language, "layout.edit")}</h2>
+        <div>
+          <h2 id="layout-editor-title">{t(language, "layout.edit")}</h2>
+          <p className="modal-subtitle">{label("修改按键分组、列数与名称", "Edit groups, columns, and button labels")}</p>
+        </div>
         <button className="icon-button" type="button" aria-label={t(language, "common.close")} title={t(language, "common.close")} onClick={onCancel}><X size={17} /></button>
       </div>
       <div className="layout-editor-body">
