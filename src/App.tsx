@@ -352,32 +352,43 @@ export default function App() {
             <div className="data-page">
               <div className="content-heading"><div><h2>{t(language, "nav.data")}</h2></div></div>
               <div className="data-page-body">
-                <label className="model-picker"><span>{t(language, "model.select")}</span><select
-                  aria-label={t(language, "model.select")}
-                  value={activeModel ?? ""}
-                  disabled={!loaded || models.length === 0}
-                  onChange={(event) => void run(t(language, "error.save"), () => saveSettings(event.target.value, language))}
-                >
-                  {models.length === 0 && <option value="">{t(language, "model.empty")}</option>}
-                  {models.map((model) => <option value={model.model.id} key={model.model.id}>{model.model.name}</option>)}
-                </select></label>
-                <div className="data-menu">
-            <button type="button" onClick={() => void chooseImport()}><FileInput size={16} />{t(language, "nav.import")}</button>
-            <button type="button" disabled={!activeConfig} onClick={() => void run(t(language, "error.export"), async () => {
-              await autosave.flush();
-              const path = await saveFile({ defaultPath: `${activeConfig?.model.id ?? "model"}.yaml`, filters: [{ name: "Kivo", extensions: ["yaml"] }] });
-              if (path && activeConfig) await invoke("export_model", { id: activeConfig.model.id, path });
-            })}><Upload size={16} />{t(language, "nav.export")}</button>
-            <button type="button" disabled={models.length === 0} onClick={() => void run(t(language, "error.export"), async () => {
-              await autosave.flush();
-              const path = await saveFile({ defaultPath: "kivo-backup.yaml", filters: [{ name: "Kivo", extensions: ["yaml"] }] });
-              if (path) await invoke("export_backup", { path });
-            })}><DatabaseBackup size={16} />{t(language, "nav.backup")}</button>
-            <button type="button" onClick={() => void chooseRestore()}><ArchiveRestore size={16} />{t(language, "nav.restore")}</button>
-            <button className="is-danger" type="button" disabled={!activeConfig} onClick={() => activeConfig && setConfirmation({ kind: "delete", model: activeConfig })}>
-              <Trash2 size={16} />{t(language, "nav.delete")}
-            </button>
-                </div>
+                <section className="data-card">
+                  <h3>{t(language, "data.groupModel")}</h3>
+                  <label className="model-picker"><span>{t(language, "model.select")}</span><select
+                    aria-label={t(language, "model.select")}
+                    value={activeModel ?? ""}
+                    disabled={!loaded || models.length === 0}
+                    onChange={(event) => void run(t(language, "error.save"), () => saveSettings(event.target.value, language))}
+                  >
+                    {models.length === 0 && <option value="">{t(language, "model.empty")}</option>}
+                    {models.map((model) => <option value={model.model.id} key={model.model.id}>{model.model.name}</option>)}
+                  </select></label>
+                </section>
+                <section className="data-card">
+                  <h3>{t(language, "data.groupTransfer")}</h3>
+                  <div className="data-menu">
+                    <button type="button" onClick={() => void chooseImport()}><FileInput size={16} />{t(language, "nav.import")}</button>
+                    <button type="button" disabled={!activeConfig} onClick={() => void run(t(language, "error.export"), async () => {
+                      await autosave.flush();
+                      const path = await saveFile({ defaultPath: `${activeConfig?.model.id ?? "model"}.yaml`, filters: [{ name: "Kivo", extensions: ["yaml"] }] });
+                      if (path && activeConfig) await invoke("export_model", { id: activeConfig.model.id, path });
+                    })}><Upload size={16} />{t(language, "nav.export")}</button>
+                    <button type="button" disabled={models.length === 0} onClick={() => void run(t(language, "error.export"), async () => {
+                      await autosave.flush();
+                      const path = await saveFile({ defaultPath: "kivo-backup.yaml", filters: [{ name: "Kivo", extensions: ["yaml"] }] });
+                      if (path) await invoke("export_backup", { path });
+                    })}><DatabaseBackup size={16} />{t(language, "nav.backup")}</button>
+                    <button type="button" onClick={() => void chooseRestore()}><ArchiveRestore size={16} />{t(language, "nav.restore")}</button>
+                  </div>
+                </section>
+                <section className="data-card is-danger">
+                  <h3>{t(language, "data.groupDanger")}</h3>
+                  <div className="data-menu">
+                    <button className="is-danger" type="button" disabled={!activeConfig} onClick={() => activeConfig && setConfirmation({ kind: "delete", model: activeConfig })}>
+                      <Trash2 size={16} />{t(language, "nav.delete")}
+                    </button>
+                  </div>
+                </section>
               </div>
             </div>
           ) : view === "home" ? (
