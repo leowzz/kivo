@@ -20,6 +20,8 @@ interface HardwareMappingProps {
   boardProfiles: BoardProfileSummary[];
   devices: DeviceStatus[];
   learning: LearningTarget | null;
+  initialHardwareProfileId?: string;
+  initialDeviceId?: string | null;
   selectedButtonId: string | null;
   onSelectButton(buttonId: string): void;
   onChange(hardwareProfiles: HardwareProfile[]): void;
@@ -99,6 +101,8 @@ export function HardwareMapping({
   boardProfiles,
   devices,
   learning,
+  initialHardwareProfileId,
+  initialDeviceId,
   selectedButtonId,
   onSelectButton,
   onChange,
@@ -106,12 +110,26 @@ export function HardwareMapping({
   onBeginLearning,
   onEndLearning,
 }: HardwareMappingProps) {
-  const [selectedId, setSelectedId] = useState(hardwareProfiles[0]?.id ?? "");
+  const initialHardware = hardwareProfiles.find(
+    ({ id }) => id === initialHardwareProfileId,
+  ) ?? hardwareProfiles[0];
+  const [selectedId, setSelectedId] = useState(initialHardware?.id ?? "");
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<HardwareProfile | null>(null);
-  const [selectedDeviceId, setSelectedDeviceId] = useState("");
+  const [selectedDeviceId, setSelectedDeviceId] = useState(
+    initialDeviceId ?? "",
+  );
   const pendingCreatedId = useRef<string | null>(null);
+  const appliedNavigationTarget = useRef<string | null>(
+    initialHardwareProfileId
+      ? JSON.stringify([initialHardwareProfileId, initialDeviceId ?? null])
+      : null,
+  );
+  const pendingNavigationSelection = useRef<{
+    hardwareProfileId: string;
+    deviceId: string;
+  } | null>(null);
   const renameOrigin = useRef<{ id: string; profile: string } | null>(null);
   const hardware = hardwareProfiles.find(({ id }) => id === selectedId) ?? hardwareProfiles[0];
   const board = boardProfiles.find(({ id }) => id === hardware?.board_profile_id);
@@ -128,6 +146,53 @@ export function HardwareMapping({
     [boardProfiles, hardware],
   );
   const buttons = layout.groups.flatMap((group) => group.buttons);
+
+  useEffect(() => {
+    if (!initialHardwareProfileId) {
+      appliedNavigationTarget.current = null;
+      return;
+    }
+    const navigationKey = JSON.stringify([
+      initialHardwareProfileId,
+      initialDeviceId ?? null,
+    ]);
+    if (appliedNavigationTarget.current === navigationKey) return;
+    const targetHardware = hardwareProfiles.find(
+      ({ id }) => id === initialHardwareProfileId,
+    );
+    if (!targetHardware) return;
+    const targetDeviceId = initialDeviceId && devices.some((device) =>
+      device.deviceId === initialDeviceId &&
+      device.connection === "online" &&
+      device.mode === "runtime" &&
+      device.identity === "valid" &&
+      device.boardProfileId === targetHardware.board_profile_id
+    )
+      ? initialDeviceId
+      : "";
+    appliedNavigationTarget.current = navigationKey;
+    if (
+      selectedId === targetHardware.id &&
+      selectedDeviceId === targetDeviceId
+    ) {
+      return;
+    }
+    pendingNavigationSelection.current = {
+      hardwareProfileId: targetHardware.id,
+      deviceId: targetDeviceId,
+    };
+    setSelectedId(targetHardware.id);
+    setSelectedDeviceId(targetDeviceId);
+    setRenaming(false);
+    setRenameValue("");
+  }, [
+    devices,
+    hardwareProfiles,
+    initialDeviceId,
+    initialHardwareProfileId,
+    selectedDeviceId,
+    selectedId,
+  ]);
 
   useEffect(() => {
     if (hardwareProfiles.some(({ id }) => id === selectedId)) {
@@ -152,12 +217,24 @@ export function HardwareMapping({
   }, [hardwareProfiles, renaming, selectedId]);
 
   useEffect(() => {
+    const pending = pendingNavigationSelection.current;
+    if (pending && selectedDeviceId !== pending.deviceId) return;
     if (!compatibleDevices.some(({ deviceId }) => deviceId === selectedDeviceId)) {
       setSelectedDeviceId("");
     }
   }, [compatibleDevices, selectedDeviceId]);
 
   useEffect(() => {
+    const pending = pendingNavigationSelection.current;
+    if (pending) {
+      if (
+        hardware?.id !== pending.hardwareProfileId ||
+        (selectedDevice?.deviceId ?? "") !== pending.deviceId
+      ) {
+        return;
+      }
+      pendingNavigationSelection.current = null;
+    }
     onSelectionChange(hardware?.id ?? null, selectedDevice?.deviceId ?? null);
   }, [hardware?.id, onSelectionChange, selectedDevice?.deviceId]);
 

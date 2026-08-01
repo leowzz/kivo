@@ -14,8 +14,10 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import App from "./App";
 import type {
   AppSnapshot,
+  CreateDeviceProfileRequest,
   DeviceProfile,
   DeviceStatus,
+  RuntimeAssignment,
   RuntimeEvent,
 } from "./types";
 
@@ -82,6 +84,74 @@ function device(overrides: Partial<DeviceStatus> = {}): DeviceStatus {
     learning: null,
     ...overrides,
   };
+}
+
+const rpBoard: AppSnapshot["boardProfiles"][number] = {
+  id: "rp",
+  controllerFamilyId: "rp2040",
+  displayName: "RP2040 Pad",
+  runtimeUsb: "2e8a:102e",
+  bootloaderUsb: "2e8a:0003",
+  safePins: [0, 1],
+};
+
+const rpProfile: DeviceProfile = {
+  schema_version: 2,
+  profile: { id: "rp-profile", name: "RP Profile", groups: [] },
+  hardware_profiles: [
+    {
+      id: "rp-other",
+      name: "RP Other",
+      board_profile_id: "rp",
+      debounce_ms: 30,
+      inputs: [],
+    },
+    {
+      id: "rp-hardware",
+      name: "RP Hardware",
+      board_profile_id: "rp",
+      debounce_ms: 30,
+      inputs: [],
+    },
+  ],
+  actions: {},
+};
+
+function rpCandidate(
+  overrides: Partial<AppSnapshot["candidates"][number]> = {},
+): AppSnapshot["candidates"][number] {
+  return {
+    key: "runtime:/dev/cu.usbmodem1101",
+    deviceId: "stable-rp",
+    mode: "runtime",
+    identity: "validating",
+    issue: "validating",
+    rawSerial: "50031519384E811C",
+    port: "/dev/cu.usbmodem1101",
+    controllerFamilyId: "rp2040",
+    boardProfileId: "rp",
+    latestError: null,
+    ...overrides,
+  };
+}
+
+function rpUnassignedDevice(
+  overrides: Partial<DeviceStatus> = {},
+): DeviceStatus {
+  return device({
+    deviceId: "stable-rp",
+    name: "RP2040 Pad · 4E811C",
+    assignment: "unassigned",
+    runtime: "inactive",
+    hardwareSerial: "50031519384E811C",
+    port: "/dev/cu.usbmodem1101",
+    controllerFamilyId: "rp2040",
+    boardProfileId: "rp",
+    firmwareBuildId: "hello-v3",
+    capabilities: [0, 1],
+    runtimeAssignment: null,
+    ...overrides,
+  });
 }
 
 const baseSnapshot: AppSnapshot = {
@@ -188,6 +258,70 @@ beforeEach(() => {
       ).settings;
       currentSnapshot.editorProfile = settings.editor_profile;
       currentSnapshot.language = settings.language;
+    }
+    if (command === "retry_candidate") {
+      const deviceId = (args as { deviceId: string }).deviceId;
+      currentSnapshot.candidates = currentSnapshot.candidates.map((candidate) =>
+        candidate.deviceId === deviceId
+          ? { ...candidate, issue: "validating", latestError: null }
+          : candidate,
+      );
+    }
+    if (command === "create_device_profile") {
+      const request = (args as { request: CreateDeviceProfileRequest }).request;
+      const id = request.name === "Offline RP" ? "offline-rp" : "created-profile";
+      const created =
+        request.kind === "clone"
+          ? {
+              ...structuredClone(
+                currentSnapshot.deviceProfiles.find(
+                  (profile) => profile.profile.id === request.source_profile_id,
+                )!,
+              ),
+              profile: {
+                ...structuredClone(
+                  currentSnapshot.deviceProfiles.find(
+                    (profile) => profile.profile.id === request.source_profile_id,
+                  )!.profile,
+                ),
+                id,
+                name: request.name,
+              },
+            }
+          : {
+              schema_version: 2 as const,
+              profile: { id, name: request.name, groups: [] },
+              hardware_profiles: [
+                {
+                  id: "hardware",
+                  name: "Default hardware",
+                  board_profile_id: request.board_profile_id,
+                  debounce_ms: 30,
+                  inputs: [],
+                },
+              ],
+              actions: {},
+            };
+      currentSnapshot.deviceProfiles.push(created);
+      currentSnapshot.editorProfile = id;
+    }
+    if (command === "complete_device_setup") {
+      const { deviceId, name, assignment } = args as {
+        deviceId: string;
+        name: string;
+        assignment: RuntimeAssignment;
+      };
+      currentSnapshot.devices = currentSnapshot.devices.map((item) =>
+        item.deviceId === deviceId
+          ? {
+              ...item,
+              name,
+              assignment: "valid",
+              runtime: "configuring",
+              runtimeAssignment: assignment,
+            }
+          : item,
+      );
     }
     if (command === "delete_device_profile") {
       currentSnapshot = {
@@ -353,6 +487,135 @@ test("periodically refreshes candidates that produce no runtime event", async ()
 
   expect(screen.getByLabelText("设备状态汇总")).toHaveTextContent(
     "1 就绪 · 1 需处理 · 0 离线",
+  );
+});
+
+test("auto-opens one new Candidate once and stays dismissed for the insertion", async () => {
+  const user = userEvent.setup();
+  currentSnapshot.devices = [];
+  currentSnapshot.candidates = [rpCandidate()];
+  currentSnapshot.boardProfiles = [rpBoard];
+  render(<App />);
+
+  expect(
+    await screen.findByRole("dialog", { name: "添加键盘" }),
+  ).toBeInTheDocument();
+  await user.click(
+    within(screen.getByRole("dialog", { name: "添加键盘" })).getByRole(
+      "button",
+      { name: "稍后处理" },
+    ),
+  );
+  expect(screen.queryByRole("dialog", { name: "添加键盘" })).toBeNull();
+  await act(async () =>
+    emitRuntimeEvent(
+      runtimeEvent({ code: "topology_active", input: null, pressed: null }),
+    ),
+  );
+  expect(screen.queryByRole("dialog", { name: "添加键盘" })).toBeNull();
+});
+
+test("does not reopen when Candidate becomes the same unassigned Device", async () => {
+  currentSnapshot.devices = [];
+  currentSnapshot.candidates = [rpCandidate()];
+  currentSnapshot.boardProfiles = [rpBoard];
+  currentSnapshot.deviceProfiles = [rpProfile];
+  render(<App />);
+  const dialog = await screen.findByRole("dialog", { name: "添加键盘" });
+  expect(dialog).toHaveTextContent("正在确认设备");
+
+  currentSnapshot.candidates = [];
+  currentSnapshot.devices = [rpUnassignedDevice()];
+  await act(async () =>
+    emitRuntimeEvent(
+      runtimeEvent({
+        deviceId: "stable-rp",
+        code: "topology_active",
+        input: null,
+        pressed: null,
+      }),
+    ),
+  );
+
+  await waitFor(() =>
+    expect(screen.getByRole("dialog", { name: "添加键盘" })).toHaveTextContent(
+      "选择键盘配置",
+    ),
+  );
+  expect(screen.getAllByRole("dialog", { name: "添加键盘" })).toHaveLength(1);
+});
+
+test("configuration page creates a profile while no device is usable", async () => {
+  const user = userEvent.setup();
+  currentSnapshot.devices = [];
+  currentSnapshot.candidates = [
+    rpCandidate({ issue: "firmware_not_responding" }),
+  ];
+  currentSnapshot.boardProfiles = [rpBoard];
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "稍后处理" }));
+  await user.click(screen.getByRole("button", { name: "配置文件" }));
+  await user.click(screen.getByRole("button", { name: "新建配置" }));
+  await user.click(screen.getByRole("radio", { name: "空白配置" }));
+  await user.type(screen.getByRole("textbox", { name: "配置名称" }), "Offline RP");
+  await user.selectOptions(screen.getByRole("combobox", { name: "板型" }), "rp");
+  await user.click(screen.getByRole("button", { name: "创建配置" }));
+
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("create_device_profile", {
+      request: {
+        kind: "blank",
+        name: "Offline RP",
+        board_profile_id: "rp",
+      },
+    }),
+  );
+  expect(screen.getByLabelText("当前编辑配置")).toHaveValue("offline-rp");
+  expect(currentSnapshot.devices).toHaveLength(0);
+});
+
+test("completes one exact Device and navigates to its Hardware Profile", async () => {
+  const user = userEvent.setup();
+  currentSnapshot.devices = [
+    rpUnassignedDevice(),
+    rpUnassignedDevice({ deviceId: "other-rp", hardwareSerial: "OTHER" }),
+  ];
+  currentSnapshot.candidates = [];
+  currentSnapshot.boardProfiles = [rpBoard];
+  currentSnapshot.deviceProfiles = [rpProfile];
+  currentSnapshot.editorProfile = rpProfile.profile.id;
+  render(<App />);
+  const dialog = await screen.findByRole("dialog", { name: "添加键盘" });
+  await user.selectOptions(
+    within(dialog).getByRole("combobox", { name: "键盘配置" }),
+    "rp-profile",
+  );
+  await user.selectOptions(
+    within(dialog).getByRole("combobox", { name: "硬件配置" }),
+    "rp-hardware",
+  );
+  await user.click(within(dialog).getByRole("button", { name: "下一步" }));
+  await user.click(
+    within(dialog).getByRole("button", { name: "完成设置" }),
+  );
+
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("complete_device_setup", {
+      deviceId: "stable-rp",
+      name: expect.any(String),
+      assignment: {
+        device_profile_id: "rp-profile",
+        hardware_profile_id: "rp-hardware",
+      },
+    }),
+  );
+  expect(
+    currentSnapshot.devices.find((item) => item.deviceId === "other-rp")
+      ?.runtimeAssignment,
+  ).toBeNull();
+  expect(await screen.findByRole("heading", { name: "硬件配置" })).toBeInTheDocument();
+  expect(screen.getByRole("combobox", { name: "硬件配置" })).toHaveValue(
+    "rp-hardware",
   );
 });
 

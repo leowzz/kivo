@@ -77,6 +77,8 @@ function renderManagement(overrides: Partial<React.ComponentProps<typeof DeviceM
     onSaveRuntimeAssignment: vi.fn(),
     onClearRuntimeAssignment: vi.fn(),
     onMetricsChange: vi.fn(),
+    onOpenSetup: vi.fn(),
+    onRetryCandidate: vi.fn(),
     ...overrides,
   };
   return { ...render(<DeviceManagement {...props} />), props };

@@ -10,6 +10,7 @@ import {
   Home,
   Keyboard,
   LayoutGrid,
+  Plus,
   Trash2,
   Upload,
   Usb,
@@ -19,17 +20,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import brandIcon from "../src-tauri/icons/128x128.png";
 import { ActionEditor } from "./ActionEditor";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { CreateDeviceProfileForm } from "./CreateDeviceProfileForm";
 import { DeviceManagement } from "./DeviceManagement";
+import { DeviceSetupWizard } from "./DeviceSetupWizard";
 import { HardwareMapping, hardwareProfilesAreValid } from "./HardwareMapping";
 import { HomeDashboard } from "./HomeDashboard";
 import { Keypad } from "./Keypad";
 import { LayoutEditor } from "./LayoutEditor";
 import { deviceSummary } from "./deviceStatus";
+import { reconcileSetupSession, setupPresence } from "./deviceSetupSession";
 import { t } from "./i18n";
 import type {
   AppSnapshot,
   BackupPreview,
   ButtonAction,
+  CreateDeviceProfileRequest,
   DeviceProfile,
   HardwareProfile,
   HomeMetricsSnapshot,
@@ -186,6 +191,9 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [layoutEditorOpen, setLayoutEditorOpen] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [setupTargetId, setSetupTargetId] = useState<string | null>(null);
+  const [profileCreatorOpen, setProfileCreatorOpen] = useState(false);
   const pressedOwnersRef = useRef<Map<string, PressedOwner>>(new Map());
   const mountedRef = useRef(true);
   const registryEpochRef = useRef(0);
@@ -200,6 +208,7 @@ export default function App() {
   const hardwareEditorTargetRef = useRef<HardwareEditorTarget | null>(null);
   const learningEditingRevisionRef = useRef(0);
   const profileDraftsRef = useRef<Map<string, DeviceProfile>>(new Map());
+  const setupSeenRef = useRef<Set<string>>(new Set());
 
   const { deviceProfiles, editorProfile, boardProfiles, devices, candidates } = registry;
   const editorProfileConfig = useMemo(
@@ -216,6 +225,29 @@ export default function App() {
     savedDeviceProfiles[editorProfileConfig.profile.id] !== JSON.stringify(editorProfileConfig));
   const summary = deviceSummary(devices);
   const attentionCount = summary.attention + candidates.length;
+  const currentSetupPresence = useMemo(
+    () => setupPresence(devices, candidates),
+    [devices, candidates],
+  );
+
+  useEffect(() => {
+    if (!loaded) return;
+    const next = reconcileSetupSession(
+      setupSeenRef.current,
+      currentSetupPresence,
+    );
+    setupSeenRef.current = next.seen;
+    if (!setupOpen && next.autoTargetId) {
+      setSetupTargetId(next.autoTargetId);
+      setSetupOpen(true);
+    }
+  }, [currentSetupPresence, loaded, setupOpen]);
+
+  const openSetup = useCallback((targetId: string | null = null) => {
+    if (targetId) setupSeenRef.current.add(targetId);
+    setSetupTargetId(targetId);
+    setSetupOpen(true);
+  }, []);
 
   const replaceRegistrySnapshot = useCallback((snapshot: AppSnapshot) => {
     registryEpochRef.current += 1;
@@ -440,6 +472,26 @@ export default function App() {
     queue,
   });
 
+  const retrySetupCandidate = useCallback(
+    async (deviceId: string) => {
+      const snapshot = await invoke<AppSnapshot>("retry_candidate", { deviceId });
+      if (mountedRef.current) applySnapshot(snapshot, true);
+    },
+    [applySnapshot],
+  );
+
+  const createDeviceProfile = useCallback(
+    async (request: CreateDeviceProfileRequest) => {
+      await autosave.flush();
+      const snapshot = await invoke<AppSnapshot>("create_device_profile", {
+        request,
+      });
+      if (mountedRef.current) applySnapshot(snapshot, true);
+      return snapshot;
+    },
+    [applySnapshot, autosave],
+  );
+
   const profileRef = useRef(editorProfileConfig);
   const devicesRef = useRef(devices);
   const selectedRef = useRef(selectedButtonId);
@@ -603,6 +655,31 @@ export default function App() {
     applySnapshot(snapshot, true);
   };
 
+  const completeDeviceSetup = async (
+    deviceId: string,
+    name: string,
+    assignment: RuntimeAssignment,
+  ) => {
+    await autosave.flush();
+    const completed = await invoke<AppSnapshot>("complete_device_setup", {
+      deviceId,
+      name,
+      assignment,
+    });
+    if (!mountedRef.current) return;
+    applySnapshot(completed, true);
+    if (completed.editorProfile !== assignment.device_profile_id) {
+      await saveSettings(assignment.device_profile_id, language);
+    }
+    setHardwareEditorTarget({
+      deviceId,
+      deviceProfileId: assignment.device_profile_id,
+      hardwareProfileId: assignment.hardware_profile_id,
+    });
+    setSetupOpen(false);
+    setView("hardware");
+  };
+
   const run = async (label: string, task: () => Promise<void>) => {
     setError(null);
     try {
@@ -710,7 +787,12 @@ export default function App() {
         <section className="content-panel">
           {view === "data" ? (
             <div className="data-page">
-              <div className="content-heading"><div><h2>{t(language, "nav.data")}</h2></div></div>
+              <div className="content-heading">
+                <div><h2>{t(language, "nav.data")}</h2></div>
+                <button className="primary-button" type="button" onClick={() => setProfileCreatorOpen(true)}>
+                  <Plus size={16} />{t(language, "profile.create")}
+                </button>
+              </div>
               <div className="data-page-body">
                 <section className="data-card">
                   <h3>{t(language, "data.groupModel")}</h3>
@@ -764,6 +846,8 @@ export default function App() {
               onSaveRuntimeAssignment={saveManagedRuntimeAssignment}
               onClearRuntimeAssignment={clearManagedRuntimeAssignment}
               onMetricsChange={handleManagedMetricsChange}
+              onOpenSetup={openSetup}
+              onRetryCandidate={retrySetupCandidate}
             />
           ) : view === "home" ? (
             <HomeDashboard
@@ -787,6 +871,16 @@ export default function App() {
               boardProfiles={boardProfiles}
               devices={devices}
               learning={selectedLearningDevice?.learning ?? null}
+              initialHardwareProfileId={
+                hardwareEditorTarget?.deviceProfileId === editorProfile
+                  ? hardwareEditorTarget.hardwareProfileId
+                  : undefined
+              }
+              initialDeviceId={
+                hardwareEditorTarget?.deviceProfileId === editorProfile
+                  ? hardwareEditorTarget.deviceId
+                  : undefined
+              }
               selectedButtonId={selectedButtonId}
               onSelectButton={setSelectedButtonId}
               onChange={(hardwareProfiles) => updateEditorProfile((profile) => ({
@@ -889,6 +983,56 @@ export default function App() {
           });
           setLayoutEditorOpen(false);
         }}
+      />
+
+      {profileCreatorOpen && (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="device-setup-dialog profile-create-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="profile-create-title"
+          >
+            <header className="device-setup-header">
+              <h2 id="profile-create-title">{t(language, "profile.create")}</h2>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label={t(language, "common.close")}
+                onClick={() => setProfileCreatorOpen(false)}
+              >
+                <X size={17} />
+              </button>
+            </header>
+            <div className="device-setup-body">
+              <CreateDeviceProfileForm
+                language={language}
+                boardProfiles={boardProfiles}
+                deviceProfiles={deviceProfiles}
+                onCreate={async (request) => {
+                  await createDeviceProfile(request);
+                  setProfileCreatorOpen(false);
+                }}
+                onCancel={() => setProfileCreatorOpen(false)}
+              />
+            </div>
+          </section>
+        </div>
+      )}
+
+      <DeviceSetupWizard
+        open={setupOpen}
+        targetId={setupTargetId}
+        language={language}
+        devices={devices}
+        candidates={candidates}
+        boardProfiles={boardProfiles}
+        deviceProfiles={deviceProfiles}
+        onTargetChange={setSetupTargetId}
+        onRetryCandidate={retrySetupCandidate}
+        onCreateProfile={createDeviceProfile}
+        onComplete={completeDeviceSetup}
+        onClose={() => setSetupOpen(false)}
       />
 
       {confirmation && (

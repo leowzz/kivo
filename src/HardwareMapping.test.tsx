@@ -241,6 +241,61 @@ test("keeps same-board profiles distinct and changes only the selected one", asy
   expect(updated[1]).toEqual({ ...hardwareProfiles[1], debounce_ms: 55 });
 });
 
+test("applies a new navigation target once without overriding later manual selection", async () => {
+  const user = userEvent.setup();
+  const props = {
+    language: "zh-CN" as const,
+    layout,
+    hardwareProfiles: structuredClone(hardwareProfiles),
+    boardProfiles,
+    devices: [device()],
+    selectedButtonId: null,
+    onSelectButton: vi.fn(),
+    onChange: vi.fn(),
+    onSelectionChange: vi.fn(),
+    learning: null,
+    onBeginLearning: vi.fn(),
+    onEndLearning: vi.fn(),
+  };
+  const { rerender } = render(<HardwareMapping {...props} />);
+
+  await user.selectOptions(
+    screen.getByRole("combobox", { name: "硬件配置" }),
+    "back-desk",
+  );
+  rerender(
+    <HardwareMapping
+      {...props}
+      initialHardwareProfileId="front-desk"
+      initialDeviceId="device-front"
+    />,
+  );
+
+  expect(screen.getByRole("combobox", { name: "硬件配置" })).toHaveValue(
+    "front-desk",
+  );
+  await user.click(screen.getByText("适配新设备"));
+  expect(screen.getByRole("combobox", { name: "在线设备" })).toHaveValue(
+    "device-front",
+  );
+
+  await user.selectOptions(
+    screen.getByRole("combobox", { name: "硬件配置" }),
+    "back-desk",
+  );
+  rerender(
+    <HardwareMapping
+      {...props}
+      hardwareProfiles={structuredClone(hardwareProfiles)}
+      initialHardwareProfileId="front-desk"
+      initialDeviceId="device-front"
+    />,
+  );
+  expect(screen.getByRole("combobox", { name: "硬件配置" })).toHaveValue(
+    "back-desk",
+  );
+});
+
 test("retains and visibly marks every invalid pin after changing Board Profile", async () => {
   const user = userEvent.setup();
   const onChange = renderMapping();

@@ -36,6 +36,8 @@ interface DeviceManagementProps {
   ): void | Promise<void>;
   onClearRuntimeAssignment(deviceId: string): void | Promise<void>;
   onMetricsChange(deviceId: string | null): void;
+  onOpenSetup(targetId: string | null): void;
+  onRetryCandidate(deviceId: string): void | Promise<void>;
 }
 
 function assignmentLabel(device: DeviceStatus, profiles: DeviceProfile[]) {
