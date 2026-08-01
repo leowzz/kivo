@@ -5,6 +5,7 @@
 #include "Handshake.h"
 #include "InputTopology.h"
 #include "TriggerProtocol.h"
+#include "platform/HidReportTransport.h"
 
 void setUp() {}
 void tearDown() {}
@@ -451,6 +452,31 @@ void test_matching_skip_response_clears_without_keypress() {
   TEST_ASSERT_FALSE(controller.hasPendingEvent());
 }
 
+void test_hid_hotkey_waits_for_press_and_release_report_slots() {
+  const bool readiness[] = {false, false, true, false, true};
+  std::size_t readinessIndex = 0;
+  std::vector<std::pair<std::uint8_t, std::uint8_t>> reports;
+  std::size_t pauses = 0;
+
+  const bool sent = platform::transmitHotkeyReports(
+      0x08, 0x28, 4,
+      [&]() { return readiness[readinessIndex++]; },
+      [&](std::uint8_t modifiers, std::uint8_t keycode) {
+        reports.emplace_back(modifiers, keycode);
+        return true;
+      },
+      [&]() { ++pauses; });
+
+  TEST_ASSERT_TRUE(sent);
+  TEST_ASSERT_EQUAL_UINT32(5, readinessIndex);
+  TEST_ASSERT_EQUAL_UINT32(3, pauses);
+  TEST_ASSERT_EQUAL_UINT32(2, reports.size());
+  TEST_ASSERT_EQUAL_UINT8(0x08, reports[0].first);
+  TEST_ASSERT_EQUAL_UINT8(0x28, reports[0].second);
+  TEST_ASSERT_EQUAL_UINT8(0, reports[1].first);
+  TEST_ASSERT_EQUAL_UINT8(0, reports[1].second);
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_commits_complete_matrix_topology_atomically);
@@ -483,5 +509,6 @@ int main(int, char **) {
   RUN_TEST(test_only_matching_paste_response_requests_keypress);
   RUN_TEST(test_matching_hotkey_response_requests_execution);
   RUN_TEST(test_matching_skip_response_clears_without_keypress);
+  RUN_TEST(test_hid_hotkey_waits_for_press_and_release_report_slots);
   return UNITY_END();
 }

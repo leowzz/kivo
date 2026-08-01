@@ -34,13 +34,14 @@ void write(const char *data, std::size_t size) { usbSerial.write(data, size); }
 
 void flush() { usbSerial.flush(); }
 
-void sendHotkey(std::uint8_t modifiers, std::uint8_t keycode) {
+bool sendHotkey(std::uint8_t modifiers, std::uint8_t keycode) {
   KeyReport report{};
   report.modifiers = modifiers;
   report.keys[0] = keycode;
   keyboard.sendReport(&report);
   delay(10);
   keyboard.releaseAll();
+  return true;
 }
 
 void delayMs(std::uint32_t milliseconds) { delay(milliseconds); }

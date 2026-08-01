@@ -12,8 +12,8 @@ mod tray;
 mod workspace;
 
 use coordinator::{
-    CandidateStatus, DeviceStatus, IdentityDimension, RuntimeCoordinator, RuntimeEvent,
-    WorkspaceRevision,
+    CandidateStatus, DeviceScan, DeviceStatus, IdentityDimension, RuntimeCoordinator, RuntimeEvent,
+    UsbEnumerator, WorkspaceRevision, enumerate_devices,
 };
 use hardware::{BOARD_PROFILES, BoardProfile};
 use metrics::{HomeMetricsSnapshot, MetricsStore};
@@ -28,13 +28,87 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread::{self, JoinHandle},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{Emitter, Manager};
 use workspace::{
     AppError, AssignmentResolution, BackupPreview, EditorSettingsPatch, ImportPreview, Language,
     RuntimeAssignment, Workspace,
 };
+
+const DEVICE_SCAN_INTERVAL: Duration = Duration::from_millis(500);
+const RUNTIME_EVENT_POLL_INTERVAL: Duration = Duration::from_millis(5);
+
+struct BackgroundDeviceScanner {
+    enumerator: Arc<dyn UsbEnumerator>,
+    in_flight: Option<JoinHandle<Result<DeviceScan, String>>>,
+    next_scan: Instant,
+    rescan_requested: bool,
+}
+
+impl BackgroundDeviceScanner {
+    fn new(enumerator: Arc<dyn UsbEnumerator>) -> Self {
+        Self {
+            enumerator,
+            in_flight: None,
+            next_scan: Instant::now(),
+            rescan_requested: false,
+        }
+    }
+
+    fn poll(&mut self) -> Option<Result<DeviceScan, String>> {
+        if self.in_flight.as_ref().is_some_and(JoinHandle::is_finished) {
+            let result = self
+                .in_flight
+                .take()
+                .expect("finished device scan is present")
+                .join()
+                .unwrap_or_else(|_| Err("device_scan_thread_panicked".into()));
+            self.next_scan = if self.rescan_requested {
+                self.rescan_requested = false;
+                Instant::now()
+            } else {
+                Instant::now() + DEVICE_SCAN_INTERVAL
+            };
+            return Some(result);
+        }
+
+        if self.in_flight.is_none() && Instant::now() >= self.next_scan {
+            let enumerator = Arc::clone(&self.enumerator);
+            self.in_flight = Some(thread::spawn(move || {
+                enumerate_devices(enumerator.as_ref())
+            }));
+        }
+        None
+    }
+
+    fn request_scan(&mut self) {
+        if self.in_flight.is_some() {
+            self.rescan_requested = true;
+        } else {
+            self.next_scan = Instant::now();
+        }
+    }
+}
+
+fn poll_runtime_coordinator(
+    scanner: &mut BackgroundDeviceScanner,
+    coordinator: &Mutex<RuntimeCoordinator>,
+) -> (Option<Vec<DeviceStatus>>, Vec<RuntimeEvent>) {
+    let scan = scanner.poll();
+    let mut coordinator = coordinator
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let devices = match scan {
+        Some(Ok(scan)) => {
+            coordinator.apply_scan(scan);
+            Some(coordinator.devices())
+        }
+        Some(Err(_)) | None => None,
+    };
+    let events = coordinator.drain_worker_events();
+    (devices, events)
+}
 
 #[doc(hidden)]
 pub mod test_support {
@@ -71,6 +145,7 @@ struct AppState {
     coordinator: Option<Arc<Mutex<RuntimeCoordinator>>>,
     paste: Option<Arc<PasteCoordinator>>,
     stop: Arc<AtomicBool>,
+    scan_requested: Arc<AtomicBool>,
     coordinator_thread: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -259,11 +334,15 @@ fn retry_candidate_inner(
         .coordinator
         .as_ref()
         .ok_or_else(|| state_error("coordinator_unavailable"))?;
-    coordinator
-        .lock()
-        .map_err(|_| state_error("coordinator_unavailable"))?
-        .retry_candidate(device_id)
-        .map_err(|error| state_error(&error))?;
+    {
+        let mut coordinator = coordinator
+            .lock()
+            .map_err(|_| state_error("coordinator_unavailable"))?;
+        coordinator
+            .retry_candidate(device_id)
+            .map_err(|error| state_error(&error))?;
+    }
+    state.scan_requested.store(true, Ordering::Relaxed);
     snapshot(state)
 }
 
@@ -703,42 +782,42 @@ pub fn run() {
                 metrics.clone(),
                 Arc::clone(&operation_barrier),
             ));
+            let enumerator: Arc<dyn UsbEnumerator> = Arc::new(coordinator::SystemUsbEnumerator);
             let coordinator = Arc::new(Mutex::new(RuntimeCoordinator::with_paste(
-                Arc::new(coordinator::SystemUsbEnumerator),
+                Arc::clone(&enumerator),
                 launcher,
                 Arc::clone(&workspace),
                 Some(paste.handle()),
             )));
             let stop = Arc::new(AtomicBool::new(false));
+            let scan_requested = Arc::new(AtomicBool::new(false));
             let coordinator_thread = {
                 let coordinator = Arc::clone(&coordinator);
                 let workspace = Arc::clone(&workspace);
                 let metrics = metrics.clone();
                 let stop = Arc::clone(&stop);
+                let scan_requested = Arc::clone(&scan_requested);
                 let app_handle = app.handle().clone();
                 thread::spawn(move || {
+                    let mut scanner = BackgroundDeviceScanner::new(enumerator);
                     while !stop.load(Ordering::Relaxed) {
-                        let (devices, events) = {
-                            let mut coordinator = coordinator
-                                .lock()
-                                .unwrap_or_else(|poisoned| poisoned.into_inner());
-                            let _ = coordinator.scan_once();
-                            let events = coordinator.drain_worker_events();
-                            (coordinator.devices(), events)
-                        };
+                        if scan_requested.swap(false, Ordering::Relaxed) {
+                            scanner.request_scan();
+                        }
+                        let (devices, events) =
+                            poll_runtime_coordinator(&mut scanner, coordinator.as_ref());
                         #[cfg(target_os = "macos")]
-                        tray::update_registry(&app_handle, &devices);
+                        if let Some(devices) = devices.as_deref() {
+                            tray::update_registry(&app_handle, devices);
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        let _ = devices;
                         for event in events {
                             let payload =
                                 enrich_runtime_event(&workspace, metrics.as_deref(), event);
                             let _ = app_handle.emit("runtime-event", payload);
                         }
-                        for _ in 0..10 {
-                            if stop.load(Ordering::Relaxed) {
-                                break;
-                            }
-                            thread::sleep(Duration::from_millis(50));
-                        }
+                        thread::sleep(RUNTIME_EVENT_POLL_INTERVAL);
                     }
                     coordinator
                         .lock()
@@ -753,6 +832,7 @@ pub fn run() {
                 coordinator: Some(coordinator),
                 paste: Some(paste),
                 stop,
+                scan_requested,
                 coordinator_thread: Mutex::new(Some(coordinator_thread)),
             });
             Ok(())
@@ -851,6 +931,111 @@ mod tests {
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
+    #[test]
+    fn runtime_event_polling_stays_within_interactive_latency_budget() {
+        assert!(
+            RUNTIME_EVENT_POLL_INTERVAL + crate::device::SERIAL_COMMAND_POLL_INTERVAL
+                <= Duration::from_millis(20)
+        );
+    }
+
+    #[test]
+    fn slow_device_discovery_does_not_block_interactive_polling() {
+        let directory = TestDirectory::new();
+        let workspace = Workspace::create(&directory.0, vec![product_profile()]).unwrap();
+        let coordinator = Mutex::new(RuntimeCoordinator::new(
+            Arc::new(EmptyEnumerator),
+            Arc::new(UnusedLauncher),
+            Arc::new(RwLock::new(workspace)),
+        ));
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let enumerator = Arc::new(BlockingEnumerator {
+            started: started_tx,
+            release: Mutex::new(release_rx),
+        });
+        let mut scanner = BackgroundDeviceScanner::new(enumerator);
+
+        let (devices, events) = poll_runtime_coordinator(&mut scanner, &coordinator);
+        assert!(devices.is_none());
+        assert!(events.is_empty());
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("device scan did not start");
+
+        let started = Instant::now();
+        let (devices, events) = poll_runtime_coordinator(&mut scanner, &coordinator);
+        assert!(devices.is_none());
+        assert!(events.is_empty());
+        let elapsed = started.elapsed();
+        for _ in 0..8 {
+            let (devices, events) = poll_runtime_coordinator(&mut scanner, &coordinator);
+            assert!(devices.is_none());
+            assert!(events.is_empty());
+        }
+        assert_eq!(started_rx.try_recv(), Err(mpsc::TryRecvError::Empty));
+
+        release_tx.send(()).unwrap();
+        assert!(
+            elapsed <= Duration::from_millis(20),
+            "polling blocked for {elapsed:?} while discovery was running"
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match poll_runtime_coordinator(&mut scanner, &coordinator) {
+                (Some(devices), events) => {
+                    assert!(devices.is_empty());
+                    assert!(events.is_empty());
+                    break;
+                }
+                (None, events) if Instant::now() < deadline => {
+                    assert!(events.is_empty());
+                    thread::yield_now();
+                }
+                (None, _) => panic!("device scan did not finish"),
+            }
+        }
+    }
+
+    #[test]
+    fn scan_requested_during_discovery_runs_immediately_after_completion() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let enumerator = Arc::new(BlockingEnumerator {
+            started: started_tx,
+            release: Mutex::new(release_rx),
+        });
+        let mut scanner = BackgroundDeviceScanner::new(enumerator);
+
+        assert!(scanner.poll().is_none());
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("first device scan did not start");
+        scanner.request_scan();
+        assert!(scanner.poll().is_none());
+        assert_eq!(started_rx.try_recv(), Err(mpsc::TryRecvError::Empty));
+
+        release_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match scanner.poll() {
+                Some(result) => {
+                    result.unwrap();
+                    break;
+                }
+                None if Instant::now() < deadline => thread::yield_now(),
+                None => panic!("first device scan did not finish"),
+            }
+        }
+
+        assert!(scanner.poll().is_none());
+        started_rx
+            .recv_timeout(Duration::from_millis(100))
+            .expect("requested device scan did not start immediately");
+        release_tx.send(()).unwrap();
+    }
+
     struct TestDirectory(PathBuf);
 
     impl TestDirectory {
@@ -909,6 +1094,7 @@ mod tests {
             coordinator: None,
             paste: None,
             stop: Arc::new(AtomicBool::new(false)),
+            scan_requested: Arc::new(AtomicBool::new(false)),
             coordinator_thread: Mutex::new(None),
         }
     }
@@ -917,6 +1103,27 @@ mod tests {
 
     impl UsbEnumerator for EmptyEnumerator {
         fn serial_ports(&self) -> Result<Vec<SerialObservation>, String> {
+            Ok(Vec::new())
+        }
+
+        fn usb_devices(&self) -> Result<Vec<BootloaderObservation>, String> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct BlockingEnumerator {
+        started: mpsc::Sender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl UsbEnumerator for BlockingEnumerator {
+        fn serial_ports(&self) -> Result<Vec<SerialObservation>, String> {
+            self.started.send(()).unwrap();
+            self.release
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(1))
+                .map_err(|error| error.to_string())?;
             Ok(Vec::new())
         }
 
@@ -1207,9 +1414,11 @@ mod tests {
         let id = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
             .unwrap();
         state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
+        assert!(!state.scan_requested.load(AtomicOrdering::Relaxed));
 
         let snapshot = retry_candidate_inner(&state, &id).unwrap();
 
+        assert!(state.scan_requested.load(AtomicOrdering::Relaxed));
         assert!(snapshot.candidates.iter().any(|candidate| {
             candidate.device_id.as_ref() == Some(&id)
                 && candidate.issue == coordinator::CandidateIssue::FirmwareNotResponding

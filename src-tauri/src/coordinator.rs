@@ -35,6 +35,18 @@ pub trait UsbEnumerator: Send + Sync {
     fn usb_devices(&self) -> Result<Vec<BootloaderObservation>, String>;
 }
 
+pub(crate) struct DeviceScan {
+    serial: Vec<SerialObservation>,
+    bootloader: Vec<BootloaderObservation>,
+}
+
+pub(crate) fn enumerate_devices(enumerator: &dyn UsbEnumerator) -> Result<DeviceScan, String> {
+    Ok(DeviceScan {
+        serial: enumerator.serial_ports()?,
+        bootloader: enumerator.usb_devices()?,
+    })
+}
+
 pub struct SystemUsbEnumerator;
 
 fn collapse_serial_port_aliases(
@@ -542,10 +554,14 @@ impl RuntimeCoordinator {
     }
 
     pub fn scan_once(&mut self) -> Result<(), String> {
-        let serial = self.enumerator.serial_ports()?;
-        let bootloader = self.enumerator.usb_devices()?;
+        let scan = enumerate_devices(self.enumerator.as_ref())?;
+        self.apply_scan(scan);
+        Ok(())
+    }
+
+    pub(crate) fn apply_scan(&mut self, scan: DeviceScan) {
         let mut classified = Vec::new();
-        for observation in serial {
+        for observation in scan.serial {
             if let Some(board) = self
                 .registry
                 .board_by_runtime_usb(observation.vid, observation.pid)
@@ -553,7 +569,7 @@ impl RuntimeCoordinator {
                 classified.push(ClassifiedObservation::Runtime { board, observation });
             }
         }
-        for observation in bootloader {
+        for observation in scan.bootloader {
             if let Some(board) = self
                 .registry
                 .board_by_bootloader_usb(observation.vid, observation.pid)
@@ -562,7 +578,6 @@ impl RuntimeCoordinator {
             }
         }
         self.reconcile(classified);
-        Ok(())
     }
 
     fn reconcile(&mut self, observations: Vec<ClassifiedObservation>) {
@@ -1342,7 +1357,7 @@ impl RuntimeCoordinator {
             return Err("candidate_not_retryable".into());
         }
         self.stop_worker(device_id);
-        self.scan_once()
+        Ok(())
     }
 
     #[cfg(test)]
@@ -1852,10 +1867,28 @@ mod tests {
                 .iter()
                 .filter(|start| start.device_id == a)
                 .count(),
-            2
+            1
         );
         assert_eq!(
             starts_after
+                .iter()
+                .filter(|start| start.device_id == b)
+                .count(),
+            1
+        );
+
+        scan(&mut coordinator);
+
+        let starts_after_scan = launcher.starts();
+        assert_eq!(
+            starts_after_scan
+                .iter()
+                .filter(|start| start.device_id == a)
+                .count(),
+            2
+        );
+        assert_eq!(
+            starts_after_scan
                 .iter()
                 .filter(|start| start.device_id == b)
                 .count(),

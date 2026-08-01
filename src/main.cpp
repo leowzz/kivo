@@ -22,8 +22,8 @@ void writeLine(const std::string &line) {
   platform::flush();
 }
 
-void pasteClipboard() {
-  platform::sendHotkey(0x08, 0x19);
+bool pasteClipboard() {
+  return platform::sendHotkey(0x08, 0x19);
 }
 
 void applyRuntimePinModes() {
@@ -125,11 +125,11 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
                             true, nowMs) != ResponseAction::Execute) {
     return;
   }
-  if (command->kind == HelperCommandKind::Paste) {
-    pasteClipboard();
-  } else {
-    platform::sendHotkey(command->modifierMask, command->keycode);
-  }
+  const bool sent = command->kind == HelperCommandKind::Paste
+                        ? pasteClipboard()
+                        : platform::sendHotkey(command->modifierMask,
+                                               command->keycode);
+  if (!sent) return;
   writeLine(formatDone(command->eventId, command->step));
 }
 

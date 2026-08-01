@@ -30,6 +30,7 @@ use std::{
 };
 
 const ACTION_ACK_TIMEOUT: Duration = Duration::from_millis(1800);
+pub(crate) const SERIAL_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(10);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeActivity {
@@ -985,7 +986,7 @@ struct SystemSerialTransportFactory;
 impl SerialTransportFactory for SystemSerialTransportFactory {
     fn open(&self, port: &str) -> Result<Box<dyn SerialTransport>, String> {
         let port = serialport::new(port, 115_200)
-            .timeout(Duration::from_millis(50))
+            .timeout(SERIAL_COMMAND_POLL_INTERVAL)
             .open()
             .map_err(|error| format!("serial_open_failed: {error}"))?;
         Ok(Box::new(SystemSerialTransport(port)))
