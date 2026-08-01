@@ -242,6 +242,22 @@ fn save_profile_inner(state: &AppState, profile: DeviceProfile) -> Result<AppSna
     mutate_workspace(state, move |workspace, _| workspace.save_profile(profile))
 }
 
+fn retry_candidate_inner(
+    state: &AppState,
+    device_id: &hardware::DeviceId,
+) -> Result<AppSnapshot, AppError> {
+    let coordinator = state
+        .coordinator
+        .as_ref()
+        .ok_or_else(|| state_error("coordinator_unavailable"))?;
+    coordinator
+        .lock()
+        .map_err(|_| state_error("coordinator_unavailable"))?
+        .retry_candidate(device_id)
+        .map_err(|error| state_error(&error))?;
+    snapshot(state)
+}
+
 fn save_settings_inner(
     state: &AppState,
     settings: EditorSettingsPatch,
@@ -432,6 +448,14 @@ fn export_backup_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, App
 #[tauri::command]
 fn get_snapshot(state: tauri::State<'_, AppState>) -> Result<AppSnapshot, AppError> {
     snapshot(&state)
+}
+
+#[tauri::command]
+fn retry_candidate(
+    state: tauri::State<'_, AppState>,
+    device_id: hardware::DeviceId,
+) -> Result<AppSnapshot, AppError> {
+    retry_candidate_inner(&state, &device_id)
 }
 
 #[tauri::command]
@@ -664,6 +688,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_snapshot,
+            retry_candidate,
             save_device_profile,
             save_settings,
             rename_device,
@@ -853,6 +878,18 @@ mod tests {
             _events: mpsc::Sender<WorkerEvent>,
         ) -> Result<Box<dyn DeviceWorker>, String> {
             unreachable!("empty enumeration never starts a worker")
+        }
+    }
+
+    struct CandidateLauncher;
+
+    impl WorkerLauncher for CandidateLauncher {
+        fn start(
+            &self,
+            _start: WorkerStart,
+            _events: mpsc::Sender<WorkerEvent>,
+        ) -> Result<Box<dyn DeviceWorker>, String> {
+            Err("serial_handshake_timeout".into())
         }
     }
 
@@ -1081,6 +1118,40 @@ mod tests {
         assert_eq!(
             rp2040["safePins"],
             serde_json::to_value((0_u8..=22).collect::<Vec<_>>()).unwrap()
+        );
+    }
+
+    #[test]
+    fn retry_candidate_command_returns_an_authoritative_snapshot() {
+        let directory = TestDirectory::new();
+        let mut state = product_state(&directory.0, vec![product_profile()]);
+        let mut coordinator = RuntimeCoordinator::new(
+            Arc::new(SaveEnumerator),
+            Arc::new(CandidateLauncher),
+            Arc::clone(&state.workspace),
+        );
+        coordinator.scan_once().unwrap();
+        let id = hardware::DeviceId::new(
+            crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+            "SAVE-A",
+        )
+        .unwrap();
+        state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
+
+        let snapshot = retry_candidate_inner(&state, &id).unwrap();
+
+        assert!(snapshot.candidates.iter().any(|candidate| {
+            candidate.device_id.as_ref() == Some(&id)
+                && candidate.issue == coordinator::CandidateIssue::FirmwareNotResponding
+        }));
+        let missing = hardware::DeviceId::new(
+            crate::hardware::VCCGND_YD_RP2040_BOARD_ID,
+            "MISSING",
+        )
+        .unwrap();
+        assert_eq!(
+            retry_candidate_inner(&state, &missing).unwrap_err().code,
+            "candidate_not_found"
         );
     }
 

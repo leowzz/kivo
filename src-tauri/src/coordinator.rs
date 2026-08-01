@@ -1306,6 +1306,27 @@ impl RuntimeCoordinator {
         self.candidates.clone()
     }
 
+    pub fn retry_candidate(&mut self, device_id: &DeviceId) -> Result<(), String> {
+        let matching = self
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.device_id.as_ref() == Some(device_id))
+            .collect::<Vec<_>>();
+        if matching.is_empty() {
+            return Err("candidate_not_found".into());
+        }
+        if matching.len() != 1 || matching[0].identity == IdentityDimension::DuplicateIdentity {
+            return Err("candidate_identity_conflict".into());
+        }
+        if matching[0].mode != DeviceMode::Runtime
+            || matching[0].identity == IdentityDimension::InvalidIdentity
+        {
+            return Err("candidate_not_retryable".into());
+        }
+        self.stop_worker(device_id);
+        self.scan_once()
+    }
+
     #[cfg(test)]
     pub fn last_receive_sequence(&self) -> u64 {
         self.receive_sequence
@@ -1707,6 +1728,89 @@ mod tests {
         let value = serde_json::to_value(candidate).unwrap();
         assert_eq!(value["issue"], "firmware_not_responding");
         assert_eq!(value["latestError"], "serial_handshake_timeout");
+    }
+
+    #[test]
+    fn retry_candidate_restarts_only_the_exact_identity() {
+        let (_directory, enumerator, launcher, mut coordinator) = harness();
+        launcher.set_hello(
+            "/dev/a",
+            HelloCapabilities {
+                protocol: 3,
+                controller_family_id: "wrong-family".into(),
+                board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+                firmware_build_id: "bad".into(),
+                pins: vec![0],
+            },
+        );
+        enumerator.set(
+            vec![
+                serial("/dev/a", 0x303a, 0x4002, Some("RETRY-A")),
+                serial("/dev/b", 0x303a, 0x4002, Some("RETRY-B")),
+            ],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+        let a =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "RETRY-A").unwrap();
+        let b =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "RETRY-B").unwrap();
+        assert!(
+            coordinator
+                .candidates()
+                .iter()
+                .any(|candidate| candidate.device_id.as_ref() == Some(&a))
+        );
+        assert!(
+            coordinator
+                .devices()
+                .iter()
+                .any(|device| device.device_id == b)
+        );
+
+        coordinator.retry_candidate(&a).unwrap();
+
+        let starts_after = launcher.starts();
+        assert_eq!(
+            starts_after
+                .iter()
+                .filter(|start| start.device_id == a)
+                .count(),
+            2
+        );
+        assert_eq!(
+            starts_after
+                .iter()
+                .filter(|start| start.device_id == b)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn retry_candidate_rejects_missing_and_duplicate_identity() {
+        let (_directory, enumerator, _launcher, mut coordinator) = harness();
+        let missing =
+            DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "MISSING").unwrap();
+        assert_eq!(
+            coordinator.retry_candidate(&missing).unwrap_err(),
+            "candidate_not_found"
+        );
+
+        enumerator.set(
+            vec![
+                serial("/dev/one", 0x2e8a, 0x102e, Some("DUPLICATE")),
+                serial("/dev/two", 0x2e8a, 0x102e, Some("DUPLICATE")),
+            ],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+        let duplicate =
+            DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "DUPLICATE").unwrap();
+        assert_eq!(
+            coordinator.retry_candidate(&duplicate).unwrap_err(),
+            "candidate_identity_conflict"
+        );
     }
 
     #[derive(Default)]
