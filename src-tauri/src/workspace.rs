@@ -442,6 +442,15 @@ impl Workspace {
         id: &DeviceId,
         value: RuntimeAssignment,
     ) -> Result<(), AppError> {
+        self.validate_assignment(id, &value)?;
+        self.update_device(id, |record| record.runtime_assignment = Some(value))
+    }
+
+    fn validate_assignment(
+        &self,
+        id: &DeviceId,
+        value: &RuntimeAssignment,
+    ) -> Result<(), AppError> {
         let device = self.device(id)?;
         let profile = self.profiles.get(&value.device_profile_id).ok_or_else(|| {
             AppError::new("unknown_profile").with_param("profile", &value.device_profile_id)
@@ -457,7 +466,27 @@ impl Workspace {
                 .with_param("device_board_profile", &device.board_profile_id)
                 .with_param("hardware_board_profile", &hardware.board_profile_id));
         }
-        self.update_device(id, |record| record.runtime_assignment = Some(value))
+        Ok(())
+    }
+
+    pub fn complete_device_setup(
+        &mut self,
+        id: &DeviceId,
+        name: String,
+        assignment: RuntimeAssignment,
+    ) -> Result<(), AppError> {
+        let name = name.trim().to_owned();
+        if name.is_empty() {
+            return Err(AppError::new("invalid_device_name"));
+        }
+        self.validate_assignment(id, &assignment)?;
+        let mut settings = self.settings.clone();
+        let record = settings.devices.get_mut(id).expect("device was validated");
+        record.name = name;
+        record.runtime_assignment = Some(assignment);
+        self.persist_settings(&settings)?;
+        self.settings = settings;
+        Ok(())
     }
 
     pub fn clear_assignment(&mut self, id: &DeviceId) -> Result<(), AppError> {
@@ -1300,6 +1329,90 @@ mod tests {
             "invalid_profile_name"
         );
         assert_eq!(workspace.profiles, before);
+    }
+
+    #[test]
+    fn complete_device_setup_persists_name_and_assignment_together() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let id =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SETUP-A").unwrap();
+        workspace.enroll_device(id.clone()).unwrap();
+        let assignment = RuntimeAssignment {
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+
+        workspace
+            .complete_device_setup(&id, "Front desk".into(), assignment.clone())
+            .unwrap();
+
+        let record = &workspace.settings.devices[&id];
+        assert_eq!(record.name, "Front desk");
+        assert_eq!(record.runtime_assignment, Some(assignment));
+        let reloaded = Workspace::load_existing(&directory.0).unwrap();
+        assert_eq!(reloaded.settings.devices[&id], *record);
+    }
+
+    #[test]
+    fn complete_device_setup_rolls_back_both_fields_when_assignment_is_invalid() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let id =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SETUP-B").unwrap();
+        workspace.enroll_device(id.clone()).unwrap();
+        let before = workspace.settings.clone();
+        let disk_before = fs::read(directory.path("data/settings.yaml")).unwrap();
+
+        let error = workspace
+            .complete_device_setup(
+                &id,
+                "Partially written".into(),
+                RuntimeAssignment {
+                    device_profile_id: "red-phone-v1".into(),
+                    hardware_profile_id: "missing".into(),
+                },
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code, "unknown_hardware_profile");
+        assert_eq!(workspace.settings, before);
+        assert_eq!(
+            fs::read(directory.path("data/settings.yaml")).unwrap(),
+            disk_before
+        );
+    }
+
+    #[test]
+    fn complete_device_setup_allows_multiple_devices_to_share_one_profile() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let a =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SHARED-A").unwrap();
+        let b =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SHARED-B").unwrap();
+        workspace.enroll_device(a.clone()).unwrap();
+        workspace.enroll_device(b.clone()).unwrap();
+        let assignment = RuntimeAssignment {
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+
+        workspace
+            .complete_device_setup(&a, "Shared A".into(), assignment.clone())
+            .unwrap();
+        workspace
+            .complete_device_setup(&b, "Shared B".into(), assignment.clone())
+            .unwrap();
+
+        assert_eq!(
+            workspace.settings.devices[&a].runtime_assignment,
+            Some(assignment.clone())
+        );
+        assert_eq!(
+            workspace.settings.devices[&b].runtime_assignment,
+            Some(assignment)
+        );
     }
 
     #[derive(Default)]

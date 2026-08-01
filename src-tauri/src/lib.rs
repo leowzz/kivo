@@ -304,6 +304,50 @@ fn save_runtime_assignment_inner(
     })
 }
 
+fn validate_setup_eligibility(
+    connection: coordinator::ConnectionDimension,
+    mode: Option<coordinator::DeviceMode>,
+    identity: IdentityDimension,
+) -> Result<(), AppError> {
+    if connection != coordinator::ConnectionDimension::Online {
+        return Err(state_error("device_offline"));
+    }
+    if mode != Some(coordinator::DeviceMode::Runtime) {
+        return Err(state_error("device_not_runtime"));
+    }
+    if identity != IdentityDimension::Valid {
+        return Err(state_error("invalid_device_identity"));
+    }
+    Ok(())
+}
+
+fn require_setup_device(
+    coordinator: Option<&RuntimeCoordinator>,
+    device_id: &hardware::DeviceId,
+) -> Result<(), AppError> {
+    let status = coordinator
+        .and_then(|coordinator| {
+            coordinator
+                .devices()
+                .into_iter()
+                .find(|device| device.device_id == *device_id)
+        })
+        .ok_or_else(|| state_error("unknown_device"))?;
+    validate_setup_eligibility(status.connection, status.mode, status.identity)
+}
+
+fn complete_device_setup_inner(
+    state: &AppState,
+    device_id: &hardware::DeviceId,
+    name: String,
+    assignment: RuntimeAssignment,
+) -> Result<AppSnapshot, AppError> {
+    mutate_workspace(state, move |workspace, coordinator| {
+        require_setup_device(coordinator, device_id)?;
+        workspace.complete_device_setup(device_id, name, assignment)
+    })
+}
+
 fn clear_runtime_assignment_inner(
     state: &AppState,
     device_id: &hardware::DeviceId,
@@ -510,6 +554,16 @@ fn save_runtime_assignment(
 }
 
 #[tauri::command]
+fn complete_device_setup(
+    state: tauri::State<'_, AppState>,
+    device_id: hardware::DeviceId,
+    name: String,
+    assignment: RuntimeAssignment,
+) -> Result<AppSnapshot, AppError> {
+    complete_device_setup_inner(&state, &device_id, name, assignment)
+}
+
+#[tauri::command]
 fn clear_runtime_assignment(
     state: tauri::State<'_, AppState>,
     device_id: hardware::DeviceId,
@@ -711,6 +765,7 @@ pub fn run() {
             save_settings,
             rename_device,
             save_runtime_assignment,
+            complete_device_setup,
             clear_runtime_assignment,
             forget_device,
             get_device_metrics,
@@ -1205,6 +1260,48 @@ mod tests {
     }
 
     #[test]
+    fn setup_eligibility_requires_online_valid_runtime_device() {
+        assert!(
+            validate_setup_eligibility(
+                coordinator::ConnectionDimension::Online,
+                Some(coordinator::DeviceMode::Runtime),
+                IdentityDimension::Valid,
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            validate_setup_eligibility(
+                coordinator::ConnectionDimension::Offline,
+                None,
+                IdentityDimension::Valid,
+            )
+            .unwrap_err()
+            .code,
+            "device_offline"
+        );
+        assert_eq!(
+            validate_setup_eligibility(
+                coordinator::ConnectionDimension::Online,
+                Some(coordinator::DeviceMode::Bootloader),
+                IdentityDimension::Valid,
+            )
+            .unwrap_err()
+            .code,
+            "device_not_runtime"
+        );
+        assert_eq!(
+            validate_setup_eligibility(
+                coordinator::ConnectionDimension::Online,
+                Some(coordinator::DeviceMode::Runtime),
+                IdentityDimension::DuplicateIdentity,
+            )
+            .unwrap_err()
+            .code,
+            "invalid_device_identity"
+        );
+    }
+
+    #[test]
     fn command_boundary_mutations_and_metrics_target_exactly_one_device() {
         let directory = TestDirectory::new();
         let mut state = product_state(&directory.0, vec![product_profile()]);
@@ -1226,6 +1323,36 @@ mod tests {
             device_profile_id: "red-phone-v1".into(),
             hardware_profile_id: "esp-primary".into(),
         };
+
+        let completed =
+            complete_device_setup_inner(&state, &a, "Setup A".into(), assignment.clone())
+                .unwrap();
+        assert_eq!(
+            state.workspace.read().unwrap().settings.devices[&a].name,
+            "Setup A"
+        );
+        assert_eq!(
+            state.workspace.read().unwrap().settings.devices[&a].runtime_assignment,
+            Some(assignment.clone())
+        );
+        assert_ne!(
+            state.workspace.read().unwrap().settings.devices[&b].name,
+            "Setup A"
+        );
+        assert_eq!(
+            state.workspace.read().unwrap().settings.devices[&b].runtime_assignment,
+            None
+        );
+        assert!(completed.devices.iter().any(|device| {
+            device.device_id == a
+                && device.name == "Setup A"
+                && device.runtime_assignment.as_ref() == Some(&assignment)
+        }));
+        assert!(matches!(
+            launcher.commands.lock().unwrap().get(&a).unwrap().last(),
+            Some(WorkerCommand::Reconfigure { .. })
+        ));
+        assert!(launcher.commands.lock().unwrap().get(&b).is_none());
 
         let assigned = save_runtime_assignment_inner(&state, &a, assignment.clone()).unwrap();
         let assigned_json = serde_json::to_value(&assigned).unwrap();
@@ -1384,6 +1511,20 @@ mod tests {
             save_runtime_assignment_inner(
                 &state,
                 &unregistered,
+                workspace::RuntimeAssignment {
+                    device_profile_id: "red-phone-v1".into(),
+                    hardware_profile_id: "esp-primary".into(),
+                },
+            )
+            .unwrap_err()
+            .code,
+            "unknown_device"
+        );
+        assert_eq!(
+            complete_device_setup_inner(
+                &state,
+                &unregistered,
+                "Candidate".into(),
                 workspace::RuntimeAssignment {
                     device_profile_id: "red-phone-v1".into(),
                     hardware_profile_id: "esp-primary".into(),
