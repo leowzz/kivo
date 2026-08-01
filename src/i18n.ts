@@ -140,6 +140,48 @@ const zhCN = {
   "profile.nameRequired": "请输入配置名称",
   "profile.sourceRequired": "请选择来源配置",
   "profile.boardRequired": "请选择板型",
+  "setup.title": "添加键盘",
+  "setup.selectTarget": "选择键盘",
+  "setup.waiting": "等待连接键盘",
+  "setup.addKeyboard": "添加键盘",
+  "setup.continue": "继续设置",
+  "setup.retry": "重新检测",
+  "setup.createFirst": "先新建配置",
+  "setup.later": "稍后处理",
+  "setup.technicalDetails": "查看技术详情",
+  "setup.systemPort": "系统通信端口",
+  "setup.selectProfile": "选择键盘配置",
+  "setup.deviceProfile": "键盘配置",
+  "setup.hardwareProfile": "硬件配置",
+  "setup.next": "下一步",
+  "setup.keyboardName": "键盘名称",
+  "setup.confirmTitle": "确认键盘设置",
+  "setup.back": "返回",
+  "setup.complete": "完成设置",
+  "setup.disconnected": "键盘已断开；重新连接同一设备后可继续。",
+  "candidate.validating.title": "正在确认设备",
+  "candidate.validating.body": "Kivo 正在验证键盘身份和固件协议。",
+  "candidate.firmware_not_responding.title": "Kivo 固件未响应",
+  "candidate.firmware_not_responding.body":
+    "Kivo 固件未响应。设备可能尚未刷入匹配固件，或固件协议版本不兼容。处理固件后保持 USB 连接，Kivo 会自动重新检测。",
+  "candidate.firmware_incompatible.title": "固件与 Kivo 不兼容",
+  "candidate.firmware_incompatible.body":
+    "设备已响应，但协议版本、控制器、板型或能力与当前 Kivo 不匹配。请在 Kivo 外部处理固件后重新检测。",
+  "candidate.bootloader.title": "设备处于引导模式",
+  "candidate.bootloader.body":
+    "引导模式不能作为键盘使用。请在 Kivo 外部完成固件处理，然后重新连接设备。",
+  "candidate.port_unavailable.title": "系统通信端口不可用",
+  "candidate.port_unavailable.body":
+    "通信端口无法打开或正被其他程序占用。关闭占用程序后重新检测。",
+  "candidate.invalid_identity.title": "设备身份无效",
+  "candidate.invalid_identity.body":
+    "设备没有可用的硬件序列号，不能按通信端口绑定。请重新连接或检查设备固件。",
+  "candidate.duplicate_identity.title": "设备身份冲突",
+  "candidate.duplicate_identity.body":
+    "多个设备声明了相同身份。请断开重复设备，只保留要设置的键盘。",
+  "candidate.unknown.title": "无法确认设备",
+  "candidate.unknown.body":
+    "验证设备时发生未知问题。可查看技术详情并重新检测。",
   "common.cancel": "取消",
   "common.confirm": "确认",
   "common.close": "关闭",
@@ -318,6 +360,53 @@ const enUS: Record<MessageKey, string> = {
   "profile.nameRequired": "Enter a profile name",
   "profile.sourceRequired": "Select a source profile",
   "profile.boardRequired": "Select a Board Profile",
+  "setup.title": "Add keyboard",
+  "setup.selectTarget": "Select keyboard",
+  "setup.waiting": "Waiting for a keyboard",
+  "setup.addKeyboard": "Add keyboard",
+  "setup.continue": "Continue setup",
+  "setup.retry": "Check again",
+  "setup.createFirst": "Create a profile first",
+  "setup.later": "Handle later",
+  "setup.technicalDetails": "View technical details",
+  "setup.systemPort": "System communication port",
+  "setup.selectProfile": "Select keyboard profile",
+  "setup.deviceProfile": "Keyboard profile",
+  "setup.hardwareProfile": "Hardware profile",
+  "setup.next": "Next",
+  "setup.keyboardName": "Keyboard name",
+  "setup.confirmTitle": "Confirm keyboard setup",
+  "setup.back": "Back",
+  "setup.complete": "Finish setup",
+  "setup.disconnected":
+    "The keyboard was disconnected. Reconnect the same device to continue.",
+  "candidate.validating.title": "Confirming device",
+  "candidate.validating.body":
+    "Kivo is validating the keyboard identity and firmware protocol.",
+  "candidate.firmware_not_responding.title":
+    "Kivo firmware is not responding",
+  "candidate.firmware_not_responding.body":
+    "The device may not have matching Kivo firmware, or its protocol version may be incompatible. Repair firmware outside Kivo and keep USB connected so Kivo can detect it again.",
+  "candidate.firmware_incompatible.title":
+    "Firmware is incompatible with Kivo",
+  "candidate.firmware_incompatible.body":
+    "The device responded, but its protocol, controller, Board Profile, or capabilities do not match. Repair firmware outside Kivo, then check again.",
+  "candidate.bootloader.title": "Device is in bootloader mode",
+  "candidate.bootloader.body":
+    "Bootloader mode cannot be used as a keyboard. Handle firmware outside Kivo, then reconnect the device.",
+  "candidate.port_unavailable.title":
+    "System communication port unavailable",
+  "candidate.port_unavailable.body":
+    "The communication port cannot be opened or is busy in another application. Close the other application, then check again.",
+  "candidate.invalid_identity.title": "Invalid device identity",
+  "candidate.invalid_identity.body":
+    "The device has no usable hardware serial and cannot be bound by communication port. Reconnect it or inspect its firmware.",
+  "candidate.duplicate_identity.title": "Device identity conflict",
+  "candidate.duplicate_identity.body":
+    "Multiple devices claim the same identity. Disconnect duplicates and leave only the keyboard you want to set up.",
+  "candidate.unknown.title": "Cannot confirm device",
+  "candidate.unknown.body":
+    "An unexpected validation problem occurred. View technical details and check again.",
   "common.cancel": "Cancel",
   "common.confirm": "Confirm",
   "common.close": "Close",
