@@ -23,6 +23,7 @@ void begin() {
   TinyUSBDevice.setProductDescriptor("Kivo Keyboard RP2040");
   Serial.begin(115200);
   keyboard.begin();
+  randomSeed(rp2040.hwrand32());
   keyPixel.begin();
   keyPixel.setBrightness(kKeyPixelBrightness);
   keyPixel.clear();
