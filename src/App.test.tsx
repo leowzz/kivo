@@ -364,6 +364,13 @@ test("does not override the WebView viewport height", async () => {
   );
 });
 
+test("home connection status names the keyboard without exposing its system port", async () => {
+  render(<App />);
+  await screen.findByRole("heading", { name: "按键概览" });
+  expect(screen.getByText("前台键盘")).toBeInTheDocument();
+  expect(screen.queryByText("/dev/cu.test")).toBeNull();
+});
+
 test("summarizes an empty device registry", async () => {
   currentSnapshot.devices = [];
   render(<App />);
@@ -699,7 +706,7 @@ test("retries a failed bootstrap as a full snapshot and clears its load error", 
   await act(async () => vi.advanceTimersByTimeAsync(2_000));
 
   expect(screen.getByText("设备已连接")).toBeInTheDocument();
-  expect(screen.getByText("/dev/cu.test")).toBeInTheDocument();
+  expect(screen.getByText("前台键盘")).toBeInTheDocument();
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
@@ -1192,7 +1199,8 @@ test("shows Home as connected when an online matching Device follows an offline 
   render(<App />);
 
   expect(await screen.findByText("设备已连接")).toBeInTheDocument();
-  expect(screen.getByText("/dev/cu.online")).toBeInTheDocument();
+  expect(screen.getByText("前台键盘")).toBeInTheDocument();
+  expect(screen.queryByText("/dev/cu.online")).toBeNull();
   expect(screen.queryByText("等待设备")).toBeNull();
 });
 

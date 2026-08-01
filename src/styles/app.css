@@ -58,13 +58,13 @@
 
 
 /* ===== 通用按钮 ===== */
-.add-actions button, .source-actions button, .primary-button, .confirm-actions button, .layout-add-button, .learning-button, .empty-workspace button {
+.add-actions button, .source-actions button, .primary-button, .confirm-actions button, .layout-add-button, .learning-button, .empty-workspace button, .candidate-actions button, .device-setup-actions button, .profile-create-actions button, .device-list-command, .setup-command {
   min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   border: 1px solid var(--border-strong); border-radius: var(--radius-8); padding: 6px 12px;
   background: var(--bg-surface); font-size: var(--text-12); font-weight: var(--weight-medium);
   box-shadow: var(--shadow-1); transition: box-shadow .15s ease, border-color .15s ease, background .12s ease;
 }
-.add-actions button:hover, .source-actions button:hover, .confirm-actions button:hover, .layout-add-button:hover, .learning-button:hover, .empty-workspace button:hover { border-color: var(--gray-7); box-shadow: var(--shadow-2); }
+.add-actions button:hover, .source-actions button:hover, .confirm-actions button:hover, .layout-add-button:hover, .learning-button:hover, .empty-workspace button:hover, .candidate-actions button:hover, .device-setup-actions button:hover, .profile-create-actions button:hover, .device-list-command:hover, .setup-command:hover { border-color: var(--gray-7); box-shadow: var(--shadow-2); }
 .primary-button { border-color: var(--green-9) !important; color: #fff; background: var(--green-9) !important; }
 .primary-button:hover { background: var(--green-10) !important; }
 .danger-button { border-color: var(--red-strong) !important; color: #fff; background: var(--red-strong) !important; }

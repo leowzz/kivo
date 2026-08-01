@@ -33,7 +33,7 @@ export function HomeDashboard({ devices, language, metrics, profile }: Props) {
           <div><span>{profile?.profile.name}</span><h2 id="home-title">{t(language, "home.title")}</h2></div>
           <div className={connectedDevice ? "home-device is-connected" : "home-device"}>
             <Activity size={15} /><span>{t(language, connectedDevice ? "connection.connected" : "connection.searching")}</span>
-            {connectedDevice?.port && <code>{connectedDevice.port}</code>}
+            {connectedDevice && <strong>{connectedDevice.name}</strong>}
           </div>
         </header>
         {!metrics ? <p className="home-unavailable">{t(language, "home.unavailable")}</p> : <>

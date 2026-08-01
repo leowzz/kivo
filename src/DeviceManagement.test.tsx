@@ -31,18 +31,21 @@ function device(overrides: Partial<DeviceStatus> = {}): DeviceStatus {
   };
 }
 
-const candidates: CandidateStatus[] = [{
-  key: "candidate:esp32-pad:bad-serial:/dev/cu.bad",
-  deviceId: null,
-  mode: "bootloader",
-  identity: "invalid_identity",
-  issue: "invalid_identity",
-  rawSerial: "BAD-001",
-  port: "/dev/cu.bad",
-  controllerFamilyId: "esp32s3",
-  boardProfileId: "esp32-pad",
-  latestError: "identity rejected",
-}];
+function candidate(overrides: Partial<CandidateStatus> = {}): CandidateStatus {
+  return {
+    key: "candidate:esp32-pad:bad-serial:/dev/cu.bad",
+    deviceId: null,
+    mode: "bootloader",
+    identity: "invalid_identity",
+    issue: "invalid_identity",
+    rawSerial: "BAD-001",
+    port: "/dev/cu.bad",
+    controllerFamilyId: "esp32s3",
+    boardProfileId: "esp32-pad",
+    latestError: "identity rejected",
+    ...overrides,
+  };
+}
 
 const metrics: HomeMetricsSnapshot = {
   totalPresses: 8,
@@ -68,7 +71,7 @@ function renderManagement(overrides: Partial<React.ComponentProps<typeof DeviceM
       device({ deviceId: "esp-a", name: "ESP32 A", hardwareSerial: "ESP-A-003", port: "/dev/cu.esp-a", controllerFamilyId: "esp32s3", boardProfileId: "esp32-pad" }),
       device({ deviceId: "esp-offline", name: "ESP32 Offline", connection: "offline", mode: null, runtime: "inactive", hardwareSerial: "ESP-OFF-004", port: null, controllerFamilyId: "esp32s3", boardProfileId: "esp32-pad", runtimeAssignment: null }),
     ],
-    candidates,
+    candidates: [candidate()],
     boardProfiles: boards,
     deviceProfiles: profiles,
     metrics: { deviceId: "rp-a", snapshot: metrics },
@@ -118,7 +121,9 @@ test("never renders metrics owned by another Device", () => {
 test("marks the selected Device ID for constrained wrapping", () => {
   renderManagement();
 
-  expect(screen.getByText("rp-a", { selector: "output" })).toHaveClass("device-id-value");
+  expect(screen.getByText("rp-a", { selector: "dd" })).toHaveClass(
+    "device-id-value",
+  );
 });
 
 test("composes visible Board Profile search with non-All filters", async () => {
@@ -207,6 +212,83 @@ test("shows candidate diagnostics without mutable device actions", async () => {
   expect(screen.getByText("identity rejected")).toBeInTheDocument();
   expect(screen.queryByRole("textbox", { name: "设备名称" })).toBeNull();
   expect(screen.queryByRole("button", { name: "忘记设备" })).toBeNull();
+});
+
+test("removes communication ports from rows and reveals them only in technical details", async () => {
+  const user = userEvent.setup();
+  renderManagement({
+    candidates: [candidate({ issue: "firmware_not_responding" })],
+  });
+
+  expect(
+    screen.queryByText("端口", { selector: ".device-table-head span" }),
+  ).toBeNull();
+  expect(screen.getByText("/dev/cu.rp-a")).not.toBeVisible();
+  await user.click(screen.getByRole("button", { name: /BAD-001/ }));
+  expect(screen.getByText("/dev/cu.bad")).not.toBeVisible();
+  await user.click(screen.getByText("查看技术详情"));
+  expect(screen.getByText("/dev/cu.bad")).toBeInTheDocument();
+  expect(screen.getByText("系统通信端口")).toBeInTheDocument();
+});
+
+test("shows friendly firmware recovery and retries only the selected Candidate", async () => {
+  const user = userEvent.setup();
+  const onRetryCandidate = vi.fn().mockResolvedValue(undefined);
+  renderManagement({
+    candidates: [
+      candidate({
+        deviceId: "candidate-rp",
+        issue: "firmware_not_responding",
+        latestError: "serial_handshake_timeout",
+      }),
+    ],
+    onRetryCandidate,
+  });
+  await user.click(screen.getByRole("button", { name: /BAD-001/ }));
+
+  expect(
+    screen.getByRole("heading", { name: "Kivo 固件未响应" }),
+  ).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "重新检测" }));
+  expect(onRetryCandidate).toHaveBeenCalledWith("candidate-rp");
+});
+
+test("opens centralized setup from the page header and an unassigned Device", async () => {
+  const user = userEvent.setup();
+  const onOpenSetup = vi.fn();
+  renderManagement({
+    devices: [
+      device({
+        assignment: "unassigned",
+        runtimeAssignment: null,
+        runtime: "inactive",
+      }),
+    ],
+    candidates: [],
+    onOpenSetup,
+  });
+
+  await user.click(screen.getByRole("button", { name: "添加键盘" }));
+  expect(onOpenSetup).toHaveBeenCalledWith(null);
+  await user.click(screen.getByRole("button", { name: "继续设置" }));
+  expect(onOpenSetup).toHaveBeenCalledWith("rp-a");
+});
+
+test("identity conflicts never expose retry or assignment actions", async () => {
+  const user = userEvent.setup();
+  renderManagement({
+    candidates: [
+      candidate({
+        deviceId: "conflict",
+        issue: "duplicate_identity",
+        identity: "duplicate_identity",
+      }),
+    ],
+  });
+  await user.click(screen.getByRole("button", { name: /BAD-001/ }));
+  expect(screen.queryByRole("button", { name: "重新检测" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "保存运行分配" })).toBeNull();
+  expect(screen.getByText(/多个设备声明了相同身份/)).toBeInTheDocument();
 });
 
 test("renames exactly the selected device", async () => {

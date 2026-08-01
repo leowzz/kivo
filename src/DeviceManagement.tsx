@@ -1,4 +1,4 @@
-import { Check, Pencil, Trash2, X } from "lucide-react";
+import { Check, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
@@ -7,9 +7,11 @@ import {
   primaryDeviceLabel,
   type DeviceFilter,
 } from "./deviceStatus";
-import { t } from "./i18n";
+import { candidateSetupId } from "./deviceSetupSession";
+import { t, type MessageKey } from "./i18n";
 import type {
   BoardProfileSummary,
+  CandidateIssue,
   CandidateStatus,
   DeviceProfile,
   DeviceStatus,
@@ -21,6 +23,45 @@ import type {
 type Selection = { kind: "device" | "candidate"; id: string };
 type Row = { selection: Selection };
 type AssignmentDraft = { deviceProfileId: string; hardwareProfileId: string };
+
+const candidateMessages: Record<
+  CandidateIssue,
+  { title: MessageKey; body: MessageKey }
+> = {
+  validating: {
+    title: "candidate.validating.title",
+    body: "candidate.validating.body",
+  },
+  firmware_not_responding: {
+    title: "candidate.firmware_not_responding.title",
+    body: "candidate.firmware_not_responding.body",
+  },
+  firmware_incompatible: {
+    title: "candidate.firmware_incompatible.title",
+    body: "candidate.firmware_incompatible.body",
+  },
+  bootloader: {
+    title: "candidate.bootloader.title",
+    body: "candidate.bootloader.body",
+  },
+  port_unavailable: {
+    title: "candidate.port_unavailable.title",
+    body: "candidate.port_unavailable.body",
+  },
+  invalid_identity: {
+    title: "candidate.invalid_identity.title",
+    body: "candidate.invalid_identity.body",
+  },
+  duplicate_identity: {
+    title: "candidate.duplicate_identity.title",
+    body: "candidate.duplicate_identity.body",
+  },
+  unknown: {
+    title: "candidate.unknown.title",
+    body: "candidate.unknown.body",
+  },
+};
+
 interface DeviceManagementProps {
   language: Language;
   devices: DeviceStatus[];
@@ -87,6 +128,14 @@ function Detail({ label, value, valueClassName }: { label: string; value: string
     </div>
   );
 }
+function TechnicalDetail({ label, value, valueClassName }: { label: string; value: string; valueClassName?: string }) {
+  return (
+    <>
+      <dt>{label}</dt>
+      <dd className={valueClassName}>{value}</dd>
+    </>
+  );
+}
 
 export function DeviceManagement({
   language,
@@ -100,6 +149,8 @@ export function DeviceManagement({
   onSaveRuntimeAssignment,
   onClearRuntimeAssignment,
   onMetricsChange,
+  onOpenSetup,
+  onRetryCandidate,
 }: DeviceManagementProps) {
   const [filter, setFilter] = useState<DeviceFilter>("all");
   const [query, setQuery] = useState("");
@@ -293,6 +344,19 @@ export function DeviceManagement({
     (hardware) =>
       hardware.id === selectedDevice?.runtimeAssignment?.hardware_profile_id,
   );
+  const selectedCandidateMessages = selectedCandidate
+    ? candidateMessages[selectedCandidate.issue]
+    : null;
+  const canRetryCandidate = Boolean(
+    selectedCandidate?.deviceId &&
+    [
+      "validating",
+      "firmware_not_responding",
+      "firmware_incompatible",
+      "port_unavailable",
+      "unknown",
+    ].includes(selectedCandidate.issue),
+  );
   const saveAssignment = async () => {
     if (
       assignmentMutationInFlight.current ||
@@ -346,6 +410,14 @@ export function DeviceManagement({
       >
         <header className="device-list-header">
           <h2>{t(language, "nav.devices")}</h2>
+          <button
+            className="primary-button device-list-command"
+            type="button"
+            onClick={() => onOpenSetup(null)}
+          >
+            <Plus size={16} />
+            {t(language, "setup.addKeyboard")}
+          </button>
           <label className="device-search">
             <span>{t(language, "devices.search")}</span>
             <input
@@ -379,7 +451,6 @@ export function DeviceManagement({
             <span>{t(language, "devices.board")}</span>
             <span>{t(language, "devices.status")}</span>
             <span>{t(language, "devices.assignment")}</span>
-            <span>{t(language, "devices.port")}</span>
           </div>
           <ul>
             {visibleDevices.map((device) => (
@@ -402,7 +473,6 @@ export function DeviceManagement({
                   </span>
                   <span>{status(device, language)}</span>
                   <span>{assignmentLabel(device, deviceProfiles)}</span>
-                  <span>{device.port ?? "-"}</span>
                 </button>
               </li>
             ))}
@@ -435,7 +505,6 @@ export function DeviceManagement({
                     </span>
                     <span>{t(language, "devices.filter.attention")}</span>
                     <span>-</span>
-                    <span>{candidate.port ?? "-"}</span>
                   </button>
                 </li>
               ))}
@@ -453,33 +522,69 @@ export function DeviceManagement({
         {selectedCandidate && (
           <>
             <h2>{t(language, "devices.diagnostics")}</h2>
-            <Detail
-              label={t(language, "devices.serial")}
-              value={selectedCandidate.rawSerial ?? "-"}
-            />
-            <Detail
-              label={t(language, "devices.board")}
-              value={
-                boards.get(selectedCandidate.boardProfileId)?.displayName ??
-                selectedCandidate.boardProfileId
-              }
-            />
-            <Detail
-              label={t(language, "devices.controller")}
-              value={selectedCandidate.controllerFamilyId}
-            />
-            <Detail
-              label={t(language, "devices.mode")}
-              value={selectedCandidate.mode}
-            />
-            <Detail
-              label={t(language, "devices.port")}
-              value={selectedCandidate.port ?? "-"}
-            />
-            <Detail
-              label={t(language, "devices.error")}
-              value={selectedCandidate.latestError ?? "-"}
-            />
+            {selectedCandidateMessages && (
+              <div className="candidate-issue">
+                <h3>{t(language, selectedCandidateMessages.title)}</h3>
+                <p>{t(language, selectedCandidateMessages.body)}</p>
+              </div>
+            )}
+            <div className="candidate-actions">
+              {canRetryCandidate && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    selectedCandidate.deviceId &&
+                    void onRetryCandidate(selectedCandidate.deviceId)
+                  }
+                >
+                  <RefreshCw size={16} />
+                  {t(language, "setup.retry")}
+                </button>
+              )}
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => onOpenSetup(candidateSetupId(selectedCandidate))}
+              >
+                {t(language, "setup.continue")}
+              </button>
+            </div>
+            <details className="device-technical-details">
+              <summary>{t(language, "setup.technicalDetails")}</summary>
+              <dl>
+                <TechnicalDetail
+                  label={t(language, "devices.serial")}
+                  value={selectedCandidate.rawSerial ?? "-"}
+                />
+                <TechnicalDetail
+                  label={t(language, "devices.id")}
+                  value={selectedCandidate.deviceId ?? "-"}
+                />
+                <TechnicalDetail
+                  label={t(language, "devices.board")}
+                  value={
+                    boards.get(selectedCandidate.boardProfileId)?.displayName ??
+                    selectedCandidate.boardProfileId
+                  }
+                />
+                <TechnicalDetail
+                  label={t(language, "devices.controller")}
+                  value={selectedCandidate.controllerFamilyId}
+                />
+                <TechnicalDetail
+                  label={t(language, "devices.mode")}
+                  value={selectedCandidate.mode}
+                />
+                <TechnicalDetail
+                  label={t(language, "setup.systemPort")}
+                  value={selectedCandidate.port ?? "-"}
+                />
+                <TechnicalDetail
+                  label={t(language, "devices.error")}
+                  value={selectedCandidate.latestError ?? "-"}
+                />
+              </dl>
+            </details>
           </>
         )}
         {selectedDevice && (
@@ -529,15 +634,6 @@ export function DeviceManagement({
               value={selectedDevice.hardwareSerial}
             />
             <Detail
-              label={t(language, "devices.id")}
-              value={selectedDevice.deviceId}
-              valueClassName="device-id-value"
-            />
-            <Detail
-              label={t(language, "devices.controller")}
-              value={selectedDevice.controllerFamilyId}
-            />
-            <Detail
               label={t(language, "devices.board")}
               value={
                 boards.get(selectedDevice.boardProfileId)?.displayName ??
@@ -545,25 +641,25 @@ export function DeviceManagement({
               }
             />
             <Detail
-              label={t(language, "devices.mode")}
-              value={selectedDevice.mode ?? "-"}
-            />
-            <Detail
-              label={t(language, "devices.port")}
-              value={selectedDevice.port ?? "-"}
-            />
-            <Detail
-              label={t(language, "devices.firmware")}
-              value={selectedDevice.firmwareBuildId ?? "-"}
-            />
-            <Detail
-              label={t(language, "devices.pins")}
-              value={selectedDevice.capabilities.join(", ") || "-"}
+              label={t(language, "devices.status")}
+              value={status(selectedDevice, language)}
             />
             <Detail
               label={t(language, "devices.assignment")}
               value={assignmentLabel(selectedDevice, deviceProfiles)}
             />
+            {selectedDevice.connection === "online" &&
+              selectedDevice.mode === "runtime" &&
+              selectedDevice.identity === "valid" &&
+              selectedDevice.assignment === "unassigned" && (
+                <button
+                  className="primary-button setup-command"
+                  type="button"
+                  onClick={() => onOpenSetup(selectedDevice.deviceId)}
+                >
+                  {t(language, "setup.continue")}
+                </button>
+              )}
             <section className="device-assignment" aria-label={t(language, "devices.assignment")}>
               <label>
                 {t(language, "model.label")}
@@ -636,10 +732,40 @@ export function DeviceManagement({
                 {t(language, "devices.clearAssignment")}
               </button>
             </section>
-            <Detail
-              label={t(language, "devices.error")}
-              value={selectedDevice.latestError?.detail ?? "-"}
-            />
+            <details className="device-technical-details">
+              <summary>{t(language, "setup.technicalDetails")}</summary>
+              <dl>
+                <TechnicalDetail
+                  label={t(language, "devices.id")}
+                  value={selectedDevice.deviceId}
+                  valueClassName="device-id-value"
+                />
+                <TechnicalDetail
+                  label={t(language, "devices.controller")}
+                  value={selectedDevice.controllerFamilyId}
+                />
+                <TechnicalDetail
+                  label={t(language, "devices.mode")}
+                  value={selectedDevice.mode ?? "-"}
+                />
+                <TechnicalDetail
+                  label={t(language, "setup.systemPort")}
+                  value={selectedDevice.port ?? "-"}
+                />
+                <TechnicalDetail
+                  label={t(language, "devices.firmware")}
+                  value={selectedDevice.firmwareBuildId ?? "-"}
+                />
+                <TechnicalDetail
+                  label={t(language, "devices.pins")}
+                  value={selectedDevice.capabilities.join(", ") || "-"}
+                />
+                <TechnicalDetail
+                  label={t(language, "devices.error")}
+                  value={selectedDevice.latestError?.detail ?? "-"}
+                />
+              </dl>
+            </details>
             {selectedMetrics && (
               <>
                 <section className="device-metrics" aria-label={t(language, "devices.metricsSummary")}>
