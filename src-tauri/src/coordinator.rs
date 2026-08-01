@@ -145,11 +145,25 @@ pub struct CandidateStatus {
     pub device_id: Option<DeviceId>,
     pub mode: DeviceMode,
     pub identity: IdentityDimension,
+    pub issue: CandidateIssue,
     pub raw_serial: Option<String>,
     pub port: Option<String>,
     pub controller_family_id: String,
     pub board_profile_id: String,
     pub latest_error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateIssue {
+    Validating,
+    FirmwareNotResponding,
+    FirmwareIncompatible,
+    Bootloader,
+    PortUnavailable,
+    InvalidIdentity,
+    DuplicateIdentity,
+    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -839,6 +853,11 @@ impl RuntimeCoordinator {
                     .find(|candidate| candidate.device_id.as_ref() == Some(&device_id))
                 {
                     candidate.latest_error = error;
+                    candidate.issue = candidate_issue(
+                        candidate.mode,
+                        candidate.identity,
+                        candidate.latest_error.as_deref(),
+                    );
                 }
                 None
             }
@@ -989,6 +1008,11 @@ impl RuntimeCoordinator {
             .find(|candidate| candidate.device_id.as_ref() == Some(id))
         {
             candidate.latest_error = Some(error);
+            candidate.issue = candidate_issue(
+                candidate.mode,
+                candidate.identity,
+                candidate.latest_error.as_deref(),
+            );
         }
     }
 
@@ -1336,11 +1360,13 @@ fn candidate_from_runtime(
     identity: IdentityDimension,
     latest_error: Option<String>,
 ) -> CandidateStatus {
+    let issue = candidate_issue(DeviceMode::Runtime, identity, latest_error.as_deref());
     CandidateStatus {
         key: format!("runtime:{}", observation.port),
         device_id,
         mode: DeviceMode::Runtime,
         identity,
+        issue,
         raw_serial: observation.serial_number.clone(),
         port: Some(observation.port.clone()),
         controller_family_id: board.family_id.into(),
@@ -1374,16 +1400,55 @@ fn candidate_from(
     identity: IdentityDimension,
     latest_error: Option<String>,
 ) -> CandidateStatus {
+    let mode = observation.mode();
+    let issue = candidate_issue(mode, identity, latest_error.as_deref());
     CandidateStatus {
         key: observation.key(),
         device_id,
-        mode: observation.mode(),
+        mode,
         identity,
+        issue,
         raw_serial: observation.serial().map(str::to_owned),
         port: observation.port(),
         controller_family_id: observation.board().family_id.into(),
         board_profile_id: observation.board().id.into(),
         latest_error,
+    }
+}
+
+fn candidate_issue(
+    mode: DeviceMode,
+    identity: IdentityDimension,
+    latest_error: Option<&str>,
+) -> CandidateIssue {
+    match identity {
+        IdentityDimension::InvalidIdentity => CandidateIssue::InvalidIdentity,
+        IdentityDimension::DuplicateIdentity => CandidateIssue::DuplicateIdentity,
+        IdentityDimension::Validating | IdentityDimension::Valid => {
+            if mode == DeviceMode::Bootloader {
+                return CandidateIssue::Bootloader;
+            }
+            match latest_error {
+                None => CandidateIssue::Validating,
+                Some("serial_handshake_timeout" | "device_disconnected") => {
+                    CandidateIssue::FirmwareNotResponding
+                }
+                Some(
+                    "protocol_mismatch"
+                    | "controller_family_mismatch"
+                    | "board_profile_mismatch"
+                    | "capability_mismatch",
+                ) => CandidateIssue::FirmwareIncompatible,
+                Some(error)
+                    if error.starts_with("serial_open_failed:")
+                        || error.starts_with("serial_handshake_failed:")
+                        || error.starts_with("serial_read_failed:") =>
+                {
+                    CandidateIssue::PortUnavailable
+                }
+                Some(_) => CandidateIssue::Unknown,
+            }
+        }
     }
 }
 
@@ -1529,6 +1594,120 @@ mod tests {
     };
 
     static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn candidate_issue_covers_identity_mode_and_worker_failures() {
+        use CandidateIssue::*;
+
+        assert_eq!(
+            candidate_issue(DeviceMode::Runtime, IdentityDimension::Validating, None),
+            Validating
+        );
+        assert_eq!(
+            candidate_issue(DeviceMode::Bootloader, IdentityDimension::Valid, None),
+            Bootloader
+        );
+        assert_eq!(
+            candidate_issue(
+                DeviceMode::Runtime,
+                IdentityDimension::InvalidIdentity,
+                None
+            ),
+            InvalidIdentity
+        );
+        assert_eq!(
+            candidate_issue(
+                DeviceMode::Runtime,
+                IdentityDimension::DuplicateIdentity,
+                None
+            ),
+            DuplicateIdentity
+        );
+        assert_eq!(
+            candidate_issue(
+                DeviceMode::Runtime,
+                IdentityDimension::Validating,
+                Some("serial_handshake_timeout")
+            ),
+            FirmwareNotResponding
+        );
+        assert_eq!(
+            candidate_issue(
+                DeviceMode::Runtime,
+                IdentityDimension::Validating,
+                Some("protocol_mismatch")
+            ),
+            FirmwareIncompatible
+        );
+        assert_eq!(
+            candidate_issue(
+                DeviceMode::Runtime,
+                IdentityDimension::Validating,
+                Some("controller_family_mismatch")
+            ),
+            FirmwareIncompatible
+        );
+        assert_eq!(
+            candidate_issue(
+                DeviceMode::Runtime,
+                IdentityDimension::Validating,
+                Some("board_profile_mismatch")
+            ),
+            FirmwareIncompatible
+        );
+        assert_eq!(
+            candidate_issue(
+                DeviceMode::Runtime,
+                IdentityDimension::Validating,
+                Some("capability_mismatch")
+            ),
+            FirmwareIncompatible
+        );
+        assert_eq!(
+            candidate_issue(
+                DeviceMode::Runtime,
+                IdentityDimension::Validating,
+                Some("serial_open_failed: busy")
+            ),
+            PortUnavailable
+        );
+        assert_eq!(
+            candidate_issue(
+                DeviceMode::Runtime,
+                IdentityDimension::Validating,
+                Some("serial_handshake_failed: denied")
+            ),
+            PortUnavailable
+        );
+        assert_eq!(
+            candidate_issue(
+                DeviceMode::Runtime,
+                IdentityDimension::Validating,
+                Some("unclassified failure")
+            ),
+            Unknown
+        );
+    }
+
+    #[test]
+    fn candidate_status_serializes_issue_without_removing_raw_error() {
+        let candidate = CandidateStatus {
+            key: "runtime:/dev/cu.usbmodem1101".into(),
+            device_id: None,
+            mode: DeviceMode::Runtime,
+            identity: IdentityDimension::Validating,
+            issue: CandidateIssue::FirmwareNotResponding,
+            raw_serial: Some("50031519384E811C".into()),
+            port: Some("/dev/cu.usbmodem1101".into()),
+            controller_family_id: "rp2040".into(),
+            board_profile_id: crate::hardware::VCCGND_YD_RP2040_BOARD_ID.into(),
+            latest_error: Some("serial_handshake_timeout".into()),
+        };
+
+        let value = serde_json::to_value(candidate).unwrap();
+        assert_eq!(value["issue"], "firmware_not_responding");
+        assert_eq!(value["latestError"], "serial_handshake_timeout");
+    }
 
     #[derive(Default)]
     struct FakeEnumerator {

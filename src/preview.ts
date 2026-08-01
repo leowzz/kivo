@@ -184,6 +184,7 @@ export const previewSnapshot: AppSnapshot = {
       deviceId: null,
       mode: "bootloader",
       identity: "invalid_identity",
+      issue: "invalid_identity",
       rawSerial: null,
       port: null,
       controllerFamilyId: "rp2040",

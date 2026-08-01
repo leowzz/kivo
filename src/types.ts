@@ -160,12 +160,23 @@ export interface CandidateStatus {
   deviceId: string | null;
   mode: DeviceMode;
   identity: IdentityDimension;
+  issue: CandidateIssue;
   rawSerial: string | null;
   port: string | null;
   controllerFamilyId: string;
   boardProfileId: string;
   latestError: string | null;
 }
+
+export type CandidateIssue =
+  | "validating"
+  | "firmware_not_responding"
+  | "firmware_incompatible"
+  | "bootloader"
+  | "port_unavailable"
+  | "invalid_identity"
+  | "duplicate_identity"
+  | "unknown";
 
 export interface ButtonMetric {
   buttonId: string;

@@ -36,6 +36,7 @@ const candidates: CandidateStatus[] = [{
   deviceId: null,
   mode: "bootloader",
   identity: "invalid_identity",
+  issue: "invalid_identity",
   rawSerial: "BAD-001",
   port: "/dev/cu.bad",
   controllerFamilyId: "esp32s3",
