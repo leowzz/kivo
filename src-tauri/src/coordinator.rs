@@ -37,12 +37,30 @@ pub trait UsbEnumerator: Send + Sync {
 
 pub struct SystemUsbEnumerator;
 
+fn collapse_serial_port_aliases(
+    ports: Vec<serialport::SerialPortInfo>,
+) -> Vec<serialport::SerialPortInfo> {
+    let callout_suffixes = ports
+        .iter()
+        .filter_map(|port| port.port_name.strip_prefix("/dev/cu."))
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+
+    ports
+        .into_iter()
+        .filter(|port| match port.port_name.strip_prefix("/dev/tty.") {
+            Some(suffix) => !callout_suffixes.contains(suffix),
+            None => true,
+        })
+        .collect()
+}
+
 impl UsbEnumerator for SystemUsbEnumerator {
     fn serial_ports(&self) -> Result<Vec<SerialObservation>, String> {
         serialport::available_ports()
             .map_err(|error| error.to_string())
             .map(|ports| {
-                ports
+                collapse_serial_port_aliases(ports)
                     .into_iter()
                     .filter_map(|port| match port.port_type {
                         serialport::SerialPortType::UsbPort(info) => Some(SerialObservation {
@@ -1603,6 +1621,7 @@ mod tests {
         protocol::{DeviceMessage, HelloCapabilities},
         workspace::Workspace,
     };
+    use serialport::{SerialPortInfo, SerialPortType, UsbPortInfo};
     use std::{
         collections::{BTreeMap, BTreeSet},
         fs,
@@ -1615,6 +1634,65 @@ mod tests {
     };
 
     static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    fn usb_serial_port(port_name: &str, serial_number: &str) -> SerialPortInfo {
+        SerialPortInfo {
+            port_name: port_name.into(),
+            port_type: SerialPortType::UsbPort(UsbPortInfo {
+                vid: 0x2e8a,
+                pid: 0x102e,
+                serial_number: Some(serial_number.into()),
+                manufacturer: Some("VCC-GND".into()),
+                product: Some("Kivo Keyboard RP2040".into()),
+            }),
+        }
+    }
+
+    #[test]
+    fn paired_macos_serial_aliases_keep_only_the_callout_port() {
+        for ports in [
+            vec![
+                usb_serial_port("/dev/tty.usbmodem2101", "50031519384E811C"),
+                usb_serial_port("/dev/cu.usbmodem2101", "50031519384E811C"),
+            ],
+            vec![
+                usb_serial_port("/dev/cu.usbmodem2101", "50031519384E811C"),
+                usb_serial_port("/dev/tty.usbmodem2101", "50031519384E811C"),
+            ],
+        ] {
+            let normalized = collapse_serial_port_aliases(ports);
+            let names = normalized
+                .iter()
+                .map(|port| port.port_name.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(names, vec!["/dev/cu.usbmodem2101"]);
+        }
+    }
+
+    #[test]
+    fn unmatched_dialin_and_non_macos_ports_are_preserved() {
+        let normalized = collapse_serial_port_aliases(vec![
+            usb_serial_port("/dev/tty.usbmodem3101", "TTY-ONLY"),
+            usb_serial_port("/dev/ttyACM0", "LINUX"),
+            usb_serial_port("COM4", "WINDOWS"),
+        ]);
+        let names = normalized
+            .iter()
+            .map(|port| port.port_name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["/dev/tty.usbmodem3101", "/dev/ttyACM0", "COM4"]);
+    }
+
+    #[test]
+    fn distinct_callout_ports_with_the_same_serial_are_not_deduplicated() {
+        let normalized = collapse_serial_port_aliases(vec![
+            usb_serial_port("/dev/cu.usbmodem2101", "DUPLICATE"),
+            usb_serial_port("/dev/cu.usbmodem3101", "DUPLICATE"),
+        ]);
+
+        assert_eq!(normalized.len(), 2);
+    }
 
     #[test]
     fn candidate_issue_covers_identity_mode_and_worker_failures() {
