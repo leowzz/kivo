@@ -4,6 +4,7 @@
 #include "GpioTriggerController.h"
 #include "Handshake.h"
 #include "InputTopology.h"
+#include "KeyActivityIndicator.h"
 #include "TriggerProtocol.h"
 #include "platform/HidReportTransport.h"
 
@@ -291,6 +292,34 @@ void test_stable_edges_emit_once_after_debounce() {
   TEST_ASSERT_EQUAL(InputState::Up, up->state);
 }
 
+void test_key_activity_indicator_recolors_each_press_and_clears_on_final_release() {
+  KeyActivityIndicator indicator;
+
+  TEST_ASSERT_EQUAL(KeyIndicatorAction::ShowRandomColor,
+                    indicator.handle(InputState::Down));
+  TEST_ASSERT_EQUAL(KeyIndicatorAction::ShowRandomColor,
+                    indicator.handle(InputState::Down));
+  TEST_ASSERT_EQUAL(KeyIndicatorAction::None,
+                    indicator.handle(InputState::Up));
+  TEST_ASSERT_EQUAL(KeyIndicatorAction::Off,
+                    indicator.handle(InputState::Up));
+}
+
+void test_key_activity_indicator_reset_discards_held_state() {
+  KeyActivityIndicator indicator;
+  TEST_ASSERT_EQUAL(KeyIndicatorAction::ShowRandomColor,
+                    indicator.handle(InputState::Down));
+
+  indicator.reset();
+
+  TEST_ASSERT_EQUAL(KeyIndicatorAction::None,
+                    indicator.handle(InputState::Up));
+  TEST_ASSERT_EQUAL(KeyIndicatorAction::ShowRandomColor,
+                    indicator.handle(InputState::Down));
+  TEST_ASSERT_EQUAL(KeyIndicatorAction::Off,
+                    indicator.handle(InputState::Up));
+}
+
 void test_release_rearms_pin_for_a_later_press() {
   auto controller = directController(0);
 
@@ -496,6 +525,8 @@ int main(int, char **) {
   RUN_TEST(test_suppresses_new_contact_that_closes_a_ghost_cycle);
   RUN_TEST(test_exposes_supported_gpio_inputs);
   RUN_TEST(test_stable_edges_emit_once_after_debounce);
+  RUN_TEST(test_key_activity_indicator_recolors_each_press_and_clears_on_final_release);
+  RUN_TEST(test_key_activity_indicator_reset_discards_held_state);
   RUN_TEST(test_release_rearms_pin_for_a_later_press);
   RUN_TEST(test_tracks_pending_responses_per_gpio);
   RUN_TEST(test_pending_responses_expire);

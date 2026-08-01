@@ -1,3 +1,4 @@
+#include <Adafruit_NeoPixel.h>
 #include <Adafruit_TinyUSB.h>
 #include <Arduino.h>
 
@@ -8,7 +9,9 @@ namespace {
 std::uint8_t const kKeyboardDescriptor[] = {TUD_HID_REPORT_DESC_KEYBOARD()};
 Adafruit_USBD_HID keyboard(kKeyboardDescriptor, sizeof(kKeyboardDescriptor),
                            HID_ITF_PROTOCOL_KEYBOARD, 2, false);
+Adafruit_NeoPixel keyPixel(1, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
 constexpr std::size_t kHidReadyPollLimit = 100;
+constexpr std::uint8_t kKeyPixelBrightness = 64;
 }  // namespace
 
 namespace platform {
@@ -20,6 +23,10 @@ void begin() {
   TinyUSBDevice.setProductDescriptor("Kivo Keyboard RP2040");
   Serial.begin(115200);
   keyboard.begin();
+  keyPixel.begin();
+  keyPixel.setBrightness(kKeyPixelBrightness);
+  keyPixel.clear();
+  keyPixel.show();
 }
 
 bool connected() { return static_cast<bool>(Serial); }
@@ -46,6 +53,17 @@ bool sendHotkey(std::uint8_t modifiers, std::uint8_t keycode) {
         return keyboard.sendReport(0, &report, sizeof(report));
       },
       []() { delay(1); });
+}
+
+void showRandomKeyColor() {
+  const auto hue = static_cast<std::uint16_t>(random(0x10000L));
+  keyPixel.setPixelColor(0, keyPixel.gamma32(keyPixel.ColorHSV(hue)));
+  keyPixel.show();
+}
+
+void clearKeyColor() {
+  keyPixel.clear();
+  keyPixel.show();
 }
 
 void delayMs(std::uint32_t milliseconds) { delay(milliseconds); }

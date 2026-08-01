@@ -44,5 +44,9 @@ bool sendHotkey(std::uint8_t modifiers, std::uint8_t keycode) {
   return true;
 }
 
+void showRandomKeyColor() {}
+
+void clearKeyColor() {}
+
 void delayMs(std::uint32_t milliseconds) { delay(milliseconds); }
 }  // namespace platform

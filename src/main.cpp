@@ -5,6 +5,7 @@
 
 #include "GpioTriggerController.h"
 #include "Handshake.h"
+#include "KeyActivityIndicator.h"
 #include "TriggerProtocol.h"
 #include "platform/Platform.h"
 
@@ -13,6 +14,7 @@ constexpr std::size_t kMaxResponseLineLength = 255;
 std::string helloLine;
 
 GpioTriggerController controller(platform::boardProfile());
+KeyActivityIndicator keyIndicator;
 ResponseLineBuffer responseLines(kMaxResponseLineLength);
 TopologyBuilder topologyBuilder(platform::boardProfile());
 bool helperConnected = false;
@@ -54,6 +56,11 @@ void configError(std::uint32_t revision, const char *code) {
   writeLine("CONFIG_ERROR " + std::to_string(revision) + " " + code + "\n");
 }
 
+void resetKeyIndicator() {
+  keyIndicator.reset();
+  platform::clearKeyColor();
+}
+
 void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
   const auto command = parseHelperCommand(line);
   if (!command.has_value()) {
@@ -91,6 +98,7 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
         configError(command->revision, "invalid_commit");
         return;
       }
+      resetKeyIndicator();
       controller.configure(*topology, nowMs);
       applyRuntimePinModes();
       writeLine("CONFIG_OK " + std::to_string(command->revision) + "\n");
@@ -102,6 +110,7 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
         configError(command->revision, "invalid_learning");
         return;
       }
+      resetKeyIndicator();
       applyLearningPinModes();
       writeLine("LEARN_OK " + std::to_string(command->revision) + "\n");
       return;
@@ -110,6 +119,7 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
         configError(command->revision, "invalid_learning_revision");
         return;
       }
+      resetKeyIndicator();
       applyRuntimePinModes();
       writeLine("LEARN_OK " + std::to_string(command->revision) + "\n");
       return;
@@ -147,6 +157,16 @@ void readHelperResponses(std::uint32_t nowMs) {
 
 void emitInput(const std::optional<InputEvent> &event, bool learning) {
   if (event.has_value()) {
+    switch (keyIndicator.handle(event->state)) {
+      case KeyIndicatorAction::ShowRandomColor:
+        platform::showRandomKeyColor();
+        break;
+      case KeyIndicatorAction::Off:
+        platform::clearKeyColor();
+        break;
+      case KeyIndicatorAction::None:
+        break;
+    }
     writeLine(learning ? formatLearningEvent(*event) : formatInputEvent(*event));
   }
 }
