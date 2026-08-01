@@ -178,6 +178,10 @@ export type CandidateIssue =
   | "duplicate_identity"
   | "unknown";
 
+export type CreateDeviceProfileRequest =
+  | { kind: "clone"; name: string; source_profile_id: string }
+  | { kind: "blank"; name: string; board_profile_id: string };
+
 export interface ButtonMetric {
   buttonId: string;
   presses: number;

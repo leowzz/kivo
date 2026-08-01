@@ -18,7 +18,7 @@ use coordinator::{
 use hardware::{BOARD_PROFILES, BoardProfile};
 use metrics::{HomeMetricsSnapshot, MetricsStore};
 use paste::PasteCoordinator;
-use profile::DeviceProfile;
+use profile::{CreateDeviceProfileRequest, DeviceProfile};
 use serde::Serialize;
 use std::{
     fs,
@@ -240,6 +240,15 @@ fn require_addressable_identity(
 
 fn save_profile_inner(state: &AppState, profile: DeviceProfile) -> Result<AppSnapshot, AppError> {
     mutate_workspace(state, move |workspace, _| workspace.save_profile(profile))
+}
+
+fn create_device_profile_inner(
+    state: &AppState,
+    request: CreateDeviceProfileRequest,
+) -> Result<AppSnapshot, AppError> {
+    mutate_workspace(state, move |workspace, _| {
+        workspace.create_profile(request).map(|_| ())
+    })
 }
 
 fn retry_candidate_inner(
@@ -467,6 +476,14 @@ fn save_device_profile(
 }
 
 #[tauri::command]
+fn create_device_profile(
+    state: tauri::State<'_, AppState>,
+    request: CreateDeviceProfileRequest,
+) -> Result<AppSnapshot, AppError> {
+    create_device_profile_inner(&state, request)
+}
+
+#[tauri::command]
 fn save_settings(
     state: tauri::State<'_, AppState>,
     settings: EditorSettingsPatch,
@@ -690,6 +707,7 @@ pub fn run() {
             get_snapshot,
             retry_candidate,
             save_device_profile,
+            create_device_profile,
             save_settings,
             rename_device,
             save_runtime_assignment,
@@ -1153,6 +1171,37 @@ mod tests {
             retry_candidate_inner(&state, &missing).unwrap_err().code,
             "candidate_not_found"
         );
+    }
+
+    #[test]
+    fn create_device_profile_command_returns_new_editor_snapshot_without_assignment() {
+        let directory = TestDirectory::new();
+        let state = product_state(&directory.0, vec![product_profile()]);
+        let original = state.workspace.read().unwrap().profiles["red-phone-v1"].clone();
+
+        let snapshot = create_device_profile_inner(
+            &state,
+            CreateDeviceProfileRequest::Clone {
+                name: "Operator Copy".into(),
+                source_profile_id: "red-phone-v1".into(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.editor_profile.as_deref(), Some("operator-copy"));
+        assert_eq!(
+            snapshot
+                .device_profiles
+                .iter()
+                .filter(|profile| profile.profile.id == "operator-copy")
+                .count(),
+            1
+        );
+        assert_eq!(
+            state.workspace.read().unwrap().profiles["red-phone-v1"],
+            original
+        );
+        assert!(state.workspace.read().unwrap().settings.devices.is_empty());
     }
 
     #[test]

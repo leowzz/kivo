@@ -1,7 +1,10 @@
 use crate::{
-    hardware::{DeviceId, HardwareRegistry, compiled_registry},
+    hardware::{DeviceId, HardwareRegistry, board_by_id, compiled_registry},
     metrics::{MetricsBackup, MetricsStore},
-    profile::{DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION},
+    profile::{
+        CreateDeviceProfileRequest, DeviceProfile, HardwareProfile, InputSource,
+        PROFILE_SCHEMA_VERSION, blank_device_profile,
+    },
     storage::atomic_write,
 };
 use serde::{Deserialize, Serialize};
@@ -272,6 +275,58 @@ impl Workspace {
         }
         self.profiles.insert(id, profile);
         Ok(())
+    }
+
+    pub fn create_profile(
+        &mut self,
+        request: CreateDeviceProfileRequest,
+    ) -> Result<&DeviceProfile, AppError> {
+        let (name, fallback, mut profile) = match request {
+            CreateDeviceProfileRequest::Clone {
+                name,
+                source_profile_id,
+            } => {
+                let source = self.profiles.get(&source_profile_id).ok_or_else(|| {
+                    AppError::new("unknown_profile").with_param("profile", source_profile_id)
+                })?;
+                (name, source.profile.id.clone(), source.clone())
+            }
+            CreateDeviceProfileRequest::Blank {
+                name,
+                board_profile_id,
+            } => {
+                let board = board_by_id(&board_profile_id).ok_or_else(|| {
+                    AppError::new("unknown_board_profile")
+                        .with_param("board_profile", &board_profile_id)
+                })?;
+                let profile =
+                    blank_device_profile(String::new(), name.clone(), board_profile_id);
+                (name, board.id.to_owned(), profile)
+            }
+        };
+        let name = name.trim().to_owned();
+        if name.is_empty() {
+            return Err(AppError::new("invalid_profile_name"));
+        }
+        let id = next_profile_id(&self.profiles, &name, &fallback);
+        profile.profile.id = id.clone();
+        profile.profile.name = name;
+        profile.validate()?;
+
+        let path = self.profile_directory().join(format!("{id}.yaml"));
+        if path.exists() || self.profiles.contains_key(&id) {
+            return Err(AppError::new("profile_already_exists").with_param("profile", id));
+        }
+        write_yaml(&path, &profile)?;
+        let mut settings = self.settings.clone();
+        settings.editor_profile = Some(id.clone());
+        if let Err(error) = self.persist_settings(&settings) {
+            let _ = fs::remove_file(path);
+            return Err(error);
+        }
+        self.settings = settings;
+        self.profiles.insert(id.clone(), profile);
+        Ok(&self.profiles[&id])
     }
 
     pub fn save_settings(&mut self, patch: EditorSettingsPatch) -> Result<(), AppError> {
@@ -607,6 +662,41 @@ impl Workspace {
     fn profile_directory(&self) -> PathBuf {
         self.data_directory().join("profiles")
     }
+}
+
+fn ascii_slug(value: &str) -> String {
+    let mut slug = String::new();
+    let mut separator = false;
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() {
+            if separator && !slug.is_empty() {
+                slug.push('-');
+            }
+            slug.push((byte as char).to_ascii_lowercase());
+            separator = false;
+        } else if !slug.is_empty() {
+            separator = true;
+        }
+    }
+    slug
+}
+
+fn next_profile_id(
+    profiles: &BTreeMap<String, DeviceProfile>,
+    name: &str,
+    fallback: &str,
+) -> String {
+    let base = [ascii_slug(name), ascii_slug(fallback), "profile".into()]
+        .into_iter()
+        .find(|value| !value.is_empty())
+        .unwrap();
+    if !profiles.contains_key(&base) {
+        return base;
+    }
+    (2..)
+        .map(|suffix| format!("{base}-{suffix}"))
+        .find(|candidate| !profiles.contains_key(candidate))
+        .expect("profile ID suffix exhausted")
 }
 
 fn collect_profiles(
@@ -1121,6 +1211,95 @@ mod tests {
 
     fn workspace(directory: &TestDirectory) -> Workspace {
         Workspace::create(&directory.0, vec![device_profile()]).unwrap()
+    }
+
+    #[test]
+    fn creates_a_deep_cloned_profile_with_a_unique_stable_id() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let original = workspace.profiles["red-phone-v1"].clone();
+
+        let created = workspace
+            .create_profile(CreateDeviceProfileRequest::Clone {
+                name: "Red Phone".into(),
+                source_profile_id: "red-phone-v1".into(),
+            })
+            .unwrap()
+            .clone();
+
+        assert_eq!(created.profile.id, "red-phone");
+        assert_eq!(created.profile.name, "Red Phone");
+        assert_eq!(created.profile.groups, original.profile.groups);
+        assert_eq!(created.actions, original.actions);
+        assert_eq!(created.hardware_profiles, original.hardware_profiles);
+        assert_eq!(
+            workspace.settings.editor_profile.as_deref(),
+            Some("red-phone")
+        );
+        assert_eq!(workspace.profiles["red-phone-v1"], original);
+
+        let second = workspace
+            .create_profile(CreateDeviceProfileRequest::Clone {
+                name: "Red Phone".into(),
+                source_profile_id: "red-phone-v1".into(),
+            })
+            .unwrap();
+        assert_eq!(second.profile.id, "red-phone-2");
+    }
+
+    #[test]
+    fn creates_a_valid_blank_profile_for_the_exact_board() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+
+        let created = workspace
+            .create_profile(CreateDeviceProfileRequest::Blank {
+                name: "新键盘".into(),
+                board_profile_id: crate::hardware::VCCGND_YD_RP2040_BOARD_ID.into(),
+            })
+            .unwrap();
+
+        created.validate().unwrap();
+        assert_eq!(created.profile.id, "vccgnd-yd-rp2040");
+        assert_eq!(created.profile.name, "新键盘");
+        assert!(created.profile.groups.is_empty());
+        assert!(created.actions.is_empty());
+        assert_eq!(created.hardware_profiles.len(), 1);
+        assert_eq!(created.hardware_profiles[0].id, "hardware");
+        assert_eq!(
+            created.hardware_profiles[0].board_profile_id,
+            crate::hardware::VCCGND_YD_RP2040_BOARD_ID
+        );
+        assert!(created.hardware_profiles[0].inputs.is_empty());
+    }
+
+    #[test]
+    fn profile_creation_rejects_bad_sources_and_never_overwrites() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let before = workspace.profiles.clone();
+
+        assert_eq!(
+            workspace
+                .create_profile(CreateDeviceProfileRequest::Clone {
+                    name: "Copy".into(),
+                    source_profile_id: "missing".into(),
+                })
+                .unwrap_err()
+                .code,
+            "unknown_profile"
+        );
+        assert_eq!(
+            workspace
+                .create_profile(CreateDeviceProfileRequest::Blank {
+                    name: " ".into(),
+                    board_profile_id: crate::hardware::VCCGND_YD_RP2040_BOARD_ID.into(),
+                })
+                .unwrap_err()
+                .code,
+            "invalid_profile_name"
+        );
+        assert_eq!(workspace.profiles, before);
     }
 
     #[derive(Default)]

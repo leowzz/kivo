@@ -9,6 +9,19 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 pub const PROFILE_SCHEMA_VERSION: u16 = 2;
 
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CreateDeviceProfileRequest {
+    Clone {
+        name: String,
+        source_profile_id: String,
+    },
+    Blank {
+        name: String,
+        board_profile_id: String,
+    },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ButtonAction {
@@ -61,6 +74,29 @@ pub struct DeviceProfile {
     pub hardware_profiles: Vec<HardwareProfile>,
     #[serde(default)]
     pub actions: BTreeMap<String, Vec<ButtonAction>>,
+}
+
+pub fn blank_device_profile(
+    id: String,
+    name: String,
+    board_profile_id: String,
+) -> DeviceProfile {
+    DeviceProfile {
+        schema_version: PROFILE_SCHEMA_VERSION,
+        profile: ModelLayout {
+            id,
+            name,
+            groups: Vec::new(),
+        },
+        hardware_profiles: vec![HardwareProfile {
+            id: "hardware".into(),
+            name: "Default hardware".into(),
+            board_profile_id,
+            debounce_ms: default_debounce_ms(),
+            inputs: Vec::new(),
+        }],
+        actions: BTreeMap::new(),
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
