@@ -577,7 +577,10 @@ test("configuration page creates a profile while no device is usable", async () 
       },
     }),
   );
-  expect(screen.getByLabelText("当前编辑配置")).toHaveValue("offline-rp");
+  expect(
+    await screen.findByRole("heading", { name: "按键布局" }),
+  ).toBeInTheDocument();
+  expect(screen.getByText("Offline RP")).toBeInTheDocument();
   expect(currentSnapshot.devices).toHaveLength(0);
 });
 
@@ -621,6 +624,42 @@ test("completes one exact Device and navigates to its Hardware Profile", async (
       ?.runtimeAssignment,
   ).toBeNull();
   expect(await screen.findByRole("heading", { name: "硬件配置" })).toBeInTheDocument();
+  expect(screen.getByRole("combobox", { name: "硬件配置" })).toHaveValue(
+    "rp-hardware",
+  );
+});
+
+test("keeps completed setup successful when saving the Editor Profile fails", async () => {
+  const defaultInvoke = vi.mocked(invoke).getMockImplementation()!;
+  currentSnapshot.devices = [rpUnassignedDevice()];
+  currentSnapshot.candidates = [];
+  currentSnapshot.boardProfiles.push(rpBoard);
+  currentSnapshot.deviceProfiles.push(rpProfile);
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "save_settings") throw new Error("settings_write_failed");
+    return defaultInvoke(command, args);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  const dialog = await screen.findByRole("dialog", { name: "添加键盘" });
+  await user.selectOptions(
+    within(dialog).getByRole("combobox", { name: "键盘配置" }),
+    "rp-profile",
+  );
+  await user.selectOptions(
+    within(dialog).getByRole("combobox", { name: "硬件配置" }),
+    "rp-hardware",
+  );
+  await user.click(within(dialog).getByRole("button", { name: "下一步" }));
+  await user.click(
+    within(dialog).getByRole("button", { name: "完成设置" }),
+  );
+
+  expect(
+    await screen.findByText("保存失败: settings_write_failed"),
+  ).toHaveClass("error-banner");
+  expect(screen.queryByRole("dialog", { name: "添加键盘" })).toBeNull();
+  expect(screen.getByRole("heading", { name: "硬件配置" })).toBeInTheDocument();
   expect(screen.getByRole("combobox", { name: "硬件配置" })).toHaveValue(
     "rp-hardware",
   );

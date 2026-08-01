@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { expect, test, vi } from "vitest";
@@ -206,7 +206,7 @@ test("selects among multiple setup targets explicitly", async () => {
     candidate({
       key: "runtime:/dev/cu.second",
       deviceId: "second",
-      rawSerial: "SECOND",
+      rawSerial: "50031519384E811D",
     }),
   ];
 
@@ -232,8 +232,19 @@ test("selects among multiple setup targets explicitly", async () => {
 
   render(<TargetSelectionHarness />);
   expect(screen.getByRole("heading", { name: "选择键盘" })).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: /SECOND/ }));
+  expect(screen.queryByRole("button", { name: /50031519384E811D/ })).toBeNull();
+  await user.click(screen.getByRole("button", { name: /4E811D/ }));
   expect(screen.getByText("正在确认设备")).toBeInTheDocument();
+});
+
+test("uses a friendly target label when a Candidate has no serial", () => {
+  renderWizard({
+    targetId: null,
+    candidates: [candidate({ rawSerial: null })],
+  });
+
+  const target = screen.getByRole("button", { name: /待处理设备 1/ });
+  expect(within(target).queryByText(/\/dev\/cu\./)).toBeNull();
 });
 
 test("lists only exact-board profiles and completes one exact Device", async () => {
@@ -282,4 +293,29 @@ test("preserves confirmation fields after setup failure", async () => {
 
   expect(await screen.findByRole("alert")).toHaveTextContent("device_offline");
   expect(screen.getByRole("textbox", { name: "键盘名称" })).toHaveValue("保留名称");
+});
+
+test("preserves confirmation fields when the same Device reconnects", async () => {
+  const user = userEvent.setup();
+  const connected = unassignedDevice();
+  const { rerender, props } = renderWizard({ devices: [connected] });
+  await user.click(screen.getByRole("button", { name: "下一步" }));
+  await user.clear(screen.getByRole("textbox", { name: "键盘名称" }));
+  await user.type(
+    screen.getByRole("textbox", { name: "键盘名称" }),
+    "重连后保留",
+  );
+
+  rerender(<DeviceSetupWizard {...props} devices={[]} />);
+  expect(
+    screen.getByRole("heading", { name: /键盘已断开/ }),
+  ).toBeInTheDocument();
+
+  rerender(<DeviceSetupWizard {...props} devices={[connected]} />);
+  expect(
+    screen.getByRole("heading", { name: "确认键盘设置" }),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("textbox", { name: "键盘名称" })).toHaveValue(
+    "重连后保留",
+  );
 });

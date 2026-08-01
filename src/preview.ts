@@ -1,5 +1,9 @@
 import telLayout from "../models/tel001.json";
-import type { AppSnapshot, DeviceProfile } from "./types";
+import type {
+  AppSnapshot,
+  CreateDeviceProfileRequest,
+  DeviceProfile,
+} from "./types";
 
 const esp32SafePins = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18];
 const rp2040SafePins = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
@@ -70,6 +74,77 @@ const operatorProfile: DeviceProfile = {
     DOWN: [{ type: "hotkey", keys: ["cmd", "down"] }],
   },
 };
+
+function asciiSlug(value: string) {
+  return value
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .toLowerCase();
+}
+
+function nextProfileId(
+  profiles: DeviceProfile[],
+  name: string,
+  fallback: string,
+) {
+  const existing = new Set(profiles.map((profile) => profile.profile.id));
+  const base = asciiSlug(name) || asciiSlug(fallback) || "profile";
+  if (!existing.has(base)) return base;
+  for (let suffix = 2; ; suffix += 1) {
+    const candidate = `${base}-${suffix}`;
+    if (!existing.has(candidate)) return candidate;
+  }
+}
+
+export function createPreviewDeviceProfile(
+  snapshot: AppSnapshot,
+  request: CreateDeviceProfileRequest,
+): AppSnapshot {
+  const name = request.name.trim();
+  if (!name) throw new Error("invalid_profile_name");
+
+  let fallback: string;
+  let profile: DeviceProfile;
+  if (request.kind === "clone") {
+    const source = snapshot.deviceProfiles.find(
+      (item) => item.profile.id === request.source_profile_id,
+    );
+    if (!source) throw new Error("unknown_profile");
+    fallback = source.profile.id;
+    profile = structuredClone(source);
+  } else {
+    if (
+      !snapshot.boardProfiles.some(
+        (board) => board.id === request.board_profile_id,
+      )
+    ) {
+      throw new Error("unknown_board_profile");
+    }
+    fallback = request.board_profile_id;
+    profile = {
+      schema_version: 2,
+      profile: { id: "", name, groups: [] },
+      hardware_profiles: [
+        {
+          id: "hardware",
+          name: "Default hardware",
+          board_profile_id: request.board_profile_id,
+          debounce_ms: 30,
+          inputs: [],
+        },
+      ],
+      actions: {},
+    };
+  }
+
+  const id = nextProfileId(snapshot.deviceProfiles, name, fallback);
+  profile.profile = { ...profile.profile, id, name };
+  return {
+    ...snapshot,
+    deviceProfiles: [...snapshot.deviceProfiles, profile],
+    editorProfile: id,
+  };
+}
 
 export const previewSnapshot: AppSnapshot = {
   deviceProfiles: [phoneProfile, operatorProfile],

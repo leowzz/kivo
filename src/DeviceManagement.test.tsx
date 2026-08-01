@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { DeviceManagement } from "./DeviceManagement";
@@ -135,7 +135,7 @@ test("composes visible Board Profile search with non-All filters", async () => {
   await user.clear(screen.getByRole("searchbox", { name: "搜索设备" }));
   await user.click(screen.getByRole("button", { name: "需处理" }));
   await user.type(screen.getByRole("searchbox", { name: "搜索设备" }), "ESP32-S3 Pad");
-  expect(screen.getByRole("button", { name: /BAD-001/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /AD-001/ })).toBeInTheDocument();
 });
 
 test("uses assignment display names, retains missing IDs, and shows selected activity", async () => {
@@ -200,7 +200,7 @@ test("preserves selected device identity across live replacements", () => {
 
 test("moves candidate selection to the nearest remaining row when its observation disappears", () => {
   const { rerender, props } = renderManagement();
-  screen.getByRole("button", { name: /BAD-001/ }).click();
+  screen.getByRole("button", { name: /AD-001/ }).click();
   rerender(<DeviceManagement {...props} candidates={[]} />);
   expect(screen.getByRole("button", { name: /ESP32 Offline/ })).toHaveAttribute("aria-pressed", "true");
 });
@@ -208,7 +208,7 @@ test("moves candidate selection to the nearest remaining row when its observatio
 test("shows candidate diagnostics without mutable device actions", async () => {
   const user = userEvent.setup();
   renderManagement();
-  await user.click(screen.getByRole("button", { name: /BAD-001/ }));
+  await user.click(screen.getByRole("button", { name: /AD-001/ }));
   expect(screen.getByText("identity rejected")).toBeInTheDocument();
   expect(screen.queryByRole("textbox", { name: "设备名称" })).toBeNull();
   expect(screen.queryByRole("button", { name: "忘记设备" })).toBeNull();
@@ -224,7 +224,7 @@ test("removes communication ports from rows and reveals them only in technical d
     screen.queryByText("端口", { selector: ".device-table-head span" }),
   ).toBeNull();
   expect(screen.getByText("/dev/cu.rp-a")).not.toBeVisible();
-  await user.click(screen.getByRole("button", { name: /BAD-001/ }));
+  await user.click(screen.getByRole("button", { name: /AD-001/ }));
   expect(screen.getByText("/dev/cu.bad")).not.toBeVisible();
   await user.click(screen.getByText("查看技术详情"));
   expect(screen.getByText("/dev/cu.bad")).toBeInTheDocument();
@@ -244,13 +244,114 @@ test("shows friendly firmware recovery and retries only the selected Candidate",
     ],
     onRetryCandidate,
   });
-  await user.click(screen.getByRole("button", { name: /BAD-001/ }));
+  await user.click(screen.getByRole("button", { name: /AD-001/ }));
 
   expect(
     screen.getByRole("heading", { name: "Kivo 固件未响应" }),
   ).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "重新检测" }));
   expect(onRetryCandidate).toHaveBeenCalledWith("candidate-rp");
+});
+
+test("disables Candidate retry and ignores repeated clicks while pending", async () => {
+  let resolveRetry!: () => void;
+  const onRetryCandidate = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        resolveRetry = resolve;
+      }),
+  );
+  renderManagement({
+    candidates: [
+      candidate({
+        deviceId: "candidate-rp",
+        issue: "firmware_not_responding",
+      }),
+    ],
+    onRetryCandidate,
+  });
+  fireEvent.click(screen.getByRole("button", { name: /AD-001/ }));
+  const retry = screen.getByRole("button", { name: "重新检测" });
+
+  fireEvent.click(retry);
+  fireEvent.click(retry);
+
+  expect(onRetryCandidate).toHaveBeenCalledTimes(1);
+  expect(retry).toBeDisabled();
+  resolveRetry();
+  await waitFor(() => expect(retry).toBeEnabled());
+});
+
+test("shows Candidate retry failures and allows another attempt", async () => {
+  const user = userEvent.setup();
+  const onRetryCandidate = vi
+    .fn()
+    .mockRejectedValue({ code: "retry_unavailable" });
+  renderManagement({
+    candidates: [
+      candidate({
+        deviceId: "candidate-rp",
+        issue: "firmware_not_responding",
+      }),
+    ],
+    onRetryCandidate,
+  });
+  await user.click(screen.getByRole("button", { name: /AD-001/ }));
+  const retry = screen.getByRole("button", { name: "重新检测" });
+  await user.click(retry);
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "retry_unavailable",
+  );
+  expect(retry).toBeEnabled();
+});
+
+test("shows only the Candidate serial suffix in the primary row", () => {
+  renderManagement({
+    candidates: [candidate({ rawSerial: "50031519384E811C" })],
+  });
+
+  const row = screen.getByRole("button", { name: /4E811C/ });
+  expect(within(row).getByText("4E811C")).toBeInTheDocument();
+  expect(within(row).queryByText("50031519384E811C")).toBeNull();
+});
+
+test("uses a friendly Candidate label when no serial is available", () => {
+  renderManagement({
+    candidates: [
+      candidate({
+        key: "runtime:/dev/cu.usbmodem1101",
+        rawSerial: null,
+        port: "/dev/cu.usbmodem1101",
+      }),
+    ],
+  });
+
+  const row = screen.getByRole("button", { name: /待处理设备 1/ });
+  expect(within(row).queryByText(/\/dev\/cu\./)).toBeNull();
+});
+
+test("scopes an operation error to its originating row", async () => {
+  const user = userEvent.setup();
+  renderManagement({
+    candidates: [
+      candidate({
+        deviceId: "candidate-rp",
+        issue: "firmware_not_responding",
+      }),
+    ],
+    onRetryCandidate: vi
+      .fn()
+      .mockRejectedValue({ code: "retry_unavailable" }),
+  });
+  await user.click(screen.getByRole("button", { name: /AD-001/ }));
+  await user.click(screen.getByRole("button", { name: "重新检测" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "retry_unavailable",
+  );
+
+  await user.click(screen.getByRole("button", { name: /RP2040 A/ }));
+  expect(screen.queryByRole("alert")).toBeNull();
 });
 
 test("opens centralized setup from the page header and an unassigned Device", async () => {
@@ -285,7 +386,7 @@ test("identity conflicts never expose retry or assignment actions", async () => 
       }),
     ],
   });
-  await user.click(screen.getByRole("button", { name: /BAD-001/ }));
+  await user.click(screen.getByRole("button", { name: /AD-001/ }));
   expect(screen.queryByRole("button", { name: "重新检测" })).toBeNull();
   expect(screen.queryByRole("button", { name: "保存运行分配" })).toBeNull();
   expect(screen.getByText(/多个设备声明了相同身份/)).toBeInTheDocument();

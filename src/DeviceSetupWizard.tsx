@@ -1,6 +1,7 @@
 import { RefreshCw, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CreateDeviceProfileForm } from "./CreateDeviceProfileForm";
+import { candidateDisplayLabel, serialSuffix } from "./deviceStatus";
 import { t, type MessageKey } from "./i18n";
 import type {
   AppSnapshot,
@@ -125,6 +126,7 @@ export function DeviceSetupWizard({
   const [name, setName] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const initializedDeviceId = useRef<string | null>(null);
   const eligibleDevices = useMemo(() => setupDevices(devices), [devices]);
   const selectedCandidate =
     candidates.find(
@@ -134,17 +136,17 @@ export function DeviceSetupWizard({
     eligibleDevices.find((device) => device.deviceId === targetId) ?? null;
   const targets = useMemo(() => {
     const values = new Map<string, string>();
-    for (const candidate of candidates) {
+    for (const [index, candidate] of candidates.entries()) {
       values.set(
         candidateTargetId(candidate),
-        candidate.rawSerial ?? candidate.key,
+        candidateDisplayLabel(candidate, index + 1, language),
       );
     }
     for (const device of eligibleDevices) {
       values.set(device.deviceId, device.name);
     }
     return [...values].map(([id, label]) => ({ id, label }));
-  }, [candidates, eligibleDevices]);
+  }, [candidates, eligibleDevices, language]);
   const compatible = useMemo(
     () =>
       selectedDevice
@@ -164,6 +166,8 @@ export function DeviceSetupWizard({
 
   useEffect(() => {
     if (!selectedDevice) return;
+    if (initializedDeviceId.current === selectedDevice.deviceId) return;
+    initializedDeviceId.current = selectedDevice.deviceId;
     const firstProfile = compatible[0] ?? null;
     const hardware =
       firstProfile?.hardware_profiles.filter(
@@ -369,7 +373,7 @@ export function DeviceSetupWizard({
                 <dt>{t(language, "devices.board")}</dt>
                 <dd>{boardName(selectedDevice.boardProfileId)}</dd>
                 <dt>{t(language, "devices.serial")}</dt>
-                <dd>{selectedDevice.hardwareSerial.slice(-6)}</dd>
+                <dd>{serialSuffix(selectedDevice.hardwareSerial)}</dd>
                 <dt>{t(language, "setup.deviceProfile")}</dt>
                 <dd>{selectedProfile?.profile.name ?? deviceProfileId}</dd>
                 <dt>{t(language, "setup.hardwareProfile")}</dt>

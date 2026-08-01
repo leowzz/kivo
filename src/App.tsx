@@ -483,13 +483,22 @@ export default function App() {
   const createDeviceProfile = useCallback(
     async (request: CreateDeviceProfileRequest) => {
       await autosave.flush();
+      if (PREVIEW_MODE) {
+        const { createPreviewDeviceProfile } = await import("./preview");
+        const snapshot = createPreviewDeviceProfile(
+          { ...registry, language, homeMetrics },
+          request,
+        );
+        if (mountedRef.current) applySnapshot(snapshot, true);
+        return snapshot;
+      }
       const snapshot = await invoke<AppSnapshot>("create_device_profile", {
         request,
       });
       if (mountedRef.current) applySnapshot(snapshot, true);
       return snapshot;
     },
-    [applySnapshot, autosave],
+    [applySnapshot, autosave, homeMetrics, language, registry],
   );
 
   const profileRef = useRef(editorProfileConfig);
@@ -669,7 +678,17 @@ export default function App() {
     if (!mountedRef.current) return;
     applySnapshot(completed, true);
     if (completed.editorProfile !== assignment.device_profile_id) {
-      await saveSettings(assignment.device_profile_id, language);
+      try {
+        await saveSettings(assignment.device_profile_id, language);
+      } catch (settingsError) {
+        setRegistry((current) => ({
+          ...current,
+          editorProfile: assignment.device_profile_id,
+        }));
+        setError(
+          `${t(language, "error.save")}: ${errorMessage(settingsError)}`,
+        );
+      }
     }
     setHardwareEditorTarget({
       deviceId,
@@ -1012,6 +1031,7 @@ export default function App() {
                 onCreate={async (request) => {
                   await createDeviceProfile(request);
                   setProfileCreatorOpen(false);
+                  setView("layout");
                 }}
                 onCancel={() => setProfileCreatorOpen(false)}
               />

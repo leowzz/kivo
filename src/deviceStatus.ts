@@ -1,4 +1,10 @@
-import type { DeviceStatus, HardwareProfile } from "./types";
+import { t } from "./i18n";
+import type {
+  CandidateStatus,
+  DeviceStatus,
+  HardwareProfile,
+  Language,
+} from "./types";
 
 export type DeviceFilter = "all" | "attention" | "ready" | "offline";
 
@@ -89,4 +95,18 @@ export function editablePins(boardSafePins: readonly number[], capabilities: rea
   if (capabilities === null) return [...boardSafePins];
   const reported = new Set(capabilities);
   return boardSafePins.filter((pin) => reported.has(pin));
+}
+
+export function serialSuffix(serial: string): string {
+  return serial.slice(-6);
+}
+
+export function candidateDisplayLabel(
+  candidate: Pick<CandidateStatus, "rawSerial">,
+  ordinal: number,
+  language: Language,
+): string {
+  return candidate.rawSerial
+    ? serialSuffix(candidate.rawSerial)
+    : t(language, "devices.pendingCandidate", { number: ordinal });
 }

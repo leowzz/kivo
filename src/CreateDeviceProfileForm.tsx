@@ -16,6 +16,14 @@ interface CreateDeviceProfileFormProps {
   onCancel(): void;
 }
 
+function errorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error && "code" in error) {
+    return String(error.code);
+  }
+  return String(error);
+}
+
 export function CreateDeviceProfileForm({
   language,
   boardProfiles,
@@ -45,7 +53,8 @@ export function CreateDeviceProfileForm({
   const [boardProfileId, setBoardProfileId] = useState(fixedBoardProfileId ?? "");
   const [pending, setPending] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  const error =
+  const [operationError, setOperationError] = useState<string | null>(null);
+  const validationError =
     name.trim().length === 0
       ? t(language, "profile.nameRequired")
       : mode === "clone" && !sourceProfileId
@@ -56,7 +65,7 @@ export function CreateDeviceProfileForm({
 
   async function submit() {
     setSubmitted(true);
-    if (pending || error) return;
+    if (pending || validationError) return;
     const request: CreateDeviceProfileRequest =
       mode === "clone"
         ? {
@@ -70,8 +79,11 @@ export function CreateDeviceProfileForm({
             board_profile_id: fixedBoardProfileId ?? boardProfileId,
           };
     setPending(true);
+    setOperationError(null);
     try {
       await onCreate(request);
+    } catch (error) {
+      setOperationError(errorMessage(error));
     } finally {
       setPending(false);
     }
@@ -151,9 +163,14 @@ export function CreateDeviceProfileForm({
           </select>
         </label>
       )}
-      {submitted && error && (
+      {submitted && validationError && (
         <p className="field-error" role="alert">
-          {error}
+          {validationError}
+        </p>
+      )}
+      {operationError && (
+        <p className="field-error" role="alert">
+          {operationError}
         </p>
       )}
       <div className="profile-create-actions">

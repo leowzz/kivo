@@ -2,6 +2,7 @@ import { Check, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
+  candidateDisplayLabel,
   compatibleHardwareProfiles,
   matchesDeviceFilter,
   primaryDeviceLabel,
@@ -23,6 +24,15 @@ import type {
 type Selection = { kind: "device" | "candidate"; id: string };
 type Row = { selection: Selection };
 type AssignmentDraft = { deviceProfileId: string; hardwareProfileId: string };
+type OperationError = { owner: Selection; message: string };
+
+function errorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error && "code" in error) {
+    return String(error.code);
+  }
+  return String(error);
+}
 
 const candidateMessages: Record<
   CandidateIssue,
@@ -158,7 +168,8 @@ export function DeviceManagement({
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState("");
   const [confirmId, setConfirmId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<OperationError | null>(null);
+  const [candidateRetrying, setCandidateRetrying] = useState(false);
   const [forgetting, setForgetting] = useState(false);
   const [assignmentDraft, setAssignmentDraft] = useState<AssignmentDraft>({
     deviceProfileId: "",
@@ -169,12 +180,23 @@ export function DeviceManagement({
     "save" | "clear" | null
   >(null);
   const previous = useRef<Row[]>([]);
+  const candidateRetryInFlight = useRef(false);
   const pendingAssignment = useRef<RuntimeAssignment | null>(null);
   const pendingClearAssignment = useRef(false);
   const assignmentMutationInFlight = useRef(false);
   const boards = useMemo(
     () => new Map(boardProfiles.map((board) => [board.id, board])),
     [boardProfiles],
+  );
+  const candidateLabels = useMemo(
+    () =>
+      new Map(
+        candidates.map((candidate, index) => [
+          candidate.key,
+          candidateDisplayLabel(candidate, index + 1, language),
+        ]),
+      ),
+    [candidates, language],
   );
   const visibleDevices = devices.filter((device) =>
     matchesDeviceFilter(device, filter, "") &&
@@ -243,6 +265,12 @@ export function DeviceManagement({
     selection?.kind === "candidate"
       ? (candidates.find((candidate) => candidate.key === selection.id) ?? null)
       : null;
+  const selectedError =
+    error &&
+    selection?.kind === error.owner.kind &&
+    selection.id === error.owner.id
+      ? error.message
+      : null;
   const selectedMetrics =
     selectedDevice && metrics?.deviceId === selectedDevice.deviceId
       ? metrics.snapshot
@@ -308,7 +336,10 @@ export function DeviceManagement({
       await onRename(selectedDevice.deviceId, name.trim());
       setRenaming(false);
     } catch (reason) {
-      setError(String(reason));
+      setError({
+        owner: { kind: "device", id: selectedDevice.deviceId },
+        message: errorMessage(reason),
+      });
     }
   };
   const forget = async () => {
@@ -319,7 +350,10 @@ export function DeviceManagement({
       await onForget(confirmDevice.deviceId);
       setConfirmId(null);
     } catch (reason) {
-      setError(String(reason));
+      setError({
+        owner: { kind: "device", id: confirmDevice.deviceId },
+        message: errorMessage(reason),
+      });
     } finally {
       setForgetting(false);
     }
@@ -357,6 +391,23 @@ export function DeviceManagement({
       "unknown",
     ].includes(selectedCandidate.issue),
   );
+  const retryCandidate = async () => {
+    if (!selectedCandidate?.deviceId || candidateRetryInFlight.current) return;
+    candidateRetryInFlight.current = true;
+    setCandidateRetrying(true);
+    setError(null);
+    try {
+      await onRetryCandidate(selectedCandidate.deviceId);
+    } catch (reason) {
+      setError({
+        owner: { kind: "candidate", id: selectedCandidate.key },
+        message: errorMessage(reason),
+      });
+    } finally {
+      candidateRetryInFlight.current = false;
+      setCandidateRetrying(false);
+    }
+  };
   const saveAssignment = async () => {
     if (
       assignmentMutationInFlight.current ||
@@ -379,7 +430,10 @@ export function DeviceManagement({
       setAssignmentConfirmation(null);
     } catch (reason) {
       pendingAssignment.current = null;
-      setError(String(reason));
+      setError({
+        owner: { kind: "device", id: selectedDevice.deviceId },
+        message: errorMessage(reason),
+      });
     } finally {
       assignmentMutationInFlight.current = false;
       setAssignmentSaving(false);
@@ -396,7 +450,10 @@ export function DeviceManagement({
       setAssignmentConfirmation(null);
     } catch (reason) {
       pendingClearAssignment.current = false;
-      setError(String(reason));
+      setError({
+        owner: { kind: "device", id: selectedDevice.deviceId },
+        message: errorMessage(reason),
+      });
     } finally {
       assignmentMutationInFlight.current = false;
       setAssignmentSaving(false);
@@ -498,7 +555,7 @@ export function DeviceManagement({
                       setSelection({ kind: "candidate", id: candidate.key })
                     }
                   >
-                    <strong>{candidate.rawSerial ?? candidate.key}</strong>
+                    <strong>{candidateLabels.get(candidate.key)}</strong>
                     <span>
                       {boards.get(candidate.boardProfileId)?.displayName ??
                         candidate.boardProfileId}
@@ -532,10 +589,8 @@ export function DeviceManagement({
               {canRetryCandidate && (
                 <button
                   type="button"
-                  onClick={() =>
-                    selectedCandidate.deviceId &&
-                    void onRetryCandidate(selectedCandidate.deviceId)
-                  }
+                  disabled={candidateRetrying}
+                  onClick={() => void retryCandidate()}
                 >
                   <RefreshCw size={16} />
                   {t(language, "setup.retry")}
@@ -585,6 +640,11 @@ export function DeviceManagement({
                 />
               </dl>
             </details>
+            {selectedError && (
+              <p className="field-error" role="alert">
+                {selectedError}
+              </p>
+            )}
           </>
         )}
         {selectedDevice && (
@@ -791,9 +851,9 @@ export function DeviceManagement({
                 </div>
               </>
             )}
-            {error && (
+            {selectedError && (
               <p className="field-error" role="alert">
-                {error}
+                {selectedError}
               </p>
             )}
             <button

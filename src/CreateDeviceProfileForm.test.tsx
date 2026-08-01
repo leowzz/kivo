@@ -139,3 +139,30 @@ test("requires a board for an independent blank profile", async () => {
     board_profile_id: "esp",
   });
 });
+
+test("shows a creation failure and preserves the form for retry", async () => {
+  const user = userEvent.setup();
+  const onCreate = vi
+    .fn()
+    .mockRejectedValue({ code: "profile_already_exists" });
+  render(
+    <CreateDeviceProfileForm
+      language="zh-CN"
+      boardProfiles={boards}
+      deviceProfiles={profiles}
+      onCreate={onCreate}
+      onCancel={vi.fn()}
+    />,
+  );
+
+  await user.type(screen.getByRole("textbox", { name: "配置名称" }), "重复配置");
+  await user.click(screen.getByRole("button", { name: "创建配置" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "profile_already_exists",
+  );
+  expect(screen.getByRole("textbox", { name: "配置名称" })).toHaveValue(
+    "重复配置",
+  );
+  expect(screen.getByRole("button", { name: "创建配置" })).toBeEnabled();
+});
