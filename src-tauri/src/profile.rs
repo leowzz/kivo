@@ -76,11 +76,7 @@ pub struct DeviceProfile {
     pub actions: BTreeMap<String, Vec<ButtonAction>>,
 }
 
-pub fn blank_device_profile(
-    id: String,
-    name: String,
-    board_profile_id: String,
-) -> DeviceProfile {
+pub fn blank_device_profile(id: String, name: String, board_profile_id: String) -> DeviceProfile {
     DeviceProfile {
         schema_version: PROFILE_SCHEMA_VERSION,
         profile: ModelLayout {

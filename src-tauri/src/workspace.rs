@@ -299,8 +299,7 @@ impl Workspace {
                     AppError::new("unknown_board_profile")
                         .with_param("board_profile", &board_profile_id)
                 })?;
-                let profile =
-                    blank_device_profile(String::new(), name.clone(), board_profile_id);
+                let profile = blank_device_profile(String::new(), name.clone(), board_profile_id);
                 (name, board.id.to_owned(), profile)
             }
         };
@@ -1335,8 +1334,7 @@ mod tests {
     fn complete_device_setup_persists_name_and_assignment_together() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let id =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SETUP-A").unwrap();
+        let id = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SETUP-A").unwrap();
         workspace.enroll_device(id.clone()).unwrap();
         let assignment = RuntimeAssignment {
             device_profile_id: "red-phone-v1".into(),
@@ -1358,8 +1356,7 @@ mod tests {
     fn complete_device_setup_rolls_back_both_fields_when_assignment_is_invalid() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let id =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SETUP-B").unwrap();
+        let id = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SETUP-B").unwrap();
         workspace.enroll_device(id.clone()).unwrap();
         let before = workspace.settings.clone();
         let disk_before = fs::read(directory.path("data/settings.yaml")).unwrap();
@@ -1387,10 +1384,8 @@ mod tests {
     fn complete_device_setup_allows_multiple_devices_to_share_one_profile() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let a =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SHARED-A").unwrap();
-        let b =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SHARED-B").unwrap();
+        let a = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SHARED-A").unwrap();
+        let b = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SHARED-B").unwrap();
         workspace.enroll_device(a.clone()).unwrap();
         workspace.enroll_device(b.clone()).unwrap();
         let assignment = RuntimeAssignment {

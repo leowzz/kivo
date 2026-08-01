@@ -1204,11 +1204,8 @@ mod tests {
             Arc::clone(&state.workspace),
         );
         coordinator.scan_once().unwrap();
-        let id = hardware::DeviceId::new(
-            crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
-            "SAVE-A",
-        )
-        .unwrap();
+        let id = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
+            .unwrap();
         state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
 
         let snapshot = retry_candidate_inner(&state, &id).unwrap();
@@ -1217,11 +1214,8 @@ mod tests {
             candidate.device_id.as_ref() == Some(&id)
                 && candidate.issue == coordinator::CandidateIssue::FirmwareNotResponding
         }));
-        let missing = hardware::DeviceId::new(
-            crate::hardware::VCCGND_YD_RP2040_BOARD_ID,
-            "MISSING",
-        )
-        .unwrap();
+        let missing =
+            hardware::DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "MISSING").unwrap();
         assert_eq!(
             retry_candidate_inner(&state, &missing).unwrap_err().code,
             "candidate_not_found"
@@ -1325,8 +1319,7 @@ mod tests {
         };
 
         let completed =
-            complete_device_setup_inner(&state, &a, "Setup A".into(), assignment.clone())
-                .unwrap();
+            complete_device_setup_inner(&state, &a, "Setup A".into(), assignment.clone()).unwrap();
         assert_eq!(
             state.workspace.read().unwrap().settings.devices[&a].name,
             "Setup A"

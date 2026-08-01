@@ -1751,10 +1751,8 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let a =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "RETRY-A").unwrap();
-        let b =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "RETRY-B").unwrap();
+        let a = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "RETRY-A").unwrap();
+        let b = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "RETRY-B").unwrap();
         assert!(
             coordinator
                 .candidates()
@@ -1790,8 +1788,7 @@ mod tests {
     #[test]
     fn retry_candidate_rejects_missing_and_duplicate_identity() {
         let (_directory, enumerator, _launcher, mut coordinator) = harness();
-        let missing =
-            DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "MISSING").unwrap();
+        let missing = DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "MISSING").unwrap();
         assert_eq!(
             coordinator.retry_candidate(&missing).unwrap_err(),
             "candidate_not_found"
