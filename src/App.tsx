@@ -670,11 +670,11 @@ export default function App() {
       </header>
 
       {error && (
-        <div className="error-banner" role="alert">
-          {error}
+        <div className="error-toast" role="alert">
+          <span className="error-banner">{error}</span>
           <button className="icon-button" type="button" aria-label={t(language, "common.close")} onClick={() => {
             setError(null);
-          }}><X size={16} /></button>
+          }}><X size={15} /></button>
         </div>
       )}
 
@@ -712,32 +712,43 @@ export default function App() {
             <div className="data-page">
               <div className="content-heading"><div><h2>{t(language, "nav.data")}</h2></div></div>
               <div className="data-page-body">
-                <label className="model-picker"><span>{t(language, "model.select")}</span><select
-                  aria-label={t(language, "model.select")}
-                  value={editorProfile ?? ""}
-                  disabled={!loaded || deviceProfiles.length === 0}
-                  onChange={(event) => void run(t(language, "error.save"), () => saveSettings(event.target.value, language))}
-                >
-                  {deviceProfiles.length === 0 && <option value="">{t(language, "model.empty")}</option>}
-                  {deviceProfiles.map((profile) => <option value={profile.profile.id} key={profile.profile.id}>{profile.profile.name}</option>)}
-                </select></label>
-                <div className="data-menu">
-            <button type="button" onClick={() => void chooseImport()}><FileInput size={16} />{t(language, "nav.import")}</button>
-            <button type="button" disabled={!editorProfileConfig} onClick={() => void run(t(language, "error.export"), async () => {
-              await autosave.flush();
-              const path = await saveFile({ defaultPath: `${editorProfileConfig?.profile.id ?? "device-profile"}.yaml`, filters: [{ name: "Kivo", extensions: ["yaml"] }] });
-              if (path && editorProfileConfig) await invoke("export_device_profile", { id: editorProfileConfig.profile.id, path });
-            })}><Upload size={16} />{t(language, "nav.export")}</button>
-            <button type="button" disabled={deviceProfiles.length === 0} onClick={() => void run(t(language, "error.export"), async () => {
-              await autosave.flush();
-              const path = await saveFile({ defaultPath: "kivo-backup.yaml", filters: [{ name: "Kivo", extensions: ["yaml"] }] });
-              if (path) await invoke("export_backup", { path });
-            })}><DatabaseBackup size={16} />{t(language, "nav.backup")}</button>
-            <button type="button" onClick={() => void chooseRestore()}><ArchiveRestore size={16} />{t(language, "nav.restore")}</button>
-            <button className="is-danger" type="button" disabled={!editorProfileConfig} onClick={() => editorProfileConfig && setConfirmation({ kind: "delete", profile: editorProfileConfig })}>
-              <Trash2 size={16} />{t(language, "nav.delete")}
-            </button>
-                </div>
+                <section className="data-card">
+                  <h3>{t(language, "data.groupModel")}</h3>
+                  <label className="model-picker"><span>{t(language, "model.select")}</span><select
+                    aria-label={t(language, "model.select")}
+                    value={editorProfile ?? ""}
+                    disabled={!loaded || deviceProfiles.length === 0}
+                    onChange={(event) => void run(t(language, "error.save"), () => saveSettings(event.target.value, language))}
+                  >
+                    {deviceProfiles.length === 0 && <option value="">{t(language, "model.empty")}</option>}
+                    {deviceProfiles.map((profile) => <option value={profile.profile.id} key={profile.profile.id}>{profile.profile.name}</option>)}
+                  </select></label>
+                </section>
+                <section className="data-card">
+                  <h3>{t(language, "data.groupTransfer")}</h3>
+                  <div className="data-menu">
+                    <button type="button" onClick={() => void chooseImport()}><FileInput size={16} />{t(language, "nav.import")}</button>
+                    <button type="button" disabled={!editorProfileConfig} onClick={() => void run(t(language, "error.export"), async () => {
+                      await autosave.flush();
+                      const path = await saveFile({ defaultPath: `${editorProfileConfig?.profile.id ?? "device-profile"}.yaml`, filters: [{ name: "Kivo", extensions: ["yaml"] }] });
+                      if (path && editorProfileConfig) await invoke("export_device_profile", { id: editorProfileConfig.profile.id, path });
+                    })}><Upload size={16} />{t(language, "nav.export")}</button>
+                    <button type="button" disabled={deviceProfiles.length === 0} onClick={() => void run(t(language, "error.export"), async () => {
+                      await autosave.flush();
+                      const path = await saveFile({ defaultPath: "kivo-backup.yaml", filters: [{ name: "Kivo", extensions: ["yaml"] }] });
+                      if (path) await invoke("export_backup", { path });
+                    })}><DatabaseBackup size={16} />{t(language, "nav.backup")}</button>
+                    <button type="button" onClick={() => void chooseRestore()}><ArchiveRestore size={16} />{t(language, "nav.restore")}</button>
+                  </div>
+                </section>
+                <section className="data-card is-danger">
+                  <h3>{t(language, "data.groupDanger")}</h3>
+                  <div className="data-menu">
+                    <button className="is-danger" type="button" disabled={!editorProfileConfig} onClick={() => editorProfileConfig && setConfirmation({ kind: "delete", profile: editorProfileConfig })}>
+                      <Trash2 size={16} />{t(language, "nav.delete")}
+                    </button>
+                  </div>
+                </section>
               </div>
             </div>
           ) : view === "devices" ? (
@@ -830,6 +841,7 @@ export default function App() {
             <>
               <div className="content-heading">
                 <div><span>{editorProfileConfig.profile.name}</span><h2>{t(language, view === "layout" ? "layout.title" : "behavior.title")}</h2></div>
+                {view === "behavior" && selectedButton && <span className="selected-crumb">{t(language, "behavior.selected", { label: selectedButton.label })}</span>}
                 {view === "layout" && <button className="primary-button" type="button" onClick={() => setLayoutEditorOpen(true)}><LayoutGrid size={16} />{t(language, "layout.edit")}</button>}
               </div>
               <div className="keypad-stage">

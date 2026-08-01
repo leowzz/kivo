@@ -1,4 +1,4 @@
-import { Copy, Pencil, Plus, Radio, SquareStop, Trash2 } from "lucide-react";
+import { Cable, Copy, LayoutGrid, Pencil, Plus, Radio, SquareStop, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { editablePins as selectEditablePins } from "./deviceStatus";
@@ -306,7 +306,11 @@ export function HardwareMapping({
             {hardware.inputs.map((source, sourceIndex) => (
               <section className="source-editor" key={`${source.type}-${source.id}`}>
                 <div className="source-heading">
-                  <div><strong>{sourceName(language, source)}</strong><code>{source.id}</code></div>
+                  <div>
+                    {source.type === "direct" ? <Cable size={14} /> : <LayoutGrid size={14} />}
+                    <strong>{sourceName(language, source)}</strong>
+                    <code>{source.id}</code>
+                  </div>
                   <button className="icon-button is-danger" type="button" aria-label={t(language, "hardware.removeSource")} title={t(language, "hardware.removeSource")} onClick={() => replaceHardware({
                     ...hardware,
                     inputs: hardware.inputs.filter((_, index) => index !== sourceIndex),
@@ -429,8 +433,12 @@ export function HardwareMapping({
           </div>
 
           <details className="learning-panel">
-            <summary>{t(language, "hardware.advanced")}</summary>
-            <div className="learning-controls">
+            <summary>
+              <Radio size={15} />
+              <span>{t(language, "hardware.advanced")}</span>
+              <small>{t(language, "hardware.advancedHint")}</small>
+            </summary>
+            <div className={learning ? "learning-controls is-learning" : "learning-controls"}>
               <label className="field-stack compact-field">
                 <span>{t(language, "hardware.onlineDevice")}</span>
                 <select aria-label={t(language, "hardware.onlineDevice")} value={selectedDevice?.deviceId ?? ""} onChange={(event) => setSelectedDeviceId(event.target.value)}>

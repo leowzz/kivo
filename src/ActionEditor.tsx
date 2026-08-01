@@ -91,10 +91,12 @@ export function ActionEditor({ language, button, actions, onChange }: ActionEdit
         {actions.length === 0 && (
           <div className="panel-empty">{t(language, "behavior.noActions")}</div>
         )}
-        {actions.map((action, index) => (
+        {actions.map((action, index) => {
+          const TypeIcon = action.type === "paste" ? TextCursorInput : Keyboard;
+          return (
           <section className="action-item" key={`${action.type}-${index}`}>
             <div className="action-item-header">
-              <span>{index + 1}. {t(language, action.type === "paste" ? "behavior.paste" : "behavior.hotkey")}</span>
+              <span><TypeIcon size={13} aria-hidden="true" />{index + 1}. {t(language, action.type === "paste" ? "behavior.paste" : "behavior.hotkey")}</span>
               <div className="icon-row">
                 <button
                   className="icon-button"
@@ -185,7 +187,8 @@ export function ActionEditor({ language, button, actions, onChange }: ActionEdit
               </div>
             )}
           </section>
-        ))}
+          );
+        })}
       </div>
 
       <div className="add-actions" aria-label={t(language, "behavior.add")}>

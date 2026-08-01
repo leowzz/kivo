@@ -12,7 +12,7 @@ import type {
   ModelLayout,
 } from "./types";
 
-const appCss = readFileSync("src/App.css", "utf8");
+const viewCss = readFileSync("src/styles/views.css", "utf8");
 
 const layout: ModelLayout = {
   id: "desk-phone",
@@ -521,10 +521,10 @@ test("renders and rejects matrix endpoints missing from source pins until repair
 });
 
 test("stacks the Hardware Profile toolbar at compact widths", () => {
-  expect(appCss).toMatch(
+  expect(viewCss).toMatch(
     /@media \(max-width: 680px\)[\s\S]*?\.hardware-toolbar\s*\{[^}]*flex-wrap:\s*wrap[^}]*\}/,
   );
-  expect(appCss).toMatch(
+  expect(viewCss).toMatch(
     /@media \(max-width: 680px\)[\s\S]*?\.hardware-toolbar > label\s*\{[^}]*min-width:\s*0[^}]*\}/,
   );
 });
