@@ -155,6 +155,7 @@ source = { virtual = "." }
 dev = [
     { name = "pip" },
     { name = "platformio" },
+    { name = "prompt-toolkit" },
     { name = "pyserial" },
     { name = "pytest" },
 ]
@@ -165,6 +166,7 @@ dev = [
 dev = [
     { name = "pip", specifier = ">=25,<26" },
     { name = "platformio", specifier = ">=6.1,<7" },
+    { name = "prompt-toolkit", specifier = ">=3.0,<4" },
     { name = "pyserial", specifier = ">=3.5,<4" },
     { name = "pytest", specifier = ">=8,<9" },
 ]
@@ -231,6 +233,18 @@ source = { registry = "https://mirrors.pku.edu.cn/pypi/web/simple" }
 sdist = { url = "https://mirrors.pku.edu.cn/pypi/web/packages/f9/e2/3e91f31a7d2b083fe6ef3fa267035b518369d9511ffab804f839851d2779/pluggy-1.6.0.tar.gz", hash = "sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3" }
 wheels = [
     { url = "https://mirrors.pku.edu.cn/pypi/web/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746" },
+]
+
+[[package]]
+name = "prompt-toolkit"
+version = "3.0.53"
+source = { registry = "https://mirrors.pku.edu.cn/pypi/web/simple" }
+dependencies = [
+    { name = "wcwidth" },
+]
+sdist = { url = "https://mirrors.pku.edu.cn/pypi/web/packages/7d/ea/39b988c938f75cb75d7045b5c69f8bfed47ee2152c8837fb403de29d6fb8/prompt_toolkit-3.0.53.tar.gz", hash = "sha256:9ec8a0ad96d5c56148b3f914aa79c1564c3fde5d2e6b876e7bc327e353cf8fa6" }
+wheels = [
+    { url = "https://mirrors.pku.edu.cn/pypi/web/packages/54/6f/84908cad2d6aa5144abcf7b42709fe4fdb459bc640ec7ac5786e7693dabc/prompt_toolkit-3.0.53-py3-none-any.whl", hash = "sha256:01c0891d7f9237d5e339f7d3e42cdae80b7534abb1c7c0e3352efba6231492f2" },
 ]
 
 [[package]]
@@ -341,6 +355,15 @@ dependencies = [
 sdist = { url = "https://mirrors.pku.edu.cn/pypi/web/packages/c3/d1/8f3c683c9561a4e6689dd3b1d345c815f10f86acd044ee1fb9a4dcd0b8c5/uvicorn-0.40.0.tar.gz", hash = "sha256:839676675e87e73694518b5574fd0f24c9d97b46bea16df7b8c05ea1a51071ea" }
 wheels = [
     { url = "https://mirrors.pku.edu.cn/pypi/web/packages/3d/d8/2083a1daa7439a66f3a48589a57d576aa117726762618f6bb09fe3798796/uvicorn-0.40.0-py3-none-any.whl", hash = "sha256:c6c8f55bc8bf13eb6fa9ff87ad62308bbbc33d0b67f84293151efe87e0d5f2ee" },
+]
+
+[[package]]
+name = "wcwidth"
+version = "0.8.2"
+source = { registry = "https://mirrors.pku.edu.cn/pypi/web/simple" }
+sdist = { url = "https://mirrors.pku.edu.cn/pypi/web/packages/34/74/c6428f875774288bec1396f5bfcbc2d925700a4dad61727fd5f2b12f249d/wcwidth-0.8.2.tar.gz", hash = "sha256:91fbef97204b96a3d4d421609b80340b760cf33e26da123ff243d76b1fda8dda" }
+wheels = [
+    { url = "https://mirrors.pku.edu.cn/pypi/web/packages/96/42/3e5985a0a7e57de470b320c6d6a1a67c844f6737a587f3d44dd13d1819e7/wcwidth-0.8.2-py3-none-any.whl", hash = "sha256:d63947694a0539a1d51e01eda7caf800c291020e6cdd7e28ad7b14dd33ad4f85" },
 ]
 
 [[package]]
