@@ -1,0 +1,165 @@
+import os
+from pathlib import Path
+import subprocess
+
+import pytest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def run_make(
+    tmp_path: Path,
+    target: str,
+    *,
+    serial: str | None = None,
+    selected_serial: str = "SELECTED-SERIAL",
+    runtime_serial: str | None = None,
+    selector_exit: int = 0,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    log_path = tmp_path / "uv.log"
+    fake_uv = tmp_path / "fake-uv"
+    fake_uv.write_text(
+        """#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "$KIVO_TEST_LOG"
+case " $* " in
+  *" scripts/select_firmware_target.py "*)
+    if [ "$KIVO_SELECTOR_EXIT" -ne 0 ]; then
+      exit "$KIVO_SELECTOR_EXIT"
+    fi
+    printf '%s\\n' "$KIVO_SELECTOR_SERIAL"
+    ;;
+  *" scripts/enter_download_mode.py "*)
+    printf '%s\\n' "/dev/fake-download"
+    ;;
+  *" scripts/upload_rp2040.py "*)
+    printf '%s\\n' "$KIVO_RUNTIME_SERIAL"
+    ;;
+esac
+"""
+    )
+    fake_uv.chmod(0o755)
+    environment = os.environ | {
+        "KIVO_TEST_LOG": str(log_path),
+        "KIVO_SELECTOR_SERIAL": selected_serial,
+        "KIVO_RUNTIME_SERIAL": runtime_serial or selected_serial,
+        "KIVO_SELECTOR_EXIT": str(selector_exit),
+    }
+    command = ["make", target, f"UV={fake_uv}", "BUILD_ID=test-build"]
+    if serial is not None:
+        command.append(f"SERIAL={serial}")
+
+    result = subprocess.run(
+        command,
+        cwd=ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    invocations = log_path.read_text().splitlines() if log_path.exists() else []
+    return result, invocations
+
+
+def test_explicit_serial_bypasses_selector_and_reaches_rp2040_tools(
+    tmp_path: Path,
+) -> None:
+    result, invocations = run_make(
+        tmp_path,
+        "upload-rp2040",
+        serial="EXPLICIT-SERIAL",
+        selected_serial="EXPLICIT-SERIAL",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not any("select_firmware_target.py" in line for line in invocations)
+    assert any("pio run -e rp2040" in line for line in invocations)
+    assert any(
+        "scripts/upload_rp2040.py" in line
+        and "--serial EXPLICIT-SERIAL" in line
+        and "--firmware .pio/build/rp2040/firmware.uf2" in line
+        for line in invocations
+    )
+    assert any(
+        "verify_runtime_firmware.py" in line and "--serial EXPLICIT-SERIAL" in line
+        for line in invocations
+    )
+
+
+def test_selector_failure_stops_before_build_or_upload(tmp_path: Path) -> None:
+    result, invocations = run_make(
+        tmp_path,
+        "upload-rp2040",
+        selector_exit=130,
+    )
+
+    assert result.returncode != 0
+    assert len(invocations) == 1
+    assert "select_firmware_target.py" in invocations[0]
+
+
+def test_bootsel_selection_verifies_with_the_resolved_runtime_serial(
+    tmp_path: Path,
+) -> None:
+    result, invocations = run_make(
+        tmp_path,
+        "upload-rp2040",
+        selected_serial="BOOTSEL-SERIAL",
+        runtime_serial="RUNTIME-SERIAL",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert any(
+        "scripts/upload_rp2040.py" in line and "--serial BOOTSEL-SERIAL" in line
+        for line in invocations
+    )
+    assert any(
+        "verify_runtime_firmware.py" in line and "--serial RUNTIME-SERIAL" in line
+        for line in invocations
+    )
+
+
+@pytest.mark.parametrize(
+    ("target", "selector_arguments", "build_invocation", "upload_invocation"),
+    [
+        (
+            "upload-rp2040",
+            "--board vccgnd-yd-rp2040 --mode runtime --mode bootloader",
+            "pio run -e rp2040",
+            "scripts/upload_rp2040.py",
+        ),
+        (
+            "upload-esp32s3",
+            "--board luatos-esp32s3-aio --mode runtime",
+            "pio run -e esp32s3",
+            "pio run -e esp32s3 -t upload",
+        ),
+    ],
+)
+def test_selected_serial_flows_through_build_upload_and_verification(
+    tmp_path: Path,
+    target: str,
+    selector_arguments: str,
+    build_invocation: str,
+    upload_invocation: str,
+) -> None:
+    result, invocations = run_make(tmp_path, target)
+
+    assert result.returncode == 0, result.stderr
+    assert selector_arguments in invocations[0]
+    build_index = next(
+        index
+        for index, line in enumerate(invocations)
+        if build_invocation in line and "-t upload" not in line
+    )
+    upload_index = next(
+        index for index, line in enumerate(invocations) if upload_invocation in line
+    )
+    verify_index = next(
+        index
+        for index, line in enumerate(invocations)
+        if "verify_runtime_firmware.py" in line
+        and "--serial SELECTED-SERIAL" in line
+    )
+    assert 0 < build_index < upload_index < verify_index

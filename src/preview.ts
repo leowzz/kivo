@@ -1,41 +1,273 @@
-import telLayout from "../models/prod/tel001.json";
-import type { AppSnapshot, ModelConfig } from "./types";
+import telLayout from "../models/tel001.json";
+import type {
+  AppSnapshot,
+  CreateDeviceProfileRequest,
+  DeviceProfile,
+} from "./types";
 
-const model: ModelConfig = {
-  schema_version: 1,
-  model: telLayout,
-  hardware: {
-    controller: "esp32s3",
-    debounce_ms: 30,
-    inputs: [
-      { type: "direct", id: "function-keys", keys: { UP: 6, DOWN: 7, DEL: 8 } },
-      {
-        type: "contact_matrix",
-        id: "carbon-keypad",
-        pins: [1, 2, 3, 12, 13, 14, 15],
-        keys: {
-          DIGIT_1: [1, 12], DIGIT_2: [1, 13], DIGIT_3: [1, 14],
-          DIGIT_4: [2, 12], DIGIT_5: [2, 13], DIGIT_6: [2, 14],
-          DIGIT_7: [3, 12], DIGIT_8: [3, 13], DIGIT_9: [3, 14],
-          STAR: [1, 15], DIGIT_0: [2, 15], HASH: [3, 15],
+const esp32SafePins = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18];
+const rp2040SafePins = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
+
+const phoneProfile: DeviceProfile = {
+  schema_version: 2,
+  profile: telLayout,
+  hardware_profiles: [
+    {
+      id: "phone-esp-front-desk",
+      name: "前台 ESP32-S3 接线",
+      board_profile_id: "luatos-esp32s3-aio",
+      debounce_ms: 30,
+      inputs: [
+        { type: "direct", id: "function-keys", keys: { UP: 6, DOWN: 7, DEL: 8 } },
+        {
+          type: "contact_matrix",
+          id: "carbon-keypad",
+          pins: [1, 2, 3, 12, 13, 14, 15],
+          keys: {
+            DIGIT_1: [1, 12], DIGIT_2: [1, 13], DIGIT_3: [1, 14],
+            DIGIT_4: [2, 12], DIGIT_5: [2, 13], DIGIT_6: [2, 14],
+            DIGIT_7: [3, 12], DIGIT_8: [3, 13], DIGIT_9: [3, 14],
+            STAR: [1, 15], DIGIT_0: [2, 15], HASH: [3, 15],
+          },
         },
-      },
-    ],
-  },
+      ],
+    },
+    {
+      id: "phone-rp-workbench",
+      name: "工作台 RP2040 接线",
+      board_profile_id: "vccgnd-yd-rp2040",
+      debounce_ms: 25,
+      inputs: [{ type: "direct", id: "workbench-keys", keys: { UP: 6, DOWN: 7, DEL: 8 } }],
+    },
+  ],
   actions: {
     DIGIT_2: [{ type: "paste", text: "你好" }, { type: "hotkey", keys: ["enter"] }],
     SPEAKER: [{ type: "hotkey", keys: ["cmd", "shift", "k"] }],
   },
 };
 
+const operatorProfile: DeviceProfile = {
+  schema_version: 2,
+  profile: {
+    ...telLayout,
+    id: "operator-console",
+    name: "接线员控制台",
+  },
+  hardware_profiles: [
+    {
+      id: "operator-esp-backup",
+      name: "备用 ESP32-S3 接线",
+      board_profile_id: "luatos-esp32s3-aio",
+      debounce_ms: 35,
+      inputs: [{ type: "direct", id: "operator-shortcuts", keys: { UP: 4, DOWN: 5, DEL: 6 } }],
+    },
+    {
+      id: "operator-rp-primary",
+      name: "主控 RP2040 接线",
+      board_profile_id: "vccgnd-yd-rp2040",
+      debounce_ms: 30,
+      inputs: [{ type: "direct", id: "operator-shortcuts", keys: { UP: 18, DOWN: 19, DEL: 20 } }],
+    },
+  ],
+  actions: {
+    UP: [{ type: "hotkey", keys: ["cmd", "up"] }],
+    DOWN: [{ type: "hotkey", keys: ["cmd", "down"] }],
+  },
+};
+
+function asciiSlug(value: string) {
+  return value
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .toLowerCase();
+}
+
+function nextProfileId(
+  profiles: DeviceProfile[],
+  name: string,
+  fallback: string,
+) {
+  const existing = new Set(profiles.map((profile) => profile.profile.id));
+  const base = asciiSlug(name) || asciiSlug(fallback) || "profile";
+  if (!existing.has(base)) return base;
+  for (let suffix = 2; ; suffix += 1) {
+    const candidate = `${base}-${suffix}`;
+    if (!existing.has(candidate)) return candidate;
+  }
+}
+
+export function createPreviewDeviceProfile(
+  snapshot: AppSnapshot,
+  request: CreateDeviceProfileRequest,
+): AppSnapshot {
+  const name = request.name.trim();
+  if (!name) throw new Error("invalid_profile_name");
+
+  let fallback: string;
+  let profile: DeviceProfile;
+  if (request.kind === "clone") {
+    const source = snapshot.deviceProfiles.find(
+      (item) => item.profile.id === request.source_profile_id,
+    );
+    if (!source) throw new Error("unknown_profile");
+    fallback = source.profile.id;
+    profile = structuredClone(source);
+  } else {
+    if (
+      !snapshot.boardProfiles.some(
+        (board) => board.id === request.board_profile_id,
+      )
+    ) {
+      throw new Error("unknown_board_profile");
+    }
+    fallback = request.board_profile_id;
+    profile = {
+      schema_version: 2,
+      profile: { id: "", name, groups: [] },
+      hardware_profiles: [
+        {
+          id: "hardware",
+          name: "Default hardware",
+          board_profile_id: request.board_profile_id,
+          debounce_ms: 30,
+          inputs: [],
+        },
+      ],
+      actions: {},
+    };
+  }
+
+  const id = nextProfileId(snapshot.deviceProfiles, name, fallback);
+  profile.profile = { ...profile.profile, id, name };
+  return {
+    ...snapshot,
+    deviceProfiles: [...snapshot.deviceProfiles, profile],
+    editorProfile: id,
+  };
+}
+
 export const previewSnapshot: AppSnapshot = {
-  models: [model],
-  activeModel: model.model.id,
+  deviceProfiles: [phoneProfile, operatorProfile],
+  editorProfile: phoneProfile.profile.id,
+  boardProfiles: [
+    {
+      id: "luatos-esp32s3-aio",
+      controllerFamilyId: "esp32s3",
+      displayName: "LuatOS ESP32-S3 AIO",
+      runtimeUsb: "303a:4002",
+      bootloaderUsb: null,
+      safePins: esp32SafePins,
+    },
+    {
+      id: "vccgnd-yd-rp2040",
+      controllerFamilyId: "rp2040",
+      displayName: "VCC-GND YD-RP2040",
+      runtimeUsb: "2e8a:102e",
+      bootloaderUsb: "2e8a:0003",
+      safePins: rp2040SafePins,
+    },
+  ],
+  devices: [
+    {
+      deviceId: "18:luatos-esp32s3-aioABCDEF123456",
+      name: "前台电话键盘",
+      connection: "online",
+      mode: "runtime",
+      identity: "valid",
+      assignment: "valid",
+      runtime: "ready",
+      hardwareSerial: "ABCDEF123456",
+      port: "/dev/cu.usbmodem-esp-front",
+      controllerFamilyId: "esp32s3",
+      boardProfileId: "luatos-esp32s3-aio",
+      firmwareBuildId: "esp32s3-20260731-a1",
+      capabilities: esp32SafePins,
+      runtimeAssignment: {
+        device_profile_id: "tel001",
+        hardware_profile_id: "phone-esp-front-desk",
+      },
+      latestError: null,
+      learning: null,
+    },
+    {
+      deviceId: "18:luatos-esp32s3-aio654321FEDCBA",
+      name: "备用电话键盘",
+      connection: "offline",
+      mode: null,
+      identity: "valid",
+      assignment: "valid",
+      runtime: "inactive",
+      hardwareSerial: "654321FEDCBA",
+      port: null,
+      controllerFamilyId: "esp32s3",
+      boardProfileId: "luatos-esp32s3-aio",
+      firmwareBuildId: null,
+      capabilities: [],
+      runtimeAssignment: {
+        device_profile_id: "operator-console",
+        hardware_profile_id: "operator-esp-backup",
+      },
+      latestError: null,
+      learning: null,
+    },
+    {
+      deviceId: "16:vccgnd-yd-rp2040E0C9125B0D9B",
+      name: "工作台键盘",
+      connection: "online",
+      mode: "runtime",
+      identity: "valid",
+      assignment: "invalid_assignment",
+      runtime: "inactive",
+      hardwareSerial: "E0C9125B0D9B",
+      port: "/dev/cu.usbmodem-rp-workbench",
+      controllerFamilyId: "rp2040",
+      boardProfileId: "vccgnd-yd-rp2040",
+      firmwareBuildId: "rp2040-20260731-b2",
+      capabilities: rp2040SafePins,
+      runtimeAssignment: {
+        device_profile_id: "tel001",
+        hardware_profile_id: "missing-rp-wiring",
+      },
+      latestError: null,
+      learning: null,
+    },
+    {
+      deviceId: "16:vccgnd-yd-rp2040E0C9125B0E17",
+      name: "主控快捷键盘",
+      connection: "online",
+      mode: "runtime",
+      identity: "valid",
+      assignment: "valid",
+      runtime: "ready",
+      hardwareSerial: "E0C9125B0E17",
+      port: "/dev/cu.usbmodem-rp-primary",
+      controllerFamilyId: "rp2040",
+      boardProfileId: "vccgnd-yd-rp2040",
+      firmwareBuildId: "rp2040-20260731-b2",
+      capabilities: rp2040SafePins,
+      runtimeAssignment: {
+        device_profile_id: "operator-console",
+        hardware_profile_id: "operator-rp-primary",
+      },
+      latestError: null,
+      learning: null,
+    },
+  ],
+  candidates: [
+    {
+      key: "bootloader:1:7",
+      deviceId: null,
+      mode: "bootloader",
+      identity: "invalid_identity",
+      issue: "invalid_identity",
+      rawSerial: null,
+      port: null,
+      controllerFamilyId: "rp2040",
+      boardProfileId: "vccgnd-yd-rp2040",
+      latestError: null,
+    },
+  ],
   language: "zh-CN",
-  supportedGpios: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18],
-  connection: { state: "searching", port: null },
-  runtimeError: null,
-  learning: null,
   homeMetrics: {
     totalPresses: 182,
     todayPresses: 42,
@@ -51,8 +283,26 @@ export const previewSnapshot: AppSnapshot = {
       { buttonId: "DIGIT_2", day: "2026-07-30", presses: 42 },
     ],
     logs: [
-      { timestampMs: 1785396000000, kind: "button", message: "DIGIT_2 pressed" },
-      { timestampMs: 1785395940000, kind: "device", message: "Device connected" },
+      {
+        timestampMs: 1785396000000,
+        kind: "button",
+        message: "DIGIT_2 pressed",
+        deviceId: "18:luatos-esp32s3-aioABCDEF123456",
+        deviceName: "前台电话键盘",
+        deviceProfileId: "tel001",
+        hardwareProfileId: "phone-esp-front-desk",
+        buttonId: "DIGIT_2",
+      },
+      {
+        timestampMs: 1785395940000,
+        kind: "device",
+        message: "Device connected",
+        deviceId: "16:vccgnd-yd-rp2040E0C9125B0E17",
+        deviceName: "主控快捷键盘",
+        deviceProfileId: "operator-console",
+        hardwareProfileId: "operator-rp-primary",
+        buttonId: null,
+      },
     ],
   },
 };

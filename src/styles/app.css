@@ -15,6 +15,13 @@
 @keyframes pulse-dot { 0%, 100% { box-shadow: 0 0 0 0 rgba(23, 116, 87, .35); } 50% { box-shadow: 0 0 0 4px rgba(23, 116, 87, 0); } }
 .connection code { max-width: 280px; overflow: hidden; text-overflow: ellipsis; color: var(--gray-9); font-size: var(--text-11); white-space: nowrap; }
 
+.device-summary { justify-self: start; height: 32px; display: flex; align-items: center; gap: 9px; padding: 0 var(--space-16); color: var(--gray-10); font-size: var(--text-12); white-space: nowrap; }
+.device-summary span { min-width: 76px; display: flex; align-items: center; gap: 6px; }
+.device-summary b { color: var(--gray-7); font-weight: var(--weight-regular); }
+.device-summary i { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--gray-8); }
+.device-summary .summary-ready i { background: var(--green-9); }
+.device-summary .summary-attention i { background: var(--amber-text); }
+
 .save-state { min-width: 130px; display: flex; align-items: center; justify-content: flex-end; padding-right: var(--space-16); color: var(--gray-9); font-size: var(--text-12); }
 .save-state.is-saving::before { content: ""; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--gray-8); animation: pulse-dot 1.2s ease-in-out infinite; }
 .save-state.is-error { color: var(--red-text); }
@@ -22,16 +29,16 @@
 
 /* ===== 侧栏 200px ===== */
 .sidebar { min-height: 0; display: flex; flex-direction: column; padding: var(--space-12) 10px; border-right: 1px solid var(--border-subtle); background: var(--bg-app); }
-.home-nav-button, .sidebar nav button, .data-nav-button {
+.home-nav-button, .devices-nav-button, .sidebar nav button, .data-nav-button {
   position: relative; width: 100%; min-height: 34px; display: flex; align-items: center; gap: 9px;
   border: 0; border-radius: var(--radius-8); padding: 7px 10px;
   color: var(--gray-11); background: transparent; text-align: left; font-size: var(--text-13);
   transition: background .12s ease;
 }
-.home-nav-button:hover, .sidebar nav button:hover, .data-nav-button:hover { background: var(--gray-3); }
-.home-nav-button.is-active, .sidebar nav button.is-active, .data-nav-button.is-active { color: var(--green-11); background: var(--green-3); font-weight: var(--weight-semibold); }
+.home-nav-button:hover, .devices-nav-button:hover, .sidebar nav button:hover, .data-nav-button:hover { background: var(--gray-3); }
+.home-nav-button.is-active, .devices-nav-button.is-active, .sidebar nav button.is-active, .data-nav-button.is-active { color: var(--green-11); background: var(--green-3); font-weight: var(--weight-semibold); }
 /* 激活态左侧 3px 指示条 */
-.home-nav-button.is-active::before, .sidebar nav button.is-active::before, .data-nav-button.is-active::before {
+.home-nav-button.is-active::before, .devices-nav-button.is-active::before, .sidebar nav button.is-active::before, .data-nav-button.is-active::before {
   content: ""; position: absolute; left: -10px; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--green-9);
 }
 .sidebar nav { display: grid; gap: 2px; margin-top: var(--space-12); padding-top: var(--space-12); border-top: 1px solid var(--border-subtle); }
@@ -51,13 +58,13 @@
 
 
 /* ===== 通用按钮 ===== */
-.add-actions button, .source-actions button, .primary-button, .confirm-actions button, .layout-add-button, .learning-button, .empty-workspace button {
+.add-actions button, .source-actions button, .primary-button, .confirm-actions button, .layout-add-button, .learning-button, .empty-workspace button, .candidate-actions button, .device-setup-actions button, .profile-create-actions button, .device-list-command, .setup-command {
   min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   border: 1px solid var(--border-strong); border-radius: var(--radius-8); padding: 6px 12px;
   background: var(--bg-surface); font-size: var(--text-12); font-weight: var(--weight-medium);
   box-shadow: var(--shadow-1); transition: box-shadow .15s ease, border-color .15s ease, background .12s ease;
 }
-.add-actions button:hover, .source-actions button:hover, .confirm-actions button:hover, .layout-add-button:hover, .learning-button:hover, .empty-workspace button:hover { border-color: var(--gray-7); box-shadow: var(--shadow-2); }
+.add-actions button:hover, .source-actions button:hover, .confirm-actions button:hover, .layout-add-button:hover, .learning-button:hover, .empty-workspace button:hover, .candidate-actions button:hover, .device-setup-actions button:hover, .profile-create-actions button:hover, .device-list-command:hover, .setup-command:hover { border-color: var(--gray-7); box-shadow: var(--shadow-2); }
 .primary-button { border-color: var(--green-9) !important; color: #fff; background: var(--green-9) !important; }
 .primary-button:hover { background: var(--green-10) !important; }
 .danger-button { border-color: var(--red-strong) !important; color: #fff; background: var(--red-strong) !important; }
@@ -100,15 +107,15 @@
 @media (max-width: 680px) {
   .product-shell { grid-template-rows: auto minmax(0, 1fr); }
   .topbar { min-height: 48px; grid-template-columns: 120px 1fr; }
-  .connection { justify-self: end; margin-left: 0; margin-right: var(--space-12); }
-  .connection code { display: none; }
+  .device-summary { justify-self: end; gap: 5px; padding: 0 var(--space-12); font-size: var(--text-11); }
+  .device-summary span { min-width: auto; }
   .save-state { grid-column: 1 / -1; min-height: 0; padding: 0 var(--space-12) 6px; }
   .product-workspace { display: block; }
   .sidebar { display: grid; grid-template-columns: 1fr; border-right: 0; border-bottom: 1px solid var(--border-subtle); }
-  .home-nav-button { width: auto; }
+  .home-nav-button, .devices-nav-button { width: auto; }
   .sidebar nav { display: flex; overflow-x: auto; margin-top: 10px; padding-top: 10px; border-top: 0; }
   .sidebar nav > span { display: none; }
   .sidebar nav button, .data-nav-button { flex: 0 0 auto; width: auto; white-space: nowrap; }
-  .home-nav-button.is-active::before, .sidebar nav button.is-active::before, .data-nav-button.is-active::before { left: 10px; right: 10px; top: auto; bottom: 0; width: auto; height: 3px; }
+  .home-nav-button.is-active::before, .devices-nav-button.is-active::before, .sidebar nav button.is-active::before, .data-nav-button.is-active::before { left: 10px; right: 10px; top: auto; bottom: 0; width: auto; height: 3px; }
   .content-panel { min-height: 480px; }
 }

@@ -3,11 +3,12 @@
 #include <algorithm>
 #include <vector>
 
-GpioTriggerController::GpioTriggerController(std::uint32_t) {}
+GpioTriggerController::GpioTriggerController(const BoardProfile &profile,
+                                             std::uint32_t)
+    : profile_(profile) {}
 
-bool GpioTriggerController::isSupportedPin(std::uint8_t gpio) {
-  return std::find(kSupportedPins.begin(), kSupportedPins.end(), gpio) !=
-         kSupportedPins.end();
+bool GpioTriggerController::isSupportedPin(std::uint8_t gpio) const {
+  return profile_.supports(gpio);
 }
 
 void GpioTriggerController::configure(const RuntimeTopology &topology,

@@ -1,22 +1,64 @@
-.PHONY: all build download-mode upload test helper helper-kill helper-build release
+.PHONY: all build build-esp32s3 build-rp2040 download-mode upload upload-esp32s3 upload-rp2040 require-serial test helper helper-kill helper-build release
+
+BUILD_ID ?= 0.1.0+dev
+UV ?= uv
+ESP32S3_BUILD = KIVO_FIRMWARE_BUILD_ID="$(BUILD_ID)" $(UV) run pio run -e esp32s3
+RP2040_BUILD = KIVO_FIRMWARE_BUILD_ID="$(BUILD_ID)" $(UV) run pio run -e rp2040
 
 all: helper
 
-build:
-	uv run pio run -e esp32s3
+require-serial:
+	@test -n "$(SERIAL)" || { echo "SERIAL is required" >&2; exit 2; }
 
-download-mode:
-	uv run python scripts/enter_download_mode.py
+build: build-esp32s3
 
-upload: download-mode
-	uv run pio run -e esp32s3 -t upload
-	uv run pio pkg exec -p tool-esptoolpy -- esptool.py --chip esp32s3 run
+build-esp32s3:
+	$(ESP32S3_BUILD)
+
+build-rp2040:
+	$(RP2040_BUILD)
+
+download-mode: require-serial
+	$(UV) run python scripts/enter_download_mode.py --serial "$(SERIAL)"
+
+upload:
+	@echo "Specify upload-esp32s3 or upload-rp2040" >&2
+	@exit 2
+
+upload-esp32s3:
+	@set -e; \
+	  serial="$(SERIAL)"; \
+	  if [ -z "$$serial" ]; then \
+	    serial="$$($(UV) run python scripts/select_firmware_target.py --board luatos-esp32s3-aio --mode runtime)"; \
+	  fi; \
+	  test -n "$$serial" || { echo "SERIAL is required" >&2; exit 2; }; \
+	  $(ESP32S3_BUILD); \
+	  download_port="$$($(UV) run python scripts/enter_download_mode.py --serial "$$serial")"; \
+	  KIVO_FIRMWARE_BUILD_ID="$(BUILD_ID)" $(UV) run pio run -e esp32s3 -t upload --upload-port "$$download_port"; \
+	  $(UV) run pio pkg exec -p tool-esptoolpy -- esptool.py --chip esp32s3 --port "$$download_port" --after hard_reset run; \
+	  $(UV) run python scripts/verify_runtime_firmware.py --serial "$$serial" --vid 0x303a --pid 0x4002 --family esp32s3 --board luatos-esp32s3-aio --build "$(BUILD_ID)"
+
+upload-rp2040:
+	@set -e; \
+	  serial="$(SERIAL)"; \
+	  if [ -z "$$serial" ]; then \
+	    serial="$$($(UV) run python scripts/select_firmware_target.py --board vccgnd-yd-rp2040 --mode runtime --mode bootloader)"; \
+	  fi; \
+	  test -n "$$serial" || { echo "SERIAL is required" >&2; exit 2; }; \
+	  $(RP2040_BUILD); \
+	  runtime_serial="$$($(UV) run python scripts/upload_rp2040.py --serial "$$serial" --firmware .pio/build/rp2040/firmware.uf2)"; \
+	  test -n "$$runtime_serial" || { echo "RP2040 runtime serial is required" >&2; exit 2; }; \
+	  $(UV) run python scripts/verify_runtime_firmware.py --serial "$$runtime_serial" --vid 0x2e8a --pid 0x102e --family rp2040 --board vccgnd-yd-rp2040 --build "$(BUILD_ID)"
 
 test:
 	bash test/test_release.sh
-	uv run pio test -e native
+	$(UV) run pytest test/test_upload_targeting.py test/test_rp2040_upload.py
+	$(UV) run pytest test/test_firmware_target_selector.py test/test_make_upload_selection.py
+	$(UV) run pio test -e native
 	cargo test --manifest-path src-tauri/Cargo.toml
+	cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 	npm test
+	npm run build
 
 helper: helper-kill
 	npm run tauri dev

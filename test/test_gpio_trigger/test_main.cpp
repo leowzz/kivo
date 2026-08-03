@@ -1,24 +1,28 @@
 #include <unity.h>
 
+#include "BoardProfile.h"
 #include "GpioTriggerController.h"
+#include "Handshake.h"
 #include "InputTopology.h"
+#include "KeyActivityIndicator.h"
 #include "TriggerProtocol.h"
+#include "platform/HidReportTransport.h"
 
 void setUp() {}
 void tearDown() {}
 
 GpioTriggerController directController(std::uint32_t startMs) {
-  TopologyBuilder builder;
+  TopologyBuilder builder(kLuatOsEsp32S3Aio);
   builder.begin(1, 30);
   builder.addDirect(1, 0, {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16,
                            17, 18});
-  GpioTriggerController controller;
+  GpioTriggerController controller(kLuatOsEsp32S3Aio, startMs);
   controller.configure(*builder.commit(1), startMs);
   return controller;
 }
 
 void test_commits_complete_matrix_topology_atomically() {
-  TopologyBuilder builder;
+  TopologyBuilder builder(kLuatOsEsp32S3Aio);
   TEST_ASSERT_TRUE(builder.begin(7, 30));
   TEST_ASSERT_TRUE(builder.addMatrix(7, 0, {1, 2}, {12, 13}));
 
@@ -29,11 +33,45 @@ void test_commits_complete_matrix_topology_atomically() {
   TEST_ASSERT_EQUAL_UINT8(2, topology->matrices[0].rows.size());
 }
 
+void test_board_profiles_enforce_exact_safe_pins() {
+  TEST_ASSERT_TRUE(kLuatOsEsp32S3Aio.supports(18));
+  TEST_ASSERT_FALSE(kLuatOsEsp32S3Aio.supports(19));
+  TEST_ASSERT_TRUE(kVccGndYdRp2040.supports(0));
+  TEST_ASSERT_TRUE(kVccGndYdRp2040.supports(22));
+  for (std::uint8_t pin = 23; pin <= 29; ++pin) {
+    TEST_ASSERT_FALSE(kVccGndYdRp2040.supports(pin));
+  }
+
+  TopologyBuilder rp2040(kVccGndYdRp2040);
+  TEST_ASSERT_TRUE(rp2040.begin(1, 30));
+  TEST_ASSERT_TRUE(rp2040.addDirect(1, 0, {0, 22}));
+
+  TopologyBuilder reserved(kVccGndYdRp2040);
+  TEST_ASSERT_TRUE(reserved.begin(1, 30));
+  TEST_ASSERT_FALSE(reserved.addDirect(1, 0, {23}));
+}
+
+void test_formats_protocol_v3_hello_with_board_and_build() {
+  TEST_ASSERT_EQUAL_STRING(
+      "HELLO 3 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 23 "
+      "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22\n",
+      formatHello(kVccGndYdRp2040, "0.1.0+gabc1234").c_str());
+}
+
+void test_rejects_empty_firmware_build_id() {
+  TEST_ASSERT_EQUAL_STRING("", formatHello(kVccGndYdRp2040, "").c_str());
+}
+
+void test_rejects_whitespace_in_firmware_build_id() {
+  TEST_ASSERT_EQUAL_STRING("",
+                           formatHello(kVccGndYdRp2040, "0.1.0 test").c_str());
+}
+
 void test_contact_edge_reports_unordered_pair_once_after_debounce() {
-  TopologyBuilder builder;
+  TopologyBuilder builder(kLuatOsEsp32S3Aio);
   TEST_ASSERT_TRUE(builder.begin(7, 30));
   TEST_ASSERT_TRUE(builder.addMatrix(7, 0, {1, 2}, {12, 13}));
-  GpioTriggerController controller;
+  GpioTriggerController controller(kLuatOsEsp32S3Aio, 0);
   controller.configure(*builder.commit(7), 0);
 
   TEST_ASSERT_FALSE(controller.updateContact(0, 1, 12, true, 10).has_value());
@@ -72,6 +110,40 @@ void test_parses_runtime_configuration_commands() {
   const auto commit = parseHelperCommand("CONFIG_COMMIT 3\n");
   TEST_ASSERT_TRUE(commit.has_value());
   TEST_ASSERT_EQUAL(HelperCommandKind::ConfigCommit, commit->kind);
+}
+
+void test_parses_extended_registered_board_pin_domain() {
+  const auto direct = parseHelperCommand("CONFIG_DIRECT 3 0 5 10 11 19 20 22\n");
+
+  TEST_ASSERT_TRUE(direct.has_value());
+  TEST_ASSERT_EQUAL_UINT8(5, direct->pins.size());
+  TEST_ASSERT_EQUAL_UINT8(10, direct->pins[0]);
+  TEST_ASSERT_EQUAL_UINT8(22, direct->pins[4]);
+
+  TopologyBuilder esp32(kLuatOsEsp32S3Aio);
+  TEST_ASSERT_TRUE(esp32.begin(3, 30));
+  TEST_ASSERT_FALSE(esp32.addDirect(3, 0, direct->pins));
+
+  TopologyBuilder rp2040(kVccGndYdRp2040);
+  TEST_ASSERT_TRUE(rp2040.begin(3, 30));
+  TEST_ASSERT_TRUE(rp2040.addDirect(3, 0, direct->pins));
+}
+
+void test_parser_defers_unsupported_pins_to_board_validation() {
+  const auto direct = parseHelperCommand("CONFIG_DIRECT 3 0 2 23 29\n");
+
+  TEST_ASSERT_TRUE(direct.has_value());
+  TEST_ASSERT_EQUAL_UINT8(2, direct->pins.size());
+  TEST_ASSERT_EQUAL_UINT8(23, direct->pins[0]);
+  TEST_ASSERT_EQUAL_UINT8(29, direct->pins[1]);
+
+  TopologyBuilder esp32(kLuatOsEsp32S3Aio);
+  TEST_ASSERT_TRUE(esp32.begin(3, 30));
+  TEST_ASSERT_FALSE(esp32.addDirect(3, 0, direct->pins));
+
+  TopologyBuilder rp2040(kVccGndYdRp2040);
+  TEST_ASSERT_TRUE(rp2040.begin(3, 30));
+  TEST_ASSERT_FALSE(rp2040.addDirect(3, 0, direct->pins));
 }
 
 void test_parses_learning_and_ordered_action_commands() {
@@ -132,10 +204,10 @@ void test_action_steps_are_strictly_ordered() {
 }
 
 void test_learning_reports_contact_and_restores_runtime_topology() {
-  TopologyBuilder builder;
+  TopologyBuilder builder(kLuatOsEsp32S3Aio);
   builder.begin(7, 30);
   builder.addDirect(7, 0, {6});
-  GpioTriggerController controller;
+  GpioTriggerController controller(kLuatOsEsp32S3Aio, 0);
   controller.configure(*builder.commit(7), 0);
 
   TEST_ASSERT_FALSE(controller.beginLearning(4, {1, 10, 12}, 0));
@@ -152,11 +224,21 @@ void test_learning_reports_contact_and_restores_runtime_topology() {
   TEST_ASSERT_EQUAL_UINT32(7, controller.topology().revision);
 }
 
+void test_rp2040_learning_accepts_gpio22_and_rejects_gpio23() {
+  GpioTriggerController esp32(kLuatOsEsp32S3Aio, 0);
+  TEST_ASSERT_FALSE(esp32.beginLearning(4, {22}, 0));
+
+  GpioTriggerController rp2040(kVccGndYdRp2040, 0);
+  TEST_ASSERT_TRUE(rp2040.beginLearning(4, {22}, 0));
+  TEST_ASSERT_TRUE(rp2040.endLearning(4, 1));
+  TEST_ASSERT_FALSE(rp2040.beginLearning(5, {23}, 1));
+}
+
 void test_suppresses_new_contact_that_closes_a_ghost_cycle() {
-  TopologyBuilder builder;
+  TopologyBuilder builder(kLuatOsEsp32S3Aio);
   builder.begin(1, 1);
   builder.addMatrix(1, 0, {1, 2}, {12, 13});
-  GpioTriggerController controller;
+  GpioTriggerController controller(kLuatOsEsp32S3Aio, 0);
   controller.configure(*builder.commit(1), 0);
 
   for (const auto pair :
@@ -171,14 +253,15 @@ void test_suppresses_new_contact_that_closes_a_ghost_cycle() {
 }
 
 void test_exposes_supported_gpio_inputs() {
-  TEST_ASSERT_TRUE(GpioTriggerController::isSupportedPin(0));
-  TEST_ASSERT_TRUE(GpioTriggerController::isSupportedPin(1));
-  TEST_ASSERT_TRUE(GpioTriggerController::isSupportedPin(9));
-  TEST_ASSERT_TRUE(GpioTriggerController::isSupportedPin(12));
-  TEST_ASSERT_TRUE(GpioTriggerController::isSupportedPin(18));
-  TEST_ASSERT_FALSE(GpioTriggerController::isSupportedPin(10));
-  TEST_ASSERT_FALSE(GpioTriggerController::isSupportedPin(11));
-  TEST_ASSERT_FALSE(GpioTriggerController::isSupportedPin(19));
+  GpioTriggerController controller(kLuatOsEsp32S3Aio);
+  TEST_ASSERT_TRUE(controller.isSupportedPin(0));
+  TEST_ASSERT_TRUE(controller.isSupportedPin(1));
+  TEST_ASSERT_TRUE(controller.isSupportedPin(9));
+  TEST_ASSERT_TRUE(controller.isSupportedPin(12));
+  TEST_ASSERT_TRUE(controller.isSupportedPin(18));
+  TEST_ASSERT_FALSE(controller.isSupportedPin(10));
+  TEST_ASSERT_FALSE(controller.isSupportedPin(11));
+  TEST_ASSERT_FALSE(controller.isSupportedPin(19));
 }
 
 void test_stable_edges_emit_once_after_debounce() {
@@ -207,6 +290,34 @@ void test_stable_edges_emit_once_after_debounce() {
   TEST_ASSERT_EQUAL_UINT32(2, up->id);
   TEST_ASSERT_EQUAL_UINT8(6, up->gpio);
   TEST_ASSERT_EQUAL(InputState::Up, up->state);
+}
+
+void test_key_activity_indicator_recolors_each_press_and_clears_on_final_release() {
+  KeyActivityIndicator indicator;
+
+  TEST_ASSERT_EQUAL(KeyIndicatorAction::ShowRandomColor,
+                    indicator.handle(InputState::Down));
+  TEST_ASSERT_EQUAL(KeyIndicatorAction::ShowRandomColor,
+                    indicator.handle(InputState::Down));
+  TEST_ASSERT_EQUAL(KeyIndicatorAction::None,
+                    indicator.handle(InputState::Up));
+  TEST_ASSERT_EQUAL(KeyIndicatorAction::Off,
+                    indicator.handle(InputState::Up));
+}
+
+void test_key_activity_indicator_reset_discards_held_state() {
+  KeyActivityIndicator indicator;
+  TEST_ASSERT_EQUAL(KeyIndicatorAction::ShowRandomColor,
+                    indicator.handle(InputState::Down));
+
+  indicator.reset();
+
+  TEST_ASSERT_EQUAL(KeyIndicatorAction::None,
+                    indicator.handle(InputState::Up));
+  TEST_ASSERT_EQUAL(KeyIndicatorAction::ShowRandomColor,
+                    indicator.handle(InputState::Down));
+  TEST_ASSERT_EQUAL(KeyIndicatorAction::Off,
+                    indicator.handle(InputState::Up));
 }
 
 void test_release_rearms_pin_for_a_later_press() {
@@ -370,18 +481,52 @@ void test_matching_skip_response_clears_without_keypress() {
   TEST_ASSERT_FALSE(controller.hasPendingEvent());
 }
 
+void test_hid_hotkey_waits_for_press_and_release_report_slots() {
+  const bool readiness[] = {false, false, true, false, true};
+  std::size_t readinessIndex = 0;
+  std::vector<std::pair<std::uint8_t, std::uint8_t>> reports;
+  std::size_t pauses = 0;
+
+  const bool sent = platform::transmitHotkeyReports(
+      0x08, 0x28, 4,
+      [&]() { return readiness[readinessIndex++]; },
+      [&](std::uint8_t modifiers, std::uint8_t keycode) {
+        reports.emplace_back(modifiers, keycode);
+        return true;
+      },
+      [&]() { ++pauses; });
+
+  TEST_ASSERT_TRUE(sent);
+  TEST_ASSERT_EQUAL_UINT32(5, readinessIndex);
+  TEST_ASSERT_EQUAL_UINT32(3, pauses);
+  TEST_ASSERT_EQUAL_UINT32(2, reports.size());
+  TEST_ASSERT_EQUAL_UINT8(0x08, reports[0].first);
+  TEST_ASSERT_EQUAL_UINT8(0x28, reports[0].second);
+  TEST_ASSERT_EQUAL_UINT8(0, reports[1].first);
+  TEST_ASSERT_EQUAL_UINT8(0, reports[1].second);
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_commits_complete_matrix_topology_atomically);
+  RUN_TEST(test_board_profiles_enforce_exact_safe_pins);
+  RUN_TEST(test_formats_protocol_v3_hello_with_board_and_build);
+  RUN_TEST(test_rejects_empty_firmware_build_id);
+  RUN_TEST(test_rejects_whitespace_in_firmware_build_id);
   RUN_TEST(test_contact_edge_reports_unordered_pair_once_after_debounce);
   RUN_TEST(test_parses_runtime_configuration_commands);
+  RUN_TEST(test_parses_extended_registered_board_pin_domain);
+  RUN_TEST(test_parser_defers_unsupported_pins_to_board_validation);
   RUN_TEST(test_parses_learning_and_ordered_action_commands);
   RUN_TEST(test_rejects_malformed_runtime_commands);
   RUN_TEST(test_action_steps_are_strictly_ordered);
   RUN_TEST(test_learning_reports_contact_and_restores_runtime_topology);
+  RUN_TEST(test_rp2040_learning_accepts_gpio22_and_rejects_gpio23);
   RUN_TEST(test_suppresses_new_contact_that_closes_a_ghost_cycle);
   RUN_TEST(test_exposes_supported_gpio_inputs);
   RUN_TEST(test_stable_edges_emit_once_after_debounce);
+  RUN_TEST(test_key_activity_indicator_recolors_each_press_and_clears_on_final_release);
+  RUN_TEST(test_key_activity_indicator_reset_discards_held_state);
   RUN_TEST(test_release_rearms_pin_for_a_later_press);
   RUN_TEST(test_tracks_pending_responses_per_gpio);
   RUN_TEST(test_pending_responses_expire);
@@ -395,5 +540,6 @@ int main(int, char **) {
   RUN_TEST(test_only_matching_paste_response_requests_keypress);
   RUN_TEST(test_matching_hotkey_response_requests_execution);
   RUN_TEST(test_matching_skip_response_clears_without_keypress);
+  RUN_TEST(test_hid_hotkey_waits_for_press_and_release_report_slots);
   return UNITY_END();
 }
