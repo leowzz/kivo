@@ -775,7 +775,12 @@ pub fn run() {
             let operation_barrier = Arc::new(RwLock::new(()));
             let workspace = Arc::new(RwLock::new(workspace));
             #[cfg(target_os = "macos")]
-            tray::setup(app, &[])?;
+            {
+                let workspace_guard = workspace
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                tray::setup(app, &[], &workspace_guard)?;
+            }
             let paste = Arc::new(PasteCoordinator::system());
             let launcher = Arc::new(device::SystemWorkerLauncher::new(
                 paste.handle(),
@@ -807,8 +812,10 @@ pub fn run() {
                         let (devices, events) =
                             poll_runtime_coordinator(&mut scanner, coordinator.as_ref());
                         #[cfg(target_os = "macos")]
-                        if let Some(devices) = devices.as_deref() {
-                            tray::update_registry(&app_handle, devices);
+                        if let Some(devices) = devices.as_deref()
+                            && let Ok(workspace) = workspace.read()
+                        {
+                            tray::update(&app_handle, devices, &workspace);
                         }
                         #[cfg(not(target_os = "macos"))]
                         let _ = devices;

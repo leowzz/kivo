@@ -1,10 +1,12 @@
 mod model;
 
-use crate::coordinator::{ConnectionDimension, DeviceMode, DeviceStatus, RuntimeDimension};
+use crate::coordinator::DeviceStatus;
+use model::{TrayButton, TrayDeviceSection, TrayMenuModel};
+use std::sync::Mutex;
 use tauri::{
-    App, AppHandle, Manager,
+    App, AppHandle, Manager, Runtime,
     image::Image,
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    menu::{Menu, MenuItem, MenuItemKind, PredefinedMenuItem, Submenu},
     tray::{TrayIcon, TrayIconBuilder},
 };
 
@@ -15,26 +17,135 @@ enum TrayAction {
 }
 
 struct TrayState {
-    status: MenuItem<tauri::Wry>,
+    model: Mutex<TrayMenuModel>,
     tray: TrayIcon<tauri::Wry>,
 }
 
-pub fn setup(app: &mut App, initial: &[DeviceStatus]) -> tauri::Result<()> {
+fn button_items<R: Runtime>(
+    app: &AppHandle<R>,
+    device_index: usize,
+    buttons: &[TrayButton],
+) -> tauri::Result<Vec<MenuItemKind<R>>> {
+    buttons
+        .iter()
+        .enumerate()
+        .map(|(button_index, button)| {
+            if button.details.is_empty() {
+                return MenuItem::with_id(
+                    app,
+                    format!("button-empty-{device_index}-{button_index}"),
+                    &button.title,
+                    false,
+                    None::<&str>,
+                )
+                .map(MenuItemKind::MenuItem);
+            }
+            let submenu = Submenu::with_id(
+                app,
+                format!("button-summary-{device_index}-{button_index}"),
+                &button.title,
+                true,
+            )?;
+            for (action_index, summary) in button.details.iter().enumerate() {
+                submenu.append(&MenuItem::with_id(
+                    app,
+                    format!("action-summary-{device_index}-{button_index}-{action_index}"),
+                    format!("{}. {summary}", action_index + 1),
+                    false,
+                    None::<&str>,
+                )?)?;
+            }
+            Ok(MenuItemKind::Submenu(submenu))
+        })
+        .collect()
+}
+
+fn build_menu<R: Runtime>(app: &AppHandle<R>, model: &TrayMenuModel) -> tauri::Result<Menu<R>> {
+    let menu = Menu::new(app)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        "status",
+        &model.status_label,
+        false,
+        None::<&str>,
+    )?)?;
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    match &model.devices {
+        TrayDeviceSection::Empty(label) => {
+            menu.append(&MenuItem::with_id(
+                app,
+                "no-device",
+                label,
+                false,
+                None::<&str>,
+            )?)?;
+        }
+        TrayDeviceSection::Flat(buttons) => {
+            for item in button_items(app, 0, buttons)? {
+                menu.append(&item)?;
+            }
+        }
+        TrayDeviceSection::Grouped(devices) => {
+            for (device_index, device) in devices.iter().enumerate() {
+                let submenu = Submenu::with_id(
+                    app,
+                    format!("device-summary-{device_index}-{}", device.id.as_str()),
+                    &device.name,
+                    true,
+                )?;
+                for item in button_items(app, device_index, &device.buttons)? {
+                    submenu.append(&item)?;
+                }
+                menu.append(&submenu)?;
+            }
+        }
+    }
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        "open-main",
+        &model.open_label,
+        true,
+        None::<&str>,
+    )?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        "quit-app",
+        &model.quit_label,
+        true,
+        None::<&str>,
+    )?)?;
+    Ok(menu)
+}
+
+fn install_if_changed<E>(
+    current: &mut TrayMenuModel,
+    next: TrayMenuModel,
+    install: impl FnOnce(&TrayMenuModel) -> Result<(), E>,
+) -> Result<bool, E> {
+    if *current == next {
+        return Ok(false);
+    }
+    install(&next)?;
+    *current = next;
+    Ok(true)
+}
+
+pub fn setup(
+    app: &mut App,
+    initial: &[DeviceStatus],
+    workspace: &crate::workspace::Workspace,
+) -> tauri::Result<()> {
     #[cfg(target_os = "macos")]
     app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-    let label = status_label(initial);
-    let status = MenuItem::with_id(app, "status", &label, false, None::<&str>)?;
-    let open = MenuItem::with_id(app, "open-main", "Open Kivo", true, None::<&str>)?;
-    let separator = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit-app", "Quit Kivo", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&status, &separator, &open, &quit])?;
+    let model = TrayMenuModel::from_workspace(initial, workspace);
+    let menu = build_menu(app.handle(), &model)?;
     let icon = Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
-    let tooltip = format!("Kivo - {label}");
     let tray = TrayIconBuilder::with_id("menu-bar")
         .icon(icon)
         .icon_as_template(true)
-        .tooltip(&tooltip)
+        .tooltip(format!("Kivo - {}", model.status_label))
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| {
@@ -44,19 +155,31 @@ pub fn setup(app: &mut App, initial: &[DeviceStatus]) -> tauri::Result<()> {
         })
         .build(app)?;
 
-    app.manage(TrayState { status, tray });
+    app.manage(TrayState {
+        model: Mutex::new(model),
+        tray,
+    });
     Ok(())
 }
 
-pub fn update_registry(app: &AppHandle, devices: &[DeviceStatus]) {
-    let label = status_label(devices);
+pub fn update(app: &AppHandle, devices: &[DeviceStatus], workspace: &crate::workspace::Workspace) {
+    let next = TrayMenuModel::from_workspace(devices, workspace);
     let state_app = app.clone();
     let _ = app.run_on_main_thread(move || {
         let Some(state) = state_app.try_state::<TrayState>() else {
             return;
         };
-        let _ = state.status.set_text(&label);
-        let _ = state.tray.set_tooltip(Some(format!("Kivo - {label}")));
+        let Ok(mut current) = state.model.lock() else {
+            return;
+        };
+        let _ = install_if_changed(&mut current, next, |model| {
+            let menu = build_menu(&state_app, model)?;
+            state.tray.set_menu(Some(menu))?;
+            let _ = state
+                .tray
+                .set_tooltip(Some(format!("Kivo - {}", model.status_label)));
+            Ok::<_, tauri::Error>(())
+        });
     });
 }
 
@@ -80,73 +203,140 @@ fn action_for(id: &str) -> Option<TrayAction> {
     }
 }
 
-fn status_label(devices: &[DeviceStatus]) -> String {
-    let online = devices
-        .iter()
-        .filter(|device| device.connection == ConnectionDimension::Online)
-        .collect::<Vec<_>>();
-    if online.is_empty() {
-        return "Waiting for device".to_owned();
-    }
-    let ready = online
-        .iter()
-        .filter(|device| device.runtime == RuntimeDimension::Ready)
-        .count();
-    let bootloader = online
-        .iter()
-        .filter(|device| device.mode == Some(DeviceMode::Bootloader))
-        .count();
-    let errors = online
-        .iter()
-        .filter(|device| device.runtime == RuntimeDimension::RuntimeError)
-        .count();
-    format!(
-        "{} online · {ready} ready · {bootloader} bootloader · {errors} errors",
-        online.len()
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        coordinator::{AssignmentDimension, IdentityDimension},
         hardware::DeviceId,
+        tray::model::{TrayButton, TrayDevice, TrayDeviceSection, TrayMenuModel},
     };
+    use std::cell::Cell;
+    use tauri::Manager;
 
-    fn status_fixture() -> DeviceStatus {
-        DeviceStatus {
-            device_id: DeviceId::new("luatos-esp32s3-aio", "TRAY").unwrap(),
-            name: "Desk".into(),
-            connection: ConnectionDimension::Online,
-            mode: Some(DeviceMode::Runtime),
-            identity: IdentityDimension::Valid,
-            assignment: AssignmentDimension::Unassigned,
-            runtime: RuntimeDimension::Inactive,
-            raw_serial: "TRAY".into(),
-            port: Some("/dev/test".into()),
-            controller_family_id: "esp32s3".into(),
-            board_profile_id: "luatos-esp32s3-aio".into(),
-            firmware_build_id: Some("test".into()),
-            pins: vec![1],
-            runtime_assignment: None,
-            latest_error: None,
-            learning: None,
+    fn tray_model(section: TrayDeviceSection) -> TrayMenuModel {
+        TrayMenuModel {
+            status_label: "status".into(),
+            devices: section,
+            open_label: "Open Kivo".into(),
+            quit_label: "Quit Kivo".into(),
         }
     }
 
     #[test]
-    fn formats_registry_summary() {
-        assert_eq!(status_label(&[]), "Waiting for device");
-        let mut ready = status_fixture();
-        ready.runtime = RuntimeDimension::Ready;
-        let mut bootloader = status_fixture();
-        bootloader.mode = Some(DeviceMode::Bootloader);
-        bootloader.runtime = RuntimeDimension::Inactive;
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "muda menus require the process main thread; Tauri mock tests run on a worker"
+    )]
+    fn builds_flat_buttons_and_grouped_devices_as_native_submenus() {
+        let app = tauri::test::mock_app();
+        let configured = TrayButton {
+            title: "A · ⌘A +1".into(),
+            details: vec!["⌘A".into(), "↩".into()],
+        };
+        let unconfigured = TrayButton {
+            title: "B · Not configured".into(),
+            details: Vec::new(),
+        };
+
+        let flat = build_menu(
+            app.handle(),
+            &tray_model(TrayDeviceSection::Flat(vec![
+                configured.clone(),
+                unconfigured.clone(),
+            ])),
+        )
+        .unwrap();
+        let flat_items = flat.items().unwrap();
+        let action_menu = flat_items
+            .iter()
+            .find_map(|item| item.as_submenu())
+            .expect("button action submenu");
+        assert_eq!(action_menu.text().unwrap(), "A · ⌘A +1");
         assert_eq!(
-            status_label(&[ready, bootloader]),
-            "2 online · 1 ready · 1 bootloader · 0 errors"
+            action_menu
+                .items()
+                .unwrap()
+                .iter()
+                .filter_map(|item| item.as_menuitem())
+                .map(|item| item.text().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["1. ⌘A", "2. ↩"],
         );
+        assert!(flat_items.iter().any(|item| {
+            item.as_menuitem().is_some_and(|menu_item| {
+                menu_item.text().unwrap() == "B · Not configured"
+                    && !menu_item.is_enabled().unwrap()
+            })
+        }));
+
+        let empty = build_menu(
+            app.handle(),
+            &tray_model(TrayDeviceSection::Empty("No available device".into())),
+        )
+        .unwrap();
+        assert!(empty.items().unwrap().iter().any(|item| {
+            item.as_menuitem().is_some_and(|menu_item| {
+                menu_item.text().unwrap() == "No available device"
+                    && !menu_item.is_enabled().unwrap()
+            })
+        }));
+
+        let grouped = build_menu(
+            app.handle(),
+            &tray_model(TrayDeviceSection::Grouped(vec![TrayDevice {
+                id: DeviceId::new("luatos-esp32s3-aio", "A").unwrap(),
+                name: "Desk".into(),
+                buttons: vec![configured],
+            }])),
+        )
+        .unwrap();
+        let device_menu = grouped
+            .items()
+            .unwrap()
+            .into_iter()
+            .find_map(|item| item.as_submenu().cloned())
+            .expect("device submenu");
+        assert_eq!(device_menu.text().unwrap(), "Desk");
+        assert!(
+            device_menu
+                .items()
+                .unwrap()
+                .iter()
+                .any(|item| item.as_submenu().is_some())
+        );
+    }
+
+    #[test]
+    fn installs_only_changed_models_and_keeps_current_after_failure() {
+        let mut current = tray_model(TrayDeviceSection::Empty("old".into()));
+        let calls = Cell::new(0);
+        let same = current.clone();
+        assert!(
+            !install_if_changed(&mut current, same, |_| {
+                calls.set(calls.get() + 1);
+                Ok::<_, &'static str>(())
+            })
+            .unwrap()
+        );
+        assert_eq!(calls.get(), 0);
+
+        let next = tray_model(TrayDeviceSection::Empty("new".into()));
+        assert!(
+            install_if_changed(&mut current, next.clone(), |_| {
+                calls.set(calls.get() + 1);
+                Ok::<_, &'static str>(())
+            })
+            .unwrap()
+        );
+        assert_eq!(current, next);
+        assert_eq!(calls.get(), 1);
+
+        let failed = tray_model(TrayDeviceSection::Empty("failed".into()));
+        assert_eq!(
+            install_if_changed(&mut current, failed, |_| Err::<(), _>("failed")),
+            Err("failed"),
+        );
+        assert_eq!(current, next);
     }
 
     #[test]
