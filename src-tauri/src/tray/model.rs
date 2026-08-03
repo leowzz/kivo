@@ -8,7 +8,7 @@ use crate::{
     hardware::DeviceId,
     model::ButtonDefinition,
     profile::ButtonAction,
-    workspace::{Language, Workspace},
+    workspace::{AssignmentResolution, Language, Workspace},
 };
 
 const PRIMARY_PASTE_LIMIT: usize = 12;
@@ -127,9 +127,11 @@ impl TrayMenuModel {
                 {
                     return None;
                 }
-                let assignment = device.runtime_assignment.as_ref()?;
-                let profile = workspace.profiles.get(&assignment.device_profile_id)?;
-                profile.hardware_profile(&assignment.hardware_profile_id)?;
+                let AssignmentResolution::Valid { profile, .. } =
+                    workspace.assignment_resolution(&device.device_id)
+                else {
+                    return None;
+                };
                 Some(TrayDevice {
                     id: device.device_id.clone(),
                     name: escape_menu_text(&collapse_whitespace(&device.name)),
@@ -358,15 +360,31 @@ mod tests {
         Workspace::create(directory.path(), vec![profile]).unwrap()
     }
 
+    fn default_assignment() -> RuntimeAssignment {
+        RuntimeAssignment {
+            device_profile_id: "desk-profile".into(),
+            hardware_profile_id: "hardware".into(),
+        }
+    }
+
+    fn enroll_and_assign(workspace: &mut Workspace, device: &DeviceStatus) {
+        workspace.enroll_device(device.device_id.clone()).unwrap();
+        workspace
+            .set_assignment(&device.device_id, default_assignment())
+            .unwrap();
+    }
+
     #[test]
     fn selects_empty_flat_and_grouped_device_sections() {
-        let workspace = workspace_with_profile(profile());
+        let directory = tempfile::tempdir().unwrap();
+        let mut workspace = Workspace::create(directory.path(), vec![profile()]).unwrap();
         let empty = TrayMenuModel::from_workspace(&[], &workspace);
         assert!(
             matches!(empty.devices, TrayDeviceSection::Empty(ref label) if label == "暂无可用设备")
         );
 
         let front = device("FRONT", "前台 & 键盘");
+        enroll_and_assign(&mut workspace, &front);
         let flat = TrayMenuModel::from_workspace(std::slice::from_ref(&front), &workspace);
         let TrayDeviceSection::Flat(buttons) = flat.devices else {
             panic!("expected flat buttons")
@@ -380,6 +398,7 @@ mod tests {
         );
 
         let back = device("BACK", "后台键盘");
+        enroll_and_assign(&mut workspace, &back);
         let grouped = TrayMenuModel::from_workspace(&[front, back], &workspace);
         let TrayDeviceSection::Grouped(devices) = grouped.devices else {
             panic!("expected grouped devices")
@@ -396,8 +415,10 @@ mod tests {
 
     #[test]
     fn filters_only_addressable_runtime_devices_without_filtering_runtime_dimension() {
-        let workspace = workspace_with_profile(profile());
+        let directory = tempfile::tempdir().unwrap();
+        let mut workspace = Workspace::create(directory.path(), vec![profile()]).unwrap();
         let valid = device("VALID", "Valid");
+        enroll_and_assign(&mut workspace, &valid);
         for runtime in [
             RuntimeDimension::Configuring,
             RuntimeDimension::Learning,
@@ -424,15 +445,25 @@ mod tests {
         unassigned.assignment = AssignmentDimension::Unassigned;
         unassigned.runtime_assignment = None;
         excluded.push(unassigned);
-        let mut missing_profile = valid;
-        missing_profile
+        let missing_profile = device("MISSING-PROFILE", "Missing Profile");
+        enroll_and_assign(&mut workspace, &missing_profile);
+        workspace
+            .settings
+            .devices
+            .get_mut(&missing_profile.device_id)
+            .unwrap()
             .runtime_assignment
             .as_mut()
             .unwrap()
             .device_profile_id = "missing".into();
         excluded.push(missing_profile);
-        let mut missing_hardware = device("MISSING-HARDWARE", "Missing Hardware");
-        missing_hardware
+        let missing_hardware = device("MISSING-HARDWARE", "Missing Hardware");
+        enroll_and_assign(&mut workspace, &missing_hardware);
+        workspace
+            .settings
+            .devices
+            .get_mut(&missing_hardware.device_id)
+            .unwrap()
             .runtime_assignment
             .as_mut()
             .unwrap()
@@ -440,6 +471,49 @@ mod tests {
         excluded.push(missing_hardware);
 
         let model = TrayMenuModel::from_workspace(&excluded, &workspace);
+        assert!(matches!(model.devices, TrayDeviceSection::Empty(_)));
+    }
+
+    #[test]
+    fn uses_current_workspace_assignment_instead_of_stale_status_assignment() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut stale_profile = profile();
+        stale_profile.profile.id = "stale-profile".into();
+        stale_profile.profile.groups[0].buttons[0].label = "Stale".into();
+        let mut workspace =
+            Workspace::create(directory.path(), vec![profile(), stale_profile]).unwrap();
+        let mut stale_status = device("STALE", "Stale");
+        enroll_and_assign(&mut workspace, &stale_status);
+        stale_status.runtime = RuntimeDimension::Configuring;
+        stale_status.runtime_assignment = Some(RuntimeAssignment {
+            device_profile_id: "stale-profile".into(),
+            hardware_profile_id: "hardware".into(),
+        });
+
+        let model = TrayMenuModel::from_workspace(&[stale_status], &workspace);
+        let TrayDeviceSection::Flat(buttons) = model.devices else {
+            panic!("expected flat buttons")
+        };
+        assert_eq!(buttons[0].title, "B · ⌘B");
+    }
+
+    #[test]
+    fn excludes_workspace_assignment_with_mismatched_hardware_board() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut incompatible_profile = profile();
+        incompatible_profile.hardware_profiles[0].board_profile_id = "vccgnd-yd-rp2040".into();
+        let mut workspace =
+            Workspace::create(directory.path(), vec![incompatible_profile]).unwrap();
+        let status = device("MISMATCH", "Mismatch");
+        workspace.enroll_device(status.device_id.clone()).unwrap();
+        workspace
+            .settings
+            .devices
+            .get_mut(&status.device_id)
+            .unwrap()
+            .runtime_assignment = Some(default_assignment());
+
+        let model = TrayMenuModel::from_workspace(&[status], &workspace);
         assert!(matches!(model.devices, TrayDeviceSection::Empty(_)));
     }
 
