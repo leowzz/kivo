@@ -1,3 +1,5 @@
+mod model;
+
 use crate::coordinator::{ConnectionDimension, DeviceMode, DeviceStatus, RuntimeDimension};
 use tauri::{
     App, AppHandle, Manager,
