@@ -2,7 +2,7 @@ use crate::{
     hardware::{DeviceId, HardwareRegistry, board_by_id, compiled_registry},
     metrics::{MetricsBackup, MetricsStore},
     profile::{
-        CreateDeviceProfileRequest, DeviceProfile, HardwareProfile, InputSource,
+        ButtonAction, CreateDeviceProfileRequest, DeviceProfile, HardwareProfile, InputSource,
         PROFILE_SCHEMA_VERSION, blank_device_profile,
     },
     storage::atomic_write,
@@ -16,6 +16,7 @@ use std::{
 
 pub const SETTINGS_SCHEMA_VERSION: u16 = 2;
 pub const BACKUP_SCHEMA_VERSION: u16 = 2;
+const LEGACY_SCHEMA_VERSION: u16 = 1;
 const MAX_IMPORT_BYTES: u64 = 10 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -99,6 +100,34 @@ impl Default for SettingsDocument {
             devices: BTreeMap::new(),
         }
     }
+}
+
+#[derive(Deserialize)]
+struct LegacySettingsDocument {
+    active_model: Option<String>,
+    language: Language,
+}
+
+#[derive(Deserialize)]
+struct LegacyHardwareConfig {
+    controller: String,
+    #[serde(default = "default_legacy_debounce_ms")]
+    debounce_ms: u16,
+    #[serde(default)]
+    inputs: Vec<InputSource>,
+}
+
+fn default_legacy_debounce_ms() -> u16 {
+    30
+}
+
+#[derive(Deserialize)]
+struct LegacyModelConfig {
+    schema_version: u16,
+    model: crate::model::ModelLayout,
+    hardware: LegacyHardwareConfig,
+    #[serde(default)]
+    actions: BTreeMap<String, Vec<ButtonAction>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -204,11 +233,74 @@ impl RestoreOperations for SystemRestoreOperations {
 
 impl Workspace {
     pub fn load(config_directory: &Path, bundled_profiles: &Path) -> Result<Self, AppError> {
-        if config_directory.join("data/settings.yaml").exists() {
-            Self::load_existing(config_directory)
+        Self::recover_interrupted_schema_v1_migration(config_directory)?;
+        let settings_path = config_directory.join("data/settings.yaml");
+        if settings_path.exists() {
+            if read_schema_header(&settings_path)?.schema_version == LEGACY_SCHEMA_VERSION {
+                Self::migrate_schema_v1(config_directory)
+            } else {
+                Self::load_existing(config_directory)
+            }
         } else {
             Self::create(config_directory, load_bundled_profiles(bundled_profiles)?)
         }
+    }
+
+    fn recover_interrupted_schema_v1_migration(config_directory: &Path) -> Result<(), AppError> {
+        let data_directory = config_directory.join("data");
+        let backup_directory = config_directory.join("data.v1.backup");
+        if data_directory.exists() || !backup_directory.exists() {
+            return Ok(());
+        }
+        let next_directory = config_directory.join("data.next");
+        if next_directory.exists()
+            && Self::load_data_directory(config_directory, &next_directory).is_ok()
+            && fs::rename(&next_directory, &data_directory).is_ok()
+        {
+            return Ok(());
+        }
+        fs::rename(&backup_directory, &data_directory)
+            .map_err(|error| io_error("recover_schema_v1_data", &backup_directory, error))
+    }
+
+    fn migrate_schema_v1(config_directory: &Path) -> Result<Self, AppError> {
+        let data_directory = config_directory.join("data");
+        let legacy_settings: LegacySettingsDocument = read_versioned_yaml(
+            &data_directory.join("settings.yaml"),
+            LEGACY_SCHEMA_VERSION,
+            "unsupported_settings_schema",
+            false,
+        )?;
+        let mut profiles = BTreeMap::new();
+        for path in yaml_files(&data_directory.join("models"), "read_models")? {
+            let legacy: LegacyModelConfig = read_versioned_yaml(
+                &path,
+                LEGACY_SCHEMA_VERSION,
+                "unsupported_model_schema",
+                false,
+            )?;
+            let profile = migrate_schema_v1_model(legacy)?;
+            validate_profile_filename(&path, &profile)?;
+            if profiles
+                .insert(profile.profile.id.clone(), profile)
+                .is_some()
+            {
+                return Err(AppError::new("duplicate_profile"));
+            }
+        }
+        let settings = SettingsDocument {
+            schema_version: SETTINGS_SCHEMA_VERSION,
+            editor_profile: legacy_settings.active_model,
+            language: legacy_settings.language,
+            devices: BTreeMap::new(),
+        };
+        validate_settings(&settings, &profiles)?;
+        activate_schema_v1_migration(config_directory, &settings, &profiles)?;
+        Ok(Self {
+            config_directory: config_directory.to_owned(),
+            settings,
+            profiles,
+        })
     }
 
     pub fn create(config_directory: &Path, profiles: Vec<DeviceProfile>) -> Result<Self, AppError> {
@@ -227,6 +319,13 @@ impl Workspace {
 
     pub fn load_existing(config_directory: &Path) -> Result<Self, AppError> {
         let data_directory = config_directory.join("data");
+        Self::load_data_directory(config_directory, &data_directory)
+    }
+
+    fn load_data_directory(
+        config_directory: &Path,
+        data_directory: &Path,
+    ) -> Result<Self, AppError> {
         let settings = read_versioned_yaml(
             &data_directory.join("settings.yaml"),
             SETTINGS_SCHEMA_VERSION,
@@ -1087,6 +1186,76 @@ struct SchemaHeader {
     schema_version: u16,
 }
 
+fn read_schema_header(path: &Path) -> Result<SchemaHeader, AppError> {
+    let contents = fs::read_to_string(path).map_err(|error| io_error("read_file", path, error))?;
+    serde_yaml_ng::from_str(&contents)
+        .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))
+}
+
+fn migrate_schema_v1_model(legacy: LegacyModelConfig) -> Result<DeviceProfile, AppError> {
+    if legacy.schema_version != LEGACY_SCHEMA_VERSION {
+        return Err(AppError::new("unsupported_model_schema"));
+    }
+    let board_profile_id = match legacy.hardware.controller.as_str() {
+        "esp32s3" => crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+        controller => {
+            return Err(
+                AppError::new("unsupported_legacy_controller").with_param("controller", controller)
+            );
+        }
+    };
+    let board = board_by_id(board_profile_id).ok_or_else(|| {
+        AppError::new("unknown_board_profile").with_param("board_profile", board_profile_id)
+    })?;
+    let profile = DeviceProfile {
+        schema_version: PROFILE_SCHEMA_VERSION,
+        profile: legacy.model,
+        hardware_profiles: vec![HardwareProfile {
+            id: board.id.into(),
+            name: board.display_name.into(),
+            board_profile_id: board.id.into(),
+            debounce_ms: legacy.hardware.debounce_ms,
+            inputs: legacy.hardware.inputs,
+        }],
+        actions: legacy.actions,
+    };
+    profile.validate()?;
+    Ok(profile)
+}
+
+fn activate_schema_v1_migration(
+    config_directory: &Path,
+    settings: &SettingsDocument,
+    profiles: &BTreeMap<String, DeviceProfile>,
+) -> Result<(), AppError> {
+    let data_directory = config_directory.join("data");
+    let next_directory = config_directory.join("data.next");
+    let backup_directory = config_directory.join("data.v1.backup");
+    if backup_directory.exists() {
+        return Err(io_error(
+            "migration_backup_exists",
+            &backup_directory,
+            std::io::Error::new(std::io::ErrorKind::AlreadyExists, "backup already exists"),
+        ));
+    }
+    remove_directory_if_exists(&next_directory)?;
+    write_data_directory(&next_directory, settings, profiles)?;
+    if let Err(error) = fs::rename(&data_directory, &backup_directory) {
+        let _ = fs::remove_dir_all(&next_directory);
+        return Err(io_error("backup_schema_v1_data", &data_directory, error));
+    }
+    if let Err(error) = fs::rename(&next_directory, &data_directory) {
+        let primary = io_error("activate_migrated_data", &data_directory, error);
+        return match fs::rename(&backup_directory, &data_directory) {
+            Ok(()) => Err(primary),
+            Err(rollback) => Err(AppError::new("migration_rollback_failed")
+                .with_param("backup", backup_directory.display().to_string())
+                .with_detail(format!("{primary}; rollback: {rollback}"))),
+        };
+    }
+    Ok(())
+}
+
 fn read_profile_limited(path: &Path) -> Result<DeviceProfile, AppError> {
     read_versioned_yaml(
         path,
@@ -1653,6 +1822,133 @@ mod tests {
             workspace.preview_backup(&backup_path).unwrap_err().code,
             "unsupported_backup_schema"
         );
+    }
+
+    #[test]
+    fn load_migrates_schema_v1_workspace_without_losing_model_data() {
+        let directory = TestDirectory::new();
+        let config_directory = directory.path("config");
+        let data_directory = config_directory.join("data");
+        fs::create_dir_all(data_directory.join("models")).unwrap();
+        fs::write(
+            data_directory.join("settings.yaml"),
+            "schema_version: 1\nactive_model: pad_06\nlanguage: zh-CN\n",
+        )
+        .unwrap();
+        fs::write(
+            data_directory.join("models/pad_06.yaml"),
+            r#"schema_version: 1
+model:
+  id: pad_06
+  name: PAD_06
+  groups:
+    - id: digits
+      columns: 1
+      buttons:
+        - { id: DIGIT_1, label: "1" }
+hardware:
+  controller: esp32s3
+  debounce_ms: 45
+  inputs:
+    - type: direct
+      id: legacy-direct
+      keys:
+        DIGIT_1: 1
+actions:
+  DIGIT_1:
+    - type: paste
+      text: migrated
+legacy:
+  unresolved_gpio_text:
+    7: preserved-in-backup
+"#,
+        )
+        .unwrap();
+
+        let workspace = Workspace::load(&config_directory, &directory.path("bundled")).unwrap();
+
+        assert_eq!(workspace.settings.schema_version, SETTINGS_SCHEMA_VERSION);
+        assert_eq!(workspace.settings.editor_profile.as_deref(), Some("pad_06"));
+        assert_eq!(workspace.settings.language, Language::ZhCn);
+        assert!(workspace.settings.devices.is_empty());
+        let profile = &workspace.profiles["pad_06"];
+        assert_eq!(profile.schema_version, PROFILE_SCHEMA_VERSION);
+        assert_eq!(
+            profile.actions["DIGIT_1"][0],
+            ButtonAction::Paste {
+                text: "migrated".into(),
+            }
+        );
+        assert_eq!(profile.hardware_profiles.len(), 1);
+        assert_eq!(
+            profile.hardware_profiles[0].board_profile_id,
+            crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID
+        );
+        assert_eq!(profile.hardware_profiles[0].debounce_ms, 45);
+        assert_eq!(
+            profile.hardware_profiles[0].inputs,
+            vec![InputSource::Direct {
+                id: "legacy-direct".into(),
+                keys: BTreeMap::from([("DIGIT_1".into(), 1)]),
+            }]
+        );
+        assert!(config_directory.join("data/profiles/pad_06.yaml").exists());
+        let backup =
+            fs::read_to_string(config_directory.join("data.v1.backup/models/pad_06.yaml")).unwrap();
+        assert!(backup.contains("unresolved_gpio_text"));
+
+        assert_eq!(
+            Workspace::load(&config_directory, &directory.path("bundled"))
+                .unwrap()
+                .settings,
+            workspace.settings
+        );
+    }
+
+    #[test]
+    fn load_completes_an_interrupted_schema_v1_activation() {
+        let directory = TestDirectory::new();
+        let config_directory = directory.path("config");
+        let data_directory = config_directory.join("data");
+        fs::create_dir_all(data_directory.join("models")).unwrap();
+        fs::write(
+            data_directory.join("settings.yaml"),
+            "schema_version: 1\nactive_model: pad_06\nlanguage: en-US\n",
+        )
+        .unwrap();
+        fs::write(
+            data_directory.join("models/pad_06.yaml"),
+            r#"schema_version: 1
+model:
+  id: pad_06
+  name: PAD_06
+  groups: []
+hardware:
+  controller: esp32s3
+  inputs: []
+actions: {}
+"#,
+        )
+        .unwrap();
+        let bundled = directory.path("bundled");
+        Workspace::load(&config_directory, &bundled).unwrap();
+        fs::rename(
+            config_directory.join("data"),
+            config_directory.join("data.next"),
+        )
+        .unwrap();
+
+        let recovered = Workspace::load(&config_directory, &bundled).unwrap();
+
+        assert_eq!(recovered.settings.editor_profile.as_deref(), Some("pad_06"));
+        assert_eq!(recovered.settings.language, Language::EnUs);
+        assert!(config_directory.join("data/settings.yaml").exists());
+        assert!(
+            config_directory
+                .join("data.v1.backup/settings.yaml")
+                .exists()
+        );
+        assert!(!config_directory.join("data.next").exists());
     }
 
     #[test]
