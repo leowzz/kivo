@@ -1,50 +1,37 @@
 #include <Arduino.h>
-#include <USB.h>
-#include <USBCDC.h>
-#include <USBHIDKeyboard.h>
 
 #include <string>
 #include <vector>
 
 #include "GpioTriggerController.h"
+#include "Handshake.h"
+#include "KeyActivityIndicator.h"
 #include "TriggerProtocol.h"
+#include "platform/Platform.h"
 
 namespace {
 constexpr std::size_t kMaxResponseLineLength = 255;
-constexpr const char *kHelloLine =
-    "HELLO 2 esp32s3 17 0 1 2 3 4 5 6 7 8 9 12 13 14 15 16 17 18\n";
+std::string helloLine;
 
-USBCDC usbSerial;
-USBHIDKeyboard keyboard;
-GpioTriggerController controller;
+GpioTriggerController controller(platform::boardProfile());
+KeyActivityIndicator keyIndicator;
 ResponseLineBuffer responseLines(kMaxResponseLineLength);
-TopologyBuilder topologyBuilder;
+TopologyBuilder topologyBuilder(platform::boardProfile());
 bool helperConnected = false;
 
 void writeLine(const std::string &line) {
-  usbSerial.write(line.c_str(), line.size());
-  usbSerial.flush();
+  platform::write(line.c_str(), line.size());
+  platform::flush();
 }
 
-void pasteClipboard() {
-  keyboard.press(KEY_LEFT_GUI);
-  keyboard.press('v');
-  delay(10);
-  keyboard.releaseAll();
-}
-
-void sendHotkey(std::uint8_t modifierMask, std::uint8_t keycode) {
-  KeyReport report{};
-  report.modifiers = modifierMask;
-  report.keys[0] = keycode;
-  keyboard.sendReport(&report);
-  delay(10);
-  keyboard.releaseAll();
+bool pasteClipboard() {
+  return platform::sendHotkey(0x08, 0x19);
 }
 
 void applyRuntimePinModes() {
-  for (const auto gpio : GpioTriggerController::kSupportedPins) {
-    pinMode(gpio, INPUT);
+  const auto &profile = platform::boardProfile();
+  for (std::size_t index = 0; index < profile.safePinCount; ++index) {
+    pinMode(profile.safePins[index], INPUT);
   }
   for (const auto &source : controller.topology().directs) {
     for (const auto gpio : source.pins) pinMode(gpio, INPUT_PULLUP);
@@ -56,8 +43,9 @@ void applyRuntimePinModes() {
 }
 
 void applyLearningPinModes() {
-  for (const auto gpio : GpioTriggerController::kSupportedPins) {
-    pinMode(gpio, INPUT);
+  const auto &profile = platform::boardProfile();
+  for (std::size_t index = 0; index < profile.safePinCount; ++index) {
+    pinMode(profile.safePins[index], INPUT);
   }
   for (const auto gpio : controller.learningPins()) {
     pinMode(gpio, INPUT_PULLUP);
@@ -66,6 +54,11 @@ void applyLearningPinModes() {
 
 void configError(std::uint32_t revision, const char *code) {
   writeLine("CONFIG_ERROR " + std::to_string(revision) + " " + code + "\n");
+}
+
+void resetKeyIndicator() {
+  keyIndicator.reset();
+  platform::clearKeyColor();
 }
 
 void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
@@ -77,7 +70,7 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
 
   switch (command->kind) {
     case HelperCommandKind::Hello:
-      writeLine(kHelloLine);
+      writeLine(helloLine);
       return;
     case HelperCommandKind::ConfigBegin:
       if (controller.isLearning() ||
@@ -105,6 +98,7 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
         configError(command->revision, "invalid_commit");
         return;
       }
+      resetKeyIndicator();
       controller.configure(*topology, nowMs);
       applyRuntimePinModes();
       writeLine("CONFIG_OK " + std::to_string(command->revision) + "\n");
@@ -116,6 +110,7 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
         configError(command->revision, "invalid_learning");
         return;
       }
+      resetKeyIndicator();
       applyLearningPinModes();
       writeLine("LEARN_OK " + std::to_string(command->revision) + "\n");
       return;
@@ -124,6 +119,7 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
         configError(command->revision, "invalid_learning_revision");
         return;
       }
+      resetKeyIndicator();
       applyRuntimePinModes();
       writeLine("LEARN_OK " + std::to_string(command->revision) + "\n");
       return;
@@ -139,17 +135,17 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
                             true, nowMs) != ResponseAction::Execute) {
     return;
   }
-  if (command->kind == HelperCommandKind::Paste) {
-    pasteClipboard();
-  } else {
-    sendHotkey(command->modifierMask, command->keycode);
-  }
+  const bool sent = command->kind == HelperCommandKind::Paste
+                        ? pasteClipboard()
+                        : platform::sendHotkey(command->modifierMask,
+                                               command->keycode);
+  if (!sent) return;
   writeLine(formatDone(command->eventId, command->step));
 }
 
 void readHelperResponses(std::uint32_t nowMs) {
-  while (usbSerial.available() > 0) {
-    const int value = usbSerial.read();
+  while (platform::available() > 0) {
+    const int value = platform::read();
     if (value < 0) {
       return;
     }
@@ -161,6 +157,16 @@ void readHelperResponses(std::uint32_t nowMs) {
 
 void emitInput(const std::optional<InputEvent> &event, bool learning) {
   if (event.has_value()) {
+    switch (keyIndicator.handle(event->state)) {
+      case KeyIndicatorAction::ShowRandomColor:
+        platform::showRandomKeyColor();
+        break;
+      case KeyIndicatorAction::Off:
+        platform::clearKeyColor();
+        break;
+      case KeyIndicatorAction::None:
+        break;
+    }
     writeLine(learning ? formatLearningEvent(*event) : formatInputEvent(*event));
   }
 }
@@ -216,20 +222,14 @@ void scanLearningInputs(std::uint32_t nowMs) {
 }  // namespace
 
 void setup() {
-  USB.VID(0x303A);
-  USB.PID(0x4002);
-  USB.manufacturerName("Kivo");
-  USB.productName("Kivo Keyboard");
-
-  usbSerial.begin(115200);
-  keyboard.begin();
-  USB.begin();
+  helloLine = formatHello(platform::boardProfile(), KIVO_FIRMWARE_BUILD_ID);
+  platform::begin();
 }
 
 void loop() {
   const std::uint32_t nowMs = millis();
-  const bool connected = static_cast<bool>(usbSerial);
-  if (connected && !helperConnected) writeLine(kHelloLine);
+  const bool connected = platform::connected();
+  if (connected && !helperConnected) writeLine(helloLine);
   helperConnected = connected;
   controller.expire(nowMs);
   readHelperResponses(nowMs);
@@ -238,5 +238,5 @@ void loop() {
   } else {
     scanRuntimeInputs(nowMs);
   }
-  delay(1);
+  platform::delayMs(1);
 }

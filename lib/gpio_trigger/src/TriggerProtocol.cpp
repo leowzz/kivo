@@ -4,6 +4,8 @@
 #include <limits>
 
 namespace {
+constexpr std::size_t kMaxProtocolPinCount = 23;
+
 std::optional<std::uint32_t> parseNumber(std::string_view value) {
   if (value.empty()) return std::nullopt;
   std::uint32_t result = 0;
@@ -34,14 +36,15 @@ std::optional<std::uint32_t> takeNumber(std::string_view &line) {
 
 bool takePins(std::string_view &line, std::size_t count,
               std::vector<std::uint8_t> &pins) {
-  if (count == 0 || count > kEsp32S3SafePins.size()) return false;
+  if (count == 0 || count > kMaxProtocolPinCount) return false;
   for (std::size_t index = 0; index < count; ++index) {
     const auto value = takeNumber(line);
-    if (!value.has_value() || *value > 255) return false;
+    if (!value.has_value() ||
+        *value > std::numeric_limits<std::uint8_t>::max()) {
+      return false;
+    }
     const auto pin = static_cast<std::uint8_t>(*value);
-    if (std::find(kEsp32S3SafePins.begin(), kEsp32S3SafePins.end(), pin) ==
-            kEsp32S3SafePins.end() ||
-        std::find(pins.begin(), pins.end(), pin) != pins.end()) {
+    if (std::find(pins.begin(), pins.end(), pin) != pins.end()) {
       return false;
     }
     pins.push_back(pin);

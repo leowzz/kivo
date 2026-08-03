@@ -1,4 +1,4 @@
-use crate::device::{ConnectionState, ConnectionStatus};
+use crate::coordinator::{ConnectionDimension, DeviceMode, DeviceStatus, RuntimeDimension};
 use tauri::{
     App, AppHandle, Manager,
     image::Image,
@@ -17,7 +17,7 @@ struct TrayState {
     tray: TrayIcon<tauri::Wry>,
 }
 
-pub fn setup(app: &mut App, initial: &ConnectionStatus) -> tauri::Result<()> {
+pub fn setup(app: &mut App, initial: &[DeviceStatus]) -> tauri::Result<()> {
     #[cfg(target_os = "macos")]
     app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
@@ -46,8 +46,8 @@ pub fn setup(app: &mut App, initial: &ConnectionStatus) -> tauri::Result<()> {
     Ok(())
 }
 
-pub fn update_connection(app: &AppHandle, connection: &ConnectionStatus) {
-    let label = status_label(connection);
+pub fn update_registry(app: &AppHandle, devices: &[DeviceStatus]) {
+    let label = status_label(devices);
     let state_app = app.clone();
     let _ = app.run_on_main_thread(move || {
         let Some(state) = state_app.try_state::<TrayState>() else {
@@ -78,32 +78,72 @@ fn action_for(id: &str) -> Option<TrayAction> {
     }
 }
 
-fn status_label(connection: &ConnectionStatus) -> String {
-    match (&connection.state, &connection.port) {
-        (ConnectionState::Connected, Some(port)) => format!("Connected - {port}"),
-        _ => "Waiting for device".to_owned(),
+fn status_label(devices: &[DeviceStatus]) -> String {
+    let online = devices
+        .iter()
+        .filter(|device| device.connection == ConnectionDimension::Online)
+        .collect::<Vec<_>>();
+    if online.is_empty() {
+        return "Waiting for device".to_owned();
     }
+    let ready = online
+        .iter()
+        .filter(|device| device.runtime == RuntimeDimension::Ready)
+        .count();
+    let bootloader = online
+        .iter()
+        .filter(|device| device.mode == Some(DeviceMode::Bootloader))
+        .count();
+    let errors = online
+        .iter()
+        .filter(|device| device.runtime == RuntimeDimension::RuntimeError)
+        .count();
+    format!(
+        "{} online · {ready} ready · {bootloader} bootloader · {errors} errors",
+        online.len()
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        coordinator::{AssignmentDimension, IdentityDimension},
+        hardware::DeviceId,
+    };
+
+    fn status_fixture() -> DeviceStatus {
+        DeviceStatus {
+            device_id: DeviceId::new("luatos-esp32s3-aio", "TRAY").unwrap(),
+            name: "Desk".into(),
+            connection: ConnectionDimension::Online,
+            mode: Some(DeviceMode::Runtime),
+            identity: IdentityDimension::Valid,
+            assignment: AssignmentDimension::Unassigned,
+            runtime: RuntimeDimension::Inactive,
+            raw_serial: "TRAY".into(),
+            port: Some("/dev/test".into()),
+            controller_family_id: "esp32s3".into(),
+            board_profile_id: "luatos-esp32s3-aio".into(),
+            firmware_build_id: Some("test".into()),
+            pins: vec![1],
+            runtime_assignment: None,
+            latest_error: None,
+            learning: None,
+        }
+    }
 
     #[test]
-    fn formats_waiting_and_connected_status() {
+    fn formats_registry_summary() {
+        assert_eq!(status_label(&[]), "Waiting for device");
+        let mut ready = status_fixture();
+        ready.runtime = RuntimeDimension::Ready;
+        let mut bootloader = status_fixture();
+        bootloader.mode = Some(DeviceMode::Bootloader);
+        bootloader.runtime = RuntimeDimension::Inactive;
         assert_eq!(
-            status_label(&ConnectionStatus {
-                state: ConnectionState::Searching,
-                port: None,
-            }),
-            "Waiting for device"
-        );
-        assert_eq!(
-            status_label(&ConnectionStatus {
-                state: ConnectionState::Connected,
-                port: Some("/dev/cu.test".to_owned()),
-            }),
-            "Connected - /dev/cu.test"
+            status_label(&[ready, bootloader]),
+            "2 online · 1 ready · 1 bootloader · 0 errors"
         );
     }
 

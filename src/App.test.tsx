@@ -1,105 +1,1140 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import App from "./App";
-import type { AppSnapshot, ModelConfig } from "./types";
+import type {
+  AppSnapshot,
+  CreateDeviceProfileRequest,
+  DeviceProfile,
+  DeviceStatus,
+  RuntimeAssignment,
+  RuntimeEvent,
+} from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 
-const model: ModelConfig = {
-  schema_version: 1,
-  model: {
+const deviceProfile: DeviceProfile = {
+  schema_version: 2,
+  profile: {
     id: "tel-carbon-v1",
     name: "碳膜电话键盘",
-    groups: [{
-      id: "digits",
-      columns: 2,
-      buttons: [
-        { id: "DIGIT_2", label: "2" },
-        { id: "ENTER", label: "确认" },
-      ],
-    }],
-  },
-  hardware: {
-    controller: "esp32s3",
-    debounce_ms: 30,
-    inputs: [
-      { type: "direct", id: "side", keys: { ENTER: 6 } },
-      { type: "contact_matrix", id: "carbon", pins: [1, 2, 12, 13], keys: { DIGIT_2: [1, 12] } },
+    groups: [
+      {
+        id: "digits",
+        columns: 2,
+        buttons: [
+          { id: "DIGIT_2", label: "2" },
+          { id: "ENTER", label: "确认" },
+        ],
+      },
     ],
   },
+  hardware_profiles: [
+    {
+      id: "front-desk",
+      name: "前台硬件配置",
+      board_profile_id: "luatos-esp32s3-aio",
+      debounce_ms: 30,
+      inputs: [
+        { type: "direct", id: "side", keys: { ENTER: 6 } },
+        {
+          type: "contact_matrix",
+          id: "carbon",
+          pins: [1, 2, 12, 13],
+          keys: { DIGIT_2: [1, 12] },
+        },
+      ],
+    },
+  ],
   actions: {},
 };
 
+function device(overrides: Partial<DeviceStatus> = {}): DeviceStatus {
+  return {
+    deviceId: "device-front-desk",
+    name: "前台键盘",
+    connection: "online",
+    mode: "runtime",
+    identity: "valid",
+    assignment: "valid",
+    runtime: "ready",
+    hardwareSerial: "ABC123",
+    port: "/dev/cu.test",
+    controllerFamilyId: "esp32s3",
+    boardProfileId: "luatos-esp32s3-aio",
+    firmwareBuildId: "test-build",
+    capabilities: [1, 2, 6, 12, 13],
+    runtimeAssignment: {
+      device_profile_id: deviceProfile.profile.id,
+      hardware_profile_id: "front-desk",
+    },
+    latestError: null,
+    learning: null,
+    ...overrides,
+  };
+}
+
+const rpBoard: AppSnapshot["boardProfiles"][number] = {
+  id: "rp",
+  controllerFamilyId: "rp2040",
+  displayName: "RP2040 Pad",
+  runtimeUsb: "2e8a:102e",
+  bootloaderUsb: "2e8a:0003",
+  safePins: [0, 1],
+};
+
+const rpProfile: DeviceProfile = {
+  schema_version: 2,
+  profile: { id: "rp-profile", name: "RP Profile", groups: [] },
+  hardware_profiles: [
+    {
+      id: "rp-other",
+      name: "RP Other",
+      board_profile_id: "rp",
+      debounce_ms: 30,
+      inputs: [],
+    },
+    {
+      id: "rp-hardware",
+      name: "RP Hardware",
+      board_profile_id: "rp",
+      debounce_ms: 30,
+      inputs: [],
+    },
+  ],
+  actions: {},
+};
+
+function rpCandidate(
+  overrides: Partial<AppSnapshot["candidates"][number]> = {},
+): AppSnapshot["candidates"][number] {
+  return {
+    key: "runtime:/dev/cu.usbmodem1101",
+    deviceId: "stable-rp",
+    mode: "runtime",
+    identity: "validating",
+    issue: "validating",
+    rawSerial: "50031519384E811C",
+    port: "/dev/cu.usbmodem1101",
+    controllerFamilyId: "rp2040",
+    boardProfileId: "rp",
+    latestError: null,
+    ...overrides,
+  };
+}
+
+function rpUnassignedDevice(
+  overrides: Partial<DeviceStatus> = {},
+): DeviceStatus {
+  return device({
+    deviceId: "stable-rp",
+    name: "RP2040 Pad · 4E811C",
+    assignment: "unassigned",
+    runtime: "inactive",
+    hardwareSerial: "50031519384E811C",
+    port: "/dev/cu.usbmodem1101",
+    controllerFamilyId: "rp2040",
+    boardProfileId: "rp",
+    firmwareBuildId: "hello-v3",
+    capabilities: [0, 1],
+    runtimeAssignment: null,
+    ...overrides,
+  });
+}
+
 const baseSnapshot: AppSnapshot = {
-  models: [model],
-  activeModel: model.model.id,
+  deviceProfiles: [deviceProfile],
+  editorProfile: deviceProfile.profile.id,
+  boardProfiles: [
+    {
+      id: "luatos-esp32s3-aio",
+      controllerFamilyId: "esp32s3",
+      displayName: "LuatOS ESP32-S3 AIO",
+      runtimeUsb: "303a:4002",
+      bootloaderUsb: null,
+      safePins: [1, 2, 6, 12, 13],
+    },
+  ],
+  devices: [device()],
+  candidates: [],
   language: "zh-CN",
-  supportedGpios: [1, 2, 6, 12, 13],
-  connection: { state: "connected", port: "/dev/cu.test" },
-  runtimeError: null,
-  learning: null,
   homeMetrics: {
     totalPresses: 12,
     todayPresses: 3,
     activeButtonCount: 2,
     topButton: { buttonId: "DIGIT_2", presses: 8 },
     heatmap: [{ buttonId: "DIGIT_2", day: "2026-07-30", presses: 3 }],
-    logs: [{ timestampMs: 1785396000000, kind: "button", message: "DIGIT_2 pressed" }],
+    logs: [
+      {
+        timestampMs: 1785396000000,
+        kind: "button",
+        message: "DIGIT_2 pressed",
+        deviceId: "device-front-desk",
+        deviceName: "前台键盘",
+        deviceProfileId: deviceProfile.profile.id,
+        hardwareProfileId: "front-desk",
+        buttonId: "DIGIT_2",
+      },
+    ],
   },
 };
 
 let currentSnapshot: AppSnapshot;
+let emitRuntimeEvent: (event: RuntimeEvent) => void;
+
+function deferred<Value>() {
+  let resolve!: (value: Value) => void;
+  const promise = new Promise<Value>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
+function runtimeEvent(overrides: Partial<RuntimeEvent> = {}): RuntimeEvent {
+  return {
+    timestampMs: 1785396000000,
+    level: "info",
+    deviceId: "device-front-desk",
+    rawSerial: "ABC123",
+    controllerFamilyId: "esp32s3",
+    boardProfileId: "luatos-esp32s3-aio",
+    port: "/dev/cu.test",
+    deviceProfileId: deviceProfile.profile.id,
+    hardwareProfileId: "front-desk",
+    homeUpdate: null,
+    code: "input_state",
+    params: {},
+    detail: null,
+    input: { type: "direct", gpio: 6 },
+    pressed: true,
+    learningTarget: null,
+    ...overrides,
+  };
+}
 
 beforeEach(() => {
+  vi.useRealTimers();
   vi.clearAllMocks();
   currentSnapshot = structuredClone(baseSnapshot);
-  HTMLDialogElement.prototype.showModal = function showModal() { this.setAttribute("open", ""); };
-  HTMLDialogElement.prototype.close = function close() { this.removeAttribute("open"); };
-  vi.mocked(listen).mockResolvedValue(vi.fn());
+  HTMLDialogElement.prototype.showModal = function showModal() {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close = function close() {
+    this.removeAttribute("open");
+  };
+  vi.mocked(listen).mockImplementation(async (_event, handler) => {
+    emitRuntimeEvent = (event) => handler({ payload: event } as never);
+    return () => undefined;
+  });
   vi.mocked(open).mockResolvedValue(null);
   vi.mocked(save).mockResolvedValue(null);
   vi.mocked(invoke).mockImplementation(async (command, args) => {
-    if (command === "save_model") {
-      const saved = (args as { model: ModelConfig }).model;
-      currentSnapshot.models = currentSnapshot.models.map((item) => item.model.id === saved.model.id ? saved : item);
+    if (command === "save_device_profile") {
+      const saved = (args as { profile: DeviceProfile }).profile;
+      currentSnapshot.deviceProfiles = currentSnapshot.deviceProfiles.map(
+        (item) => (item.profile.id === saved.profile.id ? saved : item),
+      );
     }
     if (command === "save_settings") {
-      const settings = (args as { settings: { active_model: string | null; language: AppSnapshot["language"] } }).settings;
-      currentSnapshot.activeModel = settings.active_model;
+      const settings = (
+        args as {
+          settings: {
+            editor_profile: string | null;
+            language: AppSnapshot["language"];
+          };
+        }
+      ).settings;
+      currentSnapshot.editorProfile = settings.editor_profile;
       currentSnapshot.language = settings.language;
     }
-    if (command === "delete_model") {
-      currentSnapshot = { ...currentSnapshot, models: [], activeModel: null };
+    if (command === "retry_candidate") {
+      const deviceId = (args as { deviceId: string }).deviceId;
+      currentSnapshot.candidates = currentSnapshot.candidates.map((candidate) =>
+        candidate.deviceId === deviceId
+          ? { ...candidate, issue: "validating", latestError: null }
+          : candidate,
+      );
+    }
+    if (command === "create_device_profile") {
+      const request = (args as { request: CreateDeviceProfileRequest }).request;
+      const id = request.name === "Offline RP" ? "offline-rp" : "created-profile";
+      const created =
+        request.kind === "clone"
+          ? {
+              ...structuredClone(
+                currentSnapshot.deviceProfiles.find(
+                  (profile) => profile.profile.id === request.source_profile_id,
+                )!,
+              ),
+              profile: {
+                ...structuredClone(
+                  currentSnapshot.deviceProfiles.find(
+                    (profile) => profile.profile.id === request.source_profile_id,
+                  )!.profile,
+                ),
+                id,
+                name: request.name,
+              },
+            }
+          : {
+              schema_version: 2 as const,
+              profile: { id, name: request.name, groups: [] },
+              hardware_profiles: [
+                {
+                  id: "hardware",
+                  name: "Default hardware",
+                  board_profile_id: request.board_profile_id,
+                  debounce_ms: 30,
+                  inputs: [],
+                },
+              ],
+              actions: {},
+            };
+      currentSnapshot.deviceProfiles.push(created);
+      currentSnapshot.editorProfile = id;
+    }
+    if (command === "complete_device_setup") {
+      const { deviceId, name, assignment } = args as {
+        deviceId: string;
+        name: string;
+        assignment: RuntimeAssignment;
+      };
+      currentSnapshot.devices = currentSnapshot.devices.map((item) =>
+        item.deviceId === deviceId
+          ? {
+              ...item,
+              name,
+              assignment: "valid",
+              runtime: "configuring",
+              runtimeAssignment: assignment,
+            }
+          : item,
+      );
+    }
+    if (command === "delete_device_profile") {
+      currentSnapshot = {
+        ...currentSnapshot,
+        deviceProfiles: [],
+        editorProfile: null,
+      };
+    }
+    if (command === "begin_learning") {
+      const target = args as {
+        deviceId: string;
+        deviceProfileId: string;
+        hardwareProfileId: string;
+        editingRevision: number;
+        pins: number[];
+      };
+      const selected = currentSnapshot.devices.find(({ deviceId }) => deviceId === target.deviceId);
+      if (selected) selected.learning = { ...target, firmwareRevision: 0 };
+    }
+    if (command === "end_learning") {
+      const selected = currentSnapshot.devices.find(
+        ({ deviceId }) => deviceId === (args as { deviceId: string }).deviceId,
+      );
+      if (selected) selected.learning = null;
     }
     return structuredClone(currentSnapshot);
   });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 test("does not override the WebView viewport height", async () => {
   render(<App />);
 
   await screen.findByRole("heading", { name: "按键概览" });
-  expect(document.documentElement.style.getPropertyValue("--app-height")).toBe("");
+  expect(document.documentElement.style.getPropertyValue("--app-height")).toBe(
+    "",
+  );
 });
 
-test("keeps device switching and configuration-file actions on their own page", async () => {
+test("home connection status names the keyboard without exposing its system port", async () => {
+  render(<App />);
+  await screen.findByRole("heading", { name: "按键概览" });
+  expect(screen.getByText("前台键盘")).toBeInTheDocument();
+  expect(screen.queryByText("/dev/cu.test")).toBeNull();
+});
+
+test("summarizes an empty device registry", async () => {
+  currentSnapshot.devices = [];
   render(<App />);
 
-  expect(await screen.findByRole("heading", { name: "按键概览" })).toBeInTheDocument();
+  expect(await screen.findByLabelText("设备状态汇总")).toHaveTextContent(
+    "0 就绪 · 0 需处理 · 0 离线",
+  );
+});
+
+test("summarizes mixed devices and adds candidates only to attention", async () => {
+  currentSnapshot.devices = [
+    device(),
+    device({
+      deviceId: "device-needs-attention",
+      assignment: "invalid_assignment",
+      runtime: "inactive",
+    }),
+    device({
+      deviceId: "device-offline",
+      connection: "offline",
+      mode: null,
+      runtime: "inactive",
+    }),
+  ];
+  currentSnapshot.candidates = [
+    {
+      key: "candidate-bootloader",
+      deviceId: null,
+      mode: "bootloader",
+      identity: "invalid_identity",
+      issue: "invalid_identity",
+      rawSerial: null,
+      port: null,
+      controllerFamilyId: "rp2040",
+      boardProfileId: "vccgnd-yd-rp2040",
+      latestError: null,
+    },
+  ];
+  render(<App />);
+
+  expect(await screen.findByLabelText("设备状态汇总")).toHaveTextContent(
+    "1 就绪 · 2 需处理 · 1 离线",
+  );
+});
+
+test("uses the authoritative profile-save snapshot for the device status transition", async () => {
+  currentSnapshot.devices[0].runtime = "configuring";
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "save_device_profile") {
+      const saved = (args as { profile: DeviceProfile }).profile;
+      currentSnapshot.deviceProfiles = [saved];
+      currentSnapshot.devices[0].runtime = "ready";
+    }
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  expect(await screen.findByLabelText("设备状态汇总")).toHaveTextContent(
+    "0 就绪 · 0 需处理 · 0 离线",
+  );
+  await user.click(screen.getByRole("button", { name: "按键行为" }));
+  await user.click(screen.getByRole("button", { name: "按下按键" }));
+
+  await waitFor(
+    () =>
+      expect(screen.getByLabelText("设备状态汇总")).toHaveTextContent(
+        "1 就绪 · 0 需处理 · 0 离线",
+      ),
+    { timeout: 1600 },
+  );
+});
+
+test("refreshes authoritative registry state after a runtime event", async () => {
+  render(<App />);
+  expect(await screen.findByLabelText("设备状态汇总")).toHaveTextContent(
+    "1 就绪 · 0 需处理 · 0 离线",
+  );
+  currentSnapshot.devices[0] = device({
+    connection: "offline",
+    mode: null,
+    runtime: "inactive",
+    port: null,
+  });
+
+  await act(async () =>
+    emitRuntimeEvent(
+      runtimeEvent({ code: "runtime_timeout", input: null, pressed: null }),
+    ),
+  );
+
+  await waitFor(() =>
+    expect(screen.getByLabelText("设备状态汇总")).toHaveTextContent(
+      "0 就绪 · 0 需处理 · 1 离线",
+    ),
+  );
+});
+
+test("periodically refreshes candidates that produce no runtime event", async () => {
+  vi.useFakeTimers();
+  render(<App />);
+  await act(async () => undefined);
+  expect(screen.getByLabelText("设备状态汇总")).toHaveTextContent(
+    "1 就绪 · 0 需处理 · 0 离线",
+  );
+  currentSnapshot.candidates = [
+    {
+      key: "candidate-runtime",
+      deviceId: null,
+      mode: "runtime",
+      identity: "invalid_identity",
+      issue: "invalid_identity",
+      rawSerial: null,
+      port: "/dev/cu.candidate",
+      controllerFamilyId: "rp2040",
+      boardProfileId: "vccgnd-yd-rp2040",
+      latestError: null,
+    },
+  ];
+
+  await act(async () => vi.advanceTimersByTimeAsync(2_000));
+
+  expect(screen.getByLabelText("设备状态汇总")).toHaveTextContent(
+    "1 就绪 · 1 需处理 · 0 离线",
+  );
+});
+
+test("auto-opens one new Candidate once and stays dismissed for the insertion", async () => {
+  const user = userEvent.setup();
+  currentSnapshot.devices = [];
+  currentSnapshot.candidates = [rpCandidate()];
+  currentSnapshot.boardProfiles = [rpBoard];
+  render(<App />);
+
+  expect(
+    await screen.findByRole("dialog", { name: "添加键盘" }),
+  ).toBeInTheDocument();
+  await user.click(
+    within(screen.getByRole("dialog", { name: "添加键盘" })).getByRole(
+      "button",
+      { name: "稍后处理" },
+    ),
+  );
+  expect(screen.queryByRole("dialog", { name: "添加键盘" })).toBeNull();
+  await act(async () =>
+    emitRuntimeEvent(
+      runtimeEvent({ code: "topology_active", input: null, pressed: null }),
+    ),
+  );
+  expect(screen.queryByRole("dialog", { name: "添加键盘" })).toBeNull();
+});
+
+test("does not reopen when Candidate becomes the same unassigned Device", async () => {
+  currentSnapshot.devices = [];
+  currentSnapshot.candidates = [rpCandidate()];
+  currentSnapshot.boardProfiles = [rpBoard];
+  currentSnapshot.deviceProfiles = [rpProfile];
+  render(<App />);
+  const dialog = await screen.findByRole("dialog", { name: "添加键盘" });
+  expect(dialog).toHaveTextContent("正在确认设备");
+
+  currentSnapshot.candidates = [];
+  currentSnapshot.devices = [rpUnassignedDevice()];
+  await act(async () =>
+    emitRuntimeEvent(
+      runtimeEvent({
+        deviceId: "stable-rp",
+        code: "topology_active",
+        input: null,
+        pressed: null,
+      }),
+    ),
+  );
+
+  await waitFor(() =>
+    expect(screen.getByRole("dialog", { name: "添加键盘" })).toHaveTextContent(
+      "选择键盘配置",
+    ),
+  );
+  expect(screen.getAllByRole("dialog", { name: "添加键盘" })).toHaveLength(1);
+});
+
+test("configuration page creates a profile while no device is usable", async () => {
+  const user = userEvent.setup();
+  currentSnapshot.devices = [];
+  currentSnapshot.candidates = [
+    rpCandidate({ issue: "firmware_not_responding" }),
+  ];
+  currentSnapshot.boardProfiles = [rpBoard];
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "稍后处理" }));
+  await user.click(screen.getByRole("button", { name: "配置文件" }));
+  await user.click(screen.getByRole("button", { name: "新建配置" }));
+  await user.click(screen.getByRole("radio", { name: "空白配置" }));
+  await user.type(screen.getByRole("textbox", { name: "配置名称" }), "Offline RP");
+  await user.selectOptions(screen.getByRole("combobox", { name: "板型" }), "rp");
+  await user.click(screen.getByRole("button", { name: "创建配置" }));
+
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("create_device_profile", {
+      request: {
+        kind: "blank",
+        name: "Offline RP",
+        board_profile_id: "rp",
+      },
+    }),
+  );
+  expect(
+    await screen.findByRole("heading", { name: "按键布局" }),
+  ).toBeInTheDocument();
+  expect(screen.getByText("Offline RP")).toBeInTheDocument();
+  expect(currentSnapshot.devices).toHaveLength(0);
+});
+
+test("completes one exact Device and navigates to its Hardware Profile", async () => {
+  const user = userEvent.setup();
+  currentSnapshot.devices = [
+    rpUnassignedDevice(),
+    rpUnassignedDevice({ deviceId: "other-rp", hardwareSerial: "OTHER" }),
+  ];
+  currentSnapshot.candidates = [];
+  currentSnapshot.boardProfiles = [rpBoard];
+  currentSnapshot.deviceProfiles = [rpProfile];
+  currentSnapshot.editorProfile = rpProfile.profile.id;
+  render(<App />);
+  const dialog = await screen.findByRole("dialog", { name: "添加键盘" });
+  await user.selectOptions(
+    within(dialog).getByRole("combobox", { name: "键盘配置" }),
+    "rp-profile",
+  );
+  await user.selectOptions(
+    within(dialog).getByRole("combobox", { name: "硬件配置" }),
+    "rp-hardware",
+  );
+  await user.click(within(dialog).getByRole("button", { name: "下一步" }));
+  await user.click(
+    within(dialog).getByRole("button", { name: "完成设置" }),
+  );
+
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("complete_device_setup", {
+      deviceId: "stable-rp",
+      name: expect.any(String),
+      assignment: {
+        device_profile_id: "rp-profile",
+        hardware_profile_id: "rp-hardware",
+      },
+    }),
+  );
+  expect(
+    currentSnapshot.devices.find((item) => item.deviceId === "other-rp")
+      ?.runtimeAssignment,
+  ).toBeNull();
+  expect(await screen.findByRole("heading", { name: "硬件配置" })).toBeInTheDocument();
+  expect(screen.getByRole("combobox", { name: "硬件配置" })).toHaveValue(
+    "rp-hardware",
+  );
+});
+
+test("keeps completed setup successful when saving the Editor Profile fails", async () => {
+  const defaultInvoke = vi.mocked(invoke).getMockImplementation()!;
+  currentSnapshot.devices = [rpUnassignedDevice()];
+  currentSnapshot.candidates = [];
+  currentSnapshot.boardProfiles.push(rpBoard);
+  currentSnapshot.deviceProfiles.push(rpProfile);
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "save_settings") throw new Error("settings_write_failed");
+    return defaultInvoke(command, args);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  const dialog = await screen.findByRole("dialog", { name: "添加键盘" });
+  await user.selectOptions(
+    within(dialog).getByRole("combobox", { name: "键盘配置" }),
+    "rp-profile",
+  );
+  await user.selectOptions(
+    within(dialog).getByRole("combobox", { name: "硬件配置" }),
+    "rp-hardware",
+  );
+  await user.click(within(dialog).getByRole("button", { name: "下一步" }));
+  await user.click(
+    within(dialog).getByRole("button", { name: "完成设置" }),
+  );
+
+  expect(
+    await screen.findByText("保存失败: settings_write_failed"),
+  ).toHaveClass("error-banner");
+  expect(screen.queryByRole("dialog", { name: "添加键盘" })).toBeNull();
+  expect(screen.getByRole("heading", { name: "硬件配置" })).toBeInTheDocument();
+  expect(screen.getByRole("combobox", { name: "硬件配置" })).toHaveValue(
+    "rp-hardware",
+  );
+});
+
+test("serializes bootstrap behind a delayed listener and existing registry refresh", async () => {
+  vi.useFakeTimers();
+  const listener = deferred<() => void>();
+  const firstSnapshot = deferred<AppSnapshot>();
+  const secondSnapshot = deferred<AppSnapshot>();
+  let snapshotRequests = 0;
+  vi.mocked(listen).mockReturnValue(listener.promise);
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command !== "get_snapshot") return structuredClone(currentSnapshot);
+    snapshotRequests += 1;
+    return snapshotRequests === 1
+      ? firstSnapshot.promise
+      : secondSnapshot.promise;
+  });
+
+  const { unmount } = render(<App />);
+  await act(async () => vi.advanceTimersByTimeAsync(2_000));
+  expect(snapshotRequests).toBe(1);
+
+  await act(async () => {
+    listener.resolve(() => undefined);
+    await Promise.resolve();
+  });
+  expect(snapshotRequests).toBe(1);
+
+  await act(async () => {
+    firstSnapshot.resolve(structuredClone(currentSnapshot));
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(snapshotRequests).toBe(2);
+
+  await act(async () => {
+    secondSnapshot.resolve(structuredClone(currentSnapshot));
+    await Promise.resolve();
+  });
+  unmount();
+});
+
+test("disposes a listener that resolves after App unmounts without loading a snapshot", async () => {
+  const listener = deferred<() => void>();
+  const unlisten = vi.fn();
+  vi.mocked(listen).mockReturnValue(listener.promise);
+
+  const { unmount } = render(<App />);
+  unmount();
+  await act(async () => {
+    listener.resolve(unlisten);
+    await Promise.resolve();
+  });
+
+  expect(unlisten).toHaveBeenCalledOnce();
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.some(([command]) => command === "get_snapshot"),
+  ).toBe(false);
+});
+
+test("retries a failed bootstrap as a full snapshot and clears its load error", async () => {
+  vi.useFakeTimers();
+  let snapshotRequests = 0;
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "get_snapshot" && snapshotRequests++ === 0) {
+      throw new Error("temporary snapshot failure");
+    }
+    return structuredClone(currentSnapshot);
+  });
+
+  render(<App />);
+  await act(async () => undefined);
+
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "载入失败: temporary snapshot failure",
+  );
+  expect(screen.getByText("等待设备")).toBeInTheDocument();
+
+  await act(async () => vi.advanceTimersByTimeAsync(2_000));
+
+  expect(screen.getByText("设备已连接")).toBeInTheDocument();
+  expect(screen.getByText("前台键盘")).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("preserves a dirty Device Profile draft across a registry refresh", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "按键行为" }));
+  await user.click(screen.getByRole("button", { name: "按下按键" }));
+  expect(
+    screen.getByRole("button", { name: "2，1 项行为" }),
+  ).toBeInTheDocument();
+
+  await act(async () =>
+    emitRuntimeEvent(
+      runtimeEvent({ code: "topology_active", input: null, pressed: null }),
+    ),
+  );
+
+  expect(
+    screen.getByRole("button", { name: "2，1 项行为" }),
+  ).toBeInTheDocument();
+});
+
+test("keeps device management and configuration-file actions as separate work destinations", async () => {
+  render(<App />);
+
+  expect(
+    await screen.findByRole("heading", { name: "按键概览" }),
+  ).toBeInTheDocument();
   const navigation = screen.getByRole("navigation", { name: "配置" });
-  expect(navigation).not.toContainElement(screen.getByRole("button", { name: "首页" }));
+  expect(navigation).not.toContainElement(
+    screen.getByRole("button", { name: "首页" }),
+  );
   expect(screen.getByRole("button", { name: "首页" })).toHaveClass("is-active");
-  expect(screen.queryByLabelText("选择设备型号")).toBeNull();
-  await userEvent.setup().click(screen.getByRole("button", { name: "配置文件" }));
-  expect(screen.getByLabelText("选择设备型号")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "删除型号" })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: /^保存$/ })).not.toBeInTheDocument();
+  const devicesButton = screen.getByRole("button", { name: "设备管理" });
+  expect(devicesButton.querySelector(".lucide-usb")).not.toBeNull();
+  await userEvent.setup().click(devicesButton);
+  expect(screen.getByRole("heading", { name: "设备管理" })).toBeInTheDocument();
+  expect(screen.queryByLabelText("当前编辑配置")).toBeNull();
+  await userEvent
+    .setup()
+    .click(screen.getByRole("button", { name: "配置文件" }));
+  expect(screen.getByLabelText("当前编辑配置")).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "删除设备配置" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: /^保存$/ }),
+  ).not.toBeInTheDocument();
+  expect(document.body).not.toHaveTextContent("型号");
+});
+
+test("fetches selected Device metrics with an exact ID and renders its activity", async () => {
+  currentSnapshot.devices.push(
+    device({
+      deviceId: "device-second",
+      name: "Second Device",
+      hardwareSerial: "SECOND",
+    }),
+  );
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "get_device_metrics") {
+      const deviceId = (args as { deviceId: string }).deviceId;
+      return {
+        ...baseSnapshot.homeMetrics!,
+        logs: [
+          {
+            ...baseSnapshot.homeMetrics!.logs[0],
+            deviceId,
+            message: `${deviceId} pressed`,
+          },
+        ],
+      };
+    }
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "设备管理" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("get_device_metrics", {
+      deviceId: "device-front-desk",
+    }),
+  );
+  expect(
+    await screen.findByText("device-front-desk pressed"),
+  ).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: /Second Device/ }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("get_device_metrics", {
+      deviceId: "device-second",
+    }),
+  );
+  expect(await screen.findByText("device-second pressed")).toBeInTheDocument();
+});
+
+test("clears prior Device metrics while another selected Device request is pending", async () => {
+  currentSnapshot.devices.push(device({ deviceId: "device-second", name: "Second Device", hardwareSerial: "SECOND" }));
+  const secondMetrics = deferred<AppSnapshot["homeMetrics"]>();
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "get_device_metrics") {
+      return (args as { deviceId: string }).deviceId === "device-second"
+        ? secondMetrics.promise
+        : { ...baseSnapshot.homeMetrics!, logs: [{ ...baseSnapshot.homeMetrics!.logs[0], message: "first activity" }] };
+    }
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "设备管理" }));
+  expect(await screen.findByText("first activity")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: /Second Device/ }));
+  expect(screen.queryByText("first activity")).toBeNull();
+  await act(async () => secondMetrics.resolve({ ...baseSnapshot.homeMetrics!, logs: [{ ...baseSnapshot.homeMetrics!.logs[0], message: "second activity" }] }));
+  expect(await screen.findByText("second activity")).toBeInTheDocument();
+});
+
+test("refreshes metrics only for a runtime event from the selected Device", async () => {
+  let metricRequests = 0;
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "get_device_metrics") {
+      metricRequests += 1;
+      return baseSnapshot.homeMetrics!;
+    }
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "设备管理" }));
+  await waitFor(() => expect(metricRequests).toBe(1));
+  await act(async () =>
+    emitRuntimeEvent(
+      runtimeEvent({ deviceId: "other-device", rawSerial: "OTHER" }),
+    ),
+  );
+  expect(metricRequests).toBe(1);
+  await act(async () => emitRuntimeEvent(runtimeEvent()));
+  await waitFor(() => expect(metricRequests).toBe(2));
+});
+
+test("rejects an older same-Device metrics response", async () => {
+  const first = deferred<AppSnapshot["homeMetrics"]>();
+  const second = deferred<AppSnapshot["homeMetrics"]>();
+  let metricRequests = 0;
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "get_device_metrics")
+      return metricRequests++ === 0 ? first.promise : second.promise;
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "设备管理" }));
+  await waitFor(() => expect(metricRequests).toBe(1));
+  await act(async () => emitRuntimeEvent(runtimeEvent()));
+  await waitFor(() => expect(metricRequests).toBe(2));
+  await act(async () =>
+    second.resolve({
+      ...baseSnapshot.homeMetrics!,
+      logs: [
+        { ...baseSnapshot.homeMetrics!.logs[0], message: "newer activity" },
+      ],
+    }),
+  );
+  expect(await screen.findByText("newer activity")).toBeInTheDocument();
+  await act(async () =>
+    first.resolve({
+      ...baseSnapshot.homeMetrics!,
+      logs: [
+        { ...baseSnapshot.homeMetrics!.logs[0], message: "older activity" },
+      ],
+    }),
+  );
+  expect(screen.queryByText("older activity")).toBeNull();
+  expect(screen.getByText("newer activity")).toBeInTheDocument();
+});
+
+test("renames one Device through the authoritative snapshot and reports failure", async () => {
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "get_device_metrics") return baseSnapshot.homeMetrics!;
+    if (command === "rename_device") {
+      const { deviceId, name } = args as { deviceId: string; name: string };
+      expect(deviceId).toBe("device-front-desk");
+      currentSnapshot.devices[0] = device({ name });
+    }
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "设备管理" }));
+  await user.click(screen.getByRole("button", { name: "重命名设备" }));
+  await user.clear(screen.getByRole("textbox", { name: "设备名称" }));
+  await user.type(screen.getByRole("textbox", { name: "设备名称" }), "Renamed");
+  await user.click(screen.getByRole("button", { name: "确认重命名" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("rename_device", {
+      deviceId: "device-front-desk",
+      name: "Renamed",
+    }),
+  );
+  expect(screen.getByRole("heading", { name: "Renamed" })).toBeInTheDocument();
+  vi.mocked(invoke).mockRejectedValueOnce(new Error("rename denied"));
+  await user.click(screen.getByRole("button", { name: "重命名设备" }));
+  await user.click(screen.getByRole("button", { name: "确认重命名" }));
+  expect(await screen.findByText("保存失败: rename denied")).toHaveClass(
+    "error-banner",
+  );
+});
+
+test("saves one runtime assignment through the authoritative snapshot without changing a same-board Device", async () => {
+  const secondProfile: DeviceProfile = {
+    ...deviceProfile,
+    profile: { ...deviceProfile.profile, id: "call-center", name: "呼叫中心键盘" },
+    hardware_profiles: [{ ...deviceProfile.hardware_profiles[0], id: "call-center-hardware", name: "呼叫中心硬件" }],
+  };
+  currentSnapshot.deviceProfiles.push(secondProfile);
+  currentSnapshot.devices.push(device({
+    deviceId: "device-back-desk",
+    name: "后台键盘",
+    hardwareSerial: "BACK456",
+    runtimeAssignment: { device_profile_id: deviceProfile.profile.id, hardware_profile_id: "front-desk" },
+  }));
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "get_device_metrics") return currentSnapshot.homeMetrics;
+    if (command === "save_runtime_assignment") {
+      expect(args).toEqual({
+        deviceId: "device-front-desk",
+        assignment: {
+          device_profile_id: "call-center",
+          hardware_profile_id: "call-center-hardware",
+        },
+      });
+      currentSnapshot.devices[0] = device({
+        runtimeAssignment: {
+          device_profile_id: "call-center",
+          hardware_profile_id: "call-center-hardware",
+        },
+      });
+    }
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "设备管理" }));
+  await user.selectOptions(screen.getByRole("combobox", { name: "设备配置" }), "call-center");
+  await user.click(screen.getByRole("button", { name: "保存运行分配" }));
+  await user.click(within(screen.getByRole("dialog", { name: "保存运行分配" })).getByRole("button", { name: "确认" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_runtime_assignment", {
+    deviceId: "device-front-desk",
+    assignment: {
+      device_profile_id: "call-center",
+      hardware_profile_id: "call-center-hardware",
+    },
+  }));
+  expect(screen.getAllByText("呼叫中心键盘 / 呼叫中心硬件")).toHaveLength(2);
+  expect(screen.getByRole("combobox", { name: "设备配置" })).toHaveValue("call-center");
+  expect(screen.getByRole("button", { name: /后台键盘.*碳膜电话键盘 \/ 前台硬件配置/ })).toBeInTheDocument();
+});
+
+test("keeps the existing assignment visible after runtime assignment rejection", async () => {
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "get_device_metrics") return currentSnapshot.homeMetrics;
+    if (command === "save_runtime_assignment") throw new Error("assignment denied");
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "设备管理" }));
+  await user.click(screen.getByRole("button", { name: "保存运行分配" }));
+  await user.click(within(screen.getByRole("dialog", { name: "保存运行分配" })).getByRole("button", { name: "确认" }));
+  expect(await screen.findByText("保存失败: assignment denied")).toHaveClass("error-banner");
+  expect(screen.getAllByText("碳膜电话键盘 / 前台硬件配置")).toHaveLength(2);
+});
+
+test("clears one runtime assignment through the authoritative snapshot", async () => {
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "get_device_metrics") return currentSnapshot.homeMetrics;
+    if (command === "clear_runtime_assignment") {
+      expect(args).toEqual({ deviceId: "device-front-desk" });
+      currentSnapshot.devices[0] = device({ runtimeAssignment: null, assignment: "unassigned" });
+    }
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "设备管理" }));
+  await user.click(screen.getByRole("button", { name: "清除运行分配" }));
+  await user.click(within(screen.getByRole("dialog", { name: "清除运行分配" })).getByRole("button", { name: "确认" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("clear_runtime_assignment", {
+    deviceId: "device-front-desk",
+  }));
+  expect(screen.getByRole("button", { name: "清除运行分配" })).toBeDisabled();
+});
+
+test("forgets only the confirmed offline Device and keeps failure retryable", async () => {
+  currentSnapshot.devices[0] = device({
+    connection: "offline",
+    mode: null,
+    runtime: "inactive",
+    port: null,
+  });
+  let rejectForget = false;
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "get_device_metrics") return baseSnapshot.homeMetrics!;
+    if (command === "forget_device") {
+      expect(args).toEqual({ deviceId: "device-front-desk" });
+      if (rejectForget) throw new Error("still connected");
+      currentSnapshot.devices = [];
+    }
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "设备管理" }));
+  await user.click(screen.getByRole("button", { name: "忘记设备" }));
+  await user.click(
+    screen
+      .getByRole("dialog", { name: "忘记设备" })
+      .querySelector("button.danger-button")!,
+  );
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("forget_device", {
+      deviceId: "device-front-desk",
+    }),
+  );
+  expect(screen.queryByRole("button", { name: /前台键盘/ })).toBeNull();
+  currentSnapshot.devices = [
+    device({
+      connection: "offline",
+      mode: null,
+      runtime: "inactive",
+      port: null,
+    }),
+  ];
+  rejectForget = true;
+  await act(async () =>
+    emitRuntimeEvent(runtimeEvent({ deviceId: "device-front-desk" })),
+  );
+  await user.click(await screen.findByRole("button", { name: "忘记设备" }));
+  await user.click(
+    screen
+      .getByRole("dialog", { name: "忘记设备" })
+      .querySelector("button.danger-button")!,
+  );
+  expect(await screen.findByText("删除失败: still connected")).toHaveClass(
+    "error-banner",
+  );
+  expect(screen.getByRole("dialog", { name: "忘记设备" })).toBeInTheDocument();
+});
+
+test("selecting the Editor Profile saves only the version-2 editor settings patch", async () => {
+  const secondProfile: DeviceProfile = {
+    ...structuredClone(deviceProfile),
+    profile: {
+      ...deviceProfile.profile,
+      id: "operator-console",
+      name: "接线员控制台",
+    },
+  };
+  currentSnapshot.deviceProfiles.push(secondProfile);
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "配置文件" }));
+
+  await user.selectOptions(
+    screen.getByLabelText("当前编辑配置"),
+    secondProfile.profile.id,
+  );
+
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("save_settings", {
+      settings: {
+        schema_version: 2,
+        editor_profile: secondProfile.profile.id,
+        language: "zh-CN",
+      },
+    }),
+  );
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.some(
+        ([command]) =>
+          command === "save_runtime_assignment" ||
+          command === "clear_runtime_assignment",
+      ),
+  ).toBe(false);
+  expect(currentSnapshot.devices[0].runtimeAssignment).toEqual(
+    baseSnapshot.devices[0].runtimeAssignment,
+  );
 });
 
 test("keeps the interface in Simplified Chinese without a language selector", async () => {
@@ -111,24 +1146,378 @@ test("keeps the interface in Simplified Chinese without a language selector", as
 });
 
 test("renders seven-day metrics in model order with Chinese logs", async () => {
-  currentSnapshot.models[0].model.groups = [
-    { id: "digits", columns: 2, buttons: [{ id: "DIGIT_2", label: "2" }, { id: "DIGIT_5", label: "5" }] },
+  currentSnapshot.deviceProfiles[0].profile.groups = [
+    {
+      id: "digits",
+      columns: 2,
+      buttons: [
+        { id: "DIGIT_2", label: "2" },
+        { id: "DIGIT_5", label: "5" },
+      ],
+    },
     { id: "actions", columns: 1, buttons: [{ id: "ENTER", label: "确认" }] },
   ];
   currentSnapshot.homeMetrics = {
     ...baseSnapshot.homeMetrics!,
     heatmap: [{ buttonId: "DIGIT_5", day: "2026-07-30", presses: 3 }],
-    logs: [{ timestampMs: 1785396000000, kind: "button", message: "DIGIT_5 pressed" }],
+    logs: [
+      {
+        ...baseSnapshot.homeMetrics!.logs[0],
+        message: "DIGIT_5 pressed",
+        buttonId: "DIGIT_5",
+      },
+    ],
   };
   render(<App />);
 
   await screen.findByRole("heading", { name: "按键概览" });
-  expect([...document.querySelectorAll(".heat-cell")].map((item) => item.textContent)).toEqual([
-    expect.stringContaining("2"), expect.stringContaining("5"), expect.stringContaining("确认"),
+  expect(
+    [...document.querySelectorAll(".heat-cell")].map(
+      (item) => item.textContent,
+    ),
+  ).toEqual([
+    expect.stringContaining("2"),
+    expect.stringContaining("5"),
+    expect.stringContaining("确认"),
   ]);
   expect(screen.getByText("按下 DIGIT_5")).toBeInTheDocument();
-  expect(screen.queryByLabelText("选择设备型号")).toBeNull();
+  expect(screen.queryByLabelText("当前编辑配置")).toBeNull();
   expect(screen.queryByLabelText("语言")).toBeNull();
+});
+
+test("shows Home as searching when only another profile's Device is online", async () => {
+  const secondProfile: DeviceProfile = {
+    ...structuredClone(deviceProfile),
+    profile: {
+      ...deviceProfile.profile,
+      id: "operator-console",
+      name: "接线员控制台",
+    },
+    hardware_profiles: [
+      {
+        ...structuredClone(deviceProfile.hardware_profiles[0]),
+        id: "operator-hardware",
+      },
+    ],
+  };
+  currentSnapshot.deviceProfiles.push(secondProfile);
+  currentSnapshot.devices = [
+    device({
+      deviceId: "device-operator-console",
+      port: "/dev/cu.unrelated",
+      runtimeAssignment: {
+        device_profile_id: secondProfile.profile.id,
+        hardware_profile_id: secondProfile.hardware_profiles[0].id,
+      },
+    }),
+  ];
+
+  render(<App />);
+
+  expect(await screen.findByText("等待设备")).toBeInTheDocument();
+  expect(screen.queryByText("设备已连接")).toBeNull();
+  expect(screen.queryByText("/dev/cu.unrelated")).toBeNull();
+});
+
+test("shows Home as connected when an online matching Device follows an offline one", async () => {
+  currentSnapshot.devices = [
+    device({
+      deviceId: "device-offline",
+      connection: "offline",
+      mode: null,
+      runtime: "inactive",
+      port: null,
+    }),
+    device({
+      deviceId: "device-online",
+      hardwareSerial: "ONLINE",
+      port: "/dev/cu.online",
+    }),
+  ];
+
+  render(<App />);
+
+  expect(await screen.findByText("设备已连接")).toBeInTheDocument();
+  expect(screen.getByText("前台键盘")).toBeInTheDocument();
+  expect(screen.queryByText("/dev/cu.online")).toBeNull();
+  expect(screen.queryByText("等待设备")).toBeNull();
+});
+
+test("isolates a shared pressed button by emitting Device", async () => {
+  currentSnapshot.devices.push(
+    device({ deviceId: "device-second", hardwareSerial: "SECOND" }),
+  );
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "按键行为" }));
+  const enter = screen.getByRole("button", { name: "确认，0 项行为" });
+
+  await act(async () =>
+    emitRuntimeEvent(
+      runtimeEvent({ deviceId: "device-front-desk", pressed: true }),
+    ),
+  );
+  await act(async () =>
+    emitRuntimeEvent(
+      runtimeEvent({
+        deviceId: "device-second",
+        rawSerial: "SECOND",
+        pressed: true,
+      }),
+    ),
+  );
+  await act(async () =>
+    emitRuntimeEvent(
+      runtimeEvent({ deviceId: "device-front-desk", pressed: false }),
+    ),
+  );
+  expect(enter).toHaveClass("is-pressed");
+
+  await act(async () =>
+    emitRuntimeEvent(
+      runtimeEvent({
+        deviceId: "device-second",
+        rawSerial: "SECOND",
+        pressed: false,
+      }),
+    ),
+  );
+  expect(enter).not.toHaveClass("is-pressed");
+});
+
+test("clears pressed feedback only for the disconnected Device regardless of the managed row", async () => {
+  currentSnapshot.devices.push(device({
+    deviceId: "device-second",
+    name: "Second Device",
+    hardwareSerial: "SECOND",
+  }));
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "设备管理" }));
+  await user.click(screen.getByRole("button", { name: /前台键盘/ }));
+  await user.click(screen.getByRole("button", { name: "按键行为" }));
+  const enter = screen.getByRole("button", { name: "确认，0 项行为" });
+
+  await act(async () => emitRuntimeEvent(runtimeEvent()));
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    deviceId: "device-second",
+    rawSerial: "SECOND",
+  })));
+  currentSnapshot.devices[1] = device({
+    deviceId: "device-second",
+    name: "Second Device",
+    hardwareSerial: "SECOND",
+    connection: "offline",
+    mode: null,
+    runtime: "inactive",
+    port: null,
+  });
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    code: "topology_active",
+    input: null,
+    pressed: null,
+  })));
+  await waitFor(() => expect(enter).toHaveClass("is-pressed"));
+
+  currentSnapshot.devices[0] = device({
+    connection: "offline",
+    mode: null,
+    runtime: "inactive",
+    port: null,
+  });
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    code: "topology_active",
+    input: null,
+    pressed: null,
+  })));
+  await waitFor(() => expect(enter).not.toHaveClass("is-pressed"));
+});
+
+test("keeps Home scoped to the Editor Profile while retaining Device metrics and runtime attribution", async () => {
+  const otherProfile: DeviceProfile = {
+    ...structuredClone(deviceProfile),
+    profile: { ...deviceProfile.profile, id: "other-profile", name: "其他键盘" },
+  };
+  currentSnapshot.deviceProfiles.push(otherProfile);
+  currentSnapshot.devices.push(device({
+    deviceId: "device-other-profile",
+    name: "其他设备",
+    hardwareSerial: "OTHER",
+    runtimeAssignment: {
+      device_profile_id: otherProfile.profile.id,
+      hardware_profile_id: "front-desk",
+    },
+  }));
+  const otherMetrics = {
+    ...structuredClone(baseSnapshot.homeMetrics!),
+    totalPresses: 99,
+    logs: [{
+      ...baseSnapshot.homeMetrics!.logs[0],
+      deviceId: "device-other-profile",
+      deviceName: "其他设备",
+      deviceProfileId: otherProfile.profile.id,
+      message: "other-profile activity",
+    }],
+  };
+  let metricRequests = 0;
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "get_device_metrics") {
+      metricRequests += 1;
+      return structuredClone(baseSnapshot.homeMetrics!);
+    }
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "设备管理" }));
+  await user.click(screen.getByRole("button", { name: /其他设备/ }));
+  await waitFor(() => expect(metricRequests).toBe(2));
+  await user.click(await screen.findByRole("button", { name: "按键行为" }));
+  const enter = screen.getByRole("button", { name: "确认，0 项行为" });
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    deviceId: "device-other-profile",
+    rawSerial: "OTHER",
+    deviceProfileId: otherProfile.profile.id,
+    homeUpdate: otherMetrics,
+  })));
+  expect(enter).not.toHaveClass("is-pressed");
+  await waitFor(() => expect(metricRequests).toBe(3));
+
+  await user.click(screen.getByRole("button", { name: "首页" }));
+  expect(screen.getByText("累计按下: 12")).toBeInTheDocument();
+  expect(screen.getByText("按下 DIGIT_2")).toBeInTheDocument();
+  expect(screen.queryByText("累计按下: 99")).toBeNull();
+  expect(screen.queryByText("other-profile activity")).toBeNull();
+
+  await user.click(screen.getByRole("button", { name: "按键行为" }));
+  await act(async () => emitRuntimeEvent(runtimeEvent()));
+  expect(screen.getByRole("button", { name: "确认，0 项行为" })).toHaveClass("is-pressed");
+});
+
+test("does not turn learning captures into runtime keypad feedback", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "按键行为" }));
+  const enter = screen.getByRole("button", { name: "确认，0 项行为" });
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    code: "learning_input",
+    learningTarget: {
+      deviceId: "device-front-desk",
+      deviceProfileId: deviceProfile.profile.id,
+      hardwareProfileId: "front-desk",
+      editingRevision: 1,
+      firmwareRevision: 1,
+      pins: [6],
+    },
+  })));
+
+  expect(enter).not.toHaveClass("is-pressed");
+});
+
+test("resolves runtime input from the event Hardware Profile and rejects assignment mismatch", async () => {
+  currentSnapshot.deviceProfiles[0].hardware_profiles.push({
+    id: "alternate-hardware",
+    name: "备用硬件配置",
+    board_profile_id: "luatos-esp32s3-aio",
+    debounce_ms: 30,
+    inputs: [{ type: "direct", id: "alternate", keys: { ENTER: 7 } }],
+  });
+  currentSnapshot.devices[0].runtimeAssignment = {
+    device_profile_id: deviceProfile.profile.id,
+    hardware_profile_id: "alternate-hardware",
+  };
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "按键行为" }));
+  const enter = screen.getByRole("button", { name: "确认，0 项行为" });
+
+  await act(async () =>
+    emitRuntimeEvent(
+      runtimeEvent({
+        hardwareProfileId: "front-desk",
+        input: { type: "direct", gpio: 6 },
+      }),
+    ),
+  );
+  expect(enter).not.toHaveClass("is-pressed");
+
+  await act(async () =>
+    emitRuntimeEvent(
+      runtimeEvent({
+        hardwareProfileId: "alternate-hardware",
+        input: { type: "direct", gpio: 7 },
+      }),
+    ),
+  );
+  expect(enter).toHaveClass("is-pressed");
+});
+
+test("learns input only for the exact selected Device Profile and Hardware Profile target", async () => {
+  const activeLearningTarget = {
+    deviceId: "device-front-desk",
+    deviceProfileId: deviceProfile.profile.id,
+    hardwareProfileId: "front-desk",
+    editingRevision: 7,
+    firmwareRevision: 11,
+    pins: [2, 13],
+  };
+  currentSnapshot.devices[0].learning = activeLearningTarget;
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+  await user.click(screen.getByText("适配新设备"));
+  await user.selectOptions(screen.getByLabelText("在线设备"), "device-front-desk");
+  const digitA = screen.getByRole("combobox", { name: "2 A" });
+  const digitB = screen.getByRole("combobox", { name: "2 B" });
+  expect(digitA).toHaveValue("1");
+  expect(digitB).toHaveValue("12");
+
+  await act(async () =>
+    emitRuntimeEvent(
+      runtimeEvent({
+        deviceId: "device-other",
+        rawSerial: "OTHER",
+        code: "learning_input",
+        input: { type: "contact", source: 1, pin_a: 2, pin_b: 13 },
+        learningTarget: {
+          deviceId: "device-other",
+          deviceProfileId: deviceProfile.profile.id,
+          hardwareProfileId: "front-desk",
+          editingRevision: 0,
+          firmwareRevision: 0,
+          pins: [2, 13],
+        },
+      }),
+    ),
+  );
+  expect(digitA).toHaveValue("1");
+  expect(digitB).toHaveValue("12");
+
+  await act(async () =>
+    emitRuntimeEvent(
+      runtimeEvent({
+        code: "learning_input",
+        input: { type: "contact", source: 1, pin_a: 2, pin_b: 13 },
+        learningTarget: { ...activeLearningTarget, editingRevision: 6 },
+      }),
+    ),
+  );
+  expect(digitA).toHaveValue("1");
+  expect(digitB).toHaveValue("12");
+
+  await act(async () =>
+    emitRuntimeEvent(
+      runtimeEvent({
+        code: "learning_input",
+        input: { type: "contact", source: 1, pin_a: 2, pin_b: 13 },
+        learningTarget: activeLearningTarget,
+      }),
+    ),
+  );
+  expect(digitA).toHaveValue("2");
+  expect(digitB).toHaveValue("13");
 });
 
 test("builds an ordered action list and autosaves it", async () => {
@@ -142,17 +1531,23 @@ test("builds an ordered action list and autosaves it", async () => {
   await user.type(screen.getByRole("textbox", { name: "文本" }), "你好");
   await user.click(screen.getByRole("button", { name: "按下按键" }));
 
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_model", {
-    model: expect.objectContaining({
-      actions: {
-        DIGIT_2: [
-          { type: "paste", text: "你好" },
-          { type: "hotkey", keys: ["enter"] },
-        ],
-      },
-    }),
-  }), { timeout: 1600 });
-  expect(screen.getByRole("button", { name: "2，2 项行为" })).toBeInTheDocument();
+  await waitFor(
+    () =>
+      expect(invoke).toHaveBeenCalledWith("save_device_profile", {
+        profile: expect.objectContaining({
+          actions: {
+            DIGIT_2: [
+              { type: "paste", text: "你好" },
+              { type: "hotkey", keys: ["enter"] },
+            ],
+          },
+        }),
+      }),
+    { timeout: 1600 },
+  );
+  expect(
+    screen.getByRole("button", { name: "2，2 项行为" }),
+  ).toBeInTheDocument();
 });
 
 test("records a shortcut from the application window", async () => {
@@ -163,7 +1558,12 @@ test("records a shortcut from the application window", async () => {
 
   await user.click(screen.getByRole("button", { name: "按下按键" }));
   await user.click(within(editor).getByRole("button", { name: "录入按键" }));
-  fireEvent.keyDown(window, { code: "KeyK", key: "k", metaKey: true, shiftKey: true });
+  fireEvent.keyDown(window, {
+    code: "KeyK",
+    key: "k",
+    metaKey: true,
+    shiftKey: true,
+  });
 
   expect(within(editor).getByText("Command + Shift + K")).toBeInTheDocument();
 });
@@ -178,19 +1578,30 @@ test("manually selects a multi-modifier shortcut", async () => {
   await user.click(within(editor).getByRole("checkbox", { name: "Cmd" }));
   await user.click(within(editor).getByRole("checkbox", { name: "Ctrl" }));
   await user.click(within(editor).getByRole("checkbox", { name: "Shift" }));
-  await user.selectOptions(within(editor).getByRole("combobox", { name: "按键" }), "k");
+  await user.selectOptions(
+    within(editor).getByRole("combobox", { name: "按键" }),
+    "k",
+  );
 
-  expect(within(editor).getByText("Command + Control + Shift + K")).toBeInTheDocument();
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_model", {
-    model: expect.objectContaining({
-      actions: { DIGIT_2: [{ type: "hotkey", keys: ["cmd", "ctrl", "shift", "k"] }] },
-    }),
-  }), { timeout: 1600 });
+  expect(
+    within(editor).getByText("Command + Control + Shift + K"),
+  ).toBeInTheDocument();
+  await waitFor(
+    () =>
+      expect(invoke).toHaveBeenCalledWith("save_device_profile", {
+        profile: expect.objectContaining({
+          actions: {
+            DIGIT_2: [{ type: "hotkey", keys: ["cmd", "ctrl", "shift", "k"] }],
+          },
+        }),
+      }),
+    { timeout: 1600 },
+  );
 });
 
 test("reorders actions from the right editor", async () => {
   const user = userEvent.setup();
-  currentSnapshot.models[0].actions.DIGIT_2 = [
+  currentSnapshot.deviceProfiles[0].actions.DIGIT_2 = [
     { type: "paste", text: "先粘贴" },
     { type: "hotkey", keys: ["enter"] },
   ];
@@ -200,18 +1611,28 @@ test("reorders actions from the right editor", async () => {
 
   await user.click(within(editor).getAllByRole("button", { name: "上移" })[1]);
 
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_model", {
-    model: expect.objectContaining({
-      actions: { DIGIT_2: [{ type: "hotkey", keys: ["enter"] }, { type: "paste", text: "先粘贴" }] },
-    }),
-  }), { timeout: 1600 });
+  await waitFor(
+    () =>
+      expect(invoke).toHaveBeenCalledWith("save_device_profile", {
+        profile: expect.objectContaining({
+          actions: {
+            DIGIT_2: [
+              { type: "hotkey", keys: ["enter"] },
+              { type: "paste", text: "先粘贴" },
+            ],
+          },
+        }),
+      }),
+    { timeout: 1600 },
+  );
 });
 
 test("keeps a failed autosave and exposes retry", async () => {
   const user = userEvent.setup();
   let saveAttempts = 0;
   vi.mocked(invoke).mockImplementation(async (command) => {
-    if (command === "save_model" && saveAttempts++ === 0) throw new Error("disk full");
+    if (command === "save_device_profile" && saveAttempts++ === 0)
+      throw new Error("disk full");
     return structuredClone(currentSnapshot);
   });
   render(<App />);
@@ -220,48 +1641,73 @@ test("keeps a failed autosave and exposes retry", async () => {
 
   await user.click(key);
   await user.click(screen.getByRole("button", { name: "按下按键" }));
-  expect(await screen.findByText("保存失败", {}, { timeout: 1600 })).toBeInTheDocument();
+  expect(
+    await screen.findByText("保存失败", {}, { timeout: 1600 }),
+  ).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "重试" }));
 
-  await waitFor(() => expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "save_model")).toHaveLength(2));
+  await waitFor(() =>
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "save_device_profile"),
+    ).toHaveLength(2),
+  );
 });
 
-test("previews a model before importing it", async () => {
+test("previews a device profile before importing it", async () => {
   const user = userEvent.setup();
-  vi.mocked(open).mockResolvedValue("/tmp/model.yaml");
+  vi.mocked(open).mockResolvedValue("/tmp/device-profile.yaml");
   vi.mocked(invoke).mockImplementation(async (command) => {
-    if (command === "preview_model_import") return {
-      modelId: "tel-carbon-v1",
-      modelName: "碳膜电话键盘",
-      buttonCount: 22,
-      hardwareBindingCount: 22,
-      actionCount: 8,
-      replacesExisting: true,
-    };
+    if (command === "preview_device_profile_import")
+      return {
+        profileId: "tel-carbon-v1",
+        profileName: "碳膜电话键盘",
+        buttonCount: 22,
+        hardwareBindingCount: 22,
+        actionCount: 8,
+        replacesExisting: true,
+      };
     return structuredClone(currentSnapshot);
   });
   render(<App />);
   await screen.findByText("配置文件");
 
   await user.click(screen.getByRole("button", { name: "配置文件" }));
-  await user.click(screen.getByRole("button", { name: "导入型号" }));
-  const dialog = await screen.findByRole("dialog", { name: "替换现有型号" });
-  expect(within(dialog).getByText("22 个按键，22 项硬件映射，8 项行为")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "导入设备配置" }));
+  const dialog = await screen.findByRole("dialog", {
+    name: "替换现有设备配置",
+  });
+  expect(
+    within(dialog).getByText("22 个按键，22 项硬件配置，8 项行为"),
+  ).toBeInTheDocument();
+  expect(dialog).not.toHaveTextContent("设备，");
+  expect(dialog).not.toHaveTextContent("指标行");
+  expect(dialog).not.toHaveTextContent("动态");
   await user.click(within(dialog).getByRole("button", { name: "确认" }));
 
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("import_model", { path: "/tmp/model.yaml" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("import_device_profile", {
+      path: "/tmp/device-profile.yaml",
+    }),
+  );
 });
 
 test("previews a full backup before restoring it", async () => {
   const user = userEvent.setup();
   vi.mocked(open).mockResolvedValue("/tmp/backup.yaml");
   vi.mocked(invoke).mockImplementation(async (command) => {
-    if (command === "preview_backup") return {
-      modelCount: 3,
-      buttonCount: 44,
-      hardwareBindingCount: 40,
-      actionCount: 19,
-    };
+    if (command === "preview_backup")
+      return {
+        profileCount: 3,
+        buttonCount: 44,
+        hardwareBindingCount: 40,
+        actionCount: 19,
+        deviceCount: 4,
+        assignmentCount: 3,
+        metricRowCount: 12,
+        activityCount: 9,
+      };
     return structuredClone(currentSnapshot);
   });
   render(<App />);
@@ -270,25 +1716,39 @@ test("previews a full backup before restoring it", async () => {
   await user.click(screen.getByRole("button", { name: "配置文件" }));
   await user.click(screen.getByRole("button", { name: "恢复备份" }));
   const dialog = await screen.findByRole("dialog", { name: "恢复全量备份" });
-  expect(within(dialog).getByText("3 个型号，44 个按键，40 项硬件映射，19 项行为")).toBeInTheDocument();
+  expect(
+    within(dialog).getByText(
+      "3 个设备配置，44 个按键，40 项硬件配置，19 项行为，4 台设备，3 项运行分配，12 行指标，9 条动态",
+    ),
+  ).toBeInTheDocument();
   await user.click(within(dialog).getByRole("button", { name: "确认" }));
 
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("restore_backup", { path: "/tmp/backup.yaml" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("restore_backup", {
+      path: "/tmp/backup.yaml",
+    }),
+  );
 });
 
-test("deletes the last model and keeps configuration-file actions available", async () => {
+test("deletes the last device profile and keeps configuration-file actions available", async () => {
   const user = userEvent.setup();
   render(<App />);
   await screen.findByText("配置文件");
 
   await user.click(screen.getByRole("button", { name: "配置文件" }));
-  await user.click(screen.getByRole("button", { name: "删除型号" }));
-  const dialog = await screen.findByRole("dialog", { name: "删除型号" });
+  await user.click(screen.getByRole("button", { name: "删除设备配置" }));
+  const dialog = await screen.findByRole("dialog", { name: "删除设备配置" });
   await user.click(within(dialog).getByRole("button", { name: "确认" }));
 
-  expect(await screen.findByRole("option", { name: "还没有设备型号" })).toBeInTheDocument();
-  expect(screen.getAllByRole("button", { name: "导入型号" }).length).toBeGreaterThan(0);
-  expect(screen.getAllByRole("button", { name: "恢复备份" }).length).toBeGreaterThan(0);
+  expect(
+    await screen.findByRole("option", { name: "还没有设备配置" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getAllByRole("button", { name: "导入设备配置" }).length,
+  ).toBeGreaterThan(0);
+  expect(
+    screen.getAllByRole("button", { name: "恢复备份" }).length,
+  ).toBeGreaterThan(0);
 });
 
 test("keeps key learning secondary and collapsed by default", async () => {
@@ -296,9 +1756,516 @@ test("keeps key learning secondary and collapsed by default", async () => {
   render(<App />);
   await screen.findByText("配置文件");
 
-  await user.click(screen.getByRole("button", { name: "硬件映射" }));
+  await user.click(screen.getByRole("button", { name: "硬件配置" }));
 
   expect(screen.getByText("直连 GPIO")).toBeInTheDocument();
   expect(screen.getByText("接触矩阵")).toBeInTheDocument();
-  expect(screen.getByText("适配新设备").closest("details")).not.toHaveAttribute("open");
+  expect(screen.getByText("适配新设备").closest("details")).not.toHaveAttribute(
+    "open",
+  );
+});
+
+test("autosaves a newly added Hardware Profile with its compiled Board Profile", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+
+  await user.click(screen.getByRole("button", { name: "添加硬件配置" }));
+
+  await waitFor(
+    () => expect(invoke).toHaveBeenCalledWith("save_device_profile", {
+      profile: expect.objectContaining({
+        hardware_profiles: expect.arrayContaining([
+          expect.objectContaining({
+            id: "luatos-esp32s3-aio-hardware",
+            name: "LuatOS ESP32-S3 AIO 硬件配置",
+            board_profile_id: "luatos-esp32s3-aio",
+          }),
+        ]),
+      }),
+    }),
+    { timeout: 1600 },
+  );
+});
+
+test("blocks autosave while a Board Profile change leaves invalid mappings and permits revert", async () => {
+  currentSnapshot.boardProfiles.push({
+    id: "vccgnd-yd-rp2040",
+    controllerFamilyId: "rp2040",
+    displayName: "YD-RP2040",
+    runtimeUsb: "2e8a:000a",
+    bootloaderUsb: "2e8a:0003",
+    safePins: [0, 1, 2],
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+  vi.mocked(invoke).mockClear();
+
+  await user.selectOptions(screen.getByLabelText("板型"), "vccgnd-yd-rp2040");
+  expect(await screen.findByText("无效 GPIO 6")).toBeInTheDocument();
+  await new Promise((resolve) => setTimeout(resolve, 550));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_device_profile")).toBe(false);
+
+  await user.selectOptions(screen.getByLabelText("板型"), "luatos-esp32s3-aio");
+  expect(screen.queryByText("无效 GPIO 6")).toBeNull();
+  await new Promise((resolve) => setTimeout(resolve, 550));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_device_profile")).toBe(false);
+});
+
+test("deletes a Hardware Profile without repairing its Device assignment", async () => {
+  currentSnapshot.deviceProfiles[0].hardware_profiles.push({
+    id: "spare",
+    name: "备用硬件配置",
+    board_profile_id: "luatos-esp32s3-aio",
+    debounce_ms: 30,
+    inputs: [],
+  });
+  const assignment = structuredClone(currentSnapshot.devices[0].runtimeAssignment);
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+
+  await user.click(screen.getByRole("button", { name: "删除硬件配置" }));
+  await user.click(within(screen.getByRole("dialog", { name: "删除硬件配置" })).getByRole("button", { name: "确认" }));
+
+  await waitFor(
+    () => expect(invoke).toHaveBeenCalledWith("save_device_profile", {
+      profile: expect.objectContaining({
+        hardware_profiles: [expect.objectContaining({ id: "spare" })],
+      }),
+    }),
+    { timeout: 1600 },
+  );
+  expect(currentSnapshot.devices[0].runtimeAssignment).toEqual(assignment);
+});
+
+test("preserves an unsaved Device Profile draft when learning begins", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+
+  fireEvent.change(screen.getByLabelText("消抖"), { target: { value: "31" } });
+  await user.click(screen.getByText("适配新设备"));
+  await user.selectOptions(screen.getByLabelText("在线设备"), "device-front-desk");
+  await user.click(screen.getByRole("checkbox", { name: "键盘已与原电话电路及外部电压完全隔离" }));
+  await user.click(screen.getByRole("checkbox", { name: "GPIO 2" }));
+  await user.click(screen.getByRole("button", { name: "开始学习" }));
+
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("begin_learning", expect.objectContaining({
+    deviceId: "device-front-desk",
+    deviceProfileId: deviceProfile.profile.id,
+    hardwareProfileId: "front-desk",
+    pins: [2],
+  })));
+  const beginArgs = vi.mocked(invoke).mock.calls.find(([command]) => command === "begin_learning")?.[1] as {
+    editingRevision: number;
+  };
+  expect(beginArgs.editingRevision).toBeGreaterThan(0);
+  expect(screen.getByLabelText("消抖")).toHaveValue(31);
+});
+
+test("isolates learning lifecycle and defers the captured draft until a later ordinary save", async () => {
+  currentSnapshot.devices.push(device({
+    deviceId: "device-second",
+    name: "后台键盘",
+    hardwareSerial: "SECOND",
+    port: "/dev/cu.second",
+  }));
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "begin_learning") {
+      const target = args as {
+        deviceId: string;
+        deviceProfileId: string;
+        hardwareProfileId: string;
+        editingRevision: number;
+        pins: number[];
+      };
+      const selected = currentSnapshot.devices.find(({ deviceId }) => deviceId === target.deviceId)!;
+      selected.learning = { ...target, firmwareRevision: 23 };
+      selected.runtime = "learning";
+    }
+    if (command === "end_learning") {
+      const selected = currentSnapshot.devices.find(
+        ({ deviceId }) => deviceId === (args as { deviceId: string }).deviceId,
+      )!;
+      selected.learning = null;
+      selected.runtime = "ready";
+    }
+    if (command === "save_device_profile") {
+      const saved = (args as { profile: DeviceProfile }).profile;
+      currentSnapshot.deviceProfiles = currentSnapshot.deviceProfiles.map((profile) =>
+        profile.profile.id === saved.profile.id ? saved : profile
+      );
+      currentSnapshot.devices = currentSnapshot.devices.map((item) => ({
+        ...item,
+        runtime: "configuring",
+      }));
+    }
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+  await user.click(screen.getByText("适配新设备"));
+  await user.selectOptions(screen.getByLabelText("在线设备"), "device-second");
+  await user.click(screen.getByRole("checkbox", { name: "键盘已与原电话电路及外部电压完全隔离" }));
+  await user.click(screen.getByRole("checkbox", { name: "GPIO 2" }));
+  await user.click(screen.getByRole("checkbox", { name: "GPIO 13" }));
+  await user.click(screen.getByRole("button", { name: "开始学习" }));
+
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("begin_learning", expect.objectContaining({
+    deviceId: "device-second",
+    deviceProfileId: deviceProfile.profile.id,
+    hardwareProfileId: "front-desk",
+    pins: [2, 13],
+  })));
+  const target = currentSnapshot.devices[1].learning!;
+  expect(target.editingRevision).toBeGreaterThan(0);
+
+  await user.click(screen.getByRole("button", { name: "设备管理" }));
+  expect(screen.getByRole("button", { name: /前台键盘.*就绪/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /后台键盘.*正在学习/ })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "硬件配置" }));
+  await user.click(screen.getByText("适配新设备"));
+  await user.selectOptions(screen.getByLabelText("在线设备"), "device-second");
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    deviceId: "device-second",
+    rawSerial: "SECOND",
+    code: "learning_input",
+    input: { type: "contact", source: 1, pin_a: 2, pin_b: 13 },
+    learningTarget: target,
+  })));
+  expect(screen.getByRole("combobox", { name: "2 A" })).toHaveValue("2");
+  expect(screen.getByRole("combobox", { name: "2 B" })).toHaveValue("13");
+  await new Promise((resolve) => setTimeout(resolve, 550));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_device_profile")).toBe(false);
+
+  await user.click(screen.getByRole("button", { name: "结束学习" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("end_learning", { deviceId: "device-second" }));
+  expect(vi.mocked(invoke).mock.calls.some(([command, args]) =>
+    command === "end_learning" && (args as { deviceId: string }).deviceId === "device-front-desk"
+  )).toBe(false);
+  await new Promise((resolve) => setTimeout(resolve, 550));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_device_profile")).toBe(false);
+  expect(screen.getByRole("combobox", { name: "2 B" })).toHaveValue("13");
+
+  fireEvent.change(screen.getByLabelText("消抖"), { target: { value: "31" } });
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_device_profile", {
+    profile: expect.objectContaining({
+      hardware_profiles: [expect.objectContaining({
+        debounce_ms: 31,
+        inputs: expect.arrayContaining([
+          expect.objectContaining({ keys: { DIGIT_2: [2, 13] } }),
+        ]),
+      })],
+    }),
+  }), { timeout: 1600 });
+  await user.click(screen.getByRole("button", { name: "设备管理" }));
+  expect(screen.getByRole("button", { name: /前台键盘.*正在配置/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /后台键盘.*正在配置/ })).toBeInTheDocument();
+});
+
+test("keeps a captured draft when only its learning Device disconnects", async () => {
+  const target = {
+    deviceId: "device-second",
+    deviceProfileId: deviceProfile.profile.id,
+    hardwareProfileId: "front-desk",
+    editingRevision: 41,
+    firmwareRevision: 7,
+    pins: [2, 13],
+  };
+  currentSnapshot.devices.push(device({
+    deviceId: "device-second",
+    name: "后台键盘",
+    hardwareSerial: "SECOND",
+    port: "/dev/cu.second",
+    runtime: "learning",
+    learning: target,
+  }));
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+  await user.click(screen.getByText("适配新设备"));
+  await user.selectOptions(screen.getByLabelText("在线设备"), "device-second");
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    deviceId: "device-second",
+    rawSerial: "SECOND",
+    code: "learning_input",
+    input: { type: "contact", source: 1, pin_a: 2, pin_b: 13 },
+    learningTarget: target,
+  })));
+
+  currentSnapshot.devices[1] = device({
+    deviceId: "device-second",
+    name: "后台键盘",
+    hardwareSerial: "SECOND",
+    connection: "offline",
+    mode: null,
+    runtime: "inactive",
+    port: null,
+    learning: null,
+  });
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    code: "topology_active",
+    input: null,
+    pressed: null,
+  })));
+  await waitFor(() => expect(screen.getByLabelText("在线设备")).toHaveValue(""));
+  expect(screen.getByRole("combobox", { name: "2 A" })).toHaveValue("2");
+  expect(screen.getByRole("combobox", { name: "2 B" })).toHaveValue("13");
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "end_learning")).toBe(false);
+  await new Promise((resolve) => setTimeout(resolve, 550));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_device_profile")).toBe(false);
+});
+
+test("preserves a captured mapping when learning ends before autosave", async () => {
+  const activeLearningTarget = {
+    deviceId: "device-front-desk",
+    deviceProfileId: deviceProfile.profile.id,
+    hardwareProfileId: "front-desk",
+    editingRevision: 3,
+    firmwareRevision: 5,
+    pins: [2, 13],
+  };
+  currentSnapshot.devices[0].learning = activeLearningTarget;
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+  await user.click(screen.getByText("适配新设备"));
+  await user.selectOptions(screen.getByLabelText("在线设备"), "device-front-desk");
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    code: "learning_input",
+    input: { type: "contact", source: 1, pin_a: 2, pin_b: 13 },
+    learningTarget: activeLearningTarget,
+  })));
+  expect(screen.getByRole("combobox", { name: "2 A" })).toHaveValue("2");
+  expect(screen.getByRole("combobox", { name: "2 B" })).toHaveValue("13");
+
+  await user.click(screen.getByRole("button", { name: "结束学习" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("end_learning", {
+    deviceId: "device-front-desk",
+  }));
+  expect(screen.getByRole("combobox", { name: "2 A" })).toHaveValue("2");
+  expect(screen.getByRole("combobox", { name: "2 B" })).toHaveValue("13");
+});
+
+test("keeps a captured draft through Editor Profile switches until an ordinary edit", async () => {
+  const secondProfile: DeviceProfile = {
+    ...structuredClone(deviceProfile),
+    profile: {
+      ...deviceProfile.profile,
+      id: "operator-console",
+      name: "接线员控制台",
+    },
+  };
+  const activeLearningTarget = {
+    deviceId: "device-front-desk",
+    deviceProfileId: deviceProfile.profile.id,
+    hardwareProfileId: "front-desk",
+    editingRevision: 17,
+    firmwareRevision: 5,
+    pins: [2, 13],
+  };
+  currentSnapshot.deviceProfiles.push(secondProfile);
+  currentSnapshot.devices[0].learning = activeLearningTarget;
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+  await user.click(screen.getByText("适配新设备"));
+  await user.selectOptions(screen.getByLabelText("在线设备"), "device-front-desk");
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    code: "learning_input",
+    input: { type: "contact", source: 1, pin_a: 2, pin_b: 13 },
+    learningTarget: activeLearningTarget,
+  })));
+  await user.click(screen.getByRole("button", { name: "结束学习" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("end_learning", {
+    deviceId: "device-front-desk",
+  }));
+
+  await user.click(screen.getByRole("button", { name: "配置文件" }));
+  await user.selectOptions(screen.getByLabelText("当前编辑配置"), secondProfile.profile.id);
+  await waitFor(() => expect(screen.getByLabelText("当前编辑配置")).toHaveValue(secondProfile.profile.id));
+  await user.selectOptions(screen.getByLabelText("当前编辑配置"), deviceProfile.profile.id);
+  await waitFor(() => expect(screen.getByLabelText("当前编辑配置")).toHaveValue(deviceProfile.profile.id));
+  await user.click(screen.getByRole("button", { name: "硬件配置" }));
+
+  expect(screen.getByRole("combobox", { name: "2 A" })).toHaveValue("2");
+  expect(screen.getByRole("combobox", { name: "2 B" })).toHaveValue("13");
+  await new Promise((resolve) => setTimeout(resolve, 550));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_device_profile")).toBe(false);
+
+  fireEvent.change(screen.getByLabelText("消抖"), { target: { value: "31" } });
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_device_profile", {
+    profile: expect.objectContaining({
+      hardware_profiles: [expect.objectContaining({
+        debounce_ms: 31,
+        inputs: expect.arrayContaining([
+          expect.objectContaining({ keys: { DIGIT_2: [2, 13] } }),
+        ]),
+      })],
+    }),
+  }), { timeout: 1600 });
+});
+
+test("keeps an older captured draft suppressed when a second begin fails", async () => {
+  const activeLearningTarget = {
+    deviceId: "device-front-desk",
+    deviceProfileId: deviceProfile.profile.id,
+    hardwareProfileId: "front-desk",
+    editingRevision: 23,
+    firmwareRevision: 5,
+    pins: [2, 13],
+  };
+  currentSnapshot.devices[0].learning = activeLearningTarget;
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "end_learning") {
+      currentSnapshot.devices[0].learning = null;
+      return structuredClone(currentSnapshot);
+    }
+    if (command === "begin_learning") throw new Error("learning unavailable");
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+  await user.click(screen.getByText("适配新设备"));
+  await user.selectOptions(screen.getByLabelText("在线设备"), "device-front-desk");
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    code: "learning_input",
+    input: { type: "contact", source: 1, pin_a: 2, pin_b: 13 },
+    learningTarget: activeLearningTarget,
+  })));
+  await user.click(screen.getByRole("button", { name: "结束学习" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("end_learning", {
+    deviceId: "device-front-desk",
+  }));
+
+  await user.click(screen.getByRole("checkbox", { name: "键盘已与原电话电路及外部电压完全隔离" }));
+  await user.click(screen.getByRole("checkbox", { name: "GPIO 2" }));
+  await user.click(screen.getByRole("checkbox", { name: "GPIO 13" }));
+  await user.click(screen.getByRole("button", { name: "开始学习" }));
+  expect(await screen.findByText("逐键学习失败: learning unavailable")).toHaveClass("error-banner");
+  await new Promise((resolve) => setTimeout(resolve, 550));
+
+  expect(screen.getByRole("combobox", { name: "2 A" })).toHaveValue("2");
+  expect(screen.getByRole("combobox", { name: "2 B" })).toHaveValue("13");
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_device_profile")).toBe(false);
+});
+
+test("targets learning and captured input to the explicitly selected non-first Hardware Profile and Device", async () => {
+  currentSnapshot.deviceProfiles[0].hardware_profiles.push({
+    id: "alternate-hardware",
+    name: "备用硬件配置",
+    board_profile_id: "luatos-esp32s3-aio",
+    debounce_ms: 30,
+    inputs: [{
+      type: "contact_matrix",
+      id: "alternate-matrix",
+      pins: [1, 2, 12, 13],
+      keys: { DIGIT_2: [1, 13] },
+    }],
+  });
+  currentSnapshot.devices.push(device({
+    deviceId: "device-alternate",
+    name: "备用键盘",
+    hardwareSerial: "ALTERNATE",
+    port: "/dev/cu.alternate",
+    capabilities: [1, 2, 12, 13],
+    runtimeAssignment: {
+      device_profile_id: deviceProfile.profile.id,
+      hardware_profile_id: "alternate-hardware",
+    },
+  }));
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+  await user.selectOptions(screen.getByRole("combobox", { name: "硬件配置" }), "alternate-hardware");
+  await user.click(screen.getByRole("button", { name: "2" }));
+  await user.click(screen.getByText("适配新设备"));
+  await user.selectOptions(screen.getByLabelText("在线设备"), "device-alternate");
+  await user.click(screen.getByRole("checkbox", { name: "键盘已与原电话电路及外部电压完全隔离" }));
+  await user.click(screen.getByRole("checkbox", { name: "GPIO 2" }));
+  await user.click(screen.getByRole("checkbox", { name: "GPIO 12" }));
+  await user.click(screen.getByRole("button", { name: "开始学习" }));
+
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("begin_learning", {
+    deviceId: "device-alternate",
+    deviceProfileId: deviceProfile.profile.id,
+    hardwareProfileId: "alternate-hardware",
+    editingRevision: 1,
+    pins: [2, 12],
+  }));
+  const digitA = screen.getByRole("combobox", { name: "2 A" });
+  const digitB = screen.getByRole("combobox", { name: "2 B" });
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    code: "learning_input",
+    input: { type: "contact", source: 0, pin_a: 2, pin_b: 12 },
+    learningTarget: {
+      deviceId: "device-front-desk",
+      deviceProfileId: deviceProfile.profile.id,
+      hardwareProfileId: "alternate-hardware",
+      editingRevision: 0,
+      firmwareRevision: 0,
+      pins: [2, 12],
+    },
+  })));
+  expect(digitA).toHaveValue("1");
+  expect(digitB).toHaveValue("13");
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    deviceId: "device-alternate",
+    rawSerial: "ALTERNATE",
+    code: "learning_input",
+    input: { type: "contact", source: 0, pin_a: 2, pin_b: 12 },
+    hardwareProfileId: "alternate-hardware",
+    learningTarget: {
+      deviceId: "device-alternate",
+      deviceProfileId: deviceProfile.profile.id,
+      hardwareProfileId: "alternate-hardware",
+      editingRevision: 1,
+      firmwareRevision: 0,
+      pins: [2, 12],
+    },
+  })));
+  expect(digitA).toHaveValue("2");
+  expect(digitB).toHaveValue("12");
+});
+
+test("blocks autosave for a matrix pair endpoint missing from source pins until repaired", async () => {
+  currentSnapshot.deviceProfiles[0].hardware_profiles[0].inputs[1] = {
+    type: "contact_matrix",
+    id: "carbon",
+    pins: [1, 2],
+    keys: { DIGIT_2: [1, 13] },
+  };
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "硬件配置" }));
+  vi.mocked(invoke).mockClear();
+
+  fireEvent.change(screen.getByLabelText("消抖"), { target: { value: "31" } });
+  await new Promise((resolve) => setTimeout(resolve, 550));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_device_profile")).toBe(false);
+  const endpoint = screen.getByRole("combobox", { name: "2 B" });
+  expect(endpoint).toHaveValue("13");
+  expect(endpoint).toHaveAttribute("aria-invalid", "true");
+
+  await user.selectOptions(endpoint, "2");
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_device_profile", {
+    profile: expect.objectContaining({
+      hardware_profiles: [expect.objectContaining({
+        debounce_ms: 31,
+        inputs: expect.arrayContaining([
+          expect.objectContaining({ keys: { DIGIT_2: [1, 2] } }),
+        ]),
+      })],
+    }),
+  }), { timeout: 1600 });
 });
