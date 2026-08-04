@@ -28,7 +28,9 @@ def test_layout_contracts() -> None:
         ),
     ],
 )
-def test_source_mesh_contract(filename: str, faces: int, extents: tuple[float, ...]) -> None:
+def test_source_mesh_contract(
+    filename: str, faces: int, extents: tuple[float, ...]
+) -> None:
     mesh = variants.load_source(SOURCE / filename)
     assert len(mesh.faces) == faces
     assert mesh.extents == pytest.approx(extents, abs=0.003)
@@ -137,10 +139,7 @@ def test_bottom_growth_corridors_are_empty(name: str) -> None:
                 (
                     np.array(
                         [
-                            width
-                            - variants.CORE_INSET
-                            - right
-                            + margin,
+                            width - variants.CORE_INSET - right + margin,
                             variants.CORE_INSET + margin,
                         ]
                     ),
@@ -173,3 +172,83 @@ def test_bottom_growth_corridors_are_empty(name: str) -> None:
     for lower, upper in corridors:
         inside = np.all((points > lower) & (points < upper), axis=1)
         assert not np.any(inside)
+
+
+def test_validate_pair_reports_the_complete_contract() -> None:
+    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
+    bottom_source = variants.load_source(
+        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+    )
+    layout = variants.LAYOUTS["4x4"]
+    report = variants.validate_pair(
+        variants.generate_top(top_source, layout),
+        variants.generate_bottom(bottom_source, layout),
+        bottom_source,
+        layout,
+    )
+    assert report.layout == "4x4"
+    assert report.switch_count == 16
+    assert report.footprint == pytest.approx((84.20, 84.20), abs=0.003)
+    assert report.watertight
+    assert report.manifold
+    assert report.type_c_preserved
+    assert report.screws_aligned
+
+
+def test_cli_writes_exact_artifact_names(tmp_path: Path) -> None:
+    result = variants.main(
+        [
+            "--source-root",
+            str(SOURCE),
+            "--output-root",
+            str(tmp_path / "models"),
+            "--preview-root",
+            str(tmp_path / "previews"),
+        ]
+    )
+    assert result == 0
+    for name in variants.LAYOUTS:
+        directory = tmp_path / "models" / name
+        assert (directory / f"pico_macro_pad_{name}_top.stl").is_file()
+        assert (
+            directory / f"pico_macro_pad_{name}_bottom_fitted_to_usb_c.stl"
+        ).is_file()
+        assert (tmp_path / "previews" / f"{name}-top.png").is_file()
+        assert (tmp_path / "previews" / f"{name}-bottom.png").is_file()
+        assert (tmp_path / "previews" / f"{name}-type-c.png").is_file()
+
+
+def test_binary_stl_export_is_deterministic(tmp_path: Path) -> None:
+    source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
+    mesh = variants.generate_top(source, variants.LAYOUTS["3x4"])
+    first = tmp_path / "first.stl"
+    second = tmp_path / "second.stl"
+    variants.export_stl(mesh, first)
+    variants.export_stl(mesh, second)
+
+    data = first.read_bytes()
+    assert data == second.read_bytes()
+    assert len(data) == 84 + 50 * len(mesh.faces)
+
+
+def test_cli_filters_layout_and_part(tmp_path: Path) -> None:
+    output = tmp_path / "models"
+    result = variants.main(
+        [
+            "--source-root",
+            str(SOURCE),
+            "--output-root",
+            str(output),
+            "--preview-root",
+            str(tmp_path / "previews"),
+            "--layout",
+            "4x4",
+            "--only",
+            "top",
+        ]
+    )
+    assert result == 0
+    assert (output / "4x4/pico_macro_pad_4x4_top.stl").is_file()
+    assert not (output / "4x4/pico_macro_pad_4x4_bottom_fitted_to_usb_c.stl").exists()
+    assert not (output / "3x4").exists()
+    assert not (output / "5x4").exists()

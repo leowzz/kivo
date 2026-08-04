@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+import manifold3d
 import numpy as np
 import trimesh
 
@@ -29,6 +30,7 @@ BOTTOM_Y_BREAKS = (55.00, 57.15)
 BASE_SKIN_Z = 1.12
 CORE_INSET = 8.0
 CORE_OVERLAP = 0.2
+BOOLEAN_TOLERANCE = 5e-5
 
 
 @dataclass(frozen=True)
@@ -59,9 +61,29 @@ class TypeCSection:
     center_offset: float
 
 
+@dataclass(frozen=True)
+class ValidationReport:
+    layout: str
+    footprint: tuple[float, float]
+    switch_count: int
+    watertight: bool
+    manifold: bool
+    type_c_preserved: bool
+    screws_aligned: bool
+
+
 LAYOUTS = {
     name: Layout(name, columns, 4)
     for name, columns in (("3x4", 3), ("4x4", 4), ("5x4", 5))
+}
+
+DEFAULT_SOURCE = Path("models/3d-print/3x3keypad")
+DEFAULT_OUTPUT = Path("models/3d-print")
+DEFAULT_PREVIEWS = Path("/tmp/kivo-macro-pad-previews")
+VIEW_ROTATIONS = {
+    "top": np.eye(3),
+    "bottom": np.diag([1.0, -1.0, -1.0]),
+    "type-c": np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]]),
 }
 
 
@@ -85,7 +107,40 @@ def load_source(path: Path) -> trimesh.Trimesh:
     return mesh
 
 
-def clip_slab(mesh: trimesh.Trimesh, axis: int, lower: float, upper: float) -> trimesh.Trimesh:
+def boolean_meshes(
+    meshes: Iterable[trimesh.Trimesh], operation: str
+) -> trimesh.Trimesh:
+    solids = [
+        manifold3d.Manifold(
+            manifold3d.Mesh64(
+                vert_properties=np.ascontiguousarray(mesh.vertices, dtype=np.float64),
+                tri_verts=np.ascontiguousarray(mesh.faces, dtype=np.uint64),
+            )
+        )
+        for mesh in meshes
+    ]
+    if not solids:
+        raise ValueError("Boolean operation requires at least one mesh")
+    result = solids[0]
+    for solid in solids[1:]:
+        if operation == "union":
+            result = result + solid
+        elif operation == "intersection":
+            result = result ^ solid
+        else:
+            raise ValueError(f"unsupported Boolean operation: {operation}")
+    result = result.simplify(BOOLEAN_TOLERANCE)
+    output = result.to_mesh64()
+    return trimesh.Trimesh(
+        vertices=np.array(output.vert_properties[:, :3], copy=True),
+        faces=np.array(output.tri_verts, copy=True),
+        process=False,
+    )
+
+
+def clip_slab(
+    mesh: trimesh.Trimesh, axis: int, lower: float, upper: float
+) -> trimesh.Trimesh:
     bounds = mesh.bounds.copy()
     bounds[0] -= 1.0
     bounds[1] += 1.0
@@ -94,7 +149,7 @@ def clip_slab(mesh: trimesh.Trimesh, axis: int, lower: float, upper: float) -> t
     extents = bounds[1] - bounds[0]
     box = trimesh.creation.box(extents=extents)
     box.apply_translation((bounds[0] + bounds[1]) / 2.0)
-    result = trimesh.boolean.intersection([mesh, box], engine="manifold")
+    result = boolean_meshes([mesh, box], "intersection")
     if not isinstance(result, trimesh.Trimesh) or result.is_empty:
         raise ValueError(f"empty slab on axis {axis}: {lower}..{upper}")
     for boundary in (lower, upper):
@@ -106,7 +161,7 @@ def clip_slab(mesh: trimesh.Trimesh, axis: int, lower: float, upper: float) -> t
 
 
 def union_meshes(parts: Iterable[trimesh.Trimesh]) -> trimesh.Trimesh:
-    result = trimesh.boolean.union(list(parts), engine="manifold")
+    result = boolean_meshes(parts, "union")
     if not isinstance(result, trimesh.Trimesh) or result.is_empty:
         raise ValueError("mesh union produced no solid")
     result.remove_unreferenced_vertices()
@@ -125,7 +180,9 @@ def affine_axis(
     target_start, target_end = target_interval
     result = mesh.copy()
     scale = (target_end - target_start) / (source_end - source_start)
-    result.vertices[:, axis] = target_start + (result.vertices[:, axis] - source_start) * scale
+    result.vertices[:, axis] = (
+        target_start + (result.vertices[:, axis] - source_start) * scale
+    )
     return result
 
 
@@ -222,7 +279,7 @@ def split_bottom(source: trimesh.Trimesh) -> tuple[trimesh.Trimesh, trimesh.Trim
         ]
     )
     cutter = bounds_box(lower, upper)
-    core = trimesh.boolean.intersection([source, cutter], engine="manifold")
+    core = boolean_meshes([source, cutter], "intersection")
     shell = union_meshes(
         [
             clip_slab(
@@ -257,9 +314,7 @@ def split_bottom(source: trimesh.Trimesh) -> tuple[trimesh.Trimesh, trimesh.Trim
             ),
         ]
     )
-    if not isinstance(core, trimesh.Trimesh) or not isinstance(
-        shell, trimesh.Trimesh
-    ):
+    if not isinstance(core, trimesh.Trimesh) or not isinstance(shell, trimesh.Trimesh):
         raise ValueError("bottom split did not produce two solids")
     return shell, core
 
@@ -358,3 +413,170 @@ def screw_axes(mesh: trimesh.Trimesh, z: float = 5.0) -> np.ndarray:
             raise ValueError(f"missing screw section near {expected.tolist()}")
         axes.append((local.min(axis=0) + local.max(axis=0)) / 2.0)
     return np.array(axes)
+
+
+def assert_closed_manifold(mesh: trimesh.Trimesh, label: str) -> None:
+    incidence = np.bincount(mesh.edges_unique_inverse)
+    if (
+        mesh.body_count != 1
+        or not mesh.is_watertight
+        or not mesh.is_winding_consistent
+        or np.any(incidence != 2)
+        or np.any(mesh.area_faces < 1e-9)
+        or mesh.volume <= 0.0
+    ):
+        raise ValueError(f"{label} is not one positive closed two-manifold solid")
+
+
+def validate_pair(
+    top: trimesh.Trimesh,
+    bottom: trimesh.Trimesh,
+    source_bottom: trimesh.Trimesh,
+    layout: Layout,
+) -> ValidationReport:
+    assert_closed_manifold(top, f"{layout.name} top")
+    assert_closed_manifold(bottom, f"{layout.name} bottom")
+    expected = np.array(layout.footprint)
+    if not np.allclose(top.extents[:2], expected, atol=0.003):
+        raise ValueError(f"{layout.name} top footprint drifted: {top.extents[:2]}")
+    if not np.allclose(bottom.extents[:2], expected, atol=0.003):
+        raise ValueError(
+            f"{layout.name} bottom footprint drifted: {bottom.extents[:2]}"
+        )
+    if not np.isclose(top.extents[2], 9.998, atol=0.001):
+        raise ValueError(f"{layout.name} top Z extent drifted")
+    if not np.isclose(bottom.extents[2], 15.006, atol=0.001):
+        raise ValueError(f"{layout.name} bottom Z extent drifted")
+
+    centers = expected_switch_centers(layout)
+    if not np.allclose(switch_section_sizes(top, centers, 2.7), 14.0, atol=0.003):
+        raise ValueError(f"{layout.name} switch openings drifted")
+    if not np.allclose(switch_section_sizes(top, centers, 1.0), 14.8, atol=0.003):
+        raise ValueError(f"{layout.name} switch reliefs drifted")
+    axis_pitch(centers[:, 0])
+    axis_pitch(centers[:, 1])
+
+    source_usb = type_c_section(source_bottom)
+    output_usb = type_c_section(bottom)
+    type_c_preserved = bool(
+        np.allclose(output_usb.size, source_usb.size, atol=0.003)
+        and np.isclose(output_usb.center_offset, source_usb.center_offset, atol=0.003)
+    )
+    if not type_c_preserved:
+        raise ValueError(f"{layout.name} Type-C section drifted")
+
+    expected_axes = expected_screw_axes(layout.footprint)
+    screws_aligned = bool(
+        np.allclose(screw_axes(top, z=1.0), expected_axes, atol=0.01)
+        and np.allclose(screw_axes(bottom, z=5.0), expected_axes, atol=0.01)
+    )
+    if not screws_aligned:
+        raise ValueError(f"{layout.name} screw axes drifted")
+    if not np.allclose(top.bounds[:, :2], bottom.bounds[:, :2], atol=0.003):
+        raise ValueError(f"{layout.name} top and bottom outlines do not align")
+
+    return ValidationReport(
+        layout=layout.name,
+        footprint=tuple(float(value) for value in expected),
+        switch_count=len(centers),
+        watertight=True,
+        manifold=True,
+        type_c_preserved=type_c_preserved,
+        screws_aligned=screws_aligned,
+    )
+
+
+def export_stl(mesh: trimesh.Trimesh, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(target.suffix + ".tmp")
+    temporary.write_bytes(trimesh.exchange.stl.export_stl(mesh))
+    temporary.replace(target)
+
+
+def render_preview(mesh: trimesh.Trimesh, target: Path, view: str) -> None:
+    from PIL import Image, ImageDraw
+
+    rotation = VIEW_ROTATIONS[view]
+    triangles = mesh.triangles @ rotation.T
+    projected = triangles[:, :, :2]
+    lower = projected.reshape(-1, 2).min(axis=0)
+    upper = projected.reshape(-1, 2).max(axis=0)
+    canvas = np.array([1200.0, 900.0])
+    scale = float(np.min((canvas - 96.0) / (upper - lower)))
+    points = (projected - lower) * scale + 48.0
+    points[:, :, 1] = canvas[1] - points[:, :, 1]
+
+    normals = np.cross(
+        triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0]
+    )
+    lengths = np.linalg.norm(normals, axis=1)
+    normals = normals / np.maximum(lengths[:, None], 1e-12)
+    light = np.array([0.3, -0.4, 0.85])
+    light /= np.linalg.norm(light)
+    shade = np.clip(0.55 + 0.35 * np.abs(normals @ light), 0.0, 1.0)
+    depth = triangles[:, :, 2].mean(axis=1)
+
+    image = Image.new("RGB", (1200, 900), "white")
+    draw = ImageDraw.Draw(image)
+    for index in np.argsort(depth):
+        level = int(235 - 105 * shade[index])
+        polygon = [tuple(value) for value in points[index].tolist()]
+        draw.polygon(polygon, fill=(level, level, level), outline=(70, 70, 70))
+    pixels = np.asarray(image)
+    nonblank = np.count_nonzero(np.any(pixels != 255, axis=2))
+    if nonblank < pixels.shape[0] * pixels.shape[1] * 0.05:
+        raise ValueError(f"blank preview for {target}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    image.save(target)
+
+
+def export_variant(
+    top: trimesh.Trimesh,
+    bottom: trimesh.Trimesh,
+    layout: Layout,
+    output_root: Path,
+    only: str | None,
+) -> None:
+    directory = output_root / layout.name
+    if only in (None, "top"):
+        export_stl(top, directory / f"pico_macro_pad_{layout.name}_top.stl")
+    if only in (None, "bottom"):
+        export_stl(
+            bottom,
+            directory / f"pico_macro_pad_{layout.name}_bottom_fitted_to_usb_c.stl",
+        )
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import json
+    from dataclasses import asdict
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--source-root", type=Path, default=DEFAULT_SOURCE)
+    parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--preview-root", type=Path, default=DEFAULT_PREVIEWS)
+    parser.add_argument("--layout", action="append", choices=tuple(LAYOUTS))
+    parser.add_argument("--only", choices=("top", "bottom"))
+    arguments = parser.parse_args(argv)
+
+    top_source = load_source(arguments.source_root / "pico_macro_pad_top.stl.stl")
+    bottom_source = load_source(
+        arguments.source_root / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+    )
+    selected = arguments.layout or list(LAYOUTS)
+    for name in selected:
+        layout = LAYOUTS[name]
+        top = generate_top(top_source, layout)
+        bottom = generate_bottom(bottom_source, layout)
+        report = validate_pair(top, bottom, bottom_source, layout)
+        export_variant(top, bottom, layout, arguments.output_root, arguments.only)
+        render_preview(top, arguments.preview_root / f"{name}-top.png", "top")
+        render_preview(bottom, arguments.preview_root / f"{name}-bottom.png", "bottom")
+        render_preview(bottom, arguments.preview_root / f"{name}-type-c.png", "type-c")
+        print(json.dumps(asdict(report), sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
