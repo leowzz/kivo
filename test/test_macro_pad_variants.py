@@ -35,3 +35,33 @@ def test_source_mesh_contract(filename: str, faces: int, extents: tuple[float, .
     assert mesh.is_watertight
     assert mesh.is_winding_consistent
     assert mesh.body_count == 1
+
+
+@pytest.mark.parametrize("name", ["3x4", "4x4", "5x4"])
+def test_generate_top_preserves_pitch_holes_and_topology(name: str) -> None:
+    source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
+    layout = variants.LAYOUTS[name]
+    mesh = variants.generate_top(source, layout)
+
+    assert mesh.extents[:2] == pytest.approx(layout.footprint, abs=0.003)
+    assert mesh.extents[2] == pytest.approx(9.998, abs=0.001)
+    assert mesh.is_watertight
+    assert mesh.is_winding_consistent
+    assert mesh.body_count == 1
+    assert mesh.euler_number == 2 - 2 * layout.columns * layout.rows
+
+    centers = variants.expected_switch_centers(layout)
+    openings = variants.switch_section_sizes(mesh, centers, z=2.7)
+    reliefs = variants.switch_section_sizes(mesh, centers, z=1.0)
+    assert openings == pytest.approx(
+        np.full((layout.columns * layout.rows, 2), 14.0), abs=0.003
+    )
+    assert reliefs == pytest.approx(
+        np.full((layout.columns * layout.rows, 2), 14.8), abs=0.003
+    )
+    assert variants.axis_pitch(centers[:, 0]) == pytest.approx(
+        variants.PITCH, abs=0.003
+    )
+    assert variants.axis_pitch(centers[:, 1]) == pytest.approx(
+        variants.PITCH, abs=0.003
+    )

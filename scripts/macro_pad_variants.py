@@ -80,6 +80,11 @@ def clip_slab(mesh: trimesh.Trimesh, axis: int, lower: float, upper: float) -> t
     result = trimesh.boolean.intersection([mesh, box], engine="manifold")
     if not isinstance(result, trimesh.Trimesh) or result.is_empty:
         raise ValueError(f"empty slab on axis {axis}: {lower}..{upper}")
+    for boundary in (lower, upper):
+        on_boundary = np.isclose(
+            result.vertices[:, axis], boundary, rtol=0.0, atol=EPSILON
+        )
+        result.vertices[on_boundary, axis] = boundary
     return result
 
 
@@ -104,3 +109,80 @@ def affine_axis(
     scale = (target_end - target_start) / (source_end - source_start)
     result.vertices[:, axis] = target_start + (result.vertices[:, axis] - source_start) * scale
     return result
+
+
+def translated(mesh: trimesh.Trimesh, axis: int, distance: float) -> trimesh.Trimesh:
+    result = mesh.copy()
+    offset = np.zeros(3)
+    offset[axis] = distance
+    result.apply_translation(offset)
+    return result
+
+
+def repeat_cell_band(
+    mesh: trimesh.Trimesh,
+    axis: int,
+    near_shift: float,
+    far_shift: float,
+    tile_offsets: tuple[float, ...],
+) -> trimesh.Trimesh:
+    minimum, maximum = mesh.bounds[:, axis]
+    near = clip_slab(mesh, axis, minimum - 1.0, CELL_START)
+    tile = clip_slab(mesh, axis, CELL_START, CELL_END)
+    far = clip_slab(mesh, axis, CELL_END, maximum + 1.0)
+    parts = [translated(near, axis, near_shift)]
+    parts.extend(translated(tile, axis, offset) for offset in tile_offsets)
+    parts.append(translated(far, axis, far_shift))
+    return union_meshes(parts)
+
+
+def normalize_origin(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    result = mesh.copy()
+    result.apply_translation(-result.bounds[0])
+    return result
+
+
+def generate_top(source: trimesh.Trimesh, layout: Layout) -> trimesh.Trimesh:
+    left, right, bottom = layout.growth
+    x_offsets = tuple(-left + index * PITCH for index in range(layout.columns - 2))
+    result = repeat_cell_band(source, 0, -left, right, x_offsets)
+    y_offsets = tuple(index * PITCH for index in range(layout.rows - 2))
+    result = repeat_cell_band(result, 1, 0.0, bottom, y_offsets)
+    return normalize_origin(result)
+
+
+def expected_switch_centers(layout: Layout) -> np.ndarray:
+    first = 4.0 + PITCH / 2.0
+    return np.array(
+        [
+            (first + column * PITCH, first + row * PITCH)
+            for row in range(layout.rows)
+            for column in range(layout.columns)
+        ]
+    )
+
+
+def switch_section_sizes(
+    mesh: trimesh.Trimesh, centers: np.ndarray, z: float
+) -> np.ndarray:
+    lines = trimesh.intersections.mesh_plane(
+        mesh, plane_normal=[0.0, 0.0, 1.0], plane_origin=[0.0, 0.0, z]
+    )
+    points = lines.reshape(-1, 3)[:, :2]
+    sizes: list[np.ndarray] = []
+    for center in centers:
+        local = points[np.all(np.abs(points - center) < 8.0, axis=1)]
+        if len(local) == 0:
+            raise ValueError(f"missing switch section at {center.tolist()}")
+        sizes.append(np.ptp(local, axis=0))
+    return np.array(sizes)
+
+
+def axis_pitch(values: np.ndarray) -> float:
+    unique = np.unique(np.round(values, 4))
+    if len(unique) < 2:
+        return PITCH
+    differences = np.diff(unique)
+    if not np.allclose(differences, PITCH, atol=0.003):
+        raise ValueError(f"invalid pitch sequence: {differences.tolist()}")
+    return float(differences.mean())
