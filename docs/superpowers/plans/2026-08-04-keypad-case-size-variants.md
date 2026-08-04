@@ -19,6 +19,7 @@
 - Preserve switch, wall, base, mating, screw, and counterbore cross-sections from the approved design.
 - Every output STL is one closed, consistently oriented, positive-volume two-manifold component in millimeters.
 - Do not modify `pyproject.toml`, `uv.lock`, application dependencies, source STL files, or unrelated untracked files.
+- Honor `models/.gitignore`; generated STL artifacts must exist at the requested paths but remain ignored and uncommitted.
 - All shell commands are prefixed with `rtk`; each segment of a command chain has its own `rtk` prefix.
 - Slicer and physical-fit acceptance remain Not Run.
 
@@ -916,11 +917,16 @@ Open `/tmp/kivo-macro-pad-previews/{3x4,4x4,5x4}-{top,bottom,type-c}.png` with t
 
 Expected: all nine previews pass; any failure returns to the owning generation task rather than being accepted as a slicer repair.
 
-- [ ] **Step 4: Commit only the requested artifacts**
+- [ ] **Step 4: Confirm the repository ignore policy leaves binary artifacts untracked**
 
 ```bash
-rtk git add models/3d-print/3x4 models/3d-print/4x4 models/3d-print/5x4 && rtk git commit -m "feat: add expanded RP2040 macro pad cases"
+rtk git check-ignore -v models/3d-print/3x4/pico_macro_pad_3x4_top.stl models/3d-print/4x4/pico_macro_pad_4x4_top.stl models/3d-print/5x4/pico_macro_pad_5x4_top.stl
+rtk git status --short
 ```
+
+Expected: `models/.gitignore:1:3d-print` is reported for each artifact and no
+model file is staged. Do not use `git add -f`; the requested deliverable is the
+workspace file set, not committed binary model history.
 
 - [ ] **Step 5: Run final staged-scope and repository checks**
 
@@ -930,4 +936,7 @@ rtk git log -5 --oneline
 rtk uv run --isolated --with pytest==8.4.2 --with trimesh==5.0.0 --with manifold3d==3.5.2 --with numpy==2.5.1 --with Pillow==12.3.0 python -m pytest test/test_macro_pad_variants.py -q
 ```
 
-Expected: only the pre-existing untracked `models/3d-print/3x3keypad` source directory remains outside commits; the generator, tests, and six outputs are committed; all focused tests PASS. Report slicer and physical printing as Not Run.
+Expected: Git status is clean because both source and generated model files are
+ignored; the generator and tests are committed; all six output files exist at
+their requested paths; all focused tests PASS. Report slicer and physical
+printing as Not Run.
