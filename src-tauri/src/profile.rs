@@ -95,6 +95,17 @@ pub fn blank_device_profile(id: String, name: String, board_profile_id: String) 
     }
 }
 
+#[cfg(test)]
+pub(crate) fn test_model_layout() -> ModelLayout {
+    let mut layout =
+        serde_yaml_ng::from_str::<DeviceProfile>(include_str!("../../models/prod/tel001.yaml"))
+            .unwrap()
+            .profile;
+    layout.id = "red-phone-v1".into();
+    layout.name = "Red Phone v1".into();
+    layout
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileChange {
     pub device_profile_id: String,
@@ -401,7 +412,7 @@ mod tests {
     fn profile() -> DeviceProfile {
         DeviceProfile {
             schema_version: PROFILE_SCHEMA_VERSION,
-            profile: serde_json::from_str(include_str!("../../models/red-phone-v1.json")).unwrap(),
+            profile: test_model_layout(),
             hardware_profiles: vec![
                 HardwareProfile {
                     id: "esp-primary".into(),

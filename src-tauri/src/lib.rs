@@ -1072,10 +1072,9 @@ mod tests {
     }
 
     fn product_profile() -> DeviceProfile {
-        let layout = serde_json::from_str(include_str!("../../models/red-phone-v1.json")).unwrap();
         DeviceProfile {
             schema_version: PROFILE_SCHEMA_VERSION,
-            profile: layout,
+            profile: profile::test_model_layout(),
             hardware_profiles: vec![HardwareProfile {
                 id: "esp-primary".into(),
                 name: "ESP primary".into(),

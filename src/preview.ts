@@ -1,9 +1,56 @@
-import telLayout from "../models/tel001.json";
 import type {
   AppSnapshot,
   CreateDeviceProfileRequest,
   DeviceProfile,
+  ModelLayout,
 } from "./types";
+
+const telLayout: ModelLayout = {
+  id: "tel001",
+  name: "Tel001",
+  groups: [
+    {
+      id: "top",
+      columns: 5,
+      buttons: [
+        { id: "UP", label: "UP" },
+        { id: "DOWN", label: "DOWN" },
+        { id: "BACK", label: "BACK" },
+        { id: "OUT", label: "OUT" },
+        { id: "DEL", label: "DEL" },
+      ],
+    },
+    {
+      id: "digits",
+      columns: 3,
+      buttons: [
+        { id: "DIGIT_1", label: "1" },
+        { id: "DIGIT_2", label: "2" },
+        { id: "DIGIT_3", label: "3" },
+        { id: "DIGIT_4", label: "4" },
+        { id: "DIGIT_5", label: "5" },
+        { id: "DIGIT_6", label: "6" },
+        { id: "DIGIT_7", label: "7" },
+        { id: "DIGIT_8", label: "8" },
+        { id: "DIGIT_9", label: "9" },
+        { id: "STAR", label: "*" },
+        { id: "DIGIT_0", label: "0" },
+        { id: "HASH", label: "#" },
+      ],
+    },
+    {
+      id: "bottom",
+      columns: 5,
+      buttons: [
+        { id: "R", label: "R" },
+        { id: "VOL", label: "VOL" },
+        { id: "FL_SET", label: "FL/SET" },
+        { id: "RD_PA", label: "RD/PA" },
+        { id: "SPEAKER", label: "SPEAKER" },
+      ],
+    },
+  ],
+};
 
 const esp32SafePins = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18];
 const rp2040SafePins = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];

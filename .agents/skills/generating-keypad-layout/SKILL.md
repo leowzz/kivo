@@ -1,11 +1,11 @@
 ---
 name: generating-keypad-layout
-description: Use when creating or updating a device keypad model layout JSON from a reference image during development in this repository.
+description: Use when creating or updating a Kivo Device Profile YAML keypad layout from a reference image in this repository.
 ---
 
 # Generate Keypad Layout
 
-Turn a device image into the normalized layout consumed from `models/*.json`. Generate layout only; do not create GPIO mappings or actions.
+Turn a device image into the normalized `profile` layout inside `models/prod/*.yaml`. Do not infer GPIO mappings or actions from the image.
 
 ## Required Inputs
 
@@ -19,14 +19,14 @@ If the model ID is missing, ask the user for it and stop. Do not infer it from t
 ## Workflow
 
 1. Inspect the image with the available local image-viewing tool.
-2. Read `src-tauri/src/model.rs` and existing `models/*.json`; current repository types and validation rules are authoritative.
+2. Read `src-tauri/src/model.rs`, `src-tauri/src/profile.rs`, and existing `models/prod/*.yaml`; current repository types and validation rules are authoritative.
 3. Identify physical button regions and transcribe buttons in row-major visual order.
 4. Ask before writing when the image leaves the button count, grouping, label, or semantic ID ambiguous.
-5. Write `models/<model-id>.json`. If it exists, ask before replacing it.
+5. Write or update `models/prod/<model-id>.yaml`. For a new file, use an empty `hardware_profiles` list and `actions` map. If it exists, ask before replacing it and preserve its hardware profiles and actions.
 6. Run:
 
 ```bash
-rtk jq empty models/<model-id>.json
+rtk yq '.' models/prod/<model-id>.yaml
 rtk cargo test --manifest-path src-tauri/Cargo.toml model::tests
 rtk git diff --check
 ```
@@ -50,22 +50,20 @@ Use equal-sized buttons within each group. Do not add pixel coordinates, rotatio
 
 ## Example
 
-```json
-{
-  "id": "desk-phone-v2",
-  "name": "Desk Phone v2",
-  "groups": [
-    {
-      "id": "digits",
-      "columns": 3,
-      "buttons": [
-        { "id": "DIGIT_1", "label": "1" },
-        { "id": "DIGIT_2", "label": "2" },
-        { "id": "DIGIT_3", "label": "3" }
-      ]
-    }
-  ]
-}
+```yaml
+schema_version: 2
+profile:
+  id: desk-phone-v2
+  name: Desk Phone v2
+  groups:
+    - id: digits
+      columns: 3
+      buttons:
+        - { id: DIGIT_1, label: "1" }
+        - { id: DIGIT_2, label: "2" }
+        - { id: DIGIT_3, label: "3" }
+hardware_profiles: []
+actions: {}
 ```
 
 ## Common Mistakes
@@ -74,4 +72,5 @@ Use equal-sized buttons within each group. Do not add pixel coordinates, rotatio
 - Splitting one combined physical key into multiple buttons.
 - Encoding photograph geometry that the grouped layout cannot represent.
 - Reusing a button ID within or across groups.
+- Replacing existing hardware profiles or actions while updating only the layout.
 - Modifying `config.yaml` while generating a model layout.

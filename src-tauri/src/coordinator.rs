@@ -2091,7 +2091,7 @@ mod tests {
     fn profile() -> DeviceProfile {
         DeviceProfile {
             schema_version: PROFILE_SCHEMA_VERSION,
-            profile: serde_json::from_str(include_str!("../../models/red-phone-v1.json")).unwrap(),
+            profile: crate::profile::test_model_layout(),
             hardware_profiles: vec![HardwareProfile {
                 id: "esp".into(),
                 name: "ESP".into(),
