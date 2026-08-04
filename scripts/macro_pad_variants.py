@@ -33,7 +33,9 @@ CORE_INSET = 8.0
 CORE_OVERLAP = 0.2
 BASE_OVERLAP = 0.001
 BOOLEAN_TOLERANCE = 5e-5
-PROTECTED_VOLUME_TOLERANCE = 0.1
+PROTECTED_VOLUME_TOLERANCE = 0.02
+BASE_SKIN_VOLUME_TOLERANCE = 0.08
+GENERATED_VOLUME_TOLERANCE = 1e-6
 SOURCE_HASHES = {
     "pico_macro_pad_top.stl.stl": (
         "ce0f7b64d06b3fc2864d29452e87fb264f70567c0f5924eab380d0748f4e9155"
@@ -91,6 +93,7 @@ class ValidationReport:
     screws_aligned: bool
     protected_geometry_preserved: bool
     growth_corridors_empty: bool
+    generated_geometry_matched: bool
 
 
 LAYOUTS = {
@@ -398,6 +401,14 @@ def protected_region_mismatches(
             [CELL_START, CELL_START, -0.1],
             [CELL_END, CELL_END, top_z],
         ),
+        "top-front-mating-wall": (
+            source_top,
+            top,
+            [CELL_START, -0.1, -0.1],
+            [CELL_END, CORE_INSET, top_z],
+            [CELL_START, -0.1, -0.1],
+            [CELL_END, CORE_INSET, top_z],
+        ),
         "top-left-mating-wall": (
             source_top,
             top,
@@ -413,6 +424,14 @@ def protected_region_mismatches(
             [CELL_END, source_top.extents[1] + 0.1, top_z],
             [CELL_START, source_top.extents[1] - CORE_INSET + bottom_growth, -0.1],
             [CELL_END, source_top.extents[1] + bottom_growth + 0.1, top_z],
+        ),
+        "top-right-mating-wall": (
+            source_top,
+            top,
+            [source_top.extents[0] - CORE_INSET, CELL_START, -0.1],
+            [source_top.extents[0] + 0.1, CELL_END, top_z],
+            [top.extents[0] - CORE_INSET, CELL_START, -0.1],
+            [top.extents[0] + 0.1, CELL_END, top_z],
         ),
         "bottom-controller-group": (
             source_bottom,
@@ -437,6 +456,14 @@ def protected_region_mismatches(
             [CELL_END, source_bottom.extents[1] + 0.1, bottom_z],
             [CELL_START + left, rear_start + bottom_growth, -0.1],
             [CELL_END + left, source_bottom.extents[1] + bottom_growth + 0.1, bottom_z],
+        ),
+        "bottom-right-mating-wall": (
+            source_bottom,
+            bottom,
+            [source_bottom.extents[0] - CORE_INSET, CELL_START, -0.1],
+            [source_bottom.extents[0] + 0.1, CELL_END, bottom_z],
+            [bottom.extents[0] - CORE_INSET, CELL_START, -0.1],
+            [bottom.extents[0] + 0.1, CELL_END, bottom_z],
         ),
         "bottom-base-skin": (
             source_bottom,
@@ -467,6 +494,12 @@ def protected_region_mismatches(
     }
 
 
+def protected_volume_tolerance(label: str) -> float:
+    if label == "bottom-base-skin":
+        return BASE_SKIN_VOLUME_TOLERANCE
+    return PROTECTED_VOLUME_TOLERANCE
+
+
 def growth_corridor_boxes(
     bottom: trimesh.Trimesh, source_bottom: trimesh.Trimesh, layout: Layout
 ) -> list[trimesh.Trimesh]:
@@ -493,6 +526,8 @@ def growth_corridor_boxes(
                 ),
             ]
         )
+    # The rear exclusion preserves the source mating transition. The full-mesh
+    # integrity check below covers this intentionally omitted band.
     xy_bounds.append(
         (
             [CORE_INSET + margin, source_inner_max + margin],
@@ -708,6 +743,8 @@ def validate_pair(
         raise ValueError(f"{layout.name} switch count drifted")
     if top.euler_number != 2 - 2 * expected_count:
         raise ValueError(f"{layout.name} switch tunnel topology drifted")
+    if bottom.euler_number != source_bottom.euler_number:
+        raise ValueError(f"{layout.name} bottom tunnel topology drifted")
     if (
         len(openings.x_levels) != layout.columns
         or len(openings.y_levels) != layout.rows
@@ -768,7 +805,8 @@ def validate_pair(
         top, bottom, source_top, source_bottom, layout
     )
     protected_geometry_preserved = all(
-        mismatch <= PROTECTED_VOLUME_TOLERANCE for mismatch in mismatches.values()
+        mismatch <= protected_volume_tolerance(label)
+        for label, mismatch in mismatches.items()
     )
     if not protected_geometry_preserved:
         raise ValueError(f"{layout.name} protected geometry drifted: {mismatches}")
@@ -782,6 +820,17 @@ def validate_pair(
     if not growth_corridors_empty:
         raise ValueError(f"{layout.name} added cavity contains an unexpected solid")
 
+    expected_meshes = {
+        "top": generate_top(source_top, layout),
+        "bottom": generate_bottom(source_bottom, layout),
+    }
+    for label, actual in (("top", top), ("bottom", bottom)):
+        mismatch = generated_mesh_mismatch_volume(actual, expected_meshes[label])
+        if mismatch > GENERATED_VOLUME_TOLERANCE:
+            raise ValueError(
+                f"{layout.name} generated {label} geometry drifted: {mismatch}"
+            )
+
     return ValidationReport(
         layout=layout.name,
         footprint=tuple(float(value) for value in expected),
@@ -792,6 +841,7 @@ def validate_pair(
         screws_aligned=screws_aligned,
         protected_geometry_preserved=protected_geometry_preserved,
         growth_corridors_empty=growth_corridors_empty,
+        generated_geometry_matched=True,
     )
 
 
@@ -806,6 +856,23 @@ def prepare_stl_mesh(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     result.remove_unreferenced_vertices()
     assert_closed_manifold(result, "STL export")
     return result
+
+
+def generated_mesh_mismatch_volume(
+    actual: trimesh.Trimesh, expected: trimesh.Trimesh
+) -> float:
+    actual_prepared = prepare_stl_mesh(actual)
+    expected_prepared = prepare_stl_mesh(expected)
+    lower = np.minimum(actual_prepared.bounds[0], expected_prepared.bounds[0]) - 0.1
+    upper = np.maximum(actual_prepared.bounds[1], expected_prepared.bounds[1]) + 0.1
+    return region_mismatch_volume(
+        expected_prepared,
+        actual_prepared,
+        lower,
+        upper,
+        lower,
+        upper,
+    )
 
 
 def export_stl(mesh: trimesh.Trimesh, target: Path) -> None:

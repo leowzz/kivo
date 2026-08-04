@@ -174,6 +174,73 @@ def test_bottom_growth_corridors_are_empty(name: str) -> None:
         assert overlap.is_empty or overlap.volume < 1e-6
 
 
+def test_validator_rejects_a_bottom_floor_hole() -> None:
+    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
+    bottom_source = variants.load_source(
+        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+    )
+    layout = variants.LAYOUTS["5x4"]
+    top = variants.generate_top(top_source, layout)
+    bottom = variants.generate_bottom(bottom_source, layout)
+    cutter = variants.bounds_box(
+        np.array([10.0, 60.0, -0.1]), np.array([14.0, 64.0, 2.0])
+    )
+    damaged = trimesh.boolean.difference([bottom, cutter], engine="manifold")
+    assert isinstance(damaged, trimesh.Trimesh)
+    assert damaged.euler_number == -10
+
+    with pytest.raises(ValueError, match="bottom tunnel topology drifted"):
+        variants.validate_pair(top, damaged, top_source, bottom_source, layout)
+
+
+@pytest.mark.parametrize(
+    ("lower", "upper", "message"),
+    [
+        (
+            (10.0, 74.0, 1.0),
+            (14.0, 75.0, 3.0),
+            "generated bottom geometry drifted",
+        ),
+        (
+            (98.0, 25.0, 1.0),
+            (100.0, 29.0, 3.0),
+            "protected geometry drifted",
+        ),
+    ],
+)
+def test_validator_rejects_added_bottom_ribs(
+    lower: tuple[float, ...], upper: tuple[float, ...], message: str
+) -> None:
+    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
+    bottom_source = variants.load_source(
+        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+    )
+    layout = variants.LAYOUTS["5x4"]
+    top = variants.generate_top(top_source, layout)
+    bottom = variants.generate_bottom(bottom_source, layout)
+    rib = variants.bounds_box(np.array(lower), np.array(upper))
+    damaged = variants.union_meshes([bottom, rib])
+    assert damaged.euler_number == bottom.euler_number
+
+    with pytest.raises(ValueError, match=message):
+        variants.validate_pair(top, damaged, top_source, bottom_source, layout)
+
+
+def test_validator_rejects_a_small_controller_bump() -> None:
+    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
+    bottom_source = variants.load_source(
+        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+    )
+    layout = variants.LAYOUTS["5x4"]
+    top = variants.generate_top(top_source, layout)
+    bottom = variants.generate_bottom(bottom_source, layout)
+    bump = variants.bounds_box(np.array([49.0, 10.0, 1.0]), np.array([49.2, 10.2, 2.0]))
+    damaged = variants.union_meshes([bottom, bump])
+
+    with pytest.raises(ValueError, match="protected geometry drifted"):
+        variants.validate_pair(top, damaged, top_source, bottom_source, layout)
+
+
 @pytest.mark.parametrize("name", ["3x4", "4x4", "5x4"])
 def test_protected_geometry_matches_source(name: str) -> None:
     top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
@@ -189,17 +256,18 @@ def test_protected_geometry_matches_source(name: str) -> None:
     )
     assert set(mismatches) == {
         "top-switch-cell",
+        "top-front-mating-wall",
         "top-left-mating-wall",
         "top-rear-mating-wall",
+        "top-right-mating-wall",
         "bottom-controller-group",
         "bottom-left-mating-wall",
         "bottom-rear-mating-wall",
+        "bottom-right-mating-wall",
         "bottom-base-skin",
     }
-    assert mismatches == pytest.approx(
-        {label: 0.0 for label in mismatches},
-        abs=variants.PROTECTED_VOLUME_TOLERANCE,
-    )
+    for label, mismatch in mismatches.items():
+        assert mismatch <= variants.protected_volume_tolerance(label)
 
 
 def test_validate_pair_reports_the_complete_contract() -> None:
@@ -224,6 +292,7 @@ def test_validate_pair_reports_the_complete_contract() -> None:
     assert report.screws_aligned
     assert report.protected_geometry_preserved
     assert report.growth_corridors_empty
+    assert report.generated_geometry_matched
 
 
 def test_cli_writes_exact_artifact_names(tmp_path: Path) -> None:
