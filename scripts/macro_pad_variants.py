@@ -82,7 +82,7 @@ DEFAULT_OUTPUT = Path("models/3d-print")
 DEFAULT_PREVIEWS = Path("/tmp/kivo-macro-pad-previews")
 VIEW_ROTATIONS = {
     "top": np.eye(3),
-    "bottom": np.diag([1.0, -1.0, -1.0]),
+    "bottom": np.eye(3),
     "type-c": np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]]),
 }
 
@@ -497,13 +497,19 @@ def render_preview(mesh: trimesh.Trimesh, target: Path, view: str) -> None:
     from PIL import Image, ImageDraw
 
     rotation = VIEW_ROTATIONS[view]
-    triangles = mesh.triangles @ rotation.T
+    triangles = mesh.triangles
+    if view == "type-c":
+        front = mesh.bounds[0, 1] + 0.25
+        triangles = triangles[np.min(triangles[:, :, 1], axis=1) <= front]
+    triangles = triangles @ rotation.T
     projected = triangles[:, :, :2]
     lower = projected.reshape(-1, 2).min(axis=0)
     upper = projected.reshape(-1, 2).max(axis=0)
     canvas = np.array([1200.0, 900.0])
     scale = float(np.min((canvas - 96.0) / (upper - lower)))
-    points = (projected - lower) * scale + 48.0
+    rendered_size = (upper - lower) * scale
+    offset = (canvas - rendered_size) / 2.0
+    points = (projected - lower) * scale + offset
     points[:, :, 1] = canvas[1] - points[:, :, 1]
 
     normals = np.cross(
@@ -521,7 +527,7 @@ def render_preview(mesh: trimesh.Trimesh, target: Path, view: str) -> None:
     for index in np.argsort(depth):
         level = int(235 - 105 * shade[index])
         polygon = [tuple(value) for value in points[index].tolist()]
-        draw.polygon(polygon, fill=(level, level, level), outline=(70, 70, 70))
+        draw.polygon(polygon, fill=(level, level, level))
     pixels = np.asarray(image)
     nonblank = np.count_nonzero(np.any(pixels != 255, axis=2))
     if nonblank < pixels.shape[0] * pixels.shape[1] * 0.05:
