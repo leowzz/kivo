@@ -486,10 +486,24 @@ def validate_pair(
     )
 
 
+def prepare_stl_mesh(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    result = trimesh.Trimesh(
+        vertices=np.array(mesh.vertices, dtype=np.float32),
+        faces=np.array(mesh.faces, copy=True),
+        process=False,
+    )
+    result.merge_vertices()
+    result.update_faces(result.area_faces >= 1e-9)
+    result.remove_unreferenced_vertices()
+    assert_closed_manifold(result, "STL export")
+    return result
+
+
 def export_stl(mesh: trimesh.Trimesh, target: Path) -> None:
+    prepared = prepare_stl_mesh(mesh)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(target.suffix + ".tmp")
-    temporary.write_bytes(trimesh.exchange.stl.export_stl(mesh))
+    temporary.write_bytes(trimesh.exchange.stl.export_stl(prepared))
     temporary.replace(target)
 
 

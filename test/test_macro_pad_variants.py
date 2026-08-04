@@ -207,15 +207,29 @@ def test_cli_writes_exact_artifact_names(tmp_path: Path) -> None:
         ]
     )
     assert result == 0
+    source_bottom = variants.load_source(
+        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+    )
     for name in variants.LAYOUTS:
         directory = tmp_path / "models" / name
-        assert (directory / f"pico_macro_pad_{name}_top.stl").is_file()
-        assert (
-            directory / f"pico_macro_pad_{name}_bottom_fitted_to_usb_c.stl"
-        ).is_file()
+        top_path = directory / f"pico_macro_pad_{name}_top.stl"
+        bottom_path = directory / f"pico_macro_pad_{name}_bottom_fitted_to_usb_c.stl"
+        assert top_path.is_file()
+        assert bottom_path.is_file()
         assert (tmp_path / "previews" / f"{name}-top.png").is_file()
         assert (tmp_path / "previews" / f"{name}-bottom.png").is_file()
         assert (tmp_path / "previews" / f"{name}-type-c.png").is_file()
+
+        top = trimesh.load_mesh(top_path, file_type="stl", process=False)
+        bottom = trimesh.load_mesh(bottom_path, file_type="stl", process=False)
+        assert isinstance(top, trimesh.Trimesh)
+        assert isinstance(bottom, trimesh.Trimesh)
+        top.merge_vertices()
+        bottom.merge_vertices()
+        report = variants.validate_pair(
+            top, bottom, source_bottom, variants.LAYOUTS[name]
+        )
+        assert report.layout == name
 
 
 def test_binary_stl_export_is_deterministic(tmp_path: Path) -> None:
@@ -228,7 +242,7 @@ def test_binary_stl_export_is_deterministic(tmp_path: Path) -> None:
 
     data = first.read_bytes()
     assert data == second.read_bytes()
-    assert len(data) == 84 + 50 * len(mesh.faces)
+    assert len(data) == 84 + 50 * len(variants.prepare_stl_mesh(mesh).faces)
 
 
 def test_cli_filters_layout_and_part(tmp_path: Path) -> None:
