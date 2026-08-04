@@ -462,6 +462,7 @@ pub fn encode_hotkey(keys: &[String]) -> Result<(u8, u8), String> {
             b"backspace" => 0x2a,
             b"tab" => 0x2b,
             b"space" => 0x2c,
+            b"backtick" => 0x35,
             b"home" => 0x4a,
             b"pageup" | b"page_up" => 0x4b,
             b"delete" => 0x4c,
@@ -696,6 +697,11 @@ mod tests {
             Ok((10, 14))
         );
         assert_eq!(encode_hotkey(&["page_down".into()]), Ok((0, 78)));
+    }
+
+    #[test]
+    fn encodes_backtick_hotkey() {
+        assert_eq!(encode_hotkey(&["backtick".into()]), Ok((0, 0x35)));
     }
 
     #[test]

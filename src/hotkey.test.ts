@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { normalizeHotkey } from "./hotkey";
+import { formatHotkey, normalizeHotkey } from "./hotkey";
 
 test("normalizes command shift letter", () => {
   expect(normalizeHotkey({
@@ -29,6 +29,20 @@ test("uses backend key names", () => {
     ctrlKey: false,
     altKey: true,
   } as KeyboardEvent)).toEqual(["alt", "up"]);
+});
+
+test("normalizes the backtick key", () => {
+  expect(normalizeHotkey({
+    code: "Backquote",
+    metaKey: false,
+    shiftKey: false,
+    ctrlKey: false,
+    altKey: false,
+  } as KeyboardEvent)).toEqual(["backtick"]);
+});
+
+test("formats the backtick key as its symbol", () => {
+  expect(formatHotkey(["backtick"])).toBe("`");
 });
 
 test("rejects unsupported keys", () => {

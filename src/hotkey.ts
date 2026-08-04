@@ -13,6 +13,7 @@ const NAMED_KEYS: Record<string, string> = {
   End: "end",
   PageUp: "page_up",
   PageDown: "page_down",
+  Backquote: "backtick",
 };
 
 const MODIFIER_CODES = new Set([
@@ -42,6 +43,7 @@ const HOTKEY_LABELS: Record<string, string> = {
   page_up: "Page Up",
   pagedown: "Page Down",
   page_down: "Page Down",
+  backtick: "`",
 };
 
 export function formatHotkey(keys: string[]) {

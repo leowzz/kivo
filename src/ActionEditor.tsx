@@ -21,6 +21,7 @@ const HOTKEY_MODIFIERS = [
 const HOTKEY_KEYS = [
   ..."abcdefghijklmnopqrstuvwxyz",
   ..."0123456789",
+  "backtick",
   "enter", "escape", "backspace", "tab", "space", "delete",
   "up", "down", "left", "right", "home", "end", "page_up", "page_down",
 ];

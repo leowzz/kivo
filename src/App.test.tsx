@@ -1599,6 +1599,32 @@ test("manually selects a multi-modifier shortcut", async () => {
   );
 });
 
+test("manually selects the backtick key", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "按键行为" }));
+  const editor = await screen.findByRole("complementary", { name: "2" });
+
+  await user.click(screen.getByRole("button", { name: "按下按键" }));
+  await user.selectOptions(
+    within(editor).getByRole("combobox", { name: "按键" }),
+    "backtick",
+  );
+
+  expect(within(editor).getByText("`", { selector: "output" })).toBeInTheDocument();
+  await waitFor(
+    () =>
+      expect(invoke).toHaveBeenCalledWith("save_device_profile", {
+        profile: expect.objectContaining({
+          actions: {
+            DIGIT_2: [{ type: "hotkey", keys: ["backtick"] }],
+          },
+        }),
+      }),
+    { timeout: 1600 },
+  );
+});
+
 test("reorders actions from the right editor", async () => {
   const user = userEvent.setup();
   currentSnapshot.deviceProfiles[0].actions.DIGIT_2 = [
