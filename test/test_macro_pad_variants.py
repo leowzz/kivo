@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import trimesh
 
 from scripts import macro_pad_variants as variants
 
@@ -65,3 +66,110 @@ def test_generate_top_preserves_pitch_holes_and_topology(name: str) -> None:
     assert variants.axis_pitch(centers[:, 1]) == pytest.approx(
         variants.PITCH, abs=0.003
     )
+
+
+@pytest.mark.parametrize("name", ["3x4", "4x4", "5x4"])
+def test_generate_bottom_preserves_protected_features(name: str) -> None:
+    source = variants.load_source(
+        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+    )
+    layout = variants.LAYOUTS[name]
+    mesh = variants.generate_bottom(source, layout)
+
+    assert mesh.extents[:2] == pytest.approx(layout.footprint, abs=0.003)
+    assert mesh.extents[2] == pytest.approx(15.006, abs=0.001)
+    assert mesh.is_watertight
+    assert mesh.is_winding_consistent
+    assert mesh.body_count == 1
+    assert mesh.euler_number == -8
+
+    source_usb = variants.type_c_section(source)
+    output_usb = variants.type_c_section(mesh)
+    assert output_usb.size == pytest.approx(source_usb.size, abs=0.003)
+    assert output_usb.center_offset == pytest.approx(
+        source_usb.center_offset, abs=0.003
+    )
+    assert variants.screw_axes(mesh) == pytest.approx(
+        variants.expected_screw_axes(layout.footprint), abs=0.01
+    )
+
+
+@pytest.mark.parametrize("name", ["3x4", "4x4", "5x4"])
+def test_bottom_internal_core_is_never_scaled(name: str) -> None:
+    source = variants.load_source(
+        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+    )
+    _source_shell, source_core = variants.split_bottom(source)
+    parts = variants.expand_bottom_parts(source, variants.LAYOUTS[name])
+    assert parts.core.extents == pytest.approx(source_core.extents, abs=1e-6)
+    assert parts.core.volume == pytest.approx(source_core.volume, abs=1e-4)
+
+
+@pytest.mark.parametrize("name", ["3x4", "4x4", "5x4"])
+def test_bottom_growth_corridors_are_empty(name: str) -> None:
+    source = variants.load_source(
+        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+    )
+    layout = variants.LAYOUTS[name]
+    mesh = variants.generate_bottom(source, layout)
+    points = trimesh.intersections.mesh_plane(
+        mesh, plane_normal=[0.0, 0.0, 1.0], plane_origin=[0.0, 0.0, 5.0]
+    ).reshape(-1, 3)[:, :2]
+    left, right, _bottom = layout.growth
+    width, height = mesh.extents[:2]
+    margin = 0.5
+    corridors: list[tuple[np.ndarray, np.ndarray]] = []
+
+    if left > 0.0:
+        corridors.extend(
+            [
+                (
+                    np.array(
+                        [variants.CORE_INSET + margin, variants.CORE_INSET + margin]
+                    ),
+                    np.array(
+                        [
+                            variants.CORE_INSET + left - margin,
+                            source.extents[1] - variants.CORE_INSET - margin,
+                        ]
+                    ),
+                ),
+                (
+                    np.array(
+                        [
+                            width
+                            - variants.CORE_INSET
+                            - right
+                            + margin,
+                            variants.CORE_INSET + margin,
+                        ]
+                    ),
+                    np.array(
+                        [
+                            width - variants.CORE_INSET - margin,
+                            source.extents[1] - variants.CORE_INSET - margin,
+                        ]
+                    ),
+                ),
+            ]
+        )
+
+    corridors.append(
+        (
+            np.array(
+                [
+                    variants.CORE_INSET + margin,
+                    source.extents[1] - variants.CORE_INSET + margin,
+                ]
+            ),
+            np.array(
+                [
+                    width - variants.CORE_INSET - margin,
+                    height - variants.CORE_INSET - margin,
+                ]
+            ),
+        )
+    )
+    for lower, upper in corridors:
+        inside = np.all((points > lower) & (points < upper), axis=1)
+        assert not np.any(inside)

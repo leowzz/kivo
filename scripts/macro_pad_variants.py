@@ -24,6 +24,11 @@ SOURCE_SIZE = 65.15
 CELL_START = 23.05
 CELL_END = CELL_START + PITCH
 EPSILON = 1e-5
+BOTTOM_X_BREAKS = (8.0, 20.50, 44.15, 57.15)
+BOTTOM_Y_BREAKS = (55.00, 57.15)
+BASE_SKIN_Z = 1.12
+CORE_INSET = 8.0
+CORE_OVERLAP = 0.2
 
 
 @dataclass(frozen=True)
@@ -40,6 +45,18 @@ class Layout:
     def growth(self) -> tuple[float, float, float]:
         width_growth = (self.columns - 3) * PITCH
         return (width_growth / 2.0, width_growth / 2.0, (self.rows - 3) * PITCH)
+
+
+@dataclass
+class BottomParts:
+    shell: trimesh.Trimesh
+    core: trimesh.Trimesh
+
+
+@dataclass(frozen=True)
+class TypeCSection:
+    size: tuple[float, float]
+    center_offset: float
 
 
 LAYOUTS = {
@@ -93,7 +110,8 @@ def union_meshes(parts: Iterable[trimesh.Trimesh]) -> trimesh.Trimesh:
     if not isinstance(result, trimesh.Trimesh) or result.is_empty:
         raise ValueError("mesh union produced no solid")
     result.remove_unreferenced_vertices()
-    result.process(validate=True)
+    if not result.is_volume:
+        raise ValueError("mesh union did not produce a positive closed volume")
     return result
 
 
@@ -186,3 +204,157 @@ def axis_pitch(values: np.ndarray) -> float:
     if not np.allclose(differences, PITCH, atol=0.003):
         raise ValueError(f"invalid pitch sequence: {differences.tolist()}")
     return float(differences.mean())
+
+
+def bounds_box(lower: np.ndarray, upper: np.ndarray) -> trimesh.Trimesh:
+    box = trimesh.creation.box(extents=upper - lower)
+    box.apply_translation((lower + upper) / 2.0)
+    return box
+
+
+def split_bottom(source: trimesh.Trimesh) -> tuple[trimesh.Trimesh, trimesh.Trimesh]:
+    lower = np.array([CORE_INSET, CORE_INSET, source.bounds[0, 2] - 1.0])
+    upper = np.array(
+        [
+            source.extents[0] - CORE_INSET,
+            source.extents[1] - CORE_INSET,
+            source.extents[2] + 1.0,
+        ]
+    )
+    cutter = bounds_box(lower, upper)
+    core = trimesh.boolean.intersection([source, cutter], engine="manifold")
+    shell = union_meshes(
+        [
+            clip_slab(
+                source,
+                2,
+                source.bounds[0, 2] - 1.0,
+                BASE_SKIN_Z + CORE_OVERLAP,
+            ),
+            clip_slab(
+                source,
+                0,
+                source.bounds[0, 0] - 1.0,
+                CORE_INSET + CORE_OVERLAP,
+            ),
+            clip_slab(
+                source,
+                0,
+                source.extents[0] - CORE_INSET - CORE_OVERLAP,
+                source.bounds[1, 0] + 1.0,
+            ),
+            clip_slab(
+                source,
+                1,
+                source.bounds[0, 1] - 1.0,
+                CORE_INSET + CORE_OVERLAP,
+            ),
+            clip_slab(
+                source,
+                1,
+                source.extents[1] - CORE_INSET - CORE_OVERLAP,
+                source.bounds[1, 1] + 1.0,
+            ),
+        ]
+    )
+    if not isinstance(core, trimesh.Trimesh) or not isinstance(
+        shell, trimesh.Trimesh
+    ):
+        raise ValueError("bottom split did not produce two solids")
+    return shell, core
+
+
+def expand_piecewise(
+    mesh: trimesh.Trimesh,
+    axis: int,
+    breakpoints: tuple[float, ...],
+    target_breakpoints: tuple[float, ...],
+) -> trimesh.Trimesh:
+    if np.allclose(breakpoints, target_breakpoints, rtol=0.0, atol=EPSILON):
+        return mesh.copy()
+    source_edges = (
+        mesh.bounds[0, axis] - 1.0,
+        *breakpoints,
+        mesh.bounds[1, axis] + 1.0,
+    )
+    target_edges = (
+        target_breakpoints[0] - (breakpoints[0] - source_edges[0]),
+        *target_breakpoints,
+        target_breakpoints[-1] + (source_edges[-1] - breakpoints[-1]),
+    )
+    parts: list[trimesh.Trimesh] = []
+    for source_pair, target_pair in zip(
+        zip(source_edges, source_edges[1:]),
+        zip(target_edges, target_edges[1:]),
+        strict=True,
+    ):
+        slab = clip_slab(mesh, axis, *source_pair)
+        parts.append(affine_axis(slab, axis, source_pair, target_pair))
+    return union_meshes(parts)
+
+
+def expand_bottom_parts(source: trimesh.Trimesh, layout: Layout) -> BottomParts:
+    shell, core = split_bottom(source)
+    left, right, bottom = layout.growth
+    x_targets = (
+        BOTTOM_X_BREAKS[0] - left,
+        BOTTOM_X_BREAKS[1],
+        BOTTOM_X_BREAKS[2],
+        BOTTOM_X_BREAKS[3] + right,
+    )
+    result = expand_piecewise(shell, 0, BOTTOM_X_BREAKS, x_targets)
+    y_targets = (BOTTOM_Y_BREAKS[0], BOTTOM_Y_BREAKS[1] + bottom)
+    result = expand_piecewise(result, 1, BOTTOM_Y_BREAKS, y_targets)
+    return BottomParts(shell=result, core=core)
+
+
+def generate_bottom(source: trimesh.Trimesh, layout: Layout) -> trimesh.Trimesh:
+    parts = expand_bottom_parts(source, layout)
+    return normalize_origin(union_meshes([parts.shell, parts.core]))
+
+
+def type_c_section(mesh: trimesh.Trimesh) -> TypeCSection:
+    lines = trimesh.intersections.mesh_plane(
+        mesh, plane_normal=[0.0, 1.0, 0.0], plane_origin=[0.0, 0.05, 0.0]
+    )
+    points = lines.reshape(-1, 3)[:, (0, 2)]
+    center_x = mesh.extents[0] / 2.0
+    mouth = points[
+        (np.abs(points[:, 0] - center_x) < 8.0)
+        & (points[:, 1] > 0.5)
+        & (points[:, 1] < 8.0)
+    ]
+    if len(mouth) == 0:
+        raise ValueError("Type-C mouth section is missing")
+    lower = mouth.min(axis=0)
+    upper = mouth.max(axis=0)
+    return TypeCSection(
+        size=(float(upper[0] - lower[0]), float(upper[1] - lower[1])),
+        center_offset=float((lower[0] + upper[0]) / 2.0 - center_x),
+    )
+
+
+def expected_screw_axes(footprint: tuple[float, float]) -> np.ndarray:
+    width, height = footprint
+    return np.array(
+        [
+            (3.8, 3.8),
+            (width - 3.8, 3.8),
+            (3.8, height - 3.8),
+            (width - 3.8, height - 3.8),
+        ]
+    )
+
+
+def screw_axes(mesh: trimesh.Trimesh, z: float = 5.0) -> np.ndarray:
+    lines = trimesh.intersections.mesh_plane(
+        mesh, plane_normal=[0.0, 0.0, 1.0], plane_origin=[0.0, 0.0, z]
+    )
+    points = lines.reshape(-1, 3)[:, :2]
+    axes: list[np.ndarray] = []
+    for expected in expected_screw_axes(tuple(mesh.extents[:2])):
+        local = points[np.linalg.norm(points - expected, axis=1) < 2.0]
+        if len(local) == 0:
+            raise ValueError(f"missing screw section near {expected.tolist()}")
+        axes.append((local.min(axis=0) + local.max(axis=0)) / 2.0)
+    return np.array(axes)
