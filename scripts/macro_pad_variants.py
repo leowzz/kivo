@@ -51,6 +51,12 @@ GENERATED_STL_HASHES = {
     ("3x4", "bottom"): (
         "e3a60bcbfc191080a41fc3c15ff9b0d57b415e9c84b974106cbfaa1f237b58c3"
     ),
+    ("4x3", "top"): (
+        "313e1ece2234c7b7f423000a46302894259a209ec39d72b999798417c74a44c9"
+    ),
+    ("4x3", "bottom"): (
+        "1f217800dfb5dd9719bff983e11f38400a165ce7e9aefeb332499cca6b399018"
+    ),
     ("4x4", "top"): (
         "989a329564fef057d71f305240680cdb6d99ceea44e0f51f04162da6aa11507a"
     ),
@@ -117,8 +123,13 @@ class ValidationReport:
 
 
 LAYOUTS = {
-    name: Layout(name, columns, 4)
-    for name, columns in (("3x4", 3), ("4x4", 4), ("5x4", 5))
+    name: Layout(name, columns, rows)
+    for name, columns, rows in (
+        ("3x4", 3, 4),
+        ("4x3", 4, 3),
+        ("4x4", 4, 4),
+        ("5x4", 5, 4),
+    )
 }
 
 DEFAULT_SOURCE = Path("models/3d-print/3x3keypad")
@@ -410,7 +421,11 @@ def protected_region_mismatches(
     floor_width = 15.0
     floor_depth = 5.0
     floor_source_lower = np.array([25.0, 45.0, -0.1])
-    floor_output_y = rear_start + (bottom_growth - floor_depth) / 2.0
+    floor_output_y = (
+        rear_start + (bottom_growth - floor_depth) / 2.0
+        if bottom_growth > 0.0
+        else floor_source_lower[1]
+    )
 
     specifications = {
         "top-switch-cell": (

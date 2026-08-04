@@ -14,6 +14,8 @@ SOURCE = ROOT / "models/3d-print/3x3keypad"
 
 def test_layout_contracts() -> None:
     assert variants.LAYOUTS["3x4"].footprint == pytest.approx((65.15, 84.20))
+    assert variants.LAYOUTS["4x3"].footprint == pytest.approx((84.20, 65.15))
+    assert variants.LAYOUTS["4x3"].growth == pytest.approx((9.525, 9.525, 0.0))
     assert variants.LAYOUTS["4x4"].growth == pytest.approx((9.525, 9.525, 19.05))
     assert variants.LAYOUTS["5x4"].footprint == pytest.approx((103.25, 84.20))
 
@@ -55,7 +57,7 @@ def test_load_source_rejects_changed_canonical_mesh(tmp_path: Path) -> None:
         variants.load_source(changed)
 
 
-@pytest.mark.parametrize("name", ["3x4", "4x4", "5x4"])
+@pytest.mark.parametrize("name", ["3x4", "4x3", "4x4", "5x4"])
 def test_generate_top_preserves_pitch_holes_and_topology(name: str) -> None:
     source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
     layout = variants.LAYOUTS[name]
@@ -117,7 +119,7 @@ def test_axis_pitch_rejects_a_single_coordinate_level() -> None:
         variants.axis_pitch(np.array([13.525, 13.525]))
 
 
-@pytest.mark.parametrize("name", ["3x4", "4x4", "5x4"])
+@pytest.mark.parametrize("name", ["3x4", "4x3", "4x4", "5x4"])
 def test_generate_bottom_preserves_protected_features(name: str) -> None:
     source = variants.load_source(
         SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
@@ -149,7 +151,7 @@ def test_generate_bottom_preserves_protected_features(name: str) -> None:
     )
 
 
-@pytest.mark.parametrize("name", ["3x4", "4x4", "5x4"])
+@pytest.mark.parametrize("name", ["3x4", "4x3", "4x4", "5x4"])
 def test_bottom_internal_core_is_never_scaled(name: str) -> None:
     source = variants.load_source(
         SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
@@ -160,7 +162,7 @@ def test_bottom_internal_core_is_never_scaled(name: str) -> None:
     assert parts.core.volume == pytest.approx(source_core.volume, abs=1e-4)
 
 
-@pytest.mark.parametrize("name", ["3x4", "4x4", "5x4"])
+@pytest.mark.parametrize("name", ["3x4", "4x3", "4x4", "5x4"])
 def test_bottom_growth_corridors_are_empty(name: str) -> None:
     source = variants.load_source(
         SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
@@ -168,7 +170,8 @@ def test_bottom_growth_corridors_are_empty(name: str) -> None:
     layout = variants.LAYOUTS[name]
     mesh = variants.generate_bottom(source, layout)
     corridors = variants.growth_corridor_boxes(mesh, source, layout)
-    assert len(corridors) == (1 if name == "3x4" else 3)
+    expected_corridors = {"3x4": 1, "4x3": 2, "4x4": 3, "5x4": 3}
+    assert len(corridors) == expected_corridors[name]
     for corridor in corridors:
         overlap = variants.boolean_meshes([mesh, corridor], "intersection")
         assert overlap.is_empty or overlap.volume < 1e-6
@@ -261,7 +264,7 @@ def test_validator_rejects_a_small_controller_bump() -> None:
         variants.validate_pair(top, damaged, top_source, bottom_source, layout)
 
 
-@pytest.mark.parametrize("name", ["3x4", "4x4", "5x4"])
+@pytest.mark.parametrize("name", ["3x4", "4x3", "4x4", "5x4"])
 def test_protected_geometry_matches_source(name: str) -> None:
     top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
     bottom_source = variants.load_source(
