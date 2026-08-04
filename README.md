@@ -131,3 +131,7 @@ docs/                硬件改造、兼容性与设计记录
 ```
 
 领域术语以 [`CONTEXT.md`](CONTEXT.md) 为准。电话硬件改造和电气安全要求见 [`docs/telephone-usb-voice-terminal-mod-guide.md`](docs/telephone-usb-voice-terminal-mod-guide.md)；改造设备必须彻底隔离原 PSTN 电话线路。
+
+## 平台状态
+
+Kivo 当前以 macOS 作为实际开发和验证环境。仓库中包含 Windows 相关的兼容代码、快捷键处理和 Windows x64 NSIS 构建配置，但尚未在真实 Windows 环境完成完整适配与验收，因此 Windows 暂不视为正式支持平台。
