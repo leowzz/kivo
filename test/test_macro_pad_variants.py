@@ -226,6 +226,26 @@ def test_validator_rejects_added_bottom_ribs(
         variants.validate_pair(top, damaged, top_source, bottom_source, layout)
 
 
+def test_validator_rejects_the_same_generator_regression(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
+    bottom_source = variants.load_source(
+        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+    )
+    layout = variants.LAYOUTS["5x4"]
+    top = variants.generate_top(top_source, layout)
+    bottom = variants.generate_bottom(bottom_source, layout)
+    rib = variants.bounds_box(np.array([10.0, 74.0, 1.0]), np.array([14.0, 75.0, 3.0]))
+    damaged = variants.union_meshes([bottom, rib])
+    monkeypatch.setattr(
+        variants, "generate_bottom", lambda _source, _layout: damaged.copy()
+    )
+
+    with pytest.raises(ValueError, match="generated bottom geometry drifted"):
+        variants.validate_pair(top, damaged, top_source, bottom_source, layout)
+
+
 def test_validator_rejects_a_small_controller_bump() -> None:
     top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
     bottom_source = variants.load_source(

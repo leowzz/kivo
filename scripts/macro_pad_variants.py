@@ -35,13 +35,33 @@ BASE_OVERLAP = 0.001
 BOOLEAN_TOLERANCE = 5e-5
 PROTECTED_VOLUME_TOLERANCE = 0.02
 BASE_SKIN_VOLUME_TOLERANCE = 0.08
-GENERATED_VOLUME_TOLERANCE = 1e-6
 SOURCE_HASHES = {
     "pico_macro_pad_top.stl.stl": (
         "ce0f7b64d06b3fc2864d29452e87fb264f70567c0f5924eab380d0748f4e9155"
     ),
     "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl": (
         "36e063dffbc6a135aeb53f34dc49747135066a4b0cf0335f9cbdc06887e7cfbb"
+    ),
+}
+# Approved binary STL fingerprints for the canonical source and pinned toolchain.
+GENERATED_STL_HASHES = {
+    ("3x4", "top"): (
+        "149cab830047871a2df0590778906bd7e1137c689cc5046e2a7add28174a4682"
+    ),
+    ("3x4", "bottom"): (
+        "e3a60bcbfc191080a41fc3c15ff9b0d57b415e9c84b974106cbfaa1f237b58c3"
+    ),
+    ("4x4", "top"): (
+        "989a329564fef057d71f305240680cdb6d99ceea44e0f51f04162da6aa11507a"
+    ),
+    ("4x4", "bottom"): (
+        "597efc2261bf66a3e9b3085e23ab56b66947bc0a24f1994003860390f29753f7"
+    ),
+    ("5x4", "top"): (
+        "39f1d1dcfd3658553595609dc040d9a0f94abf204a973190245b3cefa94dfc92"
+    ),
+    ("5x4", "bottom"): (
+        "f1147ae306ed1494e73212d792d2ae938a6564d08f256549d2e2daf8b7f8b627"
     ),
 }
 
@@ -526,8 +546,8 @@ def growth_corridor_boxes(
                 ),
             ]
         )
-    # The rear exclusion preserves the source mating transition. The full-mesh
-    # integrity check below covers this intentionally omitted band.
+    # The rear exclusion preserves the source mating transition. The approved
+    # STL hash check below covers this intentionally omitted band.
     xy_bounds.append(
         (
             [CORE_INSET + margin, source_inner_max + margin],
@@ -820,15 +840,13 @@ def validate_pair(
     if not growth_corridors_empty:
         raise ValueError(f"{layout.name} added cavity contains an unexpected solid")
 
-    expected_meshes = {
-        "top": generate_top(source_top, layout),
-        "bottom": generate_bottom(source_bottom, layout),
-    }
     for label, actual in (("top", top), ("bottom", bottom)):
-        mismatch = generated_mesh_mismatch_volume(actual, expected_meshes[label])
-        if mismatch > GENERATED_VOLUME_TOLERANCE:
+        actual_hash = generated_stl_hash(actual)
+        expected_hash = GENERATED_STL_HASHES[(layout.name, label)]
+        if actual_hash != expected_hash:
             raise ValueError(
-                f"{layout.name} generated {label} geometry drifted: {mismatch}"
+                f"{layout.name} generated {label} geometry drifted: "
+                f"{actual_hash} != {expected_hash}"
             )
 
     return ValidationReport(
@@ -858,21 +876,10 @@ def prepare_stl_mesh(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     return result
 
 
-def generated_mesh_mismatch_volume(
-    actual: trimesh.Trimesh, expected: trimesh.Trimesh
-) -> float:
-    actual_prepared = prepare_stl_mesh(actual)
-    expected_prepared = prepare_stl_mesh(expected)
-    lower = np.minimum(actual_prepared.bounds[0], expected_prepared.bounds[0]) - 0.1
-    upper = np.maximum(actual_prepared.bounds[1], expected_prepared.bounds[1]) + 0.1
-    return region_mismatch_volume(
-        expected_prepared,
-        actual_prepared,
-        lower,
-        upper,
-        lower,
-        upper,
-    )
+def generated_stl_hash(mesh: trimesh.Trimesh) -> str:
+    prepared = prepare_stl_mesh(mesh)
+    binary_stl = trimesh.exchange.stl.export_stl(prepared)
+    return hashlib.sha256(binary_stl).hexdigest()
 
 
 def export_stl(mesh: trimesh.Trimesh, target: Path) -> None:
