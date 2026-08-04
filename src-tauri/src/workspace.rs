@@ -2552,12 +2552,33 @@ actions: {}
         let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../models/prod");
         let profiles = load_bundled_profiles(&directory).unwrap();
         assert_eq!(profiles.len(), 1);
-        assert_eq!(profiles[0].profile.id, "tel001");
-        assert_eq!(profiles[0].hardware_profiles.len(), 1);
+        let profile = &profiles[0];
+        assert_eq!(profile.profile.id, "key9");
+        assert_eq!(profile.hardware_profiles.len(), 1);
+        let hardware = &profile.hardware_profiles[0];
+        assert_eq!(hardware.id, "hardware");
         assert_eq!(
-            profiles[0].hardware_profiles[0].board_profile_id,
-            crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID
+            hardware.board_profile_id,
+            crate::hardware::VCCGND_YD_RP2040_BOARD_ID
         );
+        assert_eq!(
+            hardware.inputs,
+            vec![InputSource::Direct {
+                id: "direct-1".into(),
+                keys: BTreeMap::from([
+                    ("K1".into(), 1),
+                    ("K2".into(), 2),
+                    ("K3".into(), 3),
+                    ("K4".into(), 4),
+                    ("K5".into(), 5),
+                    ("K6".into(), 6),
+                    ("K7".into(), 7),
+                    ("K8".into(), 8),
+                    ("K9".into(), 9),
+                ]),
+            }]
+        );
+        assert!(profile.actions.is_empty());
     }
 
     #[test]

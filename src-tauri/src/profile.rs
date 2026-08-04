@@ -7,6 +7,9 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+#[cfg(test)]
+use crate::model::{ButtonDefinition, ButtonGroup};
+
 pub const PROFILE_SCHEMA_VERSION: u16 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
@@ -97,13 +100,18 @@ pub fn blank_device_profile(id: String, name: String, board_profile_id: String) 
 
 #[cfg(test)]
 pub(crate) fn test_model_layout() -> ModelLayout {
-    let mut layout =
-        serde_yaml_ng::from_str::<DeviceProfile>(include_str!("../../models/prod/tel001.yaml"))
-            .unwrap()
-            .profile;
-    layout.id = "red-phone-v1".into();
-    layout.name = "Red Phone v1".into();
-    layout
+    ModelLayout {
+        id: "red-phone-v1".into(),
+        name: "Red Phone v1".into(),
+        groups: vec![ButtonGroup {
+            id: "keys".into(),
+            columns: 1,
+            buttons: vec![ButtonDefinition {
+                id: "UP".into(),
+                label: "UP".into(),
+            }],
+        }],
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
