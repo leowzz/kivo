@@ -4,7 +4,7 @@
 
 **Goal:** Generate verified top and bottom STL pairs for 3x4, 4x4, and 5x4 YD-RP2040 macro-pad cases while preserving every functional dimension from the 3x3 source.
 
-**Architecture:** A reproducible Python mesh generator loads and rotates each source STL so the Type-C edge is the fixed top datum. It repeats complete 19.05 mm switch-cell bands for the top and applies piecewise affine expansion only through measured empty shell corridors for the bottom; a validator checks dimensions, sections, topology, protected features, and rendered previews before exporting binary STL artifacts.
+**Architecture:** A reproducible Python mesh generator loads and rotates each source STL so the Type-C edge is the fixed top datum. It repeats complete 19.05 mm switch-cell bands for the top; for the bottom it separates a rigid internal functional core, expands only the base and perimeter shell, then rejoins the unchanged core. A validator checks dimensions, sections, topology, protected features, and rendered previews before exporting binary STL artifacts.
 
 **Tech Stack:** Python 3.13, PEP 723 scripts through `uv`, `trimesh==5.0.0`, `manifold3d==3.5.2`, `numpy==2.5.1`, `Pillow==12.3.0`, `pytest==8.4.2`, binary STL.
 
@@ -241,12 +241,13 @@ def test_generate_top_preserves_pitch_holes_and_topology(name: str) -> None:
     assert mesh.body_count == 1
     assert mesh.euler_number == 2 - 2 * layout.columns * layout.rows
 
-    openings = variants.square_section_centers(mesh, z=2.7, side=14.0)
-    reliefs = variants.square_section_centers(mesh, z=1.0, side=14.8)
-    assert openings.shape == (layout.columns * layout.rows, 2)
-    assert reliefs.shape == openings.shape
-    assert variants.axis_pitch(openings[:, 0]) == pytest.approx(PITCH, abs=0.003)
-    assert variants.axis_pitch(openings[:, 1]) == pytest.approx(PITCH, abs=0.003)
+    centers = variants.expected_switch_centers(layout)
+    openings = variants.switch_section_sizes(mesh, centers, z=2.7)
+    reliefs = variants.switch_section_sizes(mesh, centers, z=1.0)
+    assert openings == pytest.approx(np.full((layout.columns * layout.rows, 2), 14.0), abs=0.003)
+    assert reliefs == pytest.approx(np.full((layout.columns * layout.rows, 2), 14.8), abs=0.003)
+    assert variants.axis_pitch(centers[:, 0]) == pytest.approx(variants.PITCH, abs=0.003)
+    assert variants.axis_pitch(centers[:, 1]) == pytest.approx(variants.PITCH, abs=0.003)
 ```
 
 - [ ] **Step 2: Verify the tests fail on missing top-generation functions**
@@ -304,7 +305,46 @@ def generate_top(source: trimesh.Trimesh, layout: Layout) -> trimesh.Trimesh:
     return normalize_origin(result)
 ```
 
-Implement `square_section_centers()` by taking `mesh.section()` at the requested Z plane, projecting each closed path to XY, and retaining loops whose X and Y extents both match `side` within `0.03 mm`. Implement `axis_pitch()` by sorting unique rounded coordinates, taking adjacent differences, and requiring every difference to agree within `0.003 mm`.
+Add direct plane-intersection helpers. The `8.0 mm` half-window is smaller than
+half the `19.05 mm` pitch, so each selection contains only one switch profile:
+
+```python
+def expected_switch_centers(layout: Layout) -> np.ndarray:
+    first = 4.0 + PITCH / 2.0
+    return np.array(
+        [
+            (first + column * PITCH, first + row * PITCH)
+            for row in range(layout.rows)
+            for column in range(layout.columns)
+        ]
+    )
+
+
+def switch_section_sizes(
+    mesh: trimesh.Trimesh, centers: np.ndarray, z: float
+) -> np.ndarray:
+    lines = trimesh.intersections.mesh_plane(
+        mesh, plane_normal=[0.0, 0.0, 1.0], plane_origin=[0.0, 0.0, z]
+    )
+    points = lines.reshape(-1, 3)[:, :2]
+    sizes: list[np.ndarray] = []
+    for center in centers:
+        local = points[np.all(np.abs(points - center) < 8.0, axis=1)]
+        if len(local) == 0:
+            raise ValueError(f"missing switch section at {center.tolist()}")
+        sizes.append(np.ptp(local, axis=0))
+    return np.array(sizes)
+
+
+def axis_pitch(values: np.ndarray) -> float:
+    unique = np.unique(np.round(values, 4))
+    if len(unique) < 2:
+        return PITCH
+    differences = np.diff(unique)
+    if not np.allclose(differences, PITCH, atol=0.003):
+        raise ValueError(f"invalid pitch sequence: {differences.tolist()}")
+    return float(differences.mean())
+```
 
 - [ ] **Step 4: Run the top tests and inspect one temporary STL**
 
@@ -328,7 +368,7 @@ Expected: binary STL data, `84.20 x 84.20 x 9.998 mm` in the generator report.
 rtk git add scripts/macro_pad_variants.py test/test_macro_pad_variants.py && rtk git commit -m "feat: generate expanded macro pad tops"
 ```
 
-### Task 3: Expand The Bottom Through Empty Corridors
+### Task 3: Keep The Bottom Core Rigid While Expanding The Shell
 
 **Files:**
 - Modify: `scripts/macro_pad_variants.py`
@@ -336,7 +376,7 @@ rtk git add scripts/macro_pad_variants.py test/test_macro_pad_variants.py && rtk
 
 **Interfaces:**
 - Consumes: `clip_slab()`, `union_meshes()`, `affine_axis()`, `normalize_origin()`, and `Layout.growth`.
-- Produces: `expand_piecewise(mesh, axis, breakpoints, target_breakpoints)` and `generate_bottom(source, layout)`.
+- Produces: `BottomParts`, `TypeCSection`, `split_bottom(source)`, `expand_piecewise(mesh, axis, breakpoints, target_breakpoints)`, `expand_bottom_parts(source, layout)`, and `generate_bottom(source, layout)`.
 
 - [ ] **Step 1: Add failing bottom geometry and protected-feature tests**
 
@@ -365,11 +405,15 @@ def test_generate_bottom_moves_only_empty_shell_corridors(name: str) -> None:
     )
 
 
-def test_bottom_stretch_zones_do_not_cross_controller_features() -> None:
+@pytest.mark.parametrize("name", ["3x4", "4x4", "5x4"])
+def test_bottom_internal_core_is_never_scaled(name: str) -> None:
     source = variants.load_source(
         SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
     )
-    variants.assert_empty_bridge_corridors(source)
+    _source_shell, source_core = variants.split_bottom(source)
+    parts = variants.expand_bottom_parts(source, variants.LAYOUTS[name])
+    assert parts.core.extents == pytest.approx(source_core.extents, abs=1e-6)
+    assert parts.core.volume == pytest.approx(source_core.volume, abs=1e-4)
 ```
 
 - [ ] **Step 2: Run focused bottom tests and verify failure**
@@ -380,17 +424,51 @@ Run:
 rtk uv run --isolated --with pytest==8.4.2 --with trimesh==5.0.0 --with manifold3d==3.5.2 --with numpy==2.5.1 --with Pillow==12.3.0 python -m pytest test/test_macro_pad_variants.py -q -k bottom
 ```
 
-Expected: FAIL on the missing `generate_bottom` and corridor-check functions.
+Expected: FAIL on the missing `generate_bottom()` and `split_bottom()` functions.
 
-- [ ] **Step 3: Implement protected-zone assertions and piecewise expansion**
+- [ ] **Step 3: Split the rigid core and implement piecewise shell expansion**
 
-Use these measured boundaries in the Type-C-top coordinate frame:
+First separate the source into a perimeter/base shell and an interior core.
+The core contains every internal support above the base skin and stays rigid;
+the Type-C lead-in portion that remains in the shell also stays rigid because
+it lies inside both central identity intervals.
 
 ```python
+@dataclass
+class BottomParts:
+    shell: trimesh.Trimesh
+    core: trimesh.Trimesh
+
+
+@dataclass(frozen=True)
+class TypeCSection:
+    size: tuple[float, float]
+    center_offset: float
+
+
 BOTTOM_X_BREAKS = (8.0, 20.50, 44.15, 57.15)
 BOTTOM_Y_BREAKS = (55.00, 57.15)
 BASE_SKIN_Z = 1.12
-WALL_INSET = 4.0
+CORE_INSET = 4.05
+
+
+def bounds_box(lower: np.ndarray, upper: np.ndarray) -> trimesh.Trimesh:
+    box = trimesh.creation.box(extents=upper - lower)
+    box.apply_translation((lower + upper) / 2.0)
+    return box
+
+
+def split_bottom(source: trimesh.Trimesh) -> tuple[trimesh.Trimesh, trimesh.Trimesh]:
+    lower = np.array([CORE_INSET, CORE_INSET, BASE_SKIN_Z])
+    upper = np.array(
+        [source.extents[0] - CORE_INSET, source.extents[1] - CORE_INSET, source.extents[2] + 1.0]
+    )
+    cutter = bounds_box(lower, upper)
+    core = trimesh.boolean.intersection([source, cutter], engine="manifold")
+    shell = trimesh.boolean.difference([source, core], engine="manifold")
+    if not isinstance(core, trimesh.Trimesh) or not isinstance(shell, trimesh.Trimesh):
+        raise ValueError("bottom split did not produce two solids")
+    return shell, core
 
 
 def expand_piecewise(
@@ -416,8 +494,8 @@ def expand_piecewise(
     return union_meshes(parts)
 
 
-def generate_bottom(source: trimesh.Trimesh, layout: Layout) -> trimesh.Trimesh:
-    assert_empty_bridge_corridors(source)
+def expand_bottom_parts(source: trimesh.Trimesh, layout: Layout) -> BottomParts:
+    shell, core = split_bottom(source)
     left, right, bottom = layout.growth
     x_targets = (
         BOTTOM_X_BREAKS[0] - left,
@@ -425,15 +503,64 @@ def generate_bottom(source: trimesh.Trimesh, layout: Layout) -> trimesh.Trimesh:
         BOTTOM_X_BREAKS[2],
         BOTTOM_X_BREAKS[3] + right,
     )
-    result = expand_piecewise(source, 0, BOTTOM_X_BREAKS, x_targets)
+    result = expand_piecewise(shell, 0, BOTTOM_X_BREAKS, x_targets)
     y_targets = (BOTTOM_Y_BREAKS[0], BOTTOM_Y_BREAKS[1] + bottom)
     result = expand_piecewise(result, 1, BOTTOM_Y_BREAKS, y_targets)
-    return normalize_origin(result)
+    return BottomParts(shell=result, core=core)
+
+
+def generate_bottom(source: trimesh.Trimesh, layout: Layout) -> trimesh.Trimesh:
+    parts = expand_bottom_parts(source, layout)
+    return normalize_origin(union_meshes([parts.shell, parts.core]))
 ```
 
-`assert_empty_bridge_corridors()` must reject a source when a face centroid in either affine stretch interval is above the `1.12 mm` base skin and more than `4.0 mm` inside the perimeter. Allow only the known straight perimeter wall/tongue faces in those intervals. This protects the controller pocket, local ribs, Type-C lead-in, and screw stacks from accidental stretching if the source STL changes later.
+Keeping `shell` as the first `expand_piecewise()` operand is the regression
+boundary that prevents internal supports from being stretched.
 
-Implement `type_c_section()` from the boundary loop on the normalized `Y=0` wall, returning its width, height, and X offset from the enclosure center. Implement `screw_axes()` from the four circular section loops at `Z=5.0 mm`; sort results by Y then X.
+Add direct Type-C and screw-section measurements:
+
+```python
+def type_c_section(mesh: trimesh.Trimesh) -> TypeCSection:
+    lines = trimesh.intersections.mesh_plane(
+        mesh, plane_normal=[0.0, 1.0, 0.0], plane_origin=[0.0, 0.05, 0.0]
+    )
+    points = lines.reshape(-1, 3)[:, (0, 2)]
+    center_x = mesh.extents[0] / 2.0
+    mouth = points[
+        (np.abs(points[:, 0] - center_x) < 8.0)
+        & (points[:, 1] > 0.5)
+        & (points[:, 1] < 8.0)
+    ]
+    if len(mouth) == 0:
+        raise ValueError("Type-C mouth section is missing")
+    lower = mouth.min(axis=0)
+    upper = mouth.max(axis=0)
+    return TypeCSection(
+        size=(float(upper[0] - lower[0]), float(upper[1] - lower[1])),
+        center_offset=float((lower[0] + upper[0]) / 2.0 - center_x),
+    )
+
+
+def expected_screw_axes(footprint: tuple[float, float]) -> np.ndarray:
+    width, height = footprint
+    return np.array(
+        [(3.8, 3.8), (width - 3.8, 3.8), (3.8, height - 3.8), (width - 3.8, height - 3.8)]
+    )
+
+
+def screw_axes(mesh: trimesh.Trimesh, z: float = 5.0) -> np.ndarray:
+    lines = trimesh.intersections.mesh_plane(
+        mesh, plane_normal=[0.0, 0.0, 1.0], plane_origin=[0.0, 0.0, z]
+    )
+    points = lines.reshape(-1, 3)[:, :2]
+    axes: list[np.ndarray] = []
+    for expected in expected_screw_axes(tuple(mesh.extents[:2])):
+        local = points[np.linalg.norm(points - expected, axis=1) < 2.0]
+        if len(local) == 0:
+            raise ValueError(f"missing screw section near {expected.tolist()}")
+        axes.append((local.min(axis=0) + local.max(axis=0)) / 2.0)
+    return np.array(axes)
+```
 
 - [ ] **Step 4: Run bottom and complete regression tests**
 
@@ -455,7 +582,7 @@ rtk git add scripts/macro_pad_variants.py test/test_macro_pad_variants.py && rtk
 
 **Interfaces:**
 - Consumes: `generate_top()`, `generate_bottom()`, section helpers, and layout contracts.
-- Produces: `ValidationReport`, `validate_pair(top, bottom, layout)`, `render_preview(mesh, path, view)`, `export_variant()`, and CLI `main()`.
+- Produces: `ValidationReport`, `validate_pair(top, bottom, source_bottom, layout)`, `render_preview(mesh, path, view)`, `export_variant()`, and CLI `main()`.
 
 - [ ] **Step 1: Add failing validator and CLI tests**
 
@@ -469,6 +596,7 @@ def test_validate_pair_reports_the_complete_contract() -> None:
     report = variants.validate_pair(
         variants.generate_top(top_source, layout),
         variants.generate_bottom(bottom_source, layout),
+        bottom_source,
         layout,
     )
     assert report.layout == "4x4"
@@ -514,9 +642,90 @@ Expected: FAIL on missing `validate_pair()` and `main()`.
 
 - [ ] **Step 3: Implement strict validation and binary STL export**
 
-Add a frozen `ValidationReport` with fields `layout`, `footprint`, `switch_count`, `watertight`, `manifold`, `type_c_preserved`, and `screws_aligned`. `validate_pair()` must raise `ValueError` immediately when any approved contract fails; it returns the report only after all checks pass.
+Implement the report and strict checks directly:
 
-Use `mesh.edges_unique_inverse` with `numpy.bincount()` to require exactly two incident faces per unique edge. Reject any face whose area is below `1e-9 mm2`, any non-positive signed volume, mismatched top/bottom XY bounds, unexpected Z extent, section dimension drift greater than `0.03 mm`, or pitch drift greater than `0.003 mm`.
+```python
+@dataclass(frozen=True)
+class ValidationReport:
+    layout: str
+    footprint: tuple[float, float]
+    switch_count: int
+    watertight: bool
+    manifold: bool
+    type_c_preserved: bool
+    screws_aligned: bool
+
+
+def assert_closed_manifold(mesh: trimesh.Trimesh, label: str) -> None:
+    incidence = np.bincount(mesh.edges_unique_inverse)
+    if (
+        mesh.body_count != 1
+        or not mesh.is_watertight
+        or not mesh.is_winding_consistent
+        or np.any(incidence != 2)
+        or np.any(mesh.area_faces < 1e-9)
+        or mesh.volume <= 0.0
+    ):
+        raise ValueError(f"{label} is not one positive closed two-manifold solid")
+
+
+def validate_pair(
+    top: trimesh.Trimesh,
+    bottom: trimesh.Trimesh,
+    source_bottom: trimesh.Trimesh,
+    layout: Layout,
+) -> ValidationReport:
+    assert_closed_manifold(top, f"{layout.name} top")
+    assert_closed_manifold(bottom, f"{layout.name} bottom")
+    expected = np.array(layout.footprint)
+    if not np.allclose(top.extents[:2], expected, atol=0.003):
+        raise ValueError(f"{layout.name} top footprint drifted: {top.extents[:2]}")
+    if not np.allclose(bottom.extents[:2], expected, atol=0.003):
+        raise ValueError(f"{layout.name} bottom footprint drifted: {bottom.extents[:2]}")
+    if not np.isclose(top.extents[2], 9.998, atol=0.001):
+        raise ValueError(f"{layout.name} top Z extent drifted")
+    if not np.isclose(bottom.extents[2], 15.006, atol=0.001):
+        raise ValueError(f"{layout.name} bottom Z extent drifted")
+
+    centers = expected_switch_centers(layout)
+    if not np.allclose(switch_section_sizes(top, centers, 2.7), 14.0, atol=0.003):
+        raise ValueError(f"{layout.name} switch openings drifted")
+    if not np.allclose(switch_section_sizes(top, centers, 1.0), 14.8, atol=0.003):
+        raise ValueError(f"{layout.name} switch reliefs drifted")
+    axis_pitch(centers[:, 0])
+    axis_pitch(centers[:, 1])
+
+    source_usb = type_c_section(source_bottom)
+    output_usb = type_c_section(bottom)
+    type_c_preserved = np.allclose(output_usb.size, source_usb.size, atol=0.003) and np.isclose(
+        output_usb.center_offset, source_usb.center_offset, atol=0.003
+    )
+    if not type_c_preserved:
+        raise ValueError(f"{layout.name} Type-C section drifted")
+
+    expected_axes = expected_screw_axes(layout.footprint)
+    screws_aligned = np.allclose(screw_axes(top, z=1.0), expected_axes, atol=0.01) and np.allclose(
+        screw_axes(bottom, z=5.0), expected_axes, atol=0.01
+    )
+    if not screws_aligned:
+        raise ValueError(f"{layout.name} screw axes drifted")
+    if not np.allclose(top.bounds[:, :2], bottom.bounds[:, :2], atol=0.003):
+        raise ValueError(f"{layout.name} top and bottom outlines do not align")
+
+    return ValidationReport(
+        layout=layout.name,
+        footprint=tuple(float(value) for value in expected),
+        switch_count=len(centers),
+        watertight=True,
+        manifold=True,
+        type_c_preserved=type_c_preserved,
+        screws_aligned=screws_aligned,
+    )
+```
+
+Change `screw_axes()` from Task 3 to accept its section height as an explicit
+`z: float` parameter. The top is checked at `Z=1.0 mm`; the bottom is checked at
+`Z=5.0 mm`.
 
 Export through temporary files and atomic replacement:
 
@@ -530,7 +739,53 @@ def export_stl(mesh: trimesh.Trimesh, target: Path) -> None:
 
 - [ ] **Step 4: Implement deterministic orthographic preview rendering and CLI**
 
-Use Pillow to draw depth-sorted projected triangles onto an `1200 x 900` white canvas. Support `top`, `bottom`, and `type-c` camera matrices; derive flat face shading from the transformed normal dot a fixed light vector. Fit projected bounds with a 48-pixel margin and reject a preview when fewer than 5% of pixels differ from the white background.
+Add `argparse`, `json`, `dataclasses.asdict`, `PIL.Image`, and
+`PIL.ImageDraw` imports. Render depth-sorted orthographic triangles with these
+fixed camera matrices and a nonblank-pixel gate:
+
+```python
+VIEW_ROTATIONS = {
+    "top": np.eye(3),
+    "bottom": np.diag([1.0, -1.0, -1.0]),
+    "type-c": np.array(
+        [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]]
+    ),
+}
+
+
+def render_preview(mesh: trimesh.Trimesh, target: Path, view: str) -> None:
+    from PIL import Image, ImageDraw
+
+    rotation = VIEW_ROTATIONS[view]
+    triangles = mesh.triangles @ rotation.T
+    projected = triangles[:, :, :2]
+    lower = projected.reshape(-1, 2).min(axis=0)
+    upper = projected.reshape(-1, 2).max(axis=0)
+    canvas = np.array([1200.0, 900.0])
+    scale = float(np.min((canvas - 96.0) / (upper - lower)))
+    points = (projected - lower) * scale + 48.0
+    points[:, :, 1] = canvas[1] - points[:, :, 1]
+
+    normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+    lengths = np.linalg.norm(normals, axis=1)
+    normals = normals / np.maximum(lengths[:, None], 1e-12)
+    light = np.array([0.3, -0.4, 0.85])
+    light /= np.linalg.norm(light)
+    shade = np.clip(0.55 + 0.35 * np.abs(normals @ light), 0.0, 1.0)
+    depth = triangles[:, :, 2].mean(axis=1)
+
+    image = Image.new("RGB", (1200, 900), "white")
+    draw = ImageDraw.Draw(image)
+    for index in np.argsort(depth):
+        level = int(235 - 105 * shade[index])
+        polygon = [tuple(value) for value in points[index].tolist()]
+        draw.polygon(polygon, fill=(level, level, level), outline=(70, 70, 70))
+    pixels = np.asarray(image)
+    if np.count_nonzero(np.any(pixels != 255, axis=2)) < pixels.shape[0] * pixels.shape[1] * 0.05:
+        raise ValueError(f"blank preview for {target}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    image.save(target)
+```
 
 The CLI defaults are:
 
@@ -541,6 +796,61 @@ DEFAULT_PREVIEWS = Path("/tmp/kivo-macro-pad-previews")
 ```
 
 It accepts repeatable `--layout`, optional `--only {top,bottom}`, plus `--source-root`, `--output-root`, and `--preview-root`. Without filters it generates all six STL files, runs `validate_pair()` before every export, writes nine previews, and prints one JSON report per layout.
+
+Implement the export and CLI loop with these exact filenames and ordering:
+
+```python
+def export_variant(
+    top: trimesh.Trimesh,
+    bottom: trimesh.Trimesh,
+    layout: Layout,
+    output_root: Path,
+    only: str | None,
+) -> None:
+    directory = output_root / layout.name
+    if only in (None, "top"):
+        export_stl(top, directory / f"pico_macro_pad_{layout.name}_top.stl")
+    if only in (None, "bottom"):
+        export_stl(
+            bottom,
+            directory / f"pico_macro_pad_{layout.name}_bottom_fitted_to_usb_c.stl",
+        )
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import json
+    from dataclasses import asdict
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--source-root", type=Path, default=DEFAULT_SOURCE)
+    parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--preview-root", type=Path, default=DEFAULT_PREVIEWS)
+    parser.add_argument("--layout", action="append", choices=tuple(LAYOUTS))
+    parser.add_argument("--only", choices=("top", "bottom"))
+    arguments = parser.parse_args(argv)
+
+    top_source = load_source(arguments.source_root / "pico_macro_pad_top.stl.stl")
+    bottom_source = load_source(
+        arguments.source_root / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+    )
+    selected = arguments.layout or list(LAYOUTS)
+    for name in selected:
+        layout = LAYOUTS[name]
+        top = generate_top(top_source, layout)
+        bottom = generate_bottom(bottom_source, layout)
+        report = validate_pair(top, bottom, bottom_source, layout)
+        export_variant(top, bottom, layout, arguments.output_root, arguments.only)
+        render_preview(top, arguments.preview_root / f"{name}-top.png", "top")
+        render_preview(bottom, arguments.preview_root / f"{name}-bottom.png", "bottom")
+        render_preview(bottom, arguments.preview_root / f"{name}-type-c.png", "type-c")
+        print(json.dumps(asdict(report), sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
 
 - [ ] **Step 5: Run all mesh tests and commit validation tooling**
 
