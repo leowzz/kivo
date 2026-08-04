@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -30,7 +31,17 @@ BOTTOM_Y_BREAKS = (55.00, 57.15)
 BASE_SKIN_Z = 1.12
 CORE_INSET = 8.0
 CORE_OVERLAP = 0.2
+BASE_OVERLAP = 0.001
 BOOLEAN_TOLERANCE = 5e-5
+PROTECTED_VOLUME_TOLERANCE = 0.1
+SOURCE_HASHES = {
+    "pico_macro_pad_top.stl.stl": (
+        "ce0f7b64d06b3fc2864d29452e87fb264f70567c0f5924eab380d0748f4e9155"
+    ),
+    "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl": (
+        "36e063dffbc6a135aeb53f34dc49747135066a4b0cf0335f9cbdc06887e7cfbb"
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -62,6 +73,14 @@ class TypeCSection:
 
 
 @dataclass(frozen=True)
+class SwitchSectionMeasurement:
+    centers: np.ndarray
+    sizes: np.ndarray
+    x_levels: np.ndarray
+    y_levels: np.ndarray
+
+
+@dataclass(frozen=True)
 class ValidationReport:
     layout: str
     footprint: tuple[float, float]
@@ -70,6 +89,8 @@ class ValidationReport:
     manifold: bool
     type_c_preserved: bool
     screws_aligned: bool
+    protected_geometry_preserved: bool
+    growth_corridors_empty: bool
 
 
 LAYOUTS = {
@@ -82,12 +103,20 @@ DEFAULT_OUTPUT = Path("models/3d-print")
 DEFAULT_PREVIEWS = Path("/tmp/kivo-macro-pad-previews")
 VIEW_ROTATIONS = {
     "top": np.eye(3),
-    "bottom": np.eye(3),
+    "bottom": np.diag([1.0, -1.0, -1.0]),
+    "interior": np.eye(3),
     "type-c": np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]]),
 }
 
 
 def load_source(path: Path) -> trimesh.Trimesh:
+    expected_hash = SOURCE_HASHES.get(path.name)
+    if expected_hash is not None:
+        actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual_hash != expected_hash:
+            raise ValueError(
+                f"source hash mismatch for {path}: {actual_hash} != {expected_hash}"
+            )
     mesh = trimesh.load_mesh(path, file_type="stl", process=False)
     if not isinstance(mesh, trimesh.Trimesh):
         raise TypeError(f"expected one mesh in {path}")
@@ -237,27 +266,82 @@ def expected_switch_centers(layout: Layout) -> np.ndarray:
     )
 
 
-def switch_section_sizes(
-    mesh: trimesh.Trimesh, centers: np.ndarray, z: float
-) -> np.ndarray:
-    lines = trimesh.intersections.mesh_plane(
-        mesh, plane_normal=[0.0, 0.0, 1.0], plane_origin=[0.0, 0.0, z]
+def coordinate_levels(values: np.ndarray, tolerance: float = 0.01) -> np.ndarray:
+    ordered = np.sort(np.asarray(values, dtype=float))
+    if len(ordered) == 0:
+        return np.empty(0)
+    clusters: list[list[float]] = [[float(ordered[0])]]
+    for value in ordered[1:]:
+        if float(value) - float(np.mean(clusters[-1])) <= tolerance:
+            clusters[-1].append(float(value))
+        else:
+            clusters.append([float(value)])
+    return np.array([np.mean(cluster) for cluster in clusters])
+
+
+def measure_switch_section(
+    mesh: trimesh.Trimesh, z: float, nominal_size: float
+) -> SwitchSectionMeasurement:
+    section = mesh.section(plane_origin=[0.0, 0.0, z], plane_normal=[0.0, 0.0, 1.0])
+    if section is None:
+        raise ValueError(f"missing mesh section at Z={z}")
+
+    bounds: list[np.ndarray] = []
+    for entity in section.entities:
+        if not entity.closed:
+            continue
+        points = entity.discrete(section.vertices)
+        if len(points) > 1 and np.allclose(points[0], points[-1], atol=EPSILON):
+            points = points[:-1]
+        xy = points[:, :2]
+        lower = xy.min(axis=0)
+        upper = xy.max(axis=0)
+        size = upper - lower
+        if not np.all(np.isclose(size, nominal_size, rtol=0.0, atol=2.0)):
+            continue
+        shifted = np.roll(xy, -1, axis=0)
+        area = 0.5 * abs(np.sum(xy[:, 0] * shifted[:, 1] - shifted[:, 0] * xy[:, 1]))
+        rectangularity = area / float(np.prod(size))
+        if rectangularity < 0.98:
+            continue
+        bounds.append(np.array([lower, upper]))
+
+    if not bounds:
+        raise ValueError(f"no {nominal_size} mm switch sections found at Z={z}")
+    array = np.array(bounds)
+    centers = array.mean(axis=1)
+    x_levels = coordinate_levels(centers[:, 0])
+    y_levels = coordinate_levels(centers[:, 1])
+    x_indices = np.argmin(np.abs(centers[:, 0, None] - x_levels), axis=1)
+    y_indices = np.argmin(np.abs(centers[:, 1, None] - y_levels), axis=1)
+    order = np.lexsort((x_indices, y_indices))
+    array = array[order]
+    centers = centers[order]
+    return SwitchSectionMeasurement(
+        centers=centers,
+        sizes=np.ptp(array, axis=1),
+        x_levels=x_levels,
+        y_levels=y_levels,
     )
-    points = lines.reshape(-1, 3)[:, :2]
-    sizes: list[np.ndarray] = []
-    for center in centers:
-        local = points[np.all(np.abs(points - center) < 8.0, axis=1)]
-        if len(local) == 0:
-            raise ValueError(f"missing switch section at {center.tolist()}")
-        sizes.append(np.ptp(local, axis=0))
-    return np.array(sizes)
+
+
+def switch_section_centers(
+    mesh: trimesh.Trimesh, z: float, nominal_size: float
+) -> np.ndarray:
+    return measure_switch_section(mesh, z, nominal_size).centers
+
+
+def switch_section_sizes(
+    mesh: trimesh.Trimesh, z: float, nominal_size: float
+) -> np.ndarray:
+    return measure_switch_section(mesh, z, nominal_size).sizes
 
 
 def axis_pitch(values: np.ndarray) -> float:
-    unique = np.unique(np.round(values, 4))
-    if len(unique) < 2:
-        return PITCH
-    differences = np.diff(unique)
+    levels = coordinate_levels(values)
+    if len(levels) < 2:
+        raise ValueError("pitch requires at least two measured coordinate levels")
+    differences = np.diff(levels)
     if not np.allclose(differences, PITCH, atol=0.003):
         raise ValueError(f"invalid pitch sequence: {differences.tolist()}")
     return float(differences.mean())
@@ -267,6 +351,162 @@ def bounds_box(lower: np.ndarray, upper: np.ndarray) -> trimesh.Trimesh:
     box = trimesh.creation.box(extents=upper - lower)
     box.apply_translation((lower + upper) / 2.0)
     return box
+
+
+def region_mismatch_volume(
+    source: trimesh.Trimesh,
+    output: trimesh.Trimesh,
+    source_lower: np.ndarray,
+    source_upper: np.ndarray,
+    output_lower: np.ndarray,
+    output_upper: np.ndarray,
+) -> float:
+    source_region = boolean_meshes(
+        [source, bounds_box(source_lower, source_upper)], "intersection"
+    )
+    output_region = boolean_meshes(
+        [output, bounds_box(output_lower, output_upper)], "intersection"
+    )
+    output_region.apply_translation(source_lower - output_lower)
+    shared = boolean_meshes([source_region, output_region], "intersection")
+    mismatch = source_region.volume + output_region.volume - 2.0 * shared.volume
+    return max(0.0, float(mismatch))
+
+
+def protected_region_mismatches(
+    top: trimesh.Trimesh,
+    bottom: trimesh.Trimesh,
+    source_top: trimesh.Trimesh,
+    source_bottom: trimesh.Trimesh,
+    layout: Layout,
+) -> dict[str, float]:
+    left, _right, bottom_growth = layout.growth
+    top_z = source_top.extents[2] + 0.1
+    bottom_z = source_bottom.extents[2] + 0.1
+    rear_start = source_bottom.extents[1] - CORE_INSET
+    floor_width = 15.0
+    floor_depth = 5.0
+    floor_source_lower = np.array([25.0, 45.0, -0.1])
+    floor_output_y = rear_start + (bottom_growth - floor_depth) / 2.0
+
+    specifications = {
+        "top-switch-cell": (
+            source_top,
+            top,
+            [CELL_START, CELL_START, -0.1],
+            [CELL_END, CELL_END, top_z],
+            [CELL_START, CELL_START, -0.1],
+            [CELL_END, CELL_END, top_z],
+        ),
+        "top-left-mating-wall": (
+            source_top,
+            top,
+            [-0.1, CELL_START, -0.1],
+            [CORE_INSET, CELL_END, top_z],
+            [-0.1, CELL_START, -0.1],
+            [CORE_INSET, CELL_END, top_z],
+        ),
+        "top-rear-mating-wall": (
+            source_top,
+            top,
+            [CELL_START, source_top.extents[1] - CORE_INSET, -0.1],
+            [CELL_END, source_top.extents[1] + 0.1, top_z],
+            [CELL_START, source_top.extents[1] - CORE_INSET + bottom_growth, -0.1],
+            [CELL_END, source_top.extents[1] + bottom_growth + 0.1, top_z],
+        ),
+        "bottom-controller-group": (
+            source_bottom,
+            bottom,
+            [BOTTOM_X_BREAKS[1], -0.1, -0.1],
+            [BOTTOM_X_BREAKS[2], rear_start, bottom_z],
+            [BOTTOM_X_BREAKS[1] + left, -0.1, -0.1],
+            [BOTTOM_X_BREAKS[2] + left, rear_start, bottom_z],
+        ),
+        "bottom-left-mating-wall": (
+            source_bottom,
+            bottom,
+            [-0.1, CELL_START, -0.1],
+            [CORE_INSET, CELL_END, bottom_z],
+            [-0.1, CELL_START, -0.1],
+            [CORE_INSET, CELL_END, bottom_z],
+        ),
+        "bottom-rear-mating-wall": (
+            source_bottom,
+            bottom,
+            [CELL_START, rear_start, -0.1],
+            [CELL_END, source_bottom.extents[1] + 0.1, bottom_z],
+            [CELL_START + left, rear_start + bottom_growth, -0.1],
+            [CELL_END + left, source_bottom.extents[1] + bottom_growth + 0.1, bottom_z],
+        ),
+        "bottom-base-skin": (
+            source_bottom,
+            bottom,
+            floor_source_lower,
+            floor_source_lower + [floor_width, floor_depth, 2.1],
+            [25.0 + left, floor_output_y, -0.1],
+            [25.0 + left + floor_width, floor_output_y + floor_depth, 2.0],
+        ),
+    }
+    return {
+        label: region_mismatch_volume(
+            source_mesh,
+            output_mesh,
+            np.asarray(source_lower, dtype=float),
+            np.asarray(source_upper, dtype=float),
+            np.asarray(output_lower, dtype=float),
+            np.asarray(output_upper, dtype=float),
+        )
+        for label, (
+            source_mesh,
+            output_mesh,
+            source_lower,
+            source_upper,
+            output_lower,
+            output_upper,
+        ) in specifications.items()
+    }
+
+
+def growth_corridor_boxes(
+    bottom: trimesh.Trimesh, source_bottom: trimesh.Trimesh, layout: Layout
+) -> list[trimesh.Trimesh]:
+    left, right, _bottom = layout.growth
+    margin = 0.5
+    z_lower = BASE_SKIN_Z + 0.25
+    z_upper = bottom.extents[2] - margin
+    width, height = bottom.extents[:2]
+    source_inner_max = source_bottom.extents[1] - CORE_INSET
+    xy_bounds: list[tuple[list[float], list[float]]] = []
+    if left > 0.0:
+        xy_bounds.extend(
+            [
+                (
+                    [CORE_INSET + margin, CORE_INSET + margin],
+                    [CORE_INSET + left - margin, source_inner_max - margin],
+                ),
+                (
+                    [
+                        width - CORE_INSET - right + margin,
+                        CORE_INSET + margin,
+                    ],
+                    [width - CORE_INSET - margin, source_inner_max - margin],
+                ),
+            ]
+        )
+    xy_bounds.append(
+        (
+            [CORE_INSET + margin, source_inner_max + margin],
+            [width - CORE_INSET - margin, height - CORE_INSET - 2.5],
+        )
+    )
+    return [
+        bounds_box(
+            np.array([lower[0], lower[1], z_lower]),
+            np.array([upper[0], upper[1], z_upper]),
+        )
+        for lower, upper in xy_bounds
+        if np.all(np.asarray(upper) > np.asarray(lower))
+    ]
 
 
 def split_bottom(source: trimesh.Trimesh) -> tuple[trimesh.Trimesh, trimesh.Trimesh]:
@@ -286,7 +526,7 @@ def split_bottom(source: trimesh.Trimesh) -> tuple[trimesh.Trimesh, trimesh.Trim
                 source,
                 2,
                 source.bounds[0, 2] - 1.0,
-                BASE_SKIN_Z + CORE_OVERLAP,
+                BASE_SKIN_Z + BASE_OVERLAP,
             ),
             clip_slab(
                 source,
@@ -439,6 +679,7 @@ def assert_closed_manifold(mesh: trimesh.Trimesh, label: str) -> None:
 def validate_pair(
     top: trimesh.Trimesh,
     bottom: trimesh.Trimesh,
+    source_top: trimesh.Trimesh,
     source_bottom: trimesh.Trimesh,
     layout: Layout,
 ) -> ValidationReport:
@@ -456,13 +697,32 @@ def validate_pair(
     if not np.isclose(bottom.extents[2], 15.006, atol=0.001):
         raise ValueError(f"{layout.name} bottom Z extent drifted")
 
-    centers = expected_switch_centers(layout)
-    if not np.allclose(switch_section_sizes(top, centers, 2.7), 14.0, atol=0.003):
+    expected_centers = expected_switch_centers(layout)
+    openings = measure_switch_section(top, z=2.7, nominal_size=14.0)
+    reliefs = measure_switch_section(top, z=1.0, nominal_size=14.8)
+    expected_count = layout.columns * layout.rows
+    if (
+        len(openings.centers) != expected_count
+        or len(reliefs.centers) != expected_count
+    ):
+        raise ValueError(f"{layout.name} switch count drifted")
+    if top.euler_number != 2 - 2 * expected_count:
+        raise ValueError(f"{layout.name} switch tunnel topology drifted")
+    if (
+        len(openings.x_levels) != layout.columns
+        or len(openings.y_levels) != layout.rows
+    ):
+        raise ValueError(f"{layout.name} switch grid shape drifted")
+    if not np.allclose(openings.centers, expected_centers, atol=0.003):
+        raise ValueError(f"{layout.name} switch centers drifted")
+    if not np.allclose(reliefs.centers, openings.centers, atol=0.003):
+        raise ValueError(f"{layout.name} switch relief centers drifted")
+    if not np.allclose(openings.sizes, 14.0, atol=0.003):
         raise ValueError(f"{layout.name} switch openings drifted")
-    if not np.allclose(switch_section_sizes(top, centers, 1.0), 14.8, atol=0.003):
+    if not np.allclose(reliefs.sizes, 14.8, atol=0.003):
         raise ValueError(f"{layout.name} switch reliefs drifted")
-    axis_pitch(centers[:, 0])
-    axis_pitch(centers[:, 1])
+    axis_pitch(openings.x_levels)
+    axis_pitch(openings.y_levels)
 
     source_usb = type_c_section(source_bottom)
     output_usb = type_c_section(bottom)
@@ -504,14 +764,34 @@ def validate_pair(
     if not np.allclose(top.bounds[:, :2], bottom.bounds[:, :2], atol=0.003):
         raise ValueError(f"{layout.name} top and bottom outlines do not align")
 
+    mismatches = protected_region_mismatches(
+        top, bottom, source_top, source_bottom, layout
+    )
+    protected_geometry_preserved = all(
+        mismatch <= PROTECTED_VOLUME_TOLERANCE for mismatch in mismatches.values()
+    )
+    if not protected_geometry_preserved:
+        raise ValueError(f"{layout.name} protected geometry drifted: {mismatches}")
+
+    growth_corridors_empty = True
+    for corridor in growth_corridor_boxes(bottom, source_bottom, layout):
+        overlap = boolean_meshes([bottom, corridor], "intersection")
+        if not overlap.is_empty and overlap.volume >= 1e-6:
+            growth_corridors_empty = False
+            break
+    if not growth_corridors_empty:
+        raise ValueError(f"{layout.name} added cavity contains an unexpected solid")
+
     return ValidationReport(
         layout=layout.name,
         footprint=tuple(float(value) for value in expected),
-        switch_count=len(centers),
+        switch_count=len(openings.centers),
         watertight=True,
         manifold=True,
         type_c_preserved=type_c_preserved,
         screws_aligned=screws_aligned,
+        protected_geometry_preserved=protected_geometry_preserved,
+        growth_corridors_empty=growth_corridors_empty,
     )
 
 
@@ -618,10 +898,13 @@ def main(argv: list[str] | None = None) -> int:
         layout = LAYOUTS[name]
         top = generate_top(top_source, layout)
         bottom = generate_bottom(bottom_source, layout)
-        report = validate_pair(top, bottom, bottom_source, layout)
+        report = validate_pair(top, bottom, top_source, bottom_source, layout)
         export_variant(top, bottom, layout, arguments.output_root, arguments.only)
         render_preview(top, arguments.preview_root / f"{name}-top.png", "top")
         render_preview(bottom, arguments.preview_root / f"{name}-bottom.png", "bottom")
+        render_preview(
+            bottom, arguments.preview_root / f"{name}-interior.png", "interior"
+        )
         render_preview(bottom, arguments.preview_root / f"{name}-type-c.png", "type-c")
         print(json.dumps(asdict(report), sort_keys=True))
     return 0

@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -40,6 +41,20 @@ def test_source_mesh_contract(
     assert mesh.body_count == 1
 
 
+def test_source_hash_contract() -> None:
+    for filename, expected in variants.SOURCE_HASHES.items():
+        assert hashlib.sha256((SOURCE / filename).read_bytes()).hexdigest() == expected
+
+
+def test_load_source_rejects_changed_canonical_mesh(tmp_path: Path) -> None:
+    filename = "pico_macro_pad_top.stl.stl"
+    changed = tmp_path / filename
+    changed.write_bytes((SOURCE / filename).read_bytes() + b"changed")
+
+    with pytest.raises(ValueError, match="source hash mismatch"):
+        variants.load_source(changed)
+
+
 @pytest.mark.parametrize("name", ["3x4", "4x4", "5x4"])
 def test_generate_top_preserves_pitch_holes_and_topology(name: str) -> None:
     source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
@@ -53,19 +68,22 @@ def test_generate_top_preserves_pitch_holes_and_topology(name: str) -> None:
     assert mesh.body_count == 1
     assert mesh.euler_number == 2 - 2 * layout.columns * layout.rows
 
-    centers = variants.expected_switch_centers(layout)
-    openings = variants.switch_section_sizes(mesh, centers, z=2.7)
-    reliefs = variants.switch_section_sizes(mesh, centers, z=1.0)
+    expected_centers = variants.expected_switch_centers(layout)
+    actual_centers = variants.switch_section_centers(mesh, z=2.7, nominal_size=14.0)
+    openings = variants.switch_section_sizes(mesh, z=2.7, nominal_size=14.0)
+    reliefs = variants.switch_section_sizes(mesh, z=1.0, nominal_size=14.8)
+    assert len(actual_centers) == layout.columns * layout.rows
+    assert actual_centers == pytest.approx(expected_centers, abs=0.003)
     assert openings == pytest.approx(
         np.full((layout.columns * layout.rows, 2), 14.0), abs=0.003
     )
     assert reliefs == pytest.approx(
         np.full((layout.columns * layout.rows, 2), 14.8), abs=0.003
     )
-    assert variants.axis_pitch(centers[:, 0]) == pytest.approx(
+    assert variants.axis_pitch(actual_centers[:, 0]) == pytest.approx(
         variants.PITCH, abs=0.003
     )
-    assert variants.axis_pitch(centers[:, 1]) == pytest.approx(
+    assert variants.axis_pitch(actual_centers[:, 1]) == pytest.approx(
         variants.PITCH, abs=0.003
     )
     assert variants.screw_section_sizes(mesh, z=1.0, window=3.4) == pytest.approx(
@@ -74,6 +92,29 @@ def test_generate_top_preserves_pitch_holes_and_topology(name: str) -> None:
     assert variants.screw_section_sizes(mesh, z=2.0, window=2.0) == pytest.approx(
         np.full((4, 2), 2.95), abs=0.003
     )
+
+
+def test_validator_rejects_a_shifted_switch_opening() -> None:
+    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
+    bottom_source = variants.load_source(
+        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+    )
+    layout = variants.LAYOUTS["3x4"]
+    top = variants.generate_top(top_source, layout)
+    bottom = variants.generate_bottom(bottom_source, layout)
+    center = variants.expected_switch_centers(layout)[4]
+    opening_vertices = np.all(np.abs(top.vertices[:, :2] - center) < 8.0, axis=1)
+    top.vertices[opening_vertices, 0] += 0.5
+
+    measured = variants.switch_section_centers(top, z=2.7, nominal_size=14.0)
+    assert measured[4, 0] == pytest.approx(center[0] + 0.5, abs=0.003)
+    with pytest.raises(ValueError, match="switch grid shape drifted"):
+        variants.validate_pair(top, bottom, top_source, bottom_source, layout)
+
+
+def test_axis_pitch_rejects_a_single_coordinate_level() -> None:
+    with pytest.raises(ValueError, match="at least two measured coordinate levels"):
+        variants.axis_pitch(np.array([13.525, 13.525]))
 
 
 @pytest.mark.parametrize("name", ["3x4", "4x4", "5x4"])
@@ -126,64 +167,39 @@ def test_bottom_growth_corridors_are_empty(name: str) -> None:
     )
     layout = variants.LAYOUTS[name]
     mesh = variants.generate_bottom(source, layout)
-    points = trimesh.intersections.mesh_plane(
-        mesh, plane_normal=[0.0, 0.0, 1.0], plane_origin=[0.0, 0.0, 5.0]
-    ).reshape(-1, 3)[:, :2]
-    left, right, _bottom = layout.growth
-    width, height = mesh.extents[:2]
-    margin = 0.5
-    corridors: list[tuple[np.ndarray, np.ndarray]] = []
+    corridors = variants.growth_corridor_boxes(mesh, source, layout)
+    assert len(corridors) == (1 if name == "3x4" else 3)
+    for corridor in corridors:
+        overlap = variants.boolean_meshes([mesh, corridor], "intersection")
+        assert overlap.is_empty or overlap.volume < 1e-6
 
-    if left > 0.0:
-        corridors.extend(
-            [
-                (
-                    np.array(
-                        [variants.CORE_INSET + margin, variants.CORE_INSET + margin]
-                    ),
-                    np.array(
-                        [
-                            variants.CORE_INSET + left - margin,
-                            source.extents[1] - variants.CORE_INSET - margin,
-                        ]
-                    ),
-                ),
-                (
-                    np.array(
-                        [
-                            width - variants.CORE_INSET - right + margin,
-                            variants.CORE_INSET + margin,
-                        ]
-                    ),
-                    np.array(
-                        [
-                            width - variants.CORE_INSET - margin,
-                            source.extents[1] - variants.CORE_INSET - margin,
-                        ]
-                    ),
-                ),
-            ]
-        )
 
-    corridors.append(
-        (
-            np.array(
-                [
-                    variants.CORE_INSET + margin,
-                    source.extents[1] - variants.CORE_INSET + margin,
-                ]
-            ),
-            np.array(
-                [
-                    width - variants.CORE_INSET - margin,
-                    height - variants.CORE_INSET - margin,
-                ]
-            ),
-        )
+@pytest.mark.parametrize("name", ["3x4", "4x4", "5x4"])
+def test_protected_geometry_matches_source(name: str) -> None:
+    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
+    bottom_source = variants.load_source(
+        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
     )
-    for lower, upper in corridors:
-        inside = np.all((points > lower) & (points < upper), axis=1)
-        assert not np.any(inside)
+    layout = variants.LAYOUTS[name]
+    top = variants.generate_top(top_source, layout)
+    bottom = variants.generate_bottom(bottom_source, layout)
+
+    mismatches = variants.protected_region_mismatches(
+        top, bottom, top_source, bottom_source, layout
+    )
+    assert set(mismatches) == {
+        "top-switch-cell",
+        "top-left-mating-wall",
+        "top-rear-mating-wall",
+        "bottom-controller-group",
+        "bottom-left-mating-wall",
+        "bottom-rear-mating-wall",
+        "bottom-base-skin",
+    }
+    assert mismatches == pytest.approx(
+        {label: 0.0 for label in mismatches},
+        abs=variants.PROTECTED_VOLUME_TOLERANCE,
+    )
 
 
 def test_validate_pair_reports_the_complete_contract() -> None:
@@ -195,6 +211,7 @@ def test_validate_pair_reports_the_complete_contract() -> None:
     report = variants.validate_pair(
         variants.generate_top(top_source, layout),
         variants.generate_bottom(bottom_source, layout),
+        top_source,
         bottom_source,
         layout,
     )
@@ -205,6 +222,8 @@ def test_validate_pair_reports_the_complete_contract() -> None:
     assert report.manifold
     assert report.type_c_preserved
     assert report.screws_aligned
+    assert report.protected_geometry_preserved
+    assert report.growth_corridors_empty
 
 
 def test_cli_writes_exact_artifact_names(tmp_path: Path) -> None:
@@ -222,6 +241,7 @@ def test_cli_writes_exact_artifact_names(tmp_path: Path) -> None:
     source_bottom = variants.load_source(
         SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
     )
+    source_top = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
     for name in variants.LAYOUTS:
         directory = tmp_path / "models" / name
         top_path = directory / f"pico_macro_pad_{name}_top.stl"
@@ -230,6 +250,7 @@ def test_cli_writes_exact_artifact_names(tmp_path: Path) -> None:
         assert bottom_path.is_file()
         assert (tmp_path / "previews" / f"{name}-top.png").is_file()
         assert (tmp_path / "previews" / f"{name}-bottom.png").is_file()
+        assert (tmp_path / "previews" / f"{name}-interior.png").is_file()
         assert (tmp_path / "previews" / f"{name}-type-c.png").is_file()
 
         top = trimesh.load_mesh(top_path, file_type="stl", process=False)
@@ -239,7 +260,7 @@ def test_cli_writes_exact_artifact_names(tmp_path: Path) -> None:
         top.merge_vertices()
         bottom.merge_vertices()
         report = variants.validate_pair(
-            top, bottom, source_bottom, variants.LAYOUTS[name]
+            top, bottom, source_top, source_bottom, variants.LAYOUTS[name]
         )
         assert report.layout == name
 
