@@ -401,18 +401,26 @@ def expected_screw_axes(footprint: tuple[float, float]) -> np.ndarray:
     )
 
 
-def screw_axes(mesh: trimesh.Trimesh, z: float = 5.0) -> np.ndarray:
+def screw_section_bounds(mesh: trimesh.Trimesh, z: float, window: float) -> np.ndarray:
     lines = trimesh.intersections.mesh_plane(
         mesh, plane_normal=[0.0, 0.0, 1.0], plane_origin=[0.0, 0.0, z]
     )
     points = lines.reshape(-1, 3)[:, :2]
-    axes: list[np.ndarray] = []
+    bounds: list[np.ndarray] = []
     for expected in expected_screw_axes(tuple(mesh.extents[:2])):
-        local = points[np.linalg.norm(points - expected, axis=1) < 2.0]
+        local = points[np.linalg.norm(points - expected, axis=1) < window]
         if len(local) == 0:
             raise ValueError(f"missing screw section near {expected.tolist()}")
-        axes.append((local.min(axis=0) + local.max(axis=0)) / 2.0)
-    return np.array(axes)
+        bounds.append(np.array([local.min(axis=0), local.max(axis=0)]))
+    return np.array(bounds)
+
+
+def screw_axes(mesh: trimesh.Trimesh, z: float = 5.0) -> np.ndarray:
+    return screw_section_bounds(mesh, z, window=2.0).mean(axis=1)
+
+
+def screw_section_sizes(mesh: trimesh.Trimesh, z: float, window: float) -> np.ndarray:
+    return np.ptp(screw_section_bounds(mesh, z, window), axis=1)
 
 
 def assert_closed_manifold(mesh: trimesh.Trimesh, label: str) -> None:
@@ -472,6 +480,27 @@ def validate_pair(
     )
     if not screws_aligned:
         raise ValueError(f"{layout.name} screw axes drifted")
+
+    top_counterbores = screw_section_sizes(top, z=1.0, window=3.4)
+    top_shafts = screw_section_sizes(top, z=2.0, window=2.0)
+    bottom_counterbores = screw_section_sizes(bottom, z=1.0, window=3.4)
+    bottom_shafts = screw_section_sizes(bottom, z=5.0, window=2.0)
+    if not np.allclose(top_counterbores, 4.6, atol=0.003):
+        raise ValueError(f"{layout.name} top screw counterbores drifted")
+    if not np.allclose(top_shafts, 2.95, atol=0.003):
+        raise ValueError(f"{layout.name} top screw shafts drifted")
+    if not np.allclose(
+        bottom_counterbores,
+        screw_section_sizes(source_bottom, z=1.0, window=3.4),
+        atol=0.003,
+    ):
+        raise ValueError(f"{layout.name} bottom screw counterbores drifted")
+    if not np.allclose(
+        bottom_shafts,
+        screw_section_sizes(source_bottom, z=5.0, window=2.0),
+        atol=0.003,
+    ):
+        raise ValueError(f"{layout.name} bottom screw shafts drifted")
     if not np.allclose(top.bounds[:, :2], bottom.bounds[:, :2], atol=0.003):
         raise ValueError(f"{layout.name} top and bottom outlines do not align")
 

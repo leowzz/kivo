@@ -68,6 +68,12 @@ def test_generate_top_preserves_pitch_holes_and_topology(name: str) -> None:
     assert variants.axis_pitch(centers[:, 1]) == pytest.approx(
         variants.PITCH, abs=0.003
     )
+    assert variants.screw_section_sizes(mesh, z=1.0, window=3.4) == pytest.approx(
+        np.full((4, 2), 4.6), abs=0.003
+    )
+    assert variants.screw_section_sizes(mesh, z=2.0, window=2.0) == pytest.approx(
+        np.full((4, 2), 2.95), abs=0.003
+    )
 
 
 @pytest.mark.parametrize("name", ["3x4", "4x4", "5x4"])
@@ -93,6 +99,12 @@ def test_generate_bottom_preserves_protected_features(name: str) -> None:
     )
     assert variants.screw_axes(mesh) == pytest.approx(
         variants.expected_screw_axes(layout.footprint), abs=0.01
+    )
+    assert variants.screw_section_sizes(mesh, z=1.0, window=3.4) == pytest.approx(
+        variants.screw_section_sizes(source, z=1.0, window=3.4), abs=0.003
+    )
+    assert variants.screw_section_sizes(mesh, z=5.0, window=2.0) == pytest.approx(
+        variants.screw_section_sizes(source, z=5.0, window=2.0), abs=0.003
     )
 
 
