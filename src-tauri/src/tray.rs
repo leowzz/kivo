@@ -144,7 +144,6 @@ pub fn setup(
     let icon = Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
     let tray = TrayIconBuilder::with_id("menu-bar")
         .icon(icon)
-        .icon_as_template(true)
         .tooltip(format!("Kivo - {}", model.status_label))
         .menu(&menu)
         .show_menu_on_left_click(true)
@@ -152,8 +151,10 @@ pub fn setup(
             if let Some(action) = action_for(event.id().as_ref()) {
                 handle_action(app, action);
             }
-        })
-        .build(app)?;
+        });
+    #[cfg(target_os = "macos")]
+    let tray = tray.icon_as_template(true);
+    let tray = tray.build(app)?;
 
     app.manage(TrayState {
         model: Mutex::new(model),
@@ -206,9 +207,11 @@ fn action_for(id: &str) -> Option<TrayAction> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tray::model::{TrayDeviceSection, TrayMenuModel};
+    #[cfg(not(target_os = "windows"))]
     use crate::{
         hardware::DeviceId,
-        tray::model::{TrayButton, TrayDevice, TrayDeviceSection, TrayMenuModel},
+        tray::model::{TrayButton, TrayDevice},
     };
     use std::cell::Cell;
 
@@ -222,6 +225,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "windows"))]
     #[cfg_attr(
         target_os = "macos",
         ignore = "muda menus require the process main thread; Tauri mock tests run on a worker"

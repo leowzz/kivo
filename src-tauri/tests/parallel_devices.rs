@@ -18,7 +18,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const WAIT: Duration = Duration::from_secs(2);
@@ -297,6 +297,63 @@ impl FakeTransportFactory {
             .map(|(_, line)| line.clone())
             .collect()
     }
+
+    fn paste_action_lines(&self) -> Vec<(String, String)> {
+        self.global_writes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, line)| is_paste_action_line(line))
+            .cloned()
+            .collect()
+    }
+
+    fn device_paste_action_lines(&self, port: &str) -> Vec<String> {
+        self.global_writes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(actual_port, line)| actual_port == port && is_paste_action_line(line))
+            .map(|(_, line)| line.clone())
+            .collect()
+    }
+
+    fn configured_hotkey_action_lines(&self) -> Vec<(String, String)> {
+        self.global_writes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, line)| line.starts_with("HOTKEY ") && !is_paste_action_line(line))
+            .cloned()
+            .collect()
+    }
+}
+
+fn paste_action_line(event_id: u64, step: u16, total: u16) -> String {
+    if cfg!(target_os = "macos") {
+        format!("PASTE {event_id} {step} {total}\n")
+    } else if cfg!(target_os = "windows") {
+        format!("HOTKEY {event_id} {step} {total} 3 25\n")
+    } else {
+        format!("HOTKEY {event_id} {step} {total} 1 25\n")
+    }
+}
+
+fn is_paste_action_line(line: &str) -> bool {
+    if cfg!(target_os = "macos") {
+        line.starts_with("PASTE ")
+    } else {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        fields.len() == 6
+            && fields[0] == "HOTKEY"
+            && fields[4]
+                == if cfg!(target_os = "windows") {
+                    "3"
+                } else {
+                    "1"
+                }
+            && fields[5] == "25"
+    }
 }
 
 impl SerialTransportFactory for FakeTransportFactory {
@@ -321,9 +378,12 @@ struct TestDirectory(PathBuf);
 impl TestDirectory {
     fn new() -> Self {
         let path = std::env::temp_dir().join(format!(
-            "kivo-parallel-devices-{}-{:?}",
+            "kivo-parallel-devices-{}-{}",
             std::process::id(),
-            Instant::now()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         std::fs::create_dir_all(&path).unwrap();
         Self(path)
@@ -494,6 +554,38 @@ fn wait_for_action_count(
     while factory.action_lines(prefix).len() < count {
         coordinator.drain_worker_events();
         assert!(Instant::now() < deadline, "expected {count} {prefix} lines");
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn wait_for_paste_action_count(
+    coordinator: &mut RuntimeCoordinator,
+    factory: &FakeTransportFactory,
+    count: usize,
+) {
+    let deadline = Instant::now() + WAIT;
+    while factory.paste_action_lines().len() < count {
+        coordinator.drain_worker_events();
+        assert!(
+            Instant::now() < deadline,
+            "expected {count} paste action lines"
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn wait_for_configured_hotkey_action_count(
+    coordinator: &mut RuntimeCoordinator,
+    factory: &FakeTransportFactory,
+    count: usize,
+) {
+    let deadline = Instant::now() + WAIT;
+    while factory.configured_hotkey_action_lines().len() < count {
+        coordinator.drain_worker_events();
+        assert!(
+            Instant::now() < deadline,
+            "expected {count} configured hotkey action lines"
+        );
         thread::sleep(Duration::from_millis(1));
     }
 }
@@ -840,13 +932,13 @@ fn four_concurrent_devices_keep_runtime_and_global_paste_isolated() {
     // Paste ownership follows central receive order, while unrelated hotkeys remain live.
     endpoints["ESP-B"].emit("STATE 201 DIRECT 9 DOWN\n");
     wait_for_input_event(&mut coordinator, "ESP-B");
-    wait_for_action_count(&mut coordinator, &transports, "PASTE ", 1);
+    wait_for_paste_action_count(&mut coordinator, &transports, 1);
     assert_eq!(clipboard.writes(), ["paste-profile-esp-b"]);
 
     endpoints["RP-A"].emit("STATE 202 DIRECT 11 DOWN\n");
     wait_for_input_event(&mut coordinator, "RP-A");
     endpoints["ESP-B"].emit("DONE 201 1\n");
-    wait_for_action_count(&mut coordinator, &transports, "PASTE ", 2);
+    wait_for_paste_action_count(&mut coordinator, &transports, 2);
     assert_eq!(
         clipboard.writes(),
         ["paste-profile-esp-b", "paste-profile-rp-a"]
@@ -856,9 +948,9 @@ fn four_concurrent_devices_keep_runtime_and_global_paste_isolated() {
     wait_for_input_event(&mut coordinator, "ESP-A");
     endpoints["RP-B"].emit("STATE 250 DIRECT 12 DOWN\n");
     wait_for_input_event(&mut coordinator, "RP-B");
-    wait_for_action_count(&mut coordinator, &transports, "HOTKEY ", 9);
+    wait_for_configured_hotkey_action_count(&mut coordinator, &transports, 9);
     endpoints["RP-B"].emit("DONE 250 1\n");
-    wait_for_action_count(&mut coordinator, &transports, "HOTKEY ", 10);
+    wait_for_configured_hotkey_action_count(&mut coordinator, &transports, 10);
     endpoints["RP-B"].emit("DONE 250 2\n");
     endpoints["RP-B"].emit("STATE 204 DIRECT 13 DOWN\n");
     // Worker/coordinator channels are FIFO: observing this input proves the preceding
@@ -873,25 +965,25 @@ fn four_concurrent_devices_keep_runtime_and_global_paste_isolated() {
         WAIT,
     )
     .unwrap();
-    assert_eq!(transports.action_lines("PASTE ").len(), 2);
+    assert_eq!(transports.paste_action_lines().len(), 2);
     assert!(
         transports
-            .device_action_lines("/dev/fake-esp-a", "PASTE ")
+            .device_paste_action_lines("/dev/fake-esp-a")
             .is_empty()
     );
     assert!(
         transports
-            .device_action_lines("/dev/fake-rp-b", "PASTE ")
+            .device_paste_action_lines("/dev/fake-rp-b")
             .is_empty()
     );
 
     // Advancing time alone wakes the actor and releases the next FIFO request.
     clock.advance(Duration::from_secs(61));
-    esp_a_reconnected.wait_for_line(|line| line == "PASTE 203 1 1\n");
-    assert_eq!(transports.action_lines("PASTE ").len(), 3);
+    esp_a_reconnected.wait_for_line(|line| line == paste_action_line(203, 1, 1));
+    assert_eq!(transports.paste_action_lines().len(), 3);
     esp_a_reconnected.emit("DONE 203 1\n");
-    wait_for_action_count(&mut coordinator, &transports, "PASTE ", 4);
-    assert_eq!(transports.action_lines("PASTE ").len(), 4);
+    wait_for_paste_action_count(&mut coordinator, &transports, 4);
+    assert_eq!(transports.paste_action_lines().len(), 4);
     endpoints["RP-B"].emit("DONE 204 1\n");
     wait_until(&mut coordinator, |coordinator| {
         coordinator.devices().iter().any(|status| {
@@ -912,7 +1004,7 @@ fn four_concurrent_devices_keep_runtime_and_global_paste_isolated() {
     );
     assert_eq!(
         transports
-            .action_lines("PASTE ")
+            .paste_action_lines()
             .into_iter()
             .map(|(port, _)| port)
             .collect::<Vec<_>>(),

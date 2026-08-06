@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import csv
+import os
 import sys
 from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable, Sequence
@@ -19,6 +20,7 @@ from prompt_toolkit.layout.containers import Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.output import Output
 from prompt_toolkit.output.defaults import create_output
+from prompt_toolkit.output.vt100 import Vt100_Output
 
 
 InventoryRow = tuple[str, tuple[int, int], str, str | None, str | None]
@@ -259,6 +261,15 @@ def confirmation_serial(
     return selected.serial_number if selected else None
 
 
+def create_picker_output(stderr: TextIO) -> Output:
+    term = os.environ.get("TERM")
+    # Win32Output inspects STDOUT even when rendering to stderr; make captures
+    # STDOUT while the xterm-compatible parent terminal remains on stderr.
+    if sys.platform == "win32" and term and "xterm" in term.lower():
+        return Vt100_Output.from_pty(stderr, term=term)
+    return create_output(stdout=stderr)
+
+
 async def run_picker_async(
     *,
     tracker: TargetTracker,
@@ -316,7 +327,7 @@ async def run_picker_async(
     owns_input = prompt_input is None
     application_input = create_input(stdin=stdin) if prompt_input is None else prompt_input
     application_output = (
-        create_output(stdout=stderr) if prompt_output is None else prompt_output
+        create_picker_output(stderr) if prompt_output is None else prompt_output
     )
     application: Application[str | None] = Application(
         layout=Layout(

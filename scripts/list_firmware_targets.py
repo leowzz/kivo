@@ -7,6 +7,11 @@ from collections.abc import Iterator
 
 from serial.tools.list_ports import comports
 
+try:
+    from scripts.windows_usb import WindowsUsbError, scan_windows_usb_devices
+except ModuleNotFoundError:
+    from windows_usb import WindowsUsbError, scan_windows_usb_devices
+
 
 KNOWN_TARGETS = {
     (0x303A, 0x4002): ("runtime", "luatos-esp32s3-aio"),
@@ -86,6 +91,27 @@ def macos_uf2_rows(
             yield mode, usb_id, board, str(serial_number) if serial_number else None, None
 
 
+def windows_uf2_rows(
+    *,
+    run: object = subprocess.run,
+    system_name: str | None = None,
+) -> Iterator[tuple[str, tuple[int, int], str, str | None, None]]:
+    if (platform.system() if system_name is None else system_name) != "Windows":
+        return
+    try:
+        devices = scan_windows_usb_devices(
+            KNOWN_TARGETS,
+            run=run,
+            system_name="Windows",
+        )
+    except WindowsUsbError as error:
+        raise InventoryError(str(error)) from error
+    for device in devices:
+        mode, board = KNOWN_TARGETS[device.usb_id]
+        if mode == "bootloader":
+            yield mode, device.usb_id, board, device.serial_number, None
+
+
 def merge_rows(
     rows: Iterator[tuple[str, tuple[int, int], str, str | None, str | None]],
 ) -> list[tuple[str, tuple[int, int], str, str | None, str | None]]:
@@ -112,7 +138,9 @@ def merge_rows(
 
 def main() -> None:
     try:
-        rows = merge_rows(iter(list(cdc_rows()) + list(macos_uf2_rows())))
+        rows = merge_rows(
+            iter(list(cdc_rows()) + list(macos_uf2_rows()) + list(windows_uf2_rows()))
+        )
     except InventoryError as error:
         print(f"list_firmware_targets: {error}", file=sys.stderr)
         raise SystemExit(1) from error

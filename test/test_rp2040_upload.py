@@ -240,3 +240,44 @@ def test_parses_macos_usb_location_into_picotool_bus_and_address() -> None:
             (0x2E8A, 0x0003), BOOTSEL_SERIAL, "0x02100000", 2, 7
         )
     ]
+
+
+def test_windows_runtime_target_is_matched_by_location_and_uploaded_by_serial() -> None:
+    upload = import_module("scripts.upload_rp2040")
+    location = "pciroot(0)#usbroot(0)#usb(3)"
+    runtime = upload.UsbDevice(
+        upload.RP2040_RUNTIME_USB_ID, RUNTIME_SERIAL, location, None, None
+    )
+    bootsel = upload.UsbDevice(
+        upload.RP2040_BOOTSEL_USB_ID, BOOTSEL_SERIAL, location, None, None
+    )
+    snapshots = iter([[runtime], [bootsel]])
+    calls: list[list[str]] = []
+
+    def picotool(arguments: list[str]) -> str:
+        calls.append(arguments)
+        if arguments[:2] == ["info", "-a"]:
+            return f"Device Information\n flash id: 0x{RUNTIME_SERIAL}\n"
+        return ""
+
+    assert upload.upload_rp2040(
+        RUNTIME_SERIAL,
+        Path("firmware.uf2"),
+        usb_inventory=lambda: next(snapshots),
+        ports=lambda: [
+            SimpleNamespace(
+                device="COM7",
+                vid=0x2E8A,
+                pid=0x102E,
+                serial_number=RUNTIME_SERIAL,
+            )
+        ],
+        serial_factory=lambda *_args: FakeTouchSerial(),
+        picotool=picotool,
+        monotonic=iter([0.0, 0.1]).__next__,
+        sleep=lambda _duration: None,
+    ) == RUNTIME_SERIAL
+    assert calls == [
+        ["info", "-a", "--ser", BOOTSEL_SERIAL],
+        ["load", "-x", "firmware.uf2", "--ser", BOOTSEL_SERIAL],
+    ]

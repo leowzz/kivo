@@ -11,7 +11,8 @@ use crate::{
     profile::DeviceProfile,
     protocol::{
         ActionSequence, DeviceMessage, HelloCapabilities, InputState, OLED_PROTOCOL_VERSION,
-        PhysicalInput, is_hello_line, parse_device, topology_commands, validate_hello,
+        PhysicalInput, format_paste_command, is_hello_line, parse_device, topology_commands,
+        validate_hello,
     },
 };
 use serde::Serialize;
@@ -888,9 +889,10 @@ impl DeviceSession {
             return output;
         };
         if request.event_id == event_id && request.step == step {
-            output.lines.push(format!(
-                "PASTE {} {} {}\n",
-                request.event_id, request.step, request.total
+            output.lines.push(format_paste_command(
+                request.event_id,
+                request.step,
+                request.total,
             ));
         } else {
             self.pending_paste = Some(request);
@@ -1796,6 +1798,7 @@ mod tests {
 
         assert_eq!(update.today_presses, 1);
         assert_eq!(update.logs[0].message, "A pressed");
+        drop(store);
         std::fs::remove_file(path).unwrap();
     }
 
@@ -1844,6 +1847,7 @@ mod tests {
                 .total_presses,
             0
         );
+        drop(store);
         std::fs::remove_file(path).unwrap();
     }
 
@@ -1890,6 +1894,7 @@ mod tests {
                 .today_presses,
             0
         );
+        drop(store);
         std::fs::remove_file(path).unwrap();
     }
 
@@ -2111,7 +2116,7 @@ mod tests {
         );
 
         let granted = session.grant_paste(41, 1);
-        assert_eq!(granted.lines, ["PASTE 41 1 2\n"]);
+        assert_eq!(granted.lines, [format_paste_command(41, 1, 2)]);
         let next = session.on_message_deferred(
             DeviceMessage::Done {
                 event_id: 41,

@@ -1,22 +1,30 @@
-# Kivo Node/npm 工具链精确锁定设计
+# Kivo Node/npm 工具链版本设计
 
 日期：2026-07-31
 状态：已获用户批准
 
 ## 目标
 
-将本地开发和 GitHub Actions 使用的 JavaScript 工具链精确锁定为：
+GitHub Actions 和维护者使用可复现的参考工具链：
 
 - Node.js `24.18.0`
 - npm `11.16.0`
 
-避免不同 npm 主版本反复重写 `package-lock.json`，尤其是丢失 Linux 原生可选依赖的 `libc` 元数据。
+开源贡献者允许使用兼容的同主版本工具链：
+
+- Node.js `>=24.12.0 <25`
+- npm `>=11.0.0 <12`
+
+这样既避免不同主版本反复重写 `package-lock.json`，也不要求每个贡献者安装完全相同的补丁版本。
 
 ## 版本来源
 
-- 新增 `.nvmrc`，内容为精确版本 `24.18.0`，作为 Node 版本的唯一来源。
+- `.nvmrc` 使用参考版本 `24.18.0`，供 nvm、direnv 和 CI 使用。
 - `package.json` 新增 `packageManager: "npm@11.16.0"`。
-- `package.json` 新增 `devEngines`，对 Node `24.18.0` 和 npm `11.16.0` 使用 `onFail: "error"`，使 `npm install`、`npm ci` 和 `npm run` 在版本不匹配时直接失败。
+- 标准 `engines` 字段向 npm、其他包管理器和 IDE 声明受支持的兼容范围。
+- `package.json` 的 `devEngines` 对 Node `>=24.12.0 <25` 和 npm
+  `>=11.0.0 <12` 使用 `onFail: "error"`，只阻止未经支持的主版本或过旧版本。
+- 测试依赖使用 `jsdom@29.1.1`；jsdom 30 要求 Node 24.15 以上，会无必要地排除已验证可用的 Node 24.12。
 
 不增加额外版本管理器或版本检查脚本。
 
@@ -33,7 +41,8 @@
 
 ## CI 对齐
 
-将 `.github/workflows/release-windows.yml` 的 `actions/setup-node` 配置从浮动的 `node-version: 24` 改为 `node-version-file: .nvmrc`。后续 Node 升级只修改 `.nvmrc`，本地和 CI 同步生效。
+`.github/workflows/release-windows.yml` 的 `actions/setup-node` 使用
+`node-version-file: .nvmrc`，使 CI 始终使用参考版本；本地贡献者可以使用声明范围内的版本。
 
 CI 保持使用 `npm ci` 和现有 npm 缓存配置。
 
@@ -47,6 +56,7 @@ CI 保持使用 `npm ci` 和现有 npm 缓存配置。
 
 1. `direnv exec . node --version` 输出 `v24.18.0`。
 2. `direnv exec . npm --version` 输出 `11.16.0`。
-3. 固定环境连续两次执行 `npm install --package-lock-only`，第二次无 Git diff。
-4. `npm test` 与 `npm run build` 通过。
-5. `git diff --check` 通过，最终 diff 只包含版本配置、CI 对齐和对应 lockfile 元数据。
+3. Node `24.12.0` 以上的 24.x 与兼容的 npm 11 也能执行 `npm run`。
+4. 固定环境连续两次执行 `npm install --package-lock-only`，第二次无 Git diff。
+5. `npm test` 与 `npm run build` 通过。
+6. `git diff --check` 通过。

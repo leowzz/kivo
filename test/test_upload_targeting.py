@@ -14,8 +14,10 @@ from scripts.list_firmware_targets import (
     InventoryError,
     macos_uf2_rows,
     merge_rows,
+    windows_uf2_rows,
 )
 from scripts.verify_runtime_firmware import wait_for_expected_hello
+from scripts.windows_usb import WindowsUsbDevice, parse_windows_usb_devices
 
 
 @dataclass
@@ -258,4 +260,57 @@ def test_inventory_parses_structured_uf2_json() -> None:
 
     assert list(macos_uf2_rows(run=runner, system_name="Darwin")) == [
         ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", None)
+    ]
+
+
+def test_windows_inventory_parses_base_pnp_devices_and_locations() -> None:
+    output = """[
+      {
+        "instance_id": "USB\\\\VID_2E8A&PID_102E\\\\RUNTIME-1",
+        "location": "PCIROOT(0)#USBROOT(0)#USB(3)"
+      },
+      {
+        "instance_id": "USB\\\\VID_2E8A&PID_0003\\\\BOOTSEL-1",
+        "location": "PCIROOT(0)#USBROOT(0)#USB(3)"
+      },
+      {
+        "instance_id": "USB\\\\VID_2E8A&PID_0003&MI_00\\\\INTERFACE",
+        "location": "ignored"
+      }
+    ]"""
+
+    assert parse_windows_usb_devices(
+        output, {(0x2E8A, 0x102E), (0x2E8A, 0x0003)}
+    ) == [
+        WindowsUsbDevice(
+            usb_id=(0x2E8A, 0x102E),
+            serial_number="RUNTIME-1",
+            location="pciroot(0)#usbroot(0)#usb(3)",
+        ),
+        WindowsUsbDevice(
+            usb_id=(0x2E8A, 0x0003),
+            serial_number="BOOTSEL-1",
+            location="pciroot(0)#usbroot(0)#usb(3)",
+        ),
+    ]
+
+
+def test_windows_inventory_adds_bootsel_target_to_picker() -> None:
+    runner = lambda *_args, **_kwargs: SimpleNamespace(
+        returncode=0,
+        stderr="",
+        stdout=(
+            '[{"instance_id":"USB\\\\VID_2E8A&PID_0003\\\\BOOTSEL-1",'
+            '"location":"PCIROOT(0)#USBROOT(0)#USB(3)"}]'
+        ),
+    )
+
+    assert list(windows_uf2_rows(run=runner, system_name="Windows")) == [
+        (
+            "bootloader",
+            (0x2E8A, 0x0003),
+            "vccgnd-yd-rp2040",
+            "BOOTSEL-1",
+            None,
+        )
     ]

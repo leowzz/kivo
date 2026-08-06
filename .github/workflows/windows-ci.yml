@@ -1,0 +1,75 @@
+name: Windows CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-package:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+
+      - name: Set up Python and uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          uv sync --locked
+          npm ci
+
+      - name: Test firmware tooling
+        run: >-
+          uv run pytest
+          test/test_upload_targeting.py
+          test/test_rp2040_upload.py
+          test/test_firmware_target_selector.py
+          test/test_kill_helper.py
+          test/test_runtime_smoke.py
+
+      - name: Test native firmware core
+        run: uv run pio test -e native
+
+      - name: Test Rust backend
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Lint Rust backend
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Test frontend
+        run: npm test
+
+      - name: Build Windows NSIS installer
+        run: npm run tauri build -- --bundles nsis
