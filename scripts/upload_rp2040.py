@@ -12,6 +12,11 @@ from pathlib import Path
 import serial
 from serial.tools.list_ports import comports
 
+try:
+    from scripts.windows_usb import WindowsUsbError, scan_windows_usb_devices
+except ModuleNotFoundError:
+    from windows_usb import WindowsUsbError, scan_windows_usb_devices
+
 
 RP2040_RUNTIME_USB_ID = (0x2E8A, 0x102E)
 RP2040_BOOTSEL_USB_ID = (0x2E8A, 0x0003)
@@ -26,9 +31,9 @@ class TargetError(RuntimeError):
 class UsbDevice:
     usb_id: tuple[int, int]
     serial_number: str | None
-    location: str
-    bus: int
-    address: int
+    location: str | None
+    bus: int | None
+    address: int | None
 
 
 UsbInventory = Callable[[], list[UsbDevice]]
@@ -113,6 +118,30 @@ def scan_macos_usb_devices(
     return parse_macos_usb_devices(result.stdout)
 
 
+def scan_usb_devices() -> list[UsbDevice]:
+    system_name = platform.system()
+    if system_name == "Darwin":
+        return scan_macos_usb_devices()
+    if system_name == "Windows":
+        try:
+            devices = scan_windows_usb_devices(
+                {RP2040_RUNTIME_USB_ID, RP2040_BOOTSEL_USB_ID}
+            )
+        except WindowsUsbError as error:
+            raise TargetError(str(error)) from error
+        return [
+            UsbDevice(
+                usb_id=device.usb_id,
+                serial_number=device.serial_number,
+                location=device.location,
+                bus=None,
+                address=None,
+            )
+            for device in devices
+        ]
+    raise TargetError("targeted RP2040 upload requires macOS or Windows")
+
+
 def run_picotool(
     arguments: list[str],
     *,
@@ -144,7 +173,11 @@ def run_picotool(
 
 
 def target_arguments(target: UsbDevice) -> list[str]:
-    return ["--bus", str(target.bus), "--address", str(target.address)]
+    if target.bus is not None and target.address is not None:
+        return ["--bus", str(target.bus), "--address", str(target.address)]
+    if target.serial_number:
+        return ["--ser", target.serial_number]
+    raise TargetError("BOOTSEL target has no usable picotool selector")
 
 
 def read_flash_id(target: UsbDevice, picotool: Picotool) -> str:
@@ -274,6 +307,8 @@ def prepare_bootsel_target(
     runtime_device = require_one(
         runtime_matches, f"runtime device with serial {serial_number}"
     )
+    if not runtime_device.location:
+        raise TargetError(f"runtime device {serial_number} has no USB location")
     runtime_port = select_runtime_port(ports(), serial_number)
     touch_runtime_port(runtime_port, serial_factory=serial_factory)
     target = wait_for_bootsel(
@@ -295,7 +330,7 @@ def upload_rp2040(
     serial_number: str,
     firmware: Path,
     *,
-    usb_inventory: UsbInventory = scan_macos_usb_devices,
+    usb_inventory: UsbInventory = scan_usb_devices,
     ports: PortInventory = comports,
     serial_factory: SerialFactory = serial.Serial,
     picotool: Picotool = run_picotool,
@@ -314,9 +349,9 @@ def upload_rp2040(
         monotonic=monotonic,
         sleep=sleep,
     )
+    selector = " ".join(target_arguments(target))
     print(
-        f"Uploading to RP2040 at USB bus {target.bus}, address {target.address} "
-        f"(flash ID {runtime_serial})",
+        f"Uploading to RP2040 ({selector}, flash ID {runtime_serial})",
         file=sys.stderr,
     )
     picotool(

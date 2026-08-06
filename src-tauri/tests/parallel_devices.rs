@@ -18,7 +18,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const WAIT: Duration = Duration::from_secs(2);
@@ -330,9 +330,12 @@ struct TestDirectory(PathBuf);
 impl TestDirectory {
     fn new() -> Self {
         let path = std::env::temp_dir().join(format!(
-            "kivo-parallel-devices-{}-{:?}",
+            "kivo-parallel-devices-{}-{}",
             std::process::id(),
-            Instant::now()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         std::fs::create_dir_all(&path).unwrap();
         Self(path)

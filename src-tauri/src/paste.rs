@@ -1,11 +1,15 @@
 use crate::hardware::DeviceId;
 use std::{
     collections::{BTreeMap, VecDeque},
-    io::Write,
-    process::{Command, Stdio},
     sync::{Arc, Mutex, mpsc},
     thread::{self, JoinHandle},
     time::{Duration, Instant},
+};
+
+#[cfg(target_os = "macos")]
+use std::{
+    io::Write,
+    process::{Command, Stdio},
 };
 
 pub const ACTION_TIMEOUT: Duration = Duration::from_millis(1800);
@@ -590,32 +594,124 @@ struct SystemClipboard;
 
 impl ClipboardWriter for SystemClipboard {
     fn write(&self, text: &str) -> Result<(), String> {
-        let executable = if cfg!(target_os = "windows") {
-            "clip.exe"
-        } else {
-            "/usr/bin/pbcopy"
-        };
-        let mut command = Command::new(executable);
         #[cfg(target_os = "macos")]
-        command.env("LC_CTYPE", "UTF-8");
-        let mut child = command
-            .stdin(Stdio::piped())
-            .spawn()
-            .map_err(|error| format!("start clipboard command: {error}"))?;
-        child
-            .stdin
-            .take()
-            .ok_or_else(|| "open clipboard command stdin".to_owned())?
-            .write_all(text.as_bytes())
-            .map_err(|error| format!("write clipboard command: {error}"))?;
-        let status = child
-            .wait()
-            .map_err(|error| format!("wait for clipboard command: {error}"))?;
-        status
-            .success()
-            .then_some(())
-            .ok_or_else(|| format!("clipboard command exited {status}"))
+        return write_macos_clipboard(text);
+
+        #[cfg(target_os = "windows")]
+        return write_windows_clipboard(text);
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        Err("clipboard is unsupported on this platform".to_owned())
     }
+}
+
+#[cfg(target_os = "macos")]
+fn write_macos_clipboard(text: &str) -> Result<(), String> {
+    let mut child = Command::new("/usr/bin/pbcopy")
+        .env("LC_CTYPE", "UTF-8")
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("start clipboard command: {error}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "open clipboard command stdin".to_owned())?
+        .write_all(text.as_bytes())
+        .map_err(|error| format!("write clipboard command: {error}"))?;
+    let status = child
+        .wait()
+        .map_err(|error| format!("wait for clipboard command: {error}"))?;
+    status
+        .success()
+        .then_some(())
+        .ok_or_else(|| format!("clipboard command exited {status}"))
+}
+
+#[cfg(target_os = "windows")]
+fn write_windows_clipboard(text: &str) -> Result<(), String> {
+    use std::{ptr, thread};
+    use windows_sys::Win32::{
+        Foundation::GlobalFree,
+        System::{
+            DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
+            Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock},
+            Ole::CF_UNICODETEXT,
+        },
+    };
+
+    struct ClipboardGuard;
+    impl Drop for ClipboardGuard {
+        fn drop(&mut self) {
+            unsafe {
+                CloseClipboard();
+            }
+        }
+    }
+
+    struct GlobalMemory(windows_sys::Win32::Foundation::HGLOBAL);
+    impl Drop for GlobalMemory {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    GlobalFree(self.0);
+                }
+            }
+        }
+    }
+
+    let mut open_error = None;
+    for _ in 0..10 {
+        if unsafe { OpenClipboard(ptr::null_mut()) } != 0 {
+            open_error = None;
+            break;
+        }
+        open_error = Some(std::io::Error::last_os_error());
+        thread::sleep(Duration::from_millis(10));
+    }
+    if let Some(error) = open_error {
+        return Err(format!("open clipboard: {error}"));
+    }
+    let _clipboard = ClipboardGuard;
+
+    if unsafe { EmptyClipboard() } == 0 {
+        return Err(format!(
+            "empty clipboard: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    let wide = text
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let memory = unsafe { GlobalAlloc(GMEM_MOVEABLE, wide.len() * size_of::<u16>()) };
+    if memory.is_null() {
+        return Err(format!(
+            "allocate clipboard memory: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let mut memory = GlobalMemory(memory);
+    let destination = unsafe { GlobalLock(memory.0) }.cast::<u16>();
+    if destination.is_null() {
+        return Err(format!(
+            "lock clipboard memory: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    unsafe {
+        ptr::copy_nonoverlapping(wide.as_ptr(), destination, wide.len());
+        GlobalUnlock(memory.0);
+    }
+
+    if unsafe { SetClipboardData(CF_UNICODETEXT as u32, memory.0) }.is_null() {
+        return Err(format!(
+            "set clipboard data: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    memory.0 = ptr::null_mut();
+    Ok(())
 }
 
 #[cfg(test)]

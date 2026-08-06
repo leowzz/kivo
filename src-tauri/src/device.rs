@@ -1723,6 +1723,7 @@ mod tests {
 
         assert_eq!(update.today_presses, 1);
         assert_eq!(update.logs[0].message, "A pressed");
+        drop(store);
         std::fs::remove_file(path).unwrap();
     }
 
@@ -1771,6 +1772,7 @@ mod tests {
                 .total_presses,
             0
         );
+        drop(store);
         std::fs::remove_file(path).unwrap();
     }
 
@@ -1817,6 +1819,7 @@ mod tests {
                 .today_presses,
             0
         );
+        drop(store);
         std::fs::remove_file(path).unwrap();
     }
 

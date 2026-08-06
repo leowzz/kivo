@@ -59,10 +59,12 @@ YD-RP2040 的 UF2 bootloader USB 标识为 `2e8a:0003`。Kivo 会先校验 USB �
 
 需要：
 
-- Node.js `24.18.0` 与 npm `11.16.0`
+- Node.js `>=24.12.0 <25` 与 npm `>=11.0.0 <12`；`.nvmrc` 和
+  `packageManager` 记录 CI 使用的参考版本
 - Rust stable 和 Tauri 2 所需的系统构建依赖
 - Python `3.13`、[`uv`](https://docs.astral.sh/uv/) 与 PlatformIO
 - macOS 或 Windows；发行工作流构建 macOS universal DMG 和 Windows x64 NSIS 安装程序
+- 固件相关的 `make` 目标还需要 GNU Make；Windows 可使用 Git for Windows 附带的 shell
 
 ```bash
 git clone https://github.com/leowzz/kivo.git
@@ -84,6 +86,20 @@ direnv exec . npm --version
 ```
 
 预期分别输出 `v24.18.0` 和 `11.16.0`。
+
+Windows PowerShell 不需要 direnv。安装 `.nvmrc` 中的版本后可以直接启动：
+
+```powershell
+nvm install 24.18.0
+nvm use 24.18.0
+npm install --global npm@11.16.0
+uv sync
+npm ci
+uv run python scripts/kill_helper.py
+make
+```
+
+本地环境只要落在上述兼容范围内即可，不要求与 CI 的参考版本完全一致。
 
 ## 固件
 
@@ -115,7 +131,7 @@ make test
 make helper-build
 ```
 
-`make test` 会运行发布脚本测试、Python 上传/选择测试、PlatformIO native 测试、Rust 测试与 Clippy、前端测试和生产构建。`make helper-build` 在本机构建 Tauri 应用包。
+`make test` 会运行发布脚本测试、Python 上传/选择测试、PlatformIO native 测试、Rust 测试与 Clippy、前端测试和生产构建。`make helper-build` 在 macOS 构建应用包，在 Windows 构建 NSIS 安装程序。Windows CI 也会在每次 pull request 中运行平台测试并实际生成 NSIS 安装程序。
 
 ## 项目结构
 
@@ -134,4 +150,4 @@ docs/                硬件改造、兼容性与设计记录
 
 ## 平台状态
 
-Kivo 当前以 macOS 作为实际开发和验证环境。仓库中包含 Windows 相关的兼容代码、快捷键处理和 Windows x64 NSIS 构建配置，但尚未在真实 Windows 环境完成完整适配与验收，因此 Windows 暂不视为正式支持平台。
+Kivo 支持 macOS 和 Windows 10/11 x64。Windows 使用原生 Unicode 剪贴板、系统托盘、COM/PnP 设备发现、按硬件身份锁定的 ESP32-S3/RP2040 上传流程，以及 x64 NSIS 安装程序。Windows 安装包目前未做代码签名，首次运行时可能显示系统信誉提示。

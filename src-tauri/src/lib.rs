@@ -7,7 +7,7 @@ mod paste;
 mod profile;
 mod protocol;
 mod storage;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod tray;
 mod workspace;
 
@@ -774,7 +774,7 @@ pub fn run() {
                 .map(Arc::new);
             let operation_barrier = Arc::new(RwLock::new(()));
             let workspace = Arc::new(RwLock::new(workspace));
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             {
                 let workspace_guard = workspace
                     .read()
@@ -811,13 +811,13 @@ pub fn run() {
                         }
                         let (devices, events) =
                             poll_runtime_coordinator(&mut scanner, coordinator.as_ref());
-                        #[cfg(target_os = "macos")]
+                        #[cfg(any(target_os = "macos", target_os = "windows"))]
                         if let Some(devices) = devices.as_deref()
                             && let Ok(workspace) = workspace.read()
                         {
                             tray::update(&app_handle, devices, &workspace);
                         }
-                        #[cfg(not(target_os = "macos"))]
+                        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
                         let _ = devices;
                         for event in events {
                             let payload =
