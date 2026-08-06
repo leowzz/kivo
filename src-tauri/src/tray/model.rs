@@ -320,6 +320,7 @@ mod tests {
                 name: "Hardware".into(),
                 board_profile_id: "luatos-esp32s3-aio".into(),
                 debounce_ms: 30,
+                ssd1306: None,
                 inputs: Vec::new(),
             }],
             actions: BTreeMap::from([(

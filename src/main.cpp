@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "DisplayStatus.h"
 #include "GpioTriggerController.h"
 #include "Handshake.h"
 #include "KeyActivityIndicator.h"
@@ -17,6 +18,7 @@ GpioTriggerController controller(platform::boardProfile());
 KeyActivityIndicator keyIndicator;
 ResponseLineBuffer responseLines(kMaxResponseLineLength);
 TopologyBuilder topologyBuilder(platform::boardProfile());
+DisplayStatusModel displayStatus;
 bool helperConnected = false;
 
 void writeLine(const std::string &line) {
@@ -28,10 +30,18 @@ bool pasteClipboard() {
   return platform::sendHotkey(0x08, 0x19);
 }
 
+void renderStatus() { platform::renderDisplay(displayStatus.frame()); }
+
+bool isActiveOledPin(std::uint8_t pin) {
+  const auto &oled = controller.topology().oled;
+  return oled.has_value() && (pin == oled->sda || pin == oled->scl);
+}
+
 void applyRuntimePinModes() {
   const auto &profile = platform::boardProfile();
   for (std::size_t index = 0; index < profile.safePinCount; ++index) {
-    pinMode(profile.safePins[index], INPUT);
+    const auto pin = profile.safePins[index];
+    if (!isActiveOledPin(pin)) pinMode(pin, INPUT);
   }
   for (const auto &source : controller.topology().directs) {
     for (const auto gpio : source.pins) pinMode(gpio, INPUT_PULLUP);
@@ -45,7 +55,8 @@ void applyRuntimePinModes() {
 void applyLearningPinModes() {
   const auto &profile = platform::boardProfile();
   for (std::size_t index = 0; index < profile.safePinCount; ++index) {
-    pinMode(profile.safePins[index], INPUT);
+    const auto pin = profile.safePins[index];
+    if (!isActiveOledPin(pin)) pinMode(pin, INPUT);
   }
   for (const auto gpio : controller.learningPins()) {
     pinMode(gpio, INPUT_PULLUP);
@@ -53,6 +64,8 @@ void applyLearningPinModes() {
 }
 
 void configError(std::uint32_t revision, const char *code) {
+  displayStatus.setConfigError();
+  renderStatus();
   writeLine("CONFIG_ERROR " + std::to_string(revision) + " " + code + "\n");
 }
 
@@ -92,6 +105,13 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
         configError(command->revision, "invalid_matrix");
       }
       return;
+    case HelperCommandKind::ConfigOled:
+      if (!topologyBuilder.addOled(command->revision, command->oledSda,
+                                   command->oledScl)) {
+        topologyBuilder.cancel();
+        configError(command->revision, "invalid_oled");
+      }
+      return;
     case HelperCommandKind::ConfigCommit: {
       const auto topology = topologyBuilder.commit(command->revision);
       if (!topology.has_value()) {
@@ -100,7 +120,11 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
       }
       resetKeyIndicator();
       controller.configure(*topology, nowMs);
+      platform::configureDisplay(topology->oled);
       applyRuntimePinModes();
+      displayStatus.setReady(topology->keyCount());
+      displayStatus.clearLastInput();
+      renderStatus();
       writeLine("CONFIG_OK " + std::to_string(command->revision) + "\n");
       return;
     }
@@ -112,6 +136,8 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
       }
       resetKeyIndicator();
       applyLearningPinModes();
+      displayStatus.setLearning(command->pins.size());
+      renderStatus();
       writeLine("LEARN_OK " + std::to_string(command->revision) + "\n");
       return;
     case HelperCommandKind::LearnEnd:
@@ -121,6 +147,9 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
       }
       resetKeyIndicator();
       applyRuntimePinModes();
+      displayStatus.setReady(controller.topology().keyCount());
+      displayStatus.clearLastInput();
+      renderStatus();
       writeLine("LEARN_OK " + std::to_string(command->revision) + "\n");
       return;
     case HelperCommandKind::Skip:
@@ -157,6 +186,8 @@ void readHelperResponses(std::uint32_t nowMs) {
 
 void emitInput(const std::optional<InputEvent> &event, bool learning) {
   if (event.has_value()) {
+    displayStatus.recordInput(*event);
+    renderStatus();
     switch (keyIndicator.handle(event->state)) {
       case KeyIndicatorAction::ShowRandomColor:
         platform::showRandomKeyColor();
@@ -229,7 +260,11 @@ void setup() {
 void loop() {
   const std::uint32_t nowMs = millis();
   const bool connected = platform::connected();
-  if (connected && !helperConnected) writeLine(helloLine);
+  if (connected != helperConnected) {
+    displayStatus.setUsbConnected(connected);
+    renderStatus();
+    if (connected) writeLine(helloLine);
+  }
   helperConnected = connected;
   controller.expire(nowMs);
   readHelperResponses(nowMs);

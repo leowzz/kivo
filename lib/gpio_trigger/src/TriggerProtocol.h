@@ -14,6 +14,7 @@ enum class HelperCommandKind {
   ConfigBegin,
   ConfigDirect,
   ConfigMatrix,
+  ConfigOled,
   ConfigCommit,
   LearnBegin,
   LearnEnd,
@@ -32,6 +33,8 @@ struct HelperCommand {
   std::uint8_t sourceIndex = 0;
   std::uint8_t modifierMask = 0;
   std::uint8_t keycode = 0;
+  std::uint8_t oledSda = 0;
+  std::uint8_t oledScl = 0;
   std::vector<std::uint8_t> pins;
   std::vector<std::uint8_t> rows;
   std::vector<std::uint8_t> columns;

@@ -1,6 +1,11 @@
 #include <Adafruit_NeoPixel.h>
 #include <Adafruit_TinyUSB.h>
 #include <Arduino.h>
+#include <U8x8lib.h>
+
+#include <array>
+#include <memory>
+#include <optional>
 
 #include "HidReportTransport.h"
 #include "Platform.h"
@@ -12,6 +17,10 @@ Adafruit_USBD_HID keyboard(kKeyboardDescriptor, sizeof(kKeyboardDescriptor),
 Adafruit_NeoPixel keyPixel(1, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
 constexpr std::size_t kHidReadyPollLimit = 100;
 constexpr std::uint8_t kKeyPixelBrightness = 64;
+constexpr std::uint8_t kOledI2cAddress = 0x3C;
+constexpr std::array<std::uint8_t, 3> kDisplayRows = {0, 1, 3};
+std::unique_ptr<U8X8_SSD1306_128X32_UNIVISION_SW_I2C> display;
+std::optional<DisplayFrame> lastDisplayFrame;
 }  // namespace
 
 namespace platform {
@@ -54,6 +63,37 @@ bool sendHotkey(std::uint8_t modifiers, std::uint8_t keycode) {
         return keyboard.sendReport(0, &report, sizeof(report));
       },
       []() { delay(1); });
+}
+
+void configureDisplay(const std::optional<OledConfig> &config) {
+  if (display) {
+    display->clearDisplay();
+    display->setPowerSave(1);
+  }
+  display.reset();
+  lastDisplayFrame.reset();
+  if (!config.has_value()) return;
+
+  display = std::make_unique<U8X8_SSD1306_128X32_UNIVISION_SW_I2C>(
+      config->scl, config->sda, U8X8_PIN_NONE);
+  display->setI2CAddress(kOledI2cAddress << 1U);
+  display->begin();
+  display->setFont(u8x8_font_chroma48medium8_r);
+  display->clearDisplay();
+}
+
+void renderDisplay(const DisplayFrame &frame) {
+  if (!display || (lastDisplayFrame.has_value() &&
+                   *lastDisplayFrame == frame)) {
+    return;
+  }
+  for (std::size_t index = 0; index < frame.lines.size(); ++index) {
+    if (!lastDisplayFrame.has_value() ||
+        lastDisplayFrame->lines[index] != frame.lines[index]) {
+      display->drawString(0, kDisplayRows[index], frame.lines[index].c_str());
+    }
+  }
+  lastDisplayFrame = frame;
 }
 
 void showRandomKeyColor() {

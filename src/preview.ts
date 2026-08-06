@@ -53,7 +53,7 @@ const telLayout: ModelLayout = {
 };
 
 const esp32SafePins = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18];
-const rp2040SafePins = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
+const rp2040SafePins = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 26, 27, 28, 29];
 
 const phoneProfile: DeviceProfile = {
   schema_version: 2,
@@ -84,6 +84,7 @@ const phoneProfile: DeviceProfile = {
       name: "工作台 RP2040 接线",
       board_profile_id: "vccgnd-yd-rp2040",
       debounce_ms: 25,
+      ssd1306: { sda: 18, scl: 19 },
       inputs: [{ type: "direct", id: "workbench-keys", keys: { UP: 6, DOWN: 7, DEL: 8 } }],
     },
   ],
@@ -204,6 +205,7 @@ export const previewSnapshot: AppSnapshot = {
       runtimeUsb: "303a:4002",
       bootloaderUsb: null,
       safePins: esp32SafePins,
+      supportsOled: false,
     },
     {
       id: "vccgnd-yd-rp2040",
@@ -212,6 +214,7 @@ export const previewSnapshot: AppSnapshot = {
       runtimeUsb: "2e8a:102e",
       bootloaderUsb: "2e8a:0003",
       safePins: rp2040SafePins,
+      supportsOled: true,
     },
   ],
   devices: [

@@ -27,6 +27,7 @@ pub struct BoardProfile {
     pub display_name: &'static str,
     pub runtime_usb: UsbIdentity,
     pub bootloader_usb: Option<UsbIdentity>,
+    pub supports_oled: bool,
     pub safe_pins: &'static [u8],
     pub firmware_environment: &'static str,
 }
@@ -39,6 +40,7 @@ pub(crate) const VCCGND_YD_RP2040_BOARD_ID: &str = "vccgnd-yd-rp2040";
 const ESP32S3_SAFE_PINS: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18];
 const YD_RP2040_SAFE_PINS: &[u8] = &[
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+    26, 27, 28, 29,
 ];
 
 pub const CONTROLLER_FAMILIES: &[ControllerFamily] = &[
@@ -63,6 +65,7 @@ pub const BOARD_PROFILES: &[BoardProfile] = &[
             mode: UsbMode::Runtime,
         },
         bootloader_usb: None,
+        supports_oled: false,
         safe_pins: ESP32S3_SAFE_PINS,
         firmware_environment: "esp32s3",
     },
@@ -80,6 +83,7 @@ pub const BOARD_PROFILES: &[BoardProfile] = &[
             pid: 0x0003,
             mode: UsbMode::Bootloader,
         }),
+        supports_oled: true,
         safe_pins: YD_RP2040_SAFE_PINS,
         firmware_environment: "rp2040",
     },
@@ -169,6 +173,7 @@ const TEST_BOARD_PROFILES: &[BoardProfile] = &[
             pid: 0x2041,
             mode: UsbMode::Bootloader,
         }),
+        supports_oled: false,
         safe_pins: &[0, 6, 22],
         firmware_environment: "test-rp2040",
     },
@@ -182,6 +187,7 @@ const TEST_BOARD_PROFILES: &[BoardProfile] = &[
             mode: UsbMode::Runtime,
         },
         bootloader_usb: None,
+        supports_oled: false,
         safe_pins: &[6],
         firmware_environment: "test-esp32c3",
     },
@@ -393,7 +399,10 @@ mod tests {
         );
         assert_eq!(
             board_by_id("vccgnd-yd-rp2040").unwrap().safe_pins,
-            (0..=22).collect::<Vec<_>>().as_slice()
+            (0_u8..=22)
+                .chain(26..=29)
+                .collect::<Vec<_>>()
+                .as_slice()
         );
     }
 

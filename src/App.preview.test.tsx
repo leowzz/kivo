@@ -19,6 +19,19 @@ afterEach(() => {
   window.history.replaceState({}, "", "/");
 });
 
+test("preview exposes an editable RP2040 SSD1306 configuration", async () => {
+  const { previewSnapshot } = await import("./preview");
+  const rp2040 = previewSnapshot.boardProfiles.find(
+    ({ id }) => id === "vccgnd-yd-rp2040",
+  );
+  const hardware = previewSnapshot.deviceProfiles
+    .flatMap(({ hardware_profiles }) => hardware_profiles)
+    .find(({ id }) => id === "phone-rp-workbench");
+
+  expect(rp2040?.supportsOled).toBe(true);
+  expect(hardware?.ssd1306).toEqual({ sda: 18, scl: 19 });
+});
+
 test("creates a blank profile locally in preview mode", async () => {
   const user = userEvent.setup();
   const { default: App } = await import("./App");

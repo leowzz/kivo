@@ -1215,6 +1215,7 @@ fn migrate_schema_v1_model(legacy: LegacyModelConfig) -> Result<DeviceProfile, A
             name: board.display_name.into(),
             board_profile_id: board.id.into(),
             debounce_ms: legacy.hardware.debounce_ms,
+            ssd1306: None,
             inputs: legacy.hardware.inputs,
         }],
         actions: legacy.actions,
@@ -1376,6 +1377,7 @@ mod tests {
             name: id.into(),
             board_profile_id: board_profile_id.into(),
             debounce_ms: 30,
+            ssd1306: None,
             inputs: Vec::new(),
         }
     }

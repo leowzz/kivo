@@ -102,14 +102,14 @@ def test_select_download_port_rejects_malformed_or_different_hex_serial(observed
 
 def test_runtime_verifier_retries_until_protocol_is_ready() -> None:
     runtime = FakeRuntimeSerial(
-        [b"", b"HELLO 3 esp32s3 luatos-esp32s3-aio acceptance\n"]
+        [b"", b"HELLO 4 esp32s3 luatos-esp32s3-aio acceptance\n"]
     )
     opened: list[str] = []
     times = iter([0.0, 0.0, 0.1])
 
     wait_for_expected_hello(
         "/dev/target",
-        ["HELLO", "3", "esp32s3", "luatos-esp32s3-aio", "acceptance"],
+        ["HELLO", "4", "esp32s3", "luatos-esp32s3-aio", "acceptance"],
         timeout=1,
         serial_factory=lambda port, *_args, **_kwargs: opened.append(port) or runtime,
         monotonic=lambda: next(times),
@@ -126,7 +126,7 @@ def test_runtime_verifier_bounds_timeout_and_reports_expected_and_observed() -> 
     with pytest.raises(TargetError) as captured:
         wait_for_expected_hello(
             "/dev/target",
-            ["HELLO", "3", "esp32s3", "luatos-esp32s3-aio", "acceptance"],
+            ["HELLO", "4", "esp32s3", "luatos-esp32s3-aio", "acceptance"],
             timeout=1,
             serial_factory=lambda *_args, **_kwargs: runtime,
             monotonic=lambda: next(times),
@@ -135,7 +135,7 @@ def test_runtime_verifier_bounds_timeout_and_reports_expected_and_observed() -> 
 
     assert runtime.write_count == 2
     assert "timed out" in str(captured.value)
-    assert "HELLO 3 esp32s3 luatos-esp32s3-aio acceptance" in str(captured.value)
+    assert "HELLO 4 esp32s3 luatos-esp32s3-aio acceptance" in str(captured.value)
     assert "WRONG 3 response" in str(captured.value)
 
 

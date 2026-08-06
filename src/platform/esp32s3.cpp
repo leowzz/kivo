@@ -44,6 +44,10 @@ bool sendHotkey(std::uint8_t modifiers, std::uint8_t keycode) {
   return true;
 }
 
+void configureDisplay(const std::optional<OledConfig> &) {}
+
+void renderDisplay(const DisplayFrame &) {}
+
 void showRandomKeyColor() {}
 
 void clearKeyColor() {}
