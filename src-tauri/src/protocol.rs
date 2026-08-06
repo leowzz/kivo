@@ -339,17 +339,7 @@ impl ActionStep {
         match &self.action {
             ButtonAction::Paste { text } => {
                 copy(text)?;
-                if cfg!(target_os = "macos") {
-                    Ok(format!(
-                        "PASTE {} {} {}\n",
-                        self.event_id, self.step, self.total
-                    ))
-                } else {
-                    Ok(format!(
-                        "HOTKEY {} {} {} 1 25\n",
-                        self.event_id, self.step, self.total
-                    ))
-                }
+                Ok(format_paste_command(self.event_id, self.step, self.total))
             }
             ButtonAction::Hotkey { keys } => {
                 let (modifiers, keycode) = encode_hotkey(keys)?;
@@ -359,6 +349,16 @@ impl ActionStep {
                 ))
             }
         }
+    }
+}
+
+pub(crate) fn format_paste_command(event_id: u64, step: u16, total: u16) -> String {
+    if cfg!(target_os = "macos") {
+        format!("PASTE {event_id} {step} {total}\n")
+    } else if cfg!(target_os = "windows") {
+        format!("HOTKEY {event_id} {step} {total} 3 25\n")
+    } else {
+        format!("HOTKEY {event_id} {step} {total} 1 25\n")
     }
 }
 
@@ -697,6 +697,18 @@ mod tests {
             Ok((10, 14))
         );
         assert_eq!(encode_hotkey(&["page_down".into()]), Ok((0, 78)));
+    }
+
+    #[test]
+    fn formats_the_platform_paste_shortcut() {
+        #[cfg(target_os = "macos")]
+        assert_eq!(format_paste_command(9, 1, 2), "PASTE 9 1 2\n");
+
+        #[cfg(target_os = "windows")]
+        assert_eq!(format_paste_command(9, 1, 2), "HOTKEY 9 1 2 3 25\n");
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        assert_eq!(format_paste_command(9, 1, 2), "HOTKEY 9 1 2 1 25\n");
     }
 
     #[test]

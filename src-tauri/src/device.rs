@@ -10,8 +10,8 @@ use crate::{
     paste::{Clock, PasteHandle, PasteReply, PasteRequest, SystemClock},
     profile::DeviceProfile,
     protocol::{
-        ActionSequence, DeviceMessage, HelloCapabilities, InputState, PhysicalInput, is_hello_line,
-        parse_device, topology_commands, validate_hello,
+        ActionSequence, DeviceMessage, HelloCapabilities, InputState, PhysicalInput,
+        format_paste_command, is_hello_line, parse_device, topology_commands, validate_hello,
     },
 };
 use serde::Serialize;
@@ -827,9 +827,10 @@ impl DeviceSession {
             return output;
         };
         if request.event_id == event_id && request.step == step {
-            output.lines.push(format!(
-                "PASTE {} {} {}\n",
-                request.event_id, request.step, request.total
+            output.lines.push(format_paste_command(
+                request.event_id,
+                request.step,
+                request.total,
             ));
         } else {
             self.pending_paste = Some(request);
@@ -1938,7 +1939,7 @@ mod tests {
         );
 
         let granted = session.grant_paste(41, 1);
-        assert_eq!(granted.lines, ["PASTE 41 1 2\n"]);
+        assert_eq!(granted.lines, [format_paste_command(41, 1, 2)]);
         let next = session.on_message_deferred(
             DeviceMessage::Done {
                 event_id: 41,

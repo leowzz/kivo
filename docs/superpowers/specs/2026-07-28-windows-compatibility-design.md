@@ -14,7 +14,7 @@ platform-neutral HID modifier masks and need no change.
 For paste actions, the Tauri helper writes text to the host clipboard with
 `/usr/bin/pbcopy` on macOS and the Win32 Unicode clipboard API on Windows. After a
 successful copy, macOS keeps the existing `PASTE` response, while Windows uses
-the existing `HOTKEY` response to request `Control+V`. Firmware continues to
+the existing `HOTKEY` response to request `Control+Shift+V`. Firmware continues to
 accept both response forms.
 
 Add `src-tauri/tauri.windows.conf.json` with an NSIS bundle target. This keeps the
