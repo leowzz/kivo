@@ -55,12 +55,20 @@ impl InputSource {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct Ssd1306Config {
+    pub sda: u8,
+    pub scl: u8,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct HardwareProfile {
     pub id: String,
     pub name: String,
     pub board_profile_id: String,
     #[serde(default = "default_debounce_ms")]
     pub debounce_ms: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssd1306: Option<Ssd1306Config>,
     #[serde(default)]
     pub inputs: Vec<InputSource>,
 }
@@ -92,6 +100,7 @@ pub fn blank_device_profile(id: String, name: String, board_profile_id: String) 
             name: "Default hardware".into(),
             board_profile_id,
             debounce_ms: default_debounce_ms(),
+            ssd1306: None,
             inputs: Vec::new(),
         }],
         actions: BTreeMap::new(),
@@ -164,11 +173,14 @@ impl ProfileChange {
     }
 }
 
-fn topology_signature(hardware: Option<&HardwareProfile>) -> Option<(&str, u16, &[InputSource])> {
+fn topology_signature(
+    hardware: Option<&HardwareProfile>,
+) -> Option<(&str, u16, Option<&Ssd1306Config>, &[InputSource])> {
     hardware.map(|hardware| {
         (
             hardware.board_profile_id.as_str(),
             hardware.debounce_ms,
+            hardware.ssd1306.as_ref(),
             hardware.inputs.as_slice(),
         )
     })
@@ -273,6 +285,15 @@ impl DeviceProfile {
             let mut source_ids = BTreeSet::new();
             let mut owned_pins = BTreeSet::new();
             let mut bound_buttons = BTreeSet::new();
+            if let Some(ssd1306) = &hardware.ssd1306 {
+                if !board.supports_oled {
+                    return Err(
+                        AppError::new("oled_not_supported").with_param("board_profile", board.id)
+                    );
+                }
+                validate_pin(ssd1306.sda, board.safe_pins, &mut owned_pins)?;
+                validate_pin(ssd1306.scl, board.safe_pins, &mut owned_pins)?;
+            }
             for source in &hardware.inputs {
                 if !valid_id(source.id()) || !source_ids.insert(source.id()) {
                     return Err(AppError::new("invalid_input_source")
@@ -417,6 +438,42 @@ fn validate_bipartite(edges: &[(u8, u8)]) -> Result<(), AppError> {
 mod tests {
     use super::*;
 
+    fn yaml_profile(
+        board_profile_id: &str,
+        ssd1306: Option<(u8, u8)>,
+        inputs: &str,
+    ) -> DeviceProfile {
+        let ssd1306 = ssd1306
+            .map(|(sda, scl)| format!("    ssd1306:\n      sda: {sda}\n      scl: {scl}\n"))
+            .unwrap_or_default();
+        serde_yaml_ng::from_str(&format!(
+            concat!(
+                "schema_version: 2\n",
+                "profile:\n",
+                "  id: red-phone-v1\n",
+                "  name: Phone\n",
+                "  groups:\n",
+                "    - id: keys\n",
+                "      columns: 1\n",
+                "      buttons:\n",
+                "        - id: UP\n",
+                "          label: UP\n",
+                "hardware_profiles:\n",
+                "  - id: hardware\n",
+                "    name: Hardware\n",
+                "    board_profile_id: {board_profile_id}\n",
+                "    debounce_ms: 30\n",
+                "{ssd1306}",
+                "{inputs}\n",
+                "actions: {{}}\n",
+            ),
+            board_profile_id = board_profile_id,
+            ssd1306 = ssd1306,
+            inputs = inputs,
+        ))
+        .unwrap()
+    }
+
     fn profile() -> DeviceProfile {
         DeviceProfile {
             schema_version: PROFILE_SCHEMA_VERSION,
@@ -427,6 +484,7 @@ mod tests {
                     name: "ESP primary".into(),
                     board_profile_id: "luatos-esp32s3-aio".into(),
                     debounce_ms: 30,
+                    ssd1306: None,
                     inputs: vec![InputSource::Direct {
                         id: "direct".into(),
                         keys: BTreeMap::from([("UP".into(), 6)]),
@@ -437,6 +495,7 @@ mod tests {
                     name: "ESP secondary".into(),
                     board_profile_id: "luatos-esp32s3-aio".into(),
                     debounce_ms: 30,
+                    ssd1306: None,
                     inputs: vec![InputSource::Direct {
                         id: "direct".into(),
                         keys: BTreeMap::from([("UP".into(), 7)]),
@@ -477,6 +536,146 @@ mod tests {
         assert_eq!(
             change.topology_hardware_profile_ids,
             BTreeSet::from(["esp-secondary".to_owned()])
+        );
+    }
+
+    #[test]
+    fn ssd1306_accepts_any_two_distinct_safe_pins_on_supported_board() {
+        let profile = yaml_profile("vccgnd-yd-rp2040", Some((0, 22)), "    inputs: []");
+
+        assert!(profile.validate().is_ok());
+    }
+
+    #[test]
+    fn direct_input_accepts_new_rp2040_safe_gpio() {
+        let profile = yaml_profile(
+            "vccgnd-yd-rp2040",
+            None,
+            "    inputs:\n      - type: direct\n        id: direct\n        keys:\n          UP: 26",
+        );
+
+        assert!(profile.validate().is_ok());
+    }
+
+    #[test]
+    fn contact_matrix_accepts_new_rp2040_safe_gpios() {
+        let profile = yaml_profile(
+            "vccgnd-yd-rp2040",
+            None,
+            "    inputs:\n      - type: contact_matrix\n        id: matrix\n        pins: [26, 27]\n        keys:\n          UP: [26, 27]",
+        );
+
+        assert!(profile.validate().is_ok());
+    }
+
+    #[test]
+    fn ssd1306_accepts_gpio_28_and_29() {
+        let profile = yaml_profile("vccgnd-yd-rp2040", Some((28, 29)), "    inputs: []");
+
+        assert!(profile.validate().is_ok());
+    }
+
+    #[test]
+    fn rp2040_gpio_23_through_25_remain_unsupported() {
+        for gpio in 23..=25 {
+            let inputs = format!(
+                "    inputs:\n      - type: direct\n        id: direct\n        keys:\n          UP: {gpio}"
+            );
+            let profile = yaml_profile("vccgnd-yd-rp2040", None, &inputs);
+
+            let error = profile.validate().unwrap_err();
+            assert_eq!(error.code, "unsupported_gpio");
+            assert_eq!(error.params.get("gpio"), Some(&gpio.to_string()));
+        }
+    }
+
+    #[test]
+    fn ssd1306_rejects_the_same_pin_for_sda_and_scl() {
+        let profile = yaml_profile("vccgnd-yd-rp2040", Some((4, 4)), "    inputs: []");
+
+        assert_eq!(
+            profile.validate().unwrap_err().code,
+            "gpio_used_by_multiple_sources"
+        );
+    }
+
+    #[test]
+    fn ssd1306_rejects_unsupported_boards_before_pin_validation() {
+        let profile = yaml_profile("luatos-esp32s3-aio", Some((23, 24)), "    inputs: []");
+
+        assert_eq!(profile.validate().unwrap_err().code, "oled_not_supported");
+    }
+
+    #[test]
+    fn ssd1306_rejects_unsafe_pins() {
+        let profile = yaml_profile("vccgnd-yd-rp2040", Some((23, 5)), "    inputs: []");
+
+        assert_eq!(profile.validate().unwrap_err().code, "unsupported_gpio");
+    }
+
+    #[test]
+    fn ssd1306_rejects_direct_input_pin_conflicts() {
+        let profile = yaml_profile(
+            "vccgnd-yd-rp2040",
+            Some((4, 5)),
+            "    inputs:\n      - type: direct\n        id: direct\n        keys:\n          UP: 4",
+        );
+
+        assert_eq!(
+            profile.validate().unwrap_err().code,
+            "gpio_used_by_multiple_sources"
+        );
+    }
+
+    #[test]
+    fn ssd1306_rejects_matrix_pin_conflicts() {
+        let profile = yaml_profile(
+            "vccgnd-yd-rp2040",
+            Some((4, 5)),
+            "    inputs:\n      - type: contact_matrix\n        id: matrix\n        pins: [1, 5]\n        keys:\n          UP: [1, 5]",
+        );
+
+        assert_eq!(
+            profile.validate().unwrap_err().code,
+            "gpio_used_by_multiple_sources"
+        );
+    }
+
+    #[test]
+    fn ssd1306_yaml_is_backward_compatible_when_omitted() {
+        let profile = yaml_profile("vccgnd-yd-rp2040", None, "    inputs: []");
+
+        assert!(profile.validate().is_ok());
+        assert!(
+            !serde_yaml_ng::to_string(&profile)
+                .unwrap()
+                .contains("ssd1306:")
+        );
+    }
+
+    #[test]
+    fn ssd1306_yaml_round_trips_when_configured() {
+        let profile = yaml_profile("vccgnd-yd-rp2040", Some((4, 5)), "    inputs: []");
+
+        let serialized = serde_yaml_ng::to_string(&profile).unwrap();
+        let deserialized: DeviceProfile = serde_yaml_ng::from_str(&serialized).unwrap();
+
+        assert!(serialized.contains("ssd1306:"));
+        assert!(serialized.contains("sda: 4"));
+        assert!(serialized.contains("scl: 5"));
+        assert_eq!(deserialized, profile);
+    }
+
+    #[test]
+    fn ssd1306_changes_are_topology_changes() {
+        let old = yaml_profile("vccgnd-yd-rp2040", None, "    inputs: []");
+        let new = yaml_profile("vccgnd-yd-rp2040", Some((4, 5)), "    inputs: []");
+
+        let change = ProfileChange::between(Some(&old), Some(&new));
+
+        assert_eq!(
+            change.topology_hardware_profile_ids,
+            BTreeSet::from(["hardware".to_owned()])
         );
     }
 }

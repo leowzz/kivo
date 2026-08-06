@@ -6,6 +6,14 @@ TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 MAKEFILE="$ROOT/Makefile"
+FIRMWARE_MAIN="$ROOT/src/main.cpp"
+RP2040_PLATFORM="$ROOT/src/platform/rp2040.cpp"
+
+grep -Fq 'display->setFont(u8g2_font_6x13_tf);' "$RP2040_PLATFORM"
+grep -Fq 'makeRp2040StandaloneDebugTopology(platform::boardProfile())' \
+  "$FIRMWARE_MAIN"
+grep -Fq 'initializeStandaloneDisplay(nowMs);' "$FIRMWARE_MAIN"
+grep -Fq 'acceptsRp2040StandaloneHostTopology(*topology)' "$FIRMWARE_MAIN"
 
 target_body() {
   awk -v target="$1" '
@@ -21,7 +29,7 @@ done
 
 require_serial_body="$(target_body require-serial)"
 grep -Fq 'test -n "$(SERIAL)"' <<<"$require_serial_body"
-grep -Fq 'expected = ["HELLO", "3", family, board, build]' "$ROOT/scripts/verify_runtime_firmware.py"
+grep -Fq 'expected = ["HELLO", "4", family, board, build]' "$ROOT/scripts/verify_runtime_firmware.py"
 
 for target in upload-esp32s3 upload-rp2040; do
   ! grep -Eq "^${target}:[[:space:]].*require-serial([[:space:]]|$)" "$MAKEFILE"

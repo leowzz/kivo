@@ -42,6 +42,10 @@ export interface HardwareProfile {
   name: string;
   board_profile_id: string;
   debounce_ms: number;
+  ssd1306?: {
+    sda: number;
+    scl: number;
+  };
   inputs: InputSource[];
 }
 
@@ -119,6 +123,7 @@ export interface BoardProfileSummary {
   runtimeUsb: string;
   bootloaderUsb: string | null;
   safePins: number[];
+  supportsOled?: boolean;
 }
 
 export type ConnectionDimension = "online" | "offline";

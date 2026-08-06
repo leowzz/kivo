@@ -63,7 +63,9 @@ bool GpioTriggerController::beginLearning(
   if (learningRevision_.has_value() || pins.empty()) return false;
   for (const auto pin : pins) {
     if (!isSupportedPin(pin) ||
-        std::count(pins.begin(), pins.end(), pin) != 1) {
+        std::count(pins.begin(), pins.end(), pin) != 1 ||
+        (topology_.oled.has_value() &&
+         (pin == topology_.oled->sda || pin == topology_.oled->scl))) {
       return false;
     }
   }

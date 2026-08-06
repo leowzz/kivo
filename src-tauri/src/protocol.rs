@@ -6,6 +6,10 @@ use crate::{
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+pub const HOST_PROTOCOL_VERSION: u16 = 4;
+pub const OLED_PROTOCOL_VERSION: u16 = 4;
+const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 3;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum PhysicalInput {
@@ -60,9 +64,9 @@ pub fn validate_hello(
     candidate_board: &BoardProfile,
     hello: &HelloCapabilities,
 ) -> Result<(), AppError> {
-    if hello.protocol != 3 {
+    if !(MIN_SUPPORTED_PROTOCOL_VERSION..=HOST_PROTOCOL_VERSION).contains(&hello.protocol) {
         return Err(AppError::new("protocol_mismatch")
-            .with_param("expected", "3")
+            .with_param("expected", HOST_PROTOCOL_VERSION.to_string())
             .with_param("actual", hello.protocol.to_string()));
     }
     if hello.controller_family_id != candidate_board.family_id {
@@ -174,7 +178,7 @@ fn parse_hello(line: &str) -> Option<DeviceMessage> {
     }
     let [
         "HELLO",
-        "3",
+        protocol,
         controller_family_id,
         board_profile_id,
         firmware_build_id,
@@ -184,6 +188,10 @@ fn parse_hello(line: &str) -> Option<DeviceMessage> {
     else {
         return None;
     };
+    let protocol = protocol.parse::<u16>().ok()?;
+    if !(MIN_SUPPORTED_PROTOCOL_VERSION..=HOST_PROTOCOL_VERSION).contains(&protocol) {
+        return None;
+    }
     let count = count.parse::<usize>().ok()?;
     let pins = pins
         .iter()
@@ -195,7 +203,7 @@ fn parse_hello(line: &str) -> Option<DeviceMessage> {
         && pins.iter().copied().collect::<BTreeSet<_>>().len() == count)
         .then(|| {
             DeviceMessage::Hello(HelloCapabilities {
-                protocol: 3,
+                protocol,
                 controller_family_id: (*controller_family_id).to_owned(),
                 board_profile_id: (*board_profile_id).to_owned(),
                 firmware_build_id: (*firmware_build_id).to_owned(),
@@ -229,6 +237,15 @@ pub fn topology_commands(
         AppError::new("unknown_board_profile")
             .with_param("board_profile", &hardware.board_profile_id)
     })?;
+    if let Some(ssd1306) = &hardware.ssd1306 {
+        if !board.supports_oled {
+            return Err(AppError::new("oled_not_supported").with_param("board_profile", board.id));
+        }
+        if ssd1306.sda == ssd1306.scl {
+            return Err(AppError::new("gpio_used_by_multiple_sources")
+                .with_param("gpio", ssd1306.sda.to_string()));
+        }
+    }
     for pin in hardware_pins(hardware) {
         if !board.safe_pins.contains(&pin) || !reported_pins.contains(&pin) {
             return Err(AppError::new("capability_mismatch").with_param("gpio", pin.to_string()));
@@ -238,6 +255,12 @@ pub fn topology_commands(
         "CONFIG_BEGIN {revision} {}\n",
         hardware.debounce_ms
     )];
+    if let Some(ssd1306) = &hardware.ssd1306 {
+        lines.push(format!(
+            "CONFIG_OLED {revision} {} {}\n",
+            ssd1306.sda, ssd1306.scl
+        ));
+    }
     let mut source_index = 0u8;
     for input in &hardware.inputs {
         match input {
@@ -273,14 +296,19 @@ pub fn topology_commands(
 }
 
 fn hardware_pins(hardware: &HardwareProfile) -> BTreeSet<u8> {
-    hardware
+    let mut pins = hardware
         .inputs
         .iter()
         .flat_map(|input| match input {
             InputSource::Direct { keys, .. } => keys.values().copied().collect::<Vec<_>>(),
             InputSource::ContactMatrix { pins, .. } => pins.clone(),
         })
-        .collect()
+        .collect::<BTreeSet<_>>();
+    if let Some(ssd1306) = &hardware.ssd1306 {
+        pins.insert(ssd1306.sda);
+        pins.insert(ssd1306.scl);
+    }
+    pins
 }
 
 fn matrix_partitions(pairs: impl IntoIterator<Item = [u8; 2]>) -> (Vec<u8>, Vec<u8>) {
@@ -519,6 +547,7 @@ mod tests {
                 name: "ESP primary".into(),
                 board_profile_id: "luatos-esp32s3-aio".into(),
                 debounce_ms: 30,
+                ssd1306: None,
                 inputs: vec![InputSource::ContactMatrix {
                     id: "matrix".into(),
                     pins: vec![1, 2, 12, 13],
@@ -537,6 +566,33 @@ mod tests {
                 ],
             )]),
         }
+    }
+
+    fn ssd1306_hardware_for(board_profile_id: &str, sda: u8, scl: u8) -> HardwareProfile {
+        serde_yaml_ng::from_str(&format!(
+            concat!(
+                "id: rp-primary\n",
+                "name: RP primary\n",
+                "board_profile_id: {board_profile_id}\n",
+                "debounce_ms: 30\n",
+                "ssd1306:\n",
+                "  sda: {sda}\n",
+                "  scl: {scl}\n",
+                "inputs:\n",
+                "  - type: direct\n",
+                "    id: direct\n",
+                "    keys:\n",
+                "      A: 6\n",
+            ),
+            board_profile_id = board_profile_id,
+            sda = sda,
+            scl = scl,
+        ))
+        .unwrap()
+    }
+
+    fn ssd1306_hardware() -> HardwareProfile {
+        ssd1306_hardware_for("vccgnd-yd-rp2040", 4, 5)
     }
 
     #[test]
@@ -563,13 +619,13 @@ mod tests {
     }
 
     #[test]
-    fn parses_protocol_v3_identity_and_build() {
+    fn parses_protocol_v4_identity_and_build() {
         let message =
-            parse_device("HELLO 3 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 3 0 11 22").unwrap();
+            parse_device("HELLO 4 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 3 0 11 22").unwrap();
         assert_eq!(
             message,
             DeviceMessage::Hello(HelloCapabilities {
-                protocol: 3,
+                protocol: 4,
                 controller_family_id: "rp2040".into(),
                 board_profile_id: "vccgnd-yd-rp2040".into(),
                 firmware_build_id: "0.1.0+gabc1234".into(),
@@ -577,28 +633,51 @@ mod tests {
             })
         );
         assert!(
-            parse_device("HELLO 3 esp32s3 luatos-esp32s3-aio 0.1.0+gabc1234 3 0 6 18",).is_some()
+            parse_device("HELLO 4 esp32s3 luatos-esp32s3-aio 0.1.0+gabc1234 3 0 6 18",).is_some()
         );
         assert!(parse_device(
-            "HELLO 3 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 23 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22",
+            "HELLO 4 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 23 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22",
         )
         .is_some());
     }
 
     #[test]
-    fn rejects_non_v3_or_malformed_hello_capabilities() {
+    fn parses_and_validates_protocol_v4_identity_and_build() {
+        let message =
+            parse_device("HELLO 4 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 3 0 11 22").unwrap();
+        let DeviceMessage::Hello(hello) = message else {
+            panic!("expected HELLO");
+        };
+
+        assert_eq!(hello.protocol, 4);
+        assert!(validate_hello(board_by_id("vccgnd-yd-rp2040").unwrap(), &hello).is_ok());
+    }
+
+    #[test]
+    fn parses_protocol_v3_hello_for_backward_compatibility() {
+        let message =
+            parse_device("HELLO 3 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 3 0 11 22").unwrap();
+
+        assert!(matches!(
+            message,
+            DeviceMessage::Hello(HelloCapabilities { protocol: 3, .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_unsupported_or_malformed_hello_capabilities() {
         assert!(parse_device("HELLO 2 esp32s3 luatos-esp32s3-aio build 2 1 2").is_none());
-        assert!(parse_device("HELLO 3 rp2040 vccgnd-yd-rp2040  3 2 0 1").is_none());
-        assert!(parse_device("HELLO\t3\trp2040\tvccgnd-yd-rp2040\tbuild\t2\t0\t1").is_none());
-        assert!(parse_device(" HELLO 3 rp2040 vccgnd-yd-rp2040 build 2 0 1").is_none());
-        assert!(parse_device("HELLO 3 rp2040 vccgnd-yd-rp2040 build 2 0 1 ").is_none());
-        assert!(parse_device("HELLO 3 rp2040 vccgnd-yd-rp2040 build 2 0 1\n").is_some());
-        assert!(parse_device("HELLO 3 rp2040 vccgnd-yd-rp2040 build 2 1").is_none());
-        assert!(parse_device("HELLO 3 rp2040 vccgnd-yd-rp2040 build 0").is_none());
-        assert!(parse_device("HELLO 3 rp2040 vccgnd-yd-rp2040 build 2 1 1").is_none());
-        assert!(parse_device("HELLO 3 rp2040 vccgnd-yd-rp2040 build 1 256").is_none());
-        assert!(parse_device("HELLO 3 rp2040 vccgnd-yd-rp2040 build 1 -1").is_none());
-        assert!(parse_device("HELLO 3 rp2040 vccgnd-yd-rp2040 build 1 1 trailing").is_none());
+        assert!(parse_device("HELLO 4 rp2040 vccgnd-yd-rp2040  3 2 0 1").is_none());
+        assert!(parse_device("HELLO\t4\trp2040\tvccgnd-yd-rp2040\tbuild\t2\t0\t1").is_none());
+        assert!(parse_device(" HELLO 4 rp2040 vccgnd-yd-rp2040 build 2 0 1").is_none());
+        assert!(parse_device("HELLO 4 rp2040 vccgnd-yd-rp2040 build 2 0 1 ").is_none());
+        assert!(parse_device("HELLO 4 rp2040 vccgnd-yd-rp2040 build 2 0 1\n").is_some());
+        assert!(parse_device("HELLO 4 rp2040 vccgnd-yd-rp2040 build 2 1").is_none());
+        assert!(parse_device("HELLO 4 rp2040 vccgnd-yd-rp2040 build 0").is_none());
+        assert!(parse_device("HELLO 4 rp2040 vccgnd-yd-rp2040 build 2 1 1").is_none());
+        assert!(parse_device("HELLO 4 rp2040 vccgnd-yd-rp2040 build 1 256").is_none());
+        assert!(parse_device("HELLO 4 rp2040 vccgnd-yd-rp2040 build 1 -1").is_none());
+        assert!(parse_device("HELLO 4 rp2040 vccgnd-yd-rp2040 build 1 1 trailing").is_none());
         assert!(parse_device("STATE 9 DIRECT 6 DOWN trailing\n").is_none());
         assert!(parse_device("STATE 9 CONTACT 0 1 1 DOWN\n").is_none());
         assert!(parse_device("DONE 9 0\n").is_none());
@@ -609,13 +688,17 @@ mod tests {
     fn validates_hello_against_the_classified_board() {
         let board = board_by_id("vccgnd-yd-rp2040").unwrap();
         let hello = HelloCapabilities {
-            protocol: 3,
+            protocol: 4,
             controller_family_id: "rp2040".into(),
             board_profile_id: "vccgnd-yd-rp2040".into(),
             firmware_build_id: "test".into(),
             pins: vec![0, 22],
         };
         assert!(validate_hello(board, &hello).is_ok());
+
+        let mut legacy_protocol = hello.clone();
+        legacy_protocol.protocol = 3;
+        assert!(validate_hello(board, &legacy_protocol).is_ok());
 
         let mut wrong_protocol = hello.clone();
         wrong_protocol.protocol = 2;
@@ -644,6 +727,20 @@ mod tests {
             validate_hello(board, &unsafe_pin).unwrap_err().code,
             "capability_mismatch"
         );
+    }
+
+    #[test]
+    fn validates_legacy_rp2040_safe_pin_capability_subset() {
+        let board = board_by_id("vccgnd-yd-rp2040").unwrap();
+        let hello = HelloCapabilities {
+            protocol: 3,
+            controller_family_id: "rp2040".into(),
+            board_profile_id: "vccgnd-yd-rp2040".into(),
+            firmware_build_id: "legacy".into(),
+            pins: (0..=22).collect(),
+        };
+
+        assert!(validate_hello(board, &hello).is_ok());
     }
 
     #[test]
@@ -688,6 +785,45 @@ mod tests {
             ),
             Some("A")
         );
+    }
+
+    #[test]
+    fn ssd1306_topology_commands_precede_input_commands() {
+        assert_eq!(
+            topology_commands(&ssd1306_hardware(), 7, &BTreeSet::from([4, 5, 6])).unwrap(),
+            vec![
+                "CONFIG_BEGIN 7 30\n",
+                "CONFIG_OLED 7 4 5\n",
+                "CONFIG_DIRECT 7 0 1 6\n",
+                "CONFIG_COMMIT 7\n",
+            ]
+        );
+    }
+
+    #[test]
+    fn ssd1306_topology_requires_both_reported_pins() {
+        let error = topology_commands(&ssd1306_hardware(), 7, &BTreeSet::from([4, 6])).unwrap_err();
+
+        assert_eq!(error.code, "capability_mismatch");
+        assert_eq!(error.params.get("gpio").map(String::as_str), Some("5"));
+    }
+
+    #[test]
+    fn ssd1306_topology_rejects_unsupported_boards() {
+        let hardware = ssd1306_hardware_for("luatos-esp32s3-aio", 4, 5);
+
+        let error = topology_commands(&hardware, 7, &BTreeSet::from([4, 5, 6])).unwrap_err();
+
+        assert_eq!(error.code, "oled_not_supported");
+    }
+
+    #[test]
+    fn ssd1306_topology_rejects_the_same_pin() {
+        let hardware = ssd1306_hardware_for("vccgnd-yd-rp2040", 4, 4);
+
+        let error = topology_commands(&hardware, 7, &BTreeSet::from([4, 6])).unwrap_err();
+
+        assert_eq!(error.code, "gpio_used_by_multiple_sources");
     }
 
     #[test]

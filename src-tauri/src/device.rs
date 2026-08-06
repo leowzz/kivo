@@ -10,8 +10,8 @@ use crate::{
     paste::{Clock, PasteHandle, PasteReply, PasteRequest, SystemClock},
     profile::DeviceProfile,
     protocol::{
-        ActionSequence, DeviceMessage, HelloCapabilities, InputState, PhysicalInput, is_hello_line,
-        parse_device, topology_commands, validate_hello,
+        ActionSequence, DeviceMessage, HelloCapabilities, InputState, OLED_PROTOCOL_VERSION,
+        PhysicalInput, is_hello_line, parse_device, topology_commands, validate_hello,
     },
 };
 use serde::Serialize;
@@ -30,6 +30,7 @@ use std::{
 };
 
 const ACTION_ACK_TIMEOUT: Duration = Duration::from_millis(1800);
+const EMPTY_TOPOLOGY_DEBOUNCE_MS: u16 = 30;
 pub(crate) const SERIAL_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(10);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -106,7 +107,7 @@ pub struct DeviceSession {
     candidate_board: &'static BoardProfile,
     hello: Option<HelloCapabilities>,
     revision: u32,
-    configuring: Option<u32>,
+    configuring: Option<ConfigurationInFlight>,
     ready: bool,
     active: Option<ActionSequence>,
     active_snapshot: Option<Arc<RuntimeProfileSnapshot>>,
@@ -138,6 +139,18 @@ struct QueuedInput {
 struct PendingReconfiguration {
     snapshot: Option<Arc<RuntimeProfileSnapshot>>,
     revision: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConfigurationKind {
+    Activate,
+    Clear,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ConfigurationInFlight {
+    revision: u32,
+    kind: ConfigurationKind,
 }
 
 struct ActiveLearning {
@@ -338,16 +351,32 @@ impl DeviceSession {
         let mut output = SessionOutput::default();
         match message {
             DeviceMessage::Hello(hello) => self.configure_for_hello(hello, &mut output),
-            DeviceMessage::ConfigOk { revision } if self.configuring == Some(revision) => {
-                self.configuring = None;
-                self.ready = true;
-                output.activities.push(
-                    RuntimeActivity::new("topology_active")
-                        .with_param("revision", revision.to_string()),
-                );
+            DeviceMessage::ConfigOk { revision }
+                if self
+                    .configuring
+                    .as_ref()
+                    .is_some_and(|configuring| configuring.revision == revision) =>
+            {
+                let configuring = self
+                    .configuring
+                    .take()
+                    .expect("matching configuration exists");
+                self.ready = configuring.kind == ConfigurationKind::Activate;
+                let code = match configuring.kind {
+                    ConfigurationKind::Activate => "topology_active",
+                    ConfigurationKind::Clear => "topology_cleared",
+                };
+                output
+                    .activities
+                    .push(RuntimeActivity::new(code).with_param("revision", revision.to_string()));
                 self.start_next(&mut output);
             }
-            DeviceMessage::ConfigError { revision, code } if self.configuring == Some(revision) => {
+            DeviceMessage::ConfigError { revision, code }
+                if self
+                    .configuring
+                    .as_ref()
+                    .is_some_and(|configuring| configuring.revision == revision) =>
+            {
                 self.configuring = None;
                 self.ready = false;
                 output.activities.push(
@@ -556,8 +585,11 @@ impl DeviceSession {
             return;
         }
         self.hello = Some(hello);
+        let Some(snapshot) = snapshot else {
+            return;
+        };
         let revision = self.revision.wrapping_add(1).max(1);
-        self.configure_snapshot(snapshot, revision, output);
+        self.configure_snapshot(Some(snapshot), revision, output);
     }
 
     fn configure_snapshot(
@@ -569,15 +601,15 @@ impl DeviceSession {
         self.profile = snapshot;
         self.ready = false;
         self.configuring = None;
-        let Some(hello) = self.hello.as_ref() else {
+        if self.hello.is_none() {
             return;
-        };
-        let Some(runtime) = self.profile.as_ref() else {
-            output
-                .activities
-                .push(RuntimeActivity::new("no_runtime_assignment"));
+        }
+        if self.profile.is_none() {
+            self.clear_topology(revision, output);
             return;
-        };
+        }
+        let hello = self.hello.as_ref().expect("HELLO was checked above");
+        let runtime = self.profile.as_ref().expect("profile was checked above");
         if let Err(error) = runtime.profile.validate() {
             output
                 .activities
@@ -599,15 +631,44 @@ impl DeviceSession {
                 .push(RuntimeActivity::new("assignment_board_mismatch"));
             return;
         }
+        if hardware.ssd1306.is_some() && hello.protocol < OLED_PROTOCOL_VERSION {
+            output.activities.push(activity_from_error(
+                crate::workspace::AppError::new("protocol_mismatch")
+                    .with_param("expected", OLED_PROTOCOL_VERSION.to_string())
+                    .with_param("actual", hello.protocol.to_string()),
+            ));
+            return;
+        }
         let reported_pins = hello.pins.iter().copied().collect::<BTreeSet<_>>();
         self.revision = revision.max(1);
         match topology_commands(hardware, self.revision, &reported_pins) {
             Ok(lines) => {
-                self.configuring = Some(self.revision);
+                self.configuring = Some(ConfigurationInFlight {
+                    revision: self.revision,
+                    kind: ConfigurationKind::Activate,
+                });
                 output.lines = lines;
             }
             Err(error) => output.activities.push(activity_from_error(error)),
         }
+    }
+
+    fn clear_topology(&mut self, revision: u32, output: &mut SessionOutput) {
+        if self.hello.is_none() {
+            return;
+        }
+        self.revision = revision.max(1);
+        self.configuring = Some(ConfigurationInFlight {
+            revision: self.revision,
+            kind: ConfigurationKind::Clear,
+        });
+        output.lines = vec![
+            format!(
+                "CONFIG_BEGIN {} {EMPTY_TOPOLOGY_DEBOUNCE_MS}\n",
+                self.revision
+            ),
+            format!("CONFIG_COMMIT {}\n", self.revision),
+        ];
     }
 
     #[cfg(test)]
@@ -1629,6 +1690,7 @@ mod tests {
         paste::{ClipboardWriter, PasteCoordinator},
         profile::{
             ButtonAction, DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION,
+            Ssd1306Config,
         },
         protocol::{DeviceMessage, PhysicalInput},
     };
@@ -1671,6 +1733,7 @@ mod tests {
                     name: "ESP primary".into(),
                     board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
                     debounce_ms: 30,
+                    ssd1306: None,
                     inputs: vec![InputSource::Direct {
                         id: "direct".into(),
                         keys: BTreeMap::from([("A".into(), 6)]),
@@ -1689,6 +1752,16 @@ mod tests {
                 )]),
             },
         }
+    }
+
+    fn oled_runtime_model() -> RuntimeProfileSnapshot {
+        let mut runtime = runtime_model();
+        let hardware = &mut runtime.profile.hardware_profiles[0];
+        hardware.board_profile_id = crate::hardware::VCCGND_YD_RP2040_BOARD_ID.into();
+        hardware.ssd1306 = Some(Ssd1306Config { sda: 4, scl: 5 });
+        runtime.metric_attribution.device_id =
+            DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "ABCDEF123456").unwrap();
+        runtime
     }
 
     #[test]
@@ -1822,12 +1895,115 @@ mod tests {
 
     fn hello() -> DeviceMessage {
         DeviceMessage::Hello(HelloCapabilities {
-            protocol: 3,
+            protocol: 4,
             controller_family_id: crate::hardware::ESP32S3_FAMILY_ID.into(),
             board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
             firmware_build_id: "test".into(),
             pins: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18],
         })
+    }
+
+    #[test]
+    fn protocol_v3_non_oled_profile_still_configures() {
+        let mut session = DeviceSession::new(runtime_model());
+        let DeviceMessage::Hello(mut legacy_hello) = hello() else {
+            unreachable!();
+        };
+        legacy_hello.protocol = 3;
+
+        let configuring = session.on_message_deferred(DeviceMessage::Hello(legacy_hello), 0, 100);
+
+        assert_eq!(configuring.lines.first().unwrap(), "CONFIG_BEGIN 1 30\n");
+        assert_eq!(configuring.lines.last().unwrap(), "CONFIG_COMMIT 1\n");
+        assert!(configuring.activities.is_empty());
+        let configured =
+            session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
+        assert_eq!(configured.activities[0].code, "topology_active");
+        assert!(session.ready);
+    }
+
+    #[test]
+    fn protocol_v3_oled_profile_is_rejected_before_configuration() {
+        let board =
+            crate::hardware::board_by_id(crate::hardware::VCCGND_YD_RP2040_BOARD_ID).unwrap();
+        let mut session = DeviceSession::without_model(board);
+        session.update_snapshot(Some(Arc::new(oled_runtime_model())));
+        let legacy_hello = HelloCapabilities {
+            protocol: 3,
+            controller_family_id: board.family_id.into(),
+            board_profile_id: board.id.into(),
+            firmware_build_id: "legacy".into(),
+            pins: board.safe_pins.to_vec(),
+        };
+
+        let rejected = session.on_message_deferred(DeviceMessage::Hello(legacy_hello), 0, 100);
+
+        assert!(rejected.lines.is_empty());
+        assert_eq!(session.hello.as_ref().map(|hello| hello.protocol), Some(3));
+        assert!(!session.ready);
+        assert_eq!(rejected.activities[0].code, "protocol_mismatch");
+        assert_eq!(
+            rejected.activities[0]
+                .params
+                .get("expected")
+                .map(String::as_str),
+            Some("4")
+        );
+        assert_eq!(
+            rejected.activities[0]
+                .params
+                .get("actual")
+                .map(String::as_str),
+            Some("3")
+        );
+    }
+
+    #[test]
+    fn unassignment_clears_topology_and_stays_inactive_after_ack() {
+        let mut session = DeviceSession::new(runtime_model());
+        session.on_message_deferred(hello(), 0, 100);
+        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
+        assert!(session.ready);
+
+        let clearing = session.reconfigure(None, 2);
+
+        assert_eq!(clearing.lines, ["CONFIG_BEGIN 2 30\n", "CONFIG_COMMIT 2\n"]);
+        assert!(!session.ready);
+        let cleared = session.on_message_deferred(DeviceMessage::ConfigOk { revision: 2 }, 0, 102);
+        assert_eq!(cleared.activities[0].code, "topology_cleared");
+        assert_eq!(
+            cleared.activities[0]
+                .params
+                .get("revision")
+                .map(String::as_str),
+            Some("2")
+        );
+        assert!(!session.ready);
+        assert!(session.profile.is_none());
+    }
+
+    #[test]
+    fn unassigned_hello_waits_for_coordinator_revision_before_clearing_topology() {
+        let board =
+            crate::hardware::board_by_id(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID).unwrap();
+        let mut session = DeviceSession::without_model(board);
+
+        let hello = session.on_message_deferred(hello(), 0, 100);
+
+        assert!(hello.lines.is_empty());
+        assert!(hello.activities.is_empty());
+        assert!(session.hello.is_some());
+        assert!(session.configuring.is_none());
+        assert!(!session.ready);
+        assert!(session.profile.is_none());
+
+        let clearing = session.reconfigure(None, 1);
+        assert_eq!(clearing.lines, ["CONFIG_BEGIN 1 30\n", "CONFIG_COMMIT 1\n"]);
+        assert!(clearing.activities.is_empty());
+        let cleared = session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
+        assert_eq!(cleared.activities[0].code, "topology_cleared");
+        assert!(!session.ready);
+        assert!(session.profile.is_none());
     }
 
     #[test]
@@ -2284,7 +2460,7 @@ mod tests {
         let mut session = DeviceSession::new(runtime_model());
         let output = session.on_message(
             DeviceMessage::Hello(HelloCapabilities {
-                protocol: 3,
+                protocol: 4,
                 controller_family_id: crate::hardware::ESP32S3_FAMILY_ID.into(),
                 board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
                 firmware_build_id: "test".into(),
@@ -2339,14 +2515,14 @@ mod tests {
         session.on_message(DeviceMessage::ConfigOk { revision: 2 }, &mut copy);
         assert!(session.ready);
 
-        session.on_line("HELLO 3 esp32s3 luatos-esp32s3-aio build 2 0", &mut copy);
+        session.on_line("HELLO 4 esp32s3 luatos-esp32s3-aio build 2 0", &mut copy);
         assert!(!session.ready);
         assert!(session.hello.is_none());
 
         session.on_message(DeviceMessage::Hello(hello.clone()), &mut copy);
         session.on_message(DeviceMessage::ConfigOk { revision: 3 }, &mut copy);
         let _ = hello;
-        session.on_line("HELLO 3 esp32s3 vccgnd-yd-rp2040 build 2 0 6", &mut copy);
+        session.on_line("HELLO 4 esp32s3 vccgnd-yd-rp2040 build 2 0 6", &mut copy);
         assert!(!session.ready);
         assert!(session.hello.is_none());
     }

@@ -211,7 +211,6 @@ mod tests {
         tray::model::{TrayButton, TrayDevice, TrayDeviceSection, TrayMenuModel},
     };
     use std::cell::Cell;
-    use tauri::Manager;
 
     fn tray_model(section: TrayDeviceSection) -> TrayMenuModel {
         TrayMenuModel {

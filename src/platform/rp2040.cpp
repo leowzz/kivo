@@ -1,9 +1,16 @@
 #include <Adafruit_NeoPixel.h>
 #include <Adafruit_TinyUSB.h>
 #include <Arduino.h>
+#include <U8g2lib.h>
+#include <Wire.h>
+
+#include <array>
+#include <memory>
+#include <optional>
 
 #include "HidReportTransport.h"
 #include "Platform.h"
+#include "Rp2040OledBus.h"
 
 namespace {
 std::uint8_t const kKeyboardDescriptor[] = {TUD_HID_REPORT_DESC_KEYBOARD()};
@@ -12,6 +19,39 @@ Adafruit_USBD_HID keyboard(kKeyboardDescriptor, sizeof(kKeyboardDescriptor),
 Adafruit_NeoPixel keyPixel(1, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
 constexpr std::size_t kHidReadyPollLimit = 100;
 constexpr std::uint8_t kKeyPixelBrightness = 64;
+constexpr std::uint8_t kOledI2cAddress = 0x3C;
+constexpr std::uint32_t kOledI2cClockHz = 100000;
+constexpr std::uint8_t kDisplayWidth = 128;
+constexpr std::array<std::uint8_t, 2> kStatusBaselines = {10, 29};
+constexpr std::uint8_t kInputBaseline = 20;
+std::unique_ptr<U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C> i2c0Display;
+std::unique_ptr<U8G2_SSD1306_128X32_UNIVISION_F_2ND_HW_I2C> i2c1Display;
+std::unique_ptr<U8G2_SSD1306_128X32_UNIVISION_F_SW_I2C> softwareDisplay;
+U8G2 *display = nullptr;
+TwoWire *displayWire = nullptr;
+std::optional<DisplayFrame> lastDisplayFrame;
+
+void stopDisplay() {
+  if (display) {
+    display->clearBuffer();
+    display->sendBuffer();
+    display->setPowerSave(1);
+  }
+  display = nullptr;
+  i2c0Display.reset();
+  i2c1Display.reset();
+  softwareDisplay.reset();
+  if (displayWire) displayWire->end();
+  displayWire = nullptr;
+}
+
+void startHardwareI2c(TwoWire &wire, std::uint8_t sda, std::uint8_t scl) {
+  wire.setSDA(sda);
+  wire.setSCL(scl);
+  wire.begin();
+  wire.setClock(kOledI2cClockHz);
+  displayWire = &wire;
+}
 }  // namespace
 
 namespace platform {
@@ -54,6 +94,61 @@ bool sendHotkey(std::uint8_t modifiers, std::uint8_t keycode) {
         return keyboard.sendReport(0, &report, sizeof(report));
       },
       []() { delay(1); });
+}
+
+void configureDisplay(const std::optional<OledConfig> &config) {
+  stopDisplay();
+  lastDisplayFrame.reset();
+  if (!config.has_value()) return;
+
+  switch (selectRp2040OledBus(config->sda, config->scl)) {
+    case Rp2040OledBus::I2c0:
+      startHardwareI2c(Wire, config->sda, config->scl);
+      i2c0Display =
+          std::make_unique<U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C>(
+              U8G2_R0, U8X8_PIN_NONE);
+      display = i2c0Display.get();
+      break;
+    case Rp2040OledBus::I2c1:
+      startHardwareI2c(Wire1, config->sda, config->scl);
+      i2c1Display =
+          std::make_unique<U8G2_SSD1306_128X32_UNIVISION_F_2ND_HW_I2C>(
+              U8G2_R0, U8X8_PIN_NONE);
+      display = i2c1Display.get();
+      break;
+    case Rp2040OledBus::Software:
+      softwareDisplay =
+          std::make_unique<U8G2_SSD1306_128X32_UNIVISION_F_SW_I2C>(
+              U8G2_R0, config->scl, config->sda, U8X8_PIN_NONE);
+      display = softwareDisplay.get();
+      break;
+  }
+  display->setI2CAddress(kOledI2cAddress << 1U);
+  display->setBusClock(kOledI2cClockHz);
+  display->begin();
+  display->setFont(u8g2_font_6x13_tf);
+  display->clearBuffer();
+  display->sendBuffer();
+}
+
+void renderDisplay(const DisplayFrame &frame) {
+  if (!display || (lastDisplayFrame.has_value() &&
+                   *lastDisplayFrame == frame)) {
+    return;
+  }
+  display->clearBuffer();
+  for (std::size_t index = 0; index < kStatusBaselines.size(); ++index) {
+    display->drawStr(0, kStatusBaselines[index], frame.lines[index].c_str());
+  }
+  if (!frame.lines[2].empty()) {
+    const auto inputWidth = display->getStrWidth(frame.lines[2].c_str());
+    const auto inputX = inputWidth < kDisplayWidth
+                            ? static_cast<std::uint8_t>(kDisplayWidth - inputWidth)
+                            : 0;
+    display->drawStr(inputX, kInputBaseline, frame.lines[2].c_str());
+  }
+  display->sendBuffer();
+  lastDisplayFrame = frame;
 }
 
 void showRandomKeyColor() {

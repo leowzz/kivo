@@ -1,12 +1,15 @@
 #include <unity.h>
 
 #include "BoardProfile.h"
+#include "DisplayStatus.h"
 #include "GpioTriggerController.h"
 #include "Handshake.h"
 #include "InputTopology.h"
 #include "KeyActivityIndicator.h"
+#include "StandaloneDebugTopology.h"
 #include "TriggerProtocol.h"
 #include "platform/HidReportTransport.h"
+#include "platform/Rp2040OledBus.h"
 
 void setUp() {}
 void tearDown() {}
@@ -33,28 +36,116 @@ void test_commits_complete_matrix_topology_atomically() {
   TEST_ASSERT_EQUAL_UINT8(2, topology->matrices[0].rows.size());
 }
 
+void test_runtime_topology_counts_direct_and_matrix_keys() {
+  TopologyBuilder builder(kVccGndYdRp2040);
+  TEST_ASSERT_TRUE(builder.begin(8, 30));
+  TEST_ASSERT_TRUE(builder.addDirect(8, 0, {0, 1}));
+  TEST_ASSERT_TRUE(builder.addMatrix(8, 1, {2, 3}, {4, 5}));
+
+  const auto topology = builder.commit(8);
+
+  TEST_ASSERT_TRUE(topology.has_value());
+  TEST_ASSERT_EQUAL_UINT32(6, topology->keyCount());
+}
+
 void test_board_profiles_enforce_exact_safe_pins() {
   TEST_ASSERT_TRUE(kLuatOsEsp32S3Aio.supports(18));
   TEST_ASSERT_FALSE(kLuatOsEsp32S3Aio.supports(19));
   TEST_ASSERT_TRUE(kVccGndYdRp2040.supports(0));
   TEST_ASSERT_TRUE(kVccGndYdRp2040.supports(22));
-  for (std::uint8_t pin = 23; pin <= 29; ++pin) {
+  for (std::uint8_t pin = 23; pin <= 25; ++pin) {
     TEST_ASSERT_FALSE(kVccGndYdRp2040.supports(pin));
+  }
+  for (std::uint8_t pin = 26; pin <= 29; ++pin) {
+    TEST_ASSERT_TRUE(kVccGndYdRp2040.supports(pin));
   }
 
   TopologyBuilder rp2040(kVccGndYdRp2040);
   TEST_ASSERT_TRUE(rp2040.begin(1, 30));
-  TEST_ASSERT_TRUE(rp2040.addDirect(1, 0, {0, 22}));
+  TEST_ASSERT_TRUE(rp2040.addDirect(1, 0, {0, 22, 26, 27, 28, 29}));
 
   TopologyBuilder reserved(kVccGndYdRp2040);
   TEST_ASSERT_TRUE(reserved.begin(1, 30));
   TEST_ASSERT_FALSE(reserved.addDirect(1, 0, {23}));
 }
 
-void test_formats_protocol_v3_hello_with_board_and_build() {
+void test_board_profiles_report_oled_capability() {
+  TEST_ASSERT_FALSE(kLuatOsEsp32S3Aio.supportsOled);
+  TEST_ASSERT_TRUE(kVccGndYdRp2040.supportsOled);
+}
+
+void test_rp2040_standalone_debug_topology_matches_keyboard_wiring() {
+  const auto topology = makeRp2040StandaloneDebugTopology(kVccGndYdRp2040);
+
+  TEST_ASSERT_TRUE(topology.has_value());
+  TEST_ASSERT_EQUAL_UINT16(30, topology->debounceMs);
+  TEST_ASSERT_EQUAL_UINT32(18, topology->keyCount());
+  TEST_ASSERT_EQUAL_UINT32(1, topology->directs.size());
+  TEST_ASSERT_EQUAL_UINT8(0, topology->directs[0].index);
+  TEST_ASSERT_EQUAL_UINT32(18, topology->directs[0].pins.size());
+  for (std::uint8_t pin = 1; pin <= 18; ++pin) {
+    TEST_ASSERT_EQUAL_UINT8(pin, topology->directs[0].pins[pin - 1]);
+  }
+  TEST_ASSERT_TRUE(topology->matrices.empty());
+  TEST_ASSERT_TRUE(topology->oled.has_value());
+  TEST_ASSERT_EQUAL_UINT8(28, topology->oled->sda);
+  TEST_ASSERT_EQUAL_UINT8(29, topology->oled->scl);
+
+  TEST_ASSERT_FALSE(
+      makeRp2040StandaloneDebugTopology(kLuatOsEsp32S3Aio).has_value());
+}
+
+void test_rp2040_standalone_debug_accepts_only_matching_host_topology() {
+  const auto configured =
+      makeRp2040StandaloneDebugTopology(kVccGndYdRp2040);
+  TEST_ASSERT_TRUE(configured.has_value());
+  TEST_ASSERT_TRUE(acceptsRp2040StandaloneHostTopology(*configured));
+
+  auto differentRevision = *configured;
+  differentRevision.revision = 42;
+  TEST_ASSERT_TRUE(acceptsRp2040StandaloneHostTopology(differentRevision));
+
+  RuntimeTopology empty;
+  empty.revision = 43;
+  empty.debounceMs = 1000;
+  TEST_ASSERT_TRUE(acceptsRp2040StandaloneHostTopology(empty));
+
+  auto differentDebounce = *configured;
+  differentDebounce.debounceMs = 31;
+  TEST_ASSERT_FALSE(acceptsRp2040StandaloneHostTopology(differentDebounce));
+
+  auto missingInput = *configured;
+  missingInput.directs[0].pins.pop_back();
+  TEST_ASSERT_FALSE(acceptsRp2040StandaloneHostTopology(missingInput));
+
+  auto missingOled = *configured;
+  missingOled.oled.reset();
+  TEST_ASSERT_FALSE(acceptsRp2040StandaloneHostTopology(missingOled));
+}
+
+void test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match() {
+  TEST_ASSERT_EQUAL(platform::Rp2040OledBus::I2c0,
+                    platform::selectRp2040OledBus(28, 29));
+  TEST_ASSERT_EQUAL(platform::Rp2040OledBus::I2c1,
+                    platform::selectRp2040OledBus(26, 27));
+  TEST_ASSERT_EQUAL(platform::Rp2040OledBus::I2c0,
+                    platform::selectRp2040OledBus(4, 5));
+}
+
+void test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins() {
+  TEST_ASSERT_EQUAL(platform::Rp2040OledBus::Software,
+                    platform::selectRp2040OledBus(28, 27));
+  TEST_ASSERT_EQUAL(platform::Rp2040OledBus::Software,
+                    platform::selectRp2040OledBus(29, 28));
+  TEST_ASSERT_EQUAL(platform::Rp2040OledBus::Software,
+                    platform::selectRp2040OledBus(5, 6));
+}
+
+void test_formats_protocol_v4_hello_with_board_and_build() {
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 3 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 23 "
-      "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22\n",
+      "HELLO 4 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 27 "
+      "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 26 "
+      "27 28 29\n",
       formatHello(kVccGndYdRp2040, "0.1.0+gabc1234").c_str());
 }
 
@@ -107,18 +198,70 @@ void test_parses_runtime_configuration_commands() {
   TEST_ASSERT_EQUAL_UINT8(2, matrix->rows.size());
   TEST_ASSERT_EQUAL_UINT8(2, matrix->columns.size());
 
+  const auto oled = parseHelperCommand("CONFIG_OLED 3 4 5\n");
+  TEST_ASSERT_TRUE(oled.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::ConfigOled, oled->kind);
+  TEST_ASSERT_EQUAL_UINT32(3, oled->revision);
+  TEST_ASSERT_EQUAL_UINT8(4, oled->oledSda);
+  TEST_ASSERT_EQUAL_UINT8(5, oled->oledScl);
+
   const auto commit = parseHelperCommand("CONFIG_COMMIT 3\n");
   TEST_ASSERT_TRUE(commit.has_value());
   TEST_ASSERT_EQUAL(HelperCommandKind::ConfigCommit, commit->kind);
 }
 
+void test_oled_configuration_requires_supported_distinct_safe_pins() {
+  TopologyBuilder esp32(kLuatOsEsp32S3Aio);
+  TEST_ASSERT_TRUE(esp32.begin(1, 30));
+  TEST_ASSERT_FALSE(esp32.addOled(1, 4, 5));
+
+  TopologyBuilder rp2040(kVccGndYdRp2040);
+  TEST_ASSERT_TRUE(rp2040.begin(1, 30));
+  TEST_ASSERT_FALSE(rp2040.addOled(1, 4, 4));
+  TEST_ASSERT_FALSE(rp2040.addOled(1, 4, 23));
+  TEST_ASSERT_TRUE(rp2040.addOled(1, 28, 29));
+  const auto topology = rp2040.commit(1);
+  TEST_ASSERT_TRUE(topology.has_value());
+  TEST_ASSERT_TRUE(topology->oled.has_value());
+  TEST_ASSERT_EQUAL_UINT8(28, topology->oled->sda);
+  TEST_ASSERT_EQUAL_UINT8(29, topology->oled->scl);
+}
+
+void test_oled_pins_are_reserved_when_oled_command_arrives_first() {
+  TopologyBuilder builder(kVccGndYdRp2040);
+  TEST_ASSERT_TRUE(builder.begin(1, 30));
+  TEST_ASSERT_TRUE(builder.addOled(1, 4, 5));
+  TEST_ASSERT_FALSE(builder.addDirect(1, 0, {6, 5}));
+  TEST_ASSERT_TRUE(builder.addDirect(1, 0, {6}));
+
+  const auto topology = builder.commit(1);
+  TEST_ASSERT_TRUE(topology.has_value());
+  TEST_ASSERT_EQUAL_UINT8(1, topology->directs[0].pins.size());
+  TEST_ASSERT_EQUAL_UINT8(6, topology->directs[0].pins[0]);
+}
+
+void test_oled_pins_are_reserved_when_input_command_arrives_first() {
+  TopologyBuilder builder(kVccGndYdRp2040);
+  TEST_ASSERT_TRUE(builder.begin(1, 30));
+  TEST_ASSERT_TRUE(builder.addDirect(1, 0, {4}));
+  TEST_ASSERT_FALSE(builder.addOled(1, 5, 4));
+  TEST_ASSERT_TRUE(builder.addOled(1, 5, 6));
+
+  const auto topology = builder.commit(1);
+  TEST_ASSERT_TRUE(topology.has_value());
+  TEST_ASSERT_TRUE(topology->oled.has_value());
+  TEST_ASSERT_EQUAL_UINT8(5, topology->oled->sda);
+  TEST_ASSERT_EQUAL_UINT8(6, topology->oled->scl);
+}
+
 void test_parses_extended_registered_board_pin_domain() {
-  const auto direct = parseHelperCommand("CONFIG_DIRECT 3 0 5 10 11 19 20 22\n");
+  const auto direct = parseHelperCommand(
+      "CONFIG_DIRECT 3 0 9 10 11 19 20 22 26 27 28 29\n");
 
   TEST_ASSERT_TRUE(direct.has_value());
-  TEST_ASSERT_EQUAL_UINT8(5, direct->pins.size());
+  TEST_ASSERT_EQUAL_UINT8(9, direct->pins.size());
   TEST_ASSERT_EQUAL_UINT8(10, direct->pins[0]);
-  TEST_ASSERT_EQUAL_UINT8(22, direct->pins[4]);
+  TEST_ASSERT_EQUAL_UINT8(29, direct->pins[8]);
 
   TopologyBuilder esp32(kLuatOsEsp32S3Aio);
   TEST_ASSERT_TRUE(esp32.begin(3, 30));
@@ -130,12 +273,12 @@ void test_parses_extended_registered_board_pin_domain() {
 }
 
 void test_parser_defers_unsupported_pins_to_board_validation() {
-  const auto direct = parseHelperCommand("CONFIG_DIRECT 3 0 2 23 29\n");
+  const auto direct = parseHelperCommand("CONFIG_DIRECT 3 0 3 23 24 25\n");
 
   TEST_ASSERT_TRUE(direct.has_value());
-  TEST_ASSERT_EQUAL_UINT8(2, direct->pins.size());
+  TEST_ASSERT_EQUAL_UINT8(3, direct->pins.size());
   TEST_ASSERT_EQUAL_UINT8(23, direct->pins[0]);
-  TEST_ASSERT_EQUAL_UINT8(29, direct->pins[1]);
+  TEST_ASSERT_EQUAL_UINT8(25, direct->pins[2]);
 
   TopologyBuilder esp32(kLuatOsEsp32S3Aio);
   TEST_ASSERT_TRUE(esp32.begin(3, 30));
@@ -180,6 +323,11 @@ void test_rejects_malformed_runtime_commands() {
                         .has_value());
   TEST_ASSERT_FALSE(
       parseHelperCommand("LEARN_BEGIN 4 2 1 1\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("CONFIG_OLED 3 4\n").has_value());
+  TEST_ASSERT_FALSE(
+      parseHelperCommand("CONFIG_OLED 3 4 256\n").has_value());
+  TEST_ASSERT_FALSE(
+      parseHelperCommand("CONFIG_OLED 3 4 5 trailing\n").has_value());
   TEST_ASSERT_FALSE(parseHelperCommand("PASTE 9 0 2\n").has_value());
   TEST_ASSERT_FALSE(parseHelperCommand("HOTKEY 9 2 1 0 40\n").has_value());
   TEST_ASSERT_FALSE(parseHelperCommand(std::string(256, 'x')).has_value());
@@ -224,14 +372,93 @@ void test_learning_reports_contact_and_restores_runtime_topology() {
   TEST_ASSERT_EQUAL_UINT32(7, controller.topology().revision);
 }
 
-void test_rp2040_learning_accepts_gpio22_and_rejects_gpio23() {
+void test_rp2040_learning_accepts_gpio29_and_rejects_gpio23() {
   GpioTriggerController esp32(kLuatOsEsp32S3Aio, 0);
-  TEST_ASSERT_FALSE(esp32.beginLearning(4, {22}, 0));
+  TEST_ASSERT_FALSE(esp32.beginLearning(4, {29}, 0));
 
   GpioTriggerController rp2040(kVccGndYdRp2040, 0);
-  TEST_ASSERT_TRUE(rp2040.beginLearning(4, {22}, 0));
+  TEST_ASSERT_TRUE(rp2040.beginLearning(4, {29}, 0));
   TEST_ASSERT_TRUE(rp2040.endLearning(4, 1));
   TEST_ASSERT_FALSE(rp2040.beginLearning(5, {23}, 1));
+}
+
+void test_learning_rejects_active_oled_pins() {
+  TopologyBuilder builder(kVccGndYdRp2040);
+  TEST_ASSERT_TRUE(builder.begin(7, 30));
+  TEST_ASSERT_TRUE(builder.addDirect(7, 0, {6}));
+  TEST_ASSERT_TRUE(builder.addOled(7, 4, 5));
+  GpioTriggerController controller(kVccGndYdRp2040, 0);
+  controller.configure(*builder.commit(7), 0);
+
+  TEST_ASSERT_FALSE(controller.beginLearning(8, {4, 7}, 0));
+  TEST_ASSERT_FALSE(controller.beginLearning(8, {5, 7}, 0));
+  TEST_ASSERT_TRUE(controller.beginLearning(8, {7, 8}, 0));
+}
+
+void test_display_status_frames_have_two_sixteen_character_status_lines() {
+  DisplayStatusModel status;
+
+  auto frame = status.frame();
+  TEST_ASSERT_EQUAL_STRING("KIVO     USB OFF", frame.lines[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("WAITING CONFIG  ", frame.lines[1].c_str());
+  TEST_ASSERT_EQUAL_STRING("", frame.lines[2].c_str());
+
+  status.setUsbConnected(true);
+  status.setReady(18);
+  frame = status.frame();
+  TEST_ASSERT_EQUAL_STRING("KIVO      USB ON", frame.lines[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("READY    18 KEYS", frame.lines[1].c_str());
+
+  status.setLearning(18);
+  TEST_ASSERT_EQUAL_STRING("LEARNING 18 PINS",
+                           status.frame().lines[1].c_str());
+  status.setConfigError();
+  TEST_ASSERT_EQUAL_STRING("CONFIG ERROR    ",
+                           status.frame().lines[1].c_str());
+
+  for (std::size_t index = 0; index < 2; ++index) {
+    TEST_ASSERT_EQUAL_UINT32(16, status.frame().lines[index].size());
+  }
+}
+
+void test_standalone_debug_display_does_not_depend_on_usb_state() {
+  DisplayStatusModel status;
+  status.setStandaloneDebug();
+  status.setReady(18);
+
+  TEST_ASSERT_EQUAL_STRING("KIVO GPIO DEBUG ",
+                           status.frame().lines[0].c_str());
+  status.setUsbConnected(true);
+  TEST_ASSERT_EQUAL_STRING("KIVO GPIO DEBUG ",
+                           status.frame().lines[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("READY    18 KEYS",
+                           status.frame().lines[1].c_str());
+}
+
+void test_display_status_formats_last_direct_and_contact_edges() {
+  DisplayStatusModel status;
+
+  status.recordInput(InputEvent{1, 12, InputState::Down});
+  TEST_ASSERT_EQUAL_STRING("12 D", status.frame().lines[2].c_str());
+  status.recordInput(InputEvent{2, 12, InputState::Up});
+  TEST_ASSERT_EQUAL_STRING("12 U", status.frame().lines[2].c_str());
+  status.recordInput(InputEvent{3, 5, InputState::Down});
+  TEST_ASSERT_EQUAL_STRING("5 D", status.frame().lines[2].c_str());
+  status.recordInput(InputEvent{3, PhysicalInput::contact(0, 12, 1),
+                                InputState::Down});
+  TEST_ASSERT_EQUAL_STRING("1-12 D", status.frame().lines[2].c_str());
+  status.recordInput(InputEvent{4, PhysicalInput::contact(0, 1, 12),
+                                InputState::Up});
+  TEST_ASSERT_EQUAL_STRING("1-12 U", status.frame().lines[2].c_str());
+}
+
+void test_display_status_can_clear_stale_input_activity() {
+  DisplayStatusModel status;
+  status.recordInput(InputEvent{1, 5, InputState::Down});
+
+  status.clearLastInput();
+
+  TEST_ASSERT_EQUAL_STRING("", status.frame().lines[2].c_str());
 }
 
 void test_suppresses_new_contact_that_closes_a_ghost_cycle() {
@@ -509,19 +736,33 @@ void test_hid_hotkey_waits_for_press_and_release_report_slots() {
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_commits_complete_matrix_topology_atomically);
+  RUN_TEST(test_runtime_topology_counts_direct_and_matrix_keys);
   RUN_TEST(test_board_profiles_enforce_exact_safe_pins);
-  RUN_TEST(test_formats_protocol_v3_hello_with_board_and_build);
+  RUN_TEST(test_board_profiles_report_oled_capability);
+  RUN_TEST(test_rp2040_standalone_debug_topology_matches_keyboard_wiring);
+  RUN_TEST(test_rp2040_standalone_debug_accepts_only_matching_host_topology);
+  RUN_TEST(test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match);
+  RUN_TEST(test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins);
+  RUN_TEST(test_formats_protocol_v4_hello_with_board_and_build);
   RUN_TEST(test_rejects_empty_firmware_build_id);
   RUN_TEST(test_rejects_whitespace_in_firmware_build_id);
   RUN_TEST(test_contact_edge_reports_unordered_pair_once_after_debounce);
   RUN_TEST(test_parses_runtime_configuration_commands);
+  RUN_TEST(test_oled_configuration_requires_supported_distinct_safe_pins);
+  RUN_TEST(test_oled_pins_are_reserved_when_oled_command_arrives_first);
+  RUN_TEST(test_oled_pins_are_reserved_when_input_command_arrives_first);
   RUN_TEST(test_parses_extended_registered_board_pin_domain);
   RUN_TEST(test_parser_defers_unsupported_pins_to_board_validation);
   RUN_TEST(test_parses_learning_and_ordered_action_commands);
   RUN_TEST(test_rejects_malformed_runtime_commands);
   RUN_TEST(test_action_steps_are_strictly_ordered);
   RUN_TEST(test_learning_reports_contact_and_restores_runtime_topology);
-  RUN_TEST(test_rp2040_learning_accepts_gpio22_and_rejects_gpio23);
+  RUN_TEST(test_rp2040_learning_accepts_gpio29_and_rejects_gpio23);
+  RUN_TEST(test_learning_rejects_active_oled_pins);
+  RUN_TEST(test_display_status_frames_have_two_sixteen_character_status_lines);
+  RUN_TEST(test_standalone_debug_display_does_not_depend_on_usb_state);
+  RUN_TEST(test_display_status_formats_last_direct_and_contact_edges);
+  RUN_TEST(test_display_status_can_clear_stale_input_activity);
   RUN_TEST(test_suppresses_new_contact_that_closes_a_ghost_cycle);
   RUN_TEST(test_exposes_supported_gpio_inputs);
   RUN_TEST(test_stable_edges_emit_once_after_debounce);
