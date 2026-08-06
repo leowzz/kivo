@@ -198,15 +198,6 @@ impl FakeEndpoint {
             thread::sleep(Duration::from_millis(1));
         }
     }
-
-    fn config_revision(&self) -> u32 {
-        self.wait_for_line(|line| line.starts_with("CONFIG_BEGIN "))
-            .split_whitespace()
-            .nth(1)
-            .unwrap()
-            .parse()
-            .unwrap()
-    }
 }
 
 struct FakeTransport {
@@ -437,7 +428,7 @@ fn board(id: &str) -> &'static BoardProfile {
 
 fn hello(board: &BoardProfile, build: &str) -> String {
     format!(
-        "HELLO 3 {} {} {} {} {}\n",
+        "HELLO 4 {} {} {} {} {}\n",
         board.family_id,
         board.id,
         build,
@@ -502,6 +493,7 @@ fn profile(
             name: hardware_id.into(),
             board_profile_id: board_id.into(),
             debounce_ms: 30,
+            ssd1306: None,
             inputs: vec![InputSource::Direct {
                 id: "direct".into(),
                 keys: BTreeMap::from([("HOT".into(), hot_pin), ("PASTE".into(), paste_pin)]),
@@ -756,16 +748,22 @@ fn four_concurrent_devices_keep_runtime_and_global_paste_isolated() {
         coordinator.apply_workspace_revision(WorkspaceRevision::capture(&workspace));
     }
     for (serial, endpoint) in &endpoints {
-        let revision = endpoint.config_revision();
         let (_, _, _, _, _, hot_pin, paste_pin) = specs
             .iter()
             .find(|(expected, ..)| expected == serial)
             .unwrap();
+        let suffix = format!(" 0 2 {hot_pin} {paste_pin}\n");
+        let direct = endpoint
+            .wait_for_line(|line| line.starts_with("CONFIG_DIRECT ") && line.ends_with(&suffix));
+        let revision = direct
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .parse::<u32>()
+            .unwrap();
         let lines = endpoint.lines();
         assert!(lines.contains(&format!("CONFIG_BEGIN {revision} 30\n")));
-        assert!(lines.contains(&format!(
-            "CONFIG_DIRECT {revision} 0 2 {hot_pin} {paste_pin}\n"
-        )));
+        assert_eq!(direct, format!("CONFIG_DIRECT {revision}{suffix}"));
         assert!(lines.contains(&format!("CONFIG_COMMIT {revision}\n")));
         endpoint.emit(&format!("CONFIG_OK {revision}\n"));
         assert!(
@@ -860,7 +858,13 @@ fn four_concurrent_devices_keep_runtime_and_global_paste_isolated() {
             status.raw_serial == "ESP-A" && status.runtime == RuntimeDimension::Configuring
         })
     });
-    let revision = esp_a_reconnected.config_revision();
+    let direct = esp_a_reconnected.wait_for_line(|line| line.starts_with("CONFIG_DIRECT "));
+    let revision = direct
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .parse::<u32>()
+        .unwrap();
     esp_a_reconnected.emit(&format!("CONFIG_OK {revision}\n"));
     wait_until(&mut coordinator, |coordinator| {
         ready_count(coordinator) == 4
@@ -870,7 +874,7 @@ fn four_concurrent_devices_keep_runtime_and_global_paste_isolated() {
     let esp_b = &endpoints["ESP-B"];
     esp_b.emit(&hello(esp, "build-ESP-B"));
     let second_revision = esp_b
-        .wait_for_line(|line| line.starts_with("CONFIG_BEGIN 2 "))
+        .wait_for_line(|line| line.starts_with("CONFIG_BEGIN 3 "))
         .split_whitespace()
         .nth(1)
         .unwrap()
@@ -884,8 +888,8 @@ fn four_concurrent_devices_keep_runtime_and_global_paste_isolated() {
             })
     });
     esp_b.emit(&hello(esp, "build-ESP-B"));
-    esp_b.wait_for_line(|line| line.starts_with("CONFIG_BEGIN 3 "));
-    esp_b.emit("CONFIG_OK 3\n");
+    esp_b.wait_for_line(|line| line.starts_with("CONFIG_BEGIN 4 "));
+    esp_b.emit("CONFIG_OK 4\n");
     wait_until(&mut coordinator, |coordinator| {
         ready_count(coordinator) == 4
     });

@@ -17,22 +17,27 @@ bool PhysicalInput::operator==(const PhysicalInput &other) const {
          pinA == other.pinA && pinB == other.pinB;
 }
 
+std::size_t RuntimeTopology::keyCount() const {
+  std::size_t count = 0;
+  for (const auto &source : directs) count += source.pins.size();
+  for (const auto &source : matrices) {
+    count += source.rows.size() * source.columns.size();
+  }
+  return count;
+}
+
 bool TopologyBuilder::begin(std::uint32_t revision,
                             std::uint16_t debounceMs) {
   if (debounceMs == 0 || debounceMs > 1000) return false;
-  pending_ = RuntimeTopology{revision, debounceMs, {}, {}};
+  pending_ = RuntimeTopology{revision, debounceMs, {}, {}, std::nullopt};
   sourceIndices_.clear();
   ownedPins_.clear();
   return true;
 }
 
-bool TopologyBuilder::addPins(std::uint8_t sourceIndex,
-                              const std::vector<std::uint8_t> &pins) {
-  if (!pending_.has_value() || pins.empty() ||
-      std::find(sourceIndices_.begin(), sourceIndices_.end(), sourceIndex) !=
-          sourceIndices_.end()) {
-    return false;
-  }
+bool TopologyBuilder::pinsAvailable(
+    const std::vector<std::uint8_t> &pins) const {
+  if (pins.empty()) return false;
   for (const auto pin : pins) {
     if (!profile_.supports(pin) ||
         std::find(ownedPins_.begin(), ownedPins_.end(), pin) !=
@@ -41,8 +46,32 @@ bool TopologyBuilder::addPins(std::uint8_t sourceIndex,
       return false;
     }
   }
+  return true;
+}
+
+bool TopologyBuilder::addPins(std::uint8_t sourceIndex,
+                              const std::vector<std::uint8_t> &pins) {
+  if (!pending_.has_value() ||
+      std::find(sourceIndices_.begin(), sourceIndices_.end(), sourceIndex) !=
+          sourceIndices_.end() ||
+      !pinsAvailable(pins)) {
+    return false;
+  }
   sourceIndices_.push_back(sourceIndex);
   ownedPins_.insert(ownedPins_.end(), pins.begin(), pins.end());
+  return true;
+}
+
+bool TopologyBuilder::addOled(std::uint32_t revision, std::uint8_t sda,
+                              std::uint8_t scl) {
+  const std::vector<std::uint8_t> pins{sda, scl};
+  if (!pending_.has_value() || pending_->revision != revision ||
+      !profile_.supportsOled || pending_->oled.has_value() ||
+      !pinsAvailable(pins)) {
+    return false;
+  }
+  ownedPins_.insert(ownedPins_.end(), pins.begin(), pins.end());
+  pending_->oled = OledConfig{sda, scl};
   return true;
 }
 

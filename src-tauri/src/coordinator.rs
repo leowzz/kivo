@@ -851,6 +851,9 @@ impl RuntimeCoordinator {
                     if activity.code == "topology_active" {
                         status.runtime = RuntimeDimension::Ready;
                         status.latest_error = None;
+                    } else if activity.code == "topology_cleared" {
+                        status.runtime = RuntimeDimension::Inactive;
+                        status.latest_error = None;
                     } else if activity.code == "topology_rejected"
                         || activity.code.ends_with("failed")
                         || activity.code.ends_with("mismatch")
@@ -967,15 +970,11 @@ impl RuntimeCoordinator {
                 RuntimeDimension::Inactive
             };
         }
-        if profile.is_some() {
-            if let Err(error) = self.reconfigure_worker(&device_id, profile.map(Arc::new))
-                && let Some(status) = self.devices.get_mut(&device_id)
-            {
-                status.runtime = RuntimeDimension::RuntimeError;
-                status.latest_error = Some(runtime_error(error));
-            }
-        } else if let Some(slot) = self.workers.get(&device_id) {
-            let _ = slot.worker.send(WorkerCommand::UpdateSnapshot(None));
+        if let Err(error) = self.reconfigure_worker(&device_id, profile.map(Arc::new))
+            && let Some(status) = self.devices.get_mut(&device_id)
+        {
+            status.runtime = RuntimeDimension::RuntimeError;
+            status.latest_error = Some(runtime_error(error));
         }
         self.candidates
             .retain(|candidate| candidate.device_id.as_ref() != Some(&device_id));
@@ -1368,7 +1367,8 @@ impl RuntimeCoordinator {
 
 fn activity_level(code: &str) -> EventLevel {
     match code {
-        "topology_active" | "input_state" | "learning_ready" | "learning_input" => EventLevel::Info,
+        "topology_active" | "topology_cleared" | "input_state" | "learning_ready"
+        | "learning_input" => EventLevel::Info,
         "input_before_configuration"
         | "unexpected_action_acknowledgement"
         | "unmapped_input"
@@ -1829,7 +1829,7 @@ mod tests {
         launcher.set_hello(
             "/dev/a",
             HelloCapabilities {
-                protocol: 3,
+                protocol: 4,
                 controller_family_id: "wrong-family".into(),
                 board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
                 firmware_build_id: "bad".into(),
@@ -2097,6 +2097,7 @@ mod tests {
                 name: "ESP".into(),
                 board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
                 debounce_ms: 30,
+                ssd1306: None,
                 inputs: Vec::new(),
             }],
             actions: BTreeMap::new(),
@@ -2142,7 +2143,7 @@ mod tests {
     fn hello_for(start: &WorkerStart) -> HelloCapabilities {
         let board = crate::hardware::board_by_id(start.device_id.board_profile_id()).unwrap();
         HelloCapabilities {
-            protocol: 3,
+            protocol: 4,
             controller_family_id: board.family_id.into(),
             board_profile_id: board.id.into(),
             firmware_build_id: "test-build".into(),
@@ -2195,7 +2196,7 @@ mod tests {
         launcher.set_hello(
             &port,
             HelloCapabilities {
-                protocol: 3,
+                protocol: 4,
                 controller_family_id: board.family_id.into(),
                 board_profile_id: board.id.into(),
                 firmware_build_id: "fixture-build".into(),
@@ -2329,6 +2330,58 @@ mod tests {
     }
 
     #[test]
+    fn validated_hello_uses_one_worker_revision_for_clear_or_persisted_assignment() {
+        let directory = TestDirectory::new();
+        let mut workspace = Workspace::create(&directory.0, vec![profile()]).unwrap();
+        let unassigned =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "UNASSIGNED").unwrap();
+        let assigned =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ASSIGNED").unwrap();
+        workspace.enroll_device(unassigned.clone()).unwrap();
+        workspace.enroll_device(assigned.clone()).unwrap();
+        workspace
+            .set_assignment(
+                &assigned,
+                RuntimeAssignment {
+                    device_profile_id: "red-phone-v1".into(),
+                    hardware_profile_id: "esp".into(),
+                },
+            )
+            .unwrap();
+        let enumerator = Arc::new(FakeEnumerator::default());
+        let launcher = Arc::new(FakeLauncher::default());
+        let mut coordinator = RuntimeCoordinator::new(
+            enumerator.clone(),
+            launcher.clone(),
+            Arc::new(RwLock::new(workspace)),
+        );
+        enumerator.set(
+            vec![
+                serial("/dev/unassigned", 0x303a, 0x4002, Some("UNASSIGNED")),
+                serial("/dev/assigned", 0x303a, 0x4002, Some("ASSIGNED")),
+            ],
+            Vec::new(),
+        );
+
+        scan(&mut coordinator);
+
+        assert!(matches!(
+            launcher.commands_for(&unassigned).as_slice(),
+            [WorkerCommand::Reconfigure {
+                snapshot: None,
+                revision: 1,
+            }]
+        ));
+        assert!(matches!(
+            launcher.commands_for(&assigned).as_slice(),
+            [WorkerCommand::Reconfigure {
+                snapshot: Some(_),
+                revision: 1,
+            }]
+        ));
+    }
+
+    #[test]
     fn second_rp2040_board_traverses_injected_registry_domain_flow() {
         assert_eq!(
             exercise_registry_board(
@@ -2402,7 +2455,7 @@ mod tests {
         let mut session = DeviceSession::new((*old_snapshot).clone());
         session.on_message_deferred(
             DeviceMessage::Hello(HelloCapabilities {
-                protocol: 3,
+                protocol: 4,
                 controller_family_id: board.family_id.into(),
                 board_profile_id: board.id.into(),
                 firmware_build_id: "test".into(),
@@ -2605,7 +2658,7 @@ mod tests {
         let board = crate::hardware::board_by_id(device_id.board_profile_id()).unwrap();
         session.on_message_deferred(
             DeviceMessage::Hello(HelloCapabilities {
-                protocol: 3,
+                protocol: 4,
                 controller_family_id: board.family_id.into(),
                 board_profile_id: board.id.into(),
                 firmware_build_id: "test".into(),
@@ -2914,7 +2967,7 @@ mod tests {
         launcher.set_hello(
             "/dev/bad-hello",
             HelloCapabilities {
-                protocol: 3,
+                protocol: 4,
                 controller_family_id: "wrong-family".into(),
                 board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
                 firmware_build_id: "bad".into(),
@@ -2956,7 +3009,7 @@ mod tests {
             generation: 1,
             device_id: id,
             capabilities: HelloCapabilities {
-                protocol: 3,
+                protocol: 4,
                 controller_family_id: board.family_id.into(),
                 board_profile_id: board.id.into(),
                 firmware_build_id: "stale".into(),
@@ -3142,6 +3195,70 @@ mod tests {
     }
 
     #[test]
+    fn topology_cleared_activity_leaves_the_unassigned_device_inactive() {
+        let (_directory, enumerator, launcher, mut coordinator) = harness();
+        enumerator.set(
+            vec![serial("/dev/a", 0x303a, 0x4002, Some("A"))],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+        let id = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "A").unwrap();
+        {
+            let mut workspace = coordinator.workspace.write().unwrap();
+            workspace
+                .set_assignment(
+                    &id,
+                    RuntimeAssignment {
+                        device_profile_id: "red-phone-v1".into(),
+                        hardware_profile_id: "esp".into(),
+                    },
+                )
+                .unwrap();
+        }
+        coordinator.sync_profiles();
+        launcher.clear_commands();
+        coordinator
+            .workspace
+            .write()
+            .unwrap()
+            .clear_assignment(&id)
+            .unwrap();
+        coordinator.sync_profiles();
+
+        let commands = launcher.commands_for(&id);
+        let [
+            WorkerCommand::Reconfigure {
+                snapshot: None,
+                revision: _,
+            },
+        ] = commands.as_slice()
+        else {
+            panic!("expected clear reconfiguration: {commands:?}");
+        };
+        assert_eq!(
+            coordinator.devices.get(&id).unwrap().runtime,
+            RuntimeDimension::Inactive
+        );
+
+        coordinator.devices.get_mut(&id).unwrap().runtime = RuntimeDimension::Ready;
+        let event = coordinator
+            .handle_worker_event(WorkerEvent::Activity {
+                generation: 1,
+                device_id: id.clone(),
+                context: RuntimeEventContext::unassigned(100),
+                activity: RuntimeActivity::new("topology_cleared"),
+            })
+            .unwrap();
+
+        assert_eq!(event.level, EventLevel::Info);
+        assert_eq!(
+            coordinator.devices.get(&id).unwrap().runtime,
+            RuntimeDimension::Inactive
+        );
+        assert!(coordinator.devices.get(&id).unwrap().latest_error.is_none());
+    }
+
+    #[test]
     fn live_update_topology_targets_exact_hardware_with_independent_nonzero_revisions() {
         let (_directory, enumerator, launcher, mut coordinator) = harness();
         let mut expanded = profile();
@@ -3150,6 +3267,7 @@ mod tests {
             name: "ESP secondary".into(),
             board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
             debounce_ms: 30,
+            ssd1306: None,
             inputs: Vec::new(),
         });
         coordinator

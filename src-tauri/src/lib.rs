@@ -169,6 +169,7 @@ struct BoardProfileSummary {
     display_name: String,
     runtime_usb: String,
     bootloader_usb: Option<String>,
+    supports_oled: bool,
     safe_pins: Vec<u8>,
 }
 
@@ -185,6 +186,7 @@ impl From<&BoardProfile> for BoardProfileSummary {
             bootloader_usb: board
                 .bootloader_usb
                 .map(|usb| format!("{:04x}:{:04x}", usb.vid, usb.pid)),
+            supports_oled: board.supports_oled,
             safe_pins: board.safe_pins.to_vec(),
         }
     }
@@ -939,6 +941,18 @@ mod tests {
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
     #[test]
+    fn board_summaries_report_ssd1306_support() {
+        let summaries = BOARD_PROFILES
+            .iter()
+            .map(BoardProfileSummary::from)
+            .map(|summary| serde_json::to_value(summary).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(summaries[0]["supportsOled"], false);
+        assert_eq!(summaries[1]["supportsOled"], true);
+    }
+
+    #[test]
     fn runtime_event_polling_stays_within_interactive_latency_budget() {
         assert!(
             RUNTIME_EVENT_POLL_INTERVAL + crate::device::SERIAL_COMMAND_POLL_INTERVAL
@@ -1080,6 +1094,7 @@ mod tests {
                 name: "ESP primary".into(),
                 board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
                 debounce_ms: 30,
+                ssd1306: None,
                 inputs: vec![InputSource::Direct {
                     id: "direct".into(),
                     keys: BTreeMap::from([("UP".into(), 6)]),
@@ -1282,7 +1297,7 @@ mod tests {
                     generation: start.generation,
                     device_id: start.device_id.clone(),
                     capabilities: protocol::HelloCapabilities {
-                        protocol: 3,
+                        protocol: 4,
                         controller_family_id: board.family_id.into(),
                         board_profile_id: board.id.into(),
                         firmware_build_id: "restore-test".into(),
@@ -1336,7 +1351,7 @@ mod tests {
                     generation: start.generation,
                     device_id: start.device_id.clone(),
                     capabilities: protocol::HelloCapabilities {
-                        protocol: 3,
+                        protocol: 4,
                         controller_family_id: board.family_id.into(),
                         board_profile_id: board.id.into(),
                         firmware_build_id: "save-test".into(),
@@ -1403,7 +1418,7 @@ mod tests {
         assert_eq!(rp2040["bootloaderUsb"], "2e8a:0003");
         assert_eq!(
             rp2040["safePins"],
-            serde_json::to_value((0_u8..=22).collect::<Vec<_>>()).unwrap()
+            serde_json::to_value((0_u8..=22).chain(26..=29).collect::<Vec<_>>()).unwrap()
         );
     }
 

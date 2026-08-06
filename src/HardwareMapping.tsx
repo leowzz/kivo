@@ -1,4 +1,4 @@
-import { Cable, Copy, LayoutGrid, Pencil, Plus, Radio, SquareStop, Trash2 } from "lucide-react";
+import { Cable, Copy, LayoutGrid, Monitor, Pencil, Plus, Radio, SquareStop, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { editablePins as selectEditablePins } from "./deviceStatus";
@@ -51,8 +51,27 @@ function uniqueName(base: string, existing: Set<string>) {
 function boardSafePins(board: BoardProfileSummary | undefined) {
   if (!board) return [];
   return board.id === "vccgnd-yd-rp2040"
-    ? board.safePins.filter((pin) => pin >= 0 && pin <= 22)
+    ? board.safePins.filter((pin) => pin >= 0 && (pin <= 22 || (pin >= 26 && pin <= 29)))
     : board.safePins;
+}
+
+function ownedInputPins(hardware: HardwareProfile) {
+  return hardware.inputs.flatMap((source) =>
+    source.type === "direct" ? Object.values(source.keys) : source.pins
+  );
+}
+
+function conflictingPins(hardware: HardwareProfile) {
+  const counts = new Map<number, number>();
+  const add = (pin: number) => counts.set(pin, (counts.get(pin) ?? 0) + 1);
+  ownedInputPins(hardware).forEach(add);
+  if (hardware.ssd1306) {
+    add(hardware.ssd1306.sda);
+    add(hardware.ssd1306.scl);
+  }
+  return new Set(
+    [...counts.entries()].filter(([, count]) => count > 1).map(([pin]) => pin),
+  );
 }
 
 function invalidBoardPins(hardware: HardwareProfile, boardProfiles: readonly BoardProfileSummary[]) {
@@ -79,19 +98,45 @@ function hasInvalidContactPair(hardware: HardwareProfile) {
   );
 }
 
+function hasInvalidOled(
+  hardware: HardwareProfile,
+  board: BoardProfileSummary | undefined,
+) {
+  if (!hardware.ssd1306) return false;
+  if (!board?.supportsOled) return true;
+  const safe = new Set(boardSafePins(board));
+  return !safe.has(hardware.ssd1306.sda) || !safe.has(hardware.ssd1306.scl);
+}
+
 export function hardwareProfilesAreValid(
   profiles: readonly HardwareProfile[],
   boardProfiles: readonly BoardProfileSummary[],
 ) {
-  return profiles.every((profile) =>
-    boardProfiles.some(({ id }) => id === profile.board_profile_id) &&
-    invalidBoardPins(profile, boardProfiles).size === 0 &&
-    !hasInvalidContactPair(profile)
-  );
+  return profiles.every((profile) => {
+    const board = boardProfiles.find(({ id }) => id === profile.board_profile_id);
+    return Boolean(board) &&
+      invalidBoardPins(profile, boardProfiles).size === 0 &&
+      conflictingPins(profile).size === 0 &&
+      !hasInvalidContactPair(profile) &&
+      !hasInvalidOled(profile, board);
+  });
 }
 
 function invalidMessage(language: Language, pins: readonly number[]) {
   return t(language, "hardware.invalidPins", { pins: pins.join(language === "zh-CN" ? "、" : ", ") });
+}
+
+function conflictMessage(language: Language, pin: number) {
+  return t(language, "hardware.pinConflict", { pin });
+}
+
+function pinOptions(
+  current: number,
+  candidates: readonly number[],
+  excluded: ReadonlySet<number>,
+) {
+  const available = candidates.filter((pin) => !excluded.has(pin));
+  return available.includes(current) ? available : [current, ...available];
 }
 
 export function HardwareMapping({
@@ -145,6 +190,22 @@ export function HardwareMapping({
     () => hardware ? invalidBoardPins(hardware, boardProfiles) : new Set<number>(),
     [boardProfiles, hardware],
   );
+  const conflicts = useMemo(
+    () => hardware ? conflictingPins(hardware) : new Set<number>(),
+    [hardware],
+  );
+  const inputPins = useMemo(
+    () => new Set(hardware ? ownedInputPins(hardware) : []),
+    [hardware],
+  );
+  const oledPins = useMemo(
+    () => new Set(hardware?.ssd1306
+      ? [hardware.ssd1306.sda, hardware.ssd1306.scl]
+      : []),
+    [hardware],
+  );
+  const oledAvailablePins = editablePins.filter((pin) => !inputPins.has(pin));
+  const learningPins = editablePins.filter((pin) => !oledPins.has(pin));
   const buttons = layout.groups.flatMap((group) => group.buttons);
 
   useEffect(() => {
@@ -379,6 +440,75 @@ export function HardwareMapping({
             </label>
           </div>
 
+          <section className="oled-editor" aria-label={t(language, "hardware.oled")}>
+            <div className="oled-summary">
+              <Monitor size={16} />
+              <label className="oled-toggle">
+                <input
+                  type="checkbox"
+                  checked={Boolean(hardware.ssd1306)}
+                  disabled={!hardware.ssd1306 && (!board?.supportsOled || oledAvailablePins.length < 2)}
+                  onChange={(event) => {
+                    if (event.target.checked) {
+                      const [sda, scl] = oledAvailablePins;
+                      if (sda === undefined || scl === undefined) return;
+                      replaceHardware({ ...hardware, ssd1306: { sda, scl } });
+                    } else {
+                      const next = { ...hardware };
+                      delete next.ssd1306;
+                      replaceHardware(next);
+                    }
+                  }}
+                />
+                <span>{t(language, "hardware.oled")}</span>
+              </label>
+              <code>{t(language, "hardware.oledFormat")}</code>
+            </div>
+            {hardware.ssd1306 && ([
+              ["sda", t(language, "hardware.oledSda")],
+              ["scl", t(language, "hardware.oledScl")],
+            ] as const).map(([field, label]) => {
+              const current = hardware.ssd1306?.[field] ?? 0;
+              const counterpart = hardware.ssd1306?.[field === "sda" ? "scl" : "sda"];
+              const excluded = new Set(inputPins);
+              if (counterpart !== undefined) excluded.add(counterpart);
+              const unsafe = !new Set(boardSafePins(board)).has(current);
+              const unsupported = !board?.supportsOled;
+              const conflict = conflicts.has(current);
+              const currentInvalid = unsupported || unsafe || conflict;
+              return (
+                <label className="oled-pin-field" key={field}>
+                  <span>{label}</span>
+                  <select
+                    aria-label={label}
+                    aria-invalid={currentInvalid}
+                    value={current}
+                    onChange={(event) => replaceHardware({
+                      ...hardware,
+                      ssd1306: {
+                        ...hardware.ssd1306!,
+                        [field]: Number(event.target.value),
+                      },
+                    })}
+                  >
+                    {pinOptions(current, editablePins, excluded).map((pin) => (
+                      <option value={pin} key={pin}>{pin}</option>
+                    ))}
+                  </select>
+                  {currentInvalid && (
+                    <small className="field-error">
+                      {unsupported
+                        ? t(language, "hardware.oledUnsupported")
+                        : conflict
+                          ? conflictMessage(language, current)
+                          : invalidMessage(language, [current])}
+                    </small>
+                  )}
+                </label>
+              );
+            })}
+          </section>
+
           <div className="source-list">
             {hardware.inputs.map((source, sourceIndex) => (
               <section className="source-editor" key={`${source.type}-${source.id}`}>
@@ -398,11 +528,14 @@ export function HardwareMapping({
 
                 {source.type === "contact_matrix" && (() => {
                   const invalidSourcePins = source.pins.filter((pin) => invalid.has(pin));
+                  const conflictingSourcePins = [...new Set(
+                    source.pins.filter((pin) => conflicts.has(pin)),
+                  )];
                   return (
                     <label className="field-stack compact-field">
                       <span>{t(language, "hardware.matrixPins")}</span>
                       <input
-                        aria-invalid={invalidSourcePins.length > 0}
+                        aria-invalid={invalidSourcePins.length > 0 || conflictingSourcePins.length > 0}
                         value={source.pins.join(", ")}
                         onChange={(event) => {
                           const pins = [...new Set(event.target.value.split(",")
@@ -419,6 +552,9 @@ export function HardwareMapping({
                         }}
                       />
                       {invalidSourcePins.length > 0 && <small className="field-error">{invalidMessage(language, invalidSourcePins)}</small>}
+                      {conflictingSourcePins.map((pin) => (
+                        <small className="field-error" key={pin}>{conflictMessage(language, pin)}</small>
+                      ))}
                     </label>
                   );
                 })()}
@@ -433,9 +569,11 @@ export function HardwareMapping({
                       <button type="button" onClick={() => onSelectButton(button.id)}>{button.label}</button>
                       {source.type === "direct" ? (() => {
                         const current = source.keys[button.id];
-                        const currentInvalid = current !== undefined && invalid.has(current);
-                        const currentStale = current !== undefined && !editablePins.includes(current);
-                        const options = currentStale ? [current, ...editablePins] : editablePins;
+                        const currentInvalid = current !== undefined &&
+                          (invalid.has(current) || conflicts.has(current));
+                        const availableInputPins = editablePins.filter((pin) => !oledPins.has(pin));
+                        const currentStale = current !== undefined && !availableInputPins.includes(current);
+                        const options = currentStale ? [current, ...availableInputPins] : availableInputPins;
                         return (
                           <div className="mapping-control">
                             <select
@@ -452,7 +590,13 @@ export function HardwareMapping({
                               <option value="">-</option>
                               {options.map((pin) => <option value={pin} key={pin}>{pin}</option>)}
                             </select>
-                            {currentInvalid && <small className="field-error">{invalidMessage(language, [current])}</small>}
+                            {currentInvalid && (
+                              <small className="field-error">
+                                {conflicts.has(current)
+                                  ? conflictMessage(language, current)
+                                  : invalidMessage(language, [current])}
+                              </small>
+                            )}
                           </div>
                         );
                       })() : (
@@ -460,10 +604,11 @@ export function HardwareMapping({
                           {[0, 1].map((side) => {
                             const current = source.keys[button.id]?.[side];
                             const currentInvalid = current !== undefined &&
-                              (invalid.has(current) || !source.pins.includes(current));
-                            const options = current !== undefined && !source.pins.includes(current)
-                              ? [current, ...source.pins]
-                              : source.pins;
+                              (invalid.has(current) || conflicts.has(current) || !source.pins.includes(current));
+                            const availableSourcePins = source.pins.filter((pin) => !oledPins.has(pin));
+                            const options = current !== undefined && !availableSourcePins.includes(current)
+                              ? [current, ...availableSourcePins]
+                              : availableSourcePins;
                             return (
                               <select
                                 aria-label={`${button.label} ${side === 0 ? "A" : "B"}`}
@@ -476,7 +621,7 @@ export function HardwareMapping({
                                   if (event.target.value === "") delete keys[button.id];
                                   else {
                                     const selected = Number(event.target.value);
-                                    const other = currentPair?.[side === 0 ? 1 : 0] ?? source.pins.find((pin) => pin !== selected);
+                                    const other = currentPair?.[side === 0 ? 1 : 0] ?? availableSourcePins.find((pin) => pin !== selected);
                                     if (other !== undefined && other !== selected) {
                                       keys[button.id] = selected < other ? [selected, other] : [other, selected];
                                     }
@@ -530,7 +675,7 @@ export function HardwareMapping({
               <fieldset>
                 <legend>{t(language, "hardware.candidatePins")}</legend>
                 <div className="pin-grid">
-                  {editablePins.map((gpio) => (
+                  {learningPins.map((gpio) => (
                     <label key={gpio}><input aria-label={`GPIO ${gpio}`} type="checkbox" name="learning-pin" value={gpio} />{gpio}</label>
                   ))}
                 </div>
