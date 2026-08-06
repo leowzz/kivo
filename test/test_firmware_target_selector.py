@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime
 from io import StringIO
 
+import scripts.select_firmware_target as target_selector
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
@@ -203,6 +204,45 @@ def test_inventory_error_blocks_confirmation_of_stale_selection() -> None:
 
     assert confirmation_serial(tracker, inventory_error=None) == "SERIAL-A"
     assert confirmation_serial(tracker, inventory_error="scan failed") is None
+
+
+def test_windows_xterm_uses_vt100_output(monkeypatch) -> None:
+    stderr = FakeTerminal(is_tty=True)
+    expected_output = DummyOutput()
+    vt100_calls = []
+
+    monkeypatch.setattr(target_selector.sys, "platform", "win32")
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setattr(
+        target_selector.Vt100_Output,
+        "from_pty",
+        lambda stream, term: vt100_calls.append((stream, term)) or expected_output,
+    )
+    monkeypatch.setattr(
+        target_selector,
+        "create_output",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError(kwargs)),
+    )
+
+    assert target_selector.create_picker_output(stderr) is expected_output
+    assert vt100_calls == [(stderr, "xterm-256color")]
+
+
+def test_windows_native_terminal_uses_default_output(monkeypatch) -> None:
+    stderr = FakeTerminal(is_tty=True)
+    expected_output = DummyOutput()
+    default_calls = []
+
+    monkeypatch.setattr(target_selector.sys, "platform", "win32")
+    monkeypatch.delenv("TERM", raising=False)
+    monkeypatch.setattr(
+        target_selector,
+        "create_output",
+        lambda **kwargs: default_calls.append(kwargs) or expected_output,
+    )
+
+    assert target_selector.create_picker_output(stderr) is expected_output
+    assert default_calls == [{"stdout": stderr}]
 
 
 class FakeTerminal(StringIO):
