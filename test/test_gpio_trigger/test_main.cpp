@@ -8,6 +8,7 @@
 #include "KeyActivityIndicator.h"
 #include "TriggerProtocol.h"
 #include "platform/HidReportTransport.h"
+#include "platform/Rp2040OledBus.h"
 
 void setUp() {}
 void tearDown() {}
@@ -70,6 +71,24 @@ void test_board_profiles_enforce_exact_safe_pins() {
 void test_board_profiles_report_oled_capability() {
   TEST_ASSERT_FALSE(kLuatOsEsp32S3Aio.supportsOled);
   TEST_ASSERT_TRUE(kVccGndYdRp2040.supportsOled);
+}
+
+void test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match() {
+  TEST_ASSERT_EQUAL(platform::Rp2040OledBus::I2c0,
+                    platform::selectRp2040OledBus(28, 29));
+  TEST_ASSERT_EQUAL(platform::Rp2040OledBus::I2c1,
+                    platform::selectRp2040OledBus(26, 27));
+  TEST_ASSERT_EQUAL(platform::Rp2040OledBus::I2c0,
+                    platform::selectRp2040OledBus(4, 5));
+}
+
+void test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins() {
+  TEST_ASSERT_EQUAL(platform::Rp2040OledBus::Software,
+                    platform::selectRp2040OledBus(28, 27));
+  TEST_ASSERT_EQUAL(platform::Rp2040OledBus::Software,
+                    platform::selectRp2040OledBus(29, 28));
+  TEST_ASSERT_EQUAL(platform::Rp2040OledBus::Software,
+                    platform::selectRp2040OledBus(5, 6));
 }
 
 void test_formats_protocol_v4_hello_with_board_and_build() {
@@ -659,6 +678,8 @@ int main(int, char **) {
   RUN_TEST(test_runtime_topology_counts_direct_and_matrix_keys);
   RUN_TEST(test_board_profiles_enforce_exact_safe_pins);
   RUN_TEST(test_board_profiles_report_oled_capability);
+  RUN_TEST(test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match);
+  RUN_TEST(test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins);
   RUN_TEST(test_formats_protocol_v4_hello_with_board_and_build);
   RUN_TEST(test_rejects_empty_firmware_build_id);
   RUN_TEST(test_rejects_whitespace_in_firmware_build_id);
