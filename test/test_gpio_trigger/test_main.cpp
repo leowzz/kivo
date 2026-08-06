@@ -6,6 +6,7 @@
 #include "Handshake.h"
 #include "InputTopology.h"
 #include "KeyActivityIndicator.h"
+#include "StandaloneDebugTopology.h"
 #include "TriggerProtocol.h"
 #include "platform/HidReportTransport.h"
 #include "platform/Rp2040OledBus.h"
@@ -71,6 +72,55 @@ void test_board_profiles_enforce_exact_safe_pins() {
 void test_board_profiles_report_oled_capability() {
   TEST_ASSERT_FALSE(kLuatOsEsp32S3Aio.supportsOled);
   TEST_ASSERT_TRUE(kVccGndYdRp2040.supportsOled);
+}
+
+void test_rp2040_standalone_debug_topology_matches_keyboard_wiring() {
+  const auto topology = makeRp2040StandaloneDebugTopology(kVccGndYdRp2040);
+
+  TEST_ASSERT_TRUE(topology.has_value());
+  TEST_ASSERT_EQUAL_UINT16(30, topology->debounceMs);
+  TEST_ASSERT_EQUAL_UINT32(18, topology->keyCount());
+  TEST_ASSERT_EQUAL_UINT32(1, topology->directs.size());
+  TEST_ASSERT_EQUAL_UINT8(0, topology->directs[0].index);
+  TEST_ASSERT_EQUAL_UINT32(18, topology->directs[0].pins.size());
+  for (std::uint8_t pin = 1; pin <= 18; ++pin) {
+    TEST_ASSERT_EQUAL_UINT8(pin, topology->directs[0].pins[pin - 1]);
+  }
+  TEST_ASSERT_TRUE(topology->matrices.empty());
+  TEST_ASSERT_TRUE(topology->oled.has_value());
+  TEST_ASSERT_EQUAL_UINT8(28, topology->oled->sda);
+  TEST_ASSERT_EQUAL_UINT8(29, topology->oled->scl);
+
+  TEST_ASSERT_FALSE(
+      makeRp2040StandaloneDebugTopology(kLuatOsEsp32S3Aio).has_value());
+}
+
+void test_rp2040_standalone_debug_accepts_only_matching_host_topology() {
+  const auto configured =
+      makeRp2040StandaloneDebugTopology(kVccGndYdRp2040);
+  TEST_ASSERT_TRUE(configured.has_value());
+  TEST_ASSERT_TRUE(acceptsRp2040StandaloneHostTopology(*configured));
+
+  auto differentRevision = *configured;
+  differentRevision.revision = 42;
+  TEST_ASSERT_TRUE(acceptsRp2040StandaloneHostTopology(differentRevision));
+
+  RuntimeTopology empty;
+  empty.revision = 43;
+  empty.debounceMs = 1000;
+  TEST_ASSERT_TRUE(acceptsRp2040StandaloneHostTopology(empty));
+
+  auto differentDebounce = *configured;
+  differentDebounce.debounceMs = 31;
+  TEST_ASSERT_FALSE(acceptsRp2040StandaloneHostTopology(differentDebounce));
+
+  auto missingInput = *configured;
+  missingInput.directs[0].pins.pop_back();
+  TEST_ASSERT_FALSE(acceptsRp2040StandaloneHostTopology(missingInput));
+
+  auto missingOled = *configured;
+  missingOled.oled.reset();
+  TEST_ASSERT_FALSE(acceptsRp2040StandaloneHostTopology(missingOled));
 }
 
 void test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match() {
@@ -345,13 +395,13 @@ void test_learning_rejects_active_oled_pins() {
   TEST_ASSERT_TRUE(controller.beginLearning(8, {7, 8}, 0));
 }
 
-void test_display_status_frames_are_exactly_sixteen_characters() {
+void test_display_status_frames_have_two_sixteen_character_status_lines() {
   DisplayStatusModel status;
 
   auto frame = status.frame();
   TEST_ASSERT_EQUAL_STRING("KIVO     USB OFF", frame.lines[0].c_str());
   TEST_ASSERT_EQUAL_STRING("WAITING CONFIG  ", frame.lines[1].c_str());
-  TEST_ASSERT_EQUAL_STRING("                ", frame.lines[2].c_str());
+  TEST_ASSERT_EQUAL_STRING("", frame.lines[2].c_str());
 
   status.setUsbConnected(true);
   status.setReady(18);
@@ -366,28 +416,40 @@ void test_display_status_frames_are_exactly_sixteen_characters() {
   TEST_ASSERT_EQUAL_STRING("CONFIG ERROR    ",
                            status.frame().lines[1].c_str());
 
-  for (const auto &line : status.frame().lines) {
-    TEST_ASSERT_EQUAL_UINT32(16, line.size());
+  for (std::size_t index = 0; index < 2; ++index) {
+    TEST_ASSERT_EQUAL_UINT32(16, status.frame().lines[index].size());
   }
+}
+
+void test_standalone_debug_display_does_not_depend_on_usb_state() {
+  DisplayStatusModel status;
+  status.setStandaloneDebug();
+  status.setReady(18);
+
+  TEST_ASSERT_EQUAL_STRING("KIVO GPIO DEBUG ",
+                           status.frame().lines[0].c_str());
+  status.setUsbConnected(true);
+  TEST_ASSERT_EQUAL_STRING("KIVO GPIO DEBUG ",
+                           status.frame().lines[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("READY    18 KEYS",
+                           status.frame().lines[1].c_str());
 }
 
 void test_display_status_formats_last_direct_and_contact_edges() {
   DisplayStatusModel status;
 
-  status.recordInput(InputEvent{1, 5, InputState::Down});
-  TEST_ASSERT_EQUAL_STRING("GPIO 05     DOWN",
-                           status.frame().lines[2].c_str());
-  status.recordInput(InputEvent{2, 5, InputState::Up});
-  TEST_ASSERT_EQUAL_STRING("GPIO 05       UP",
-                           status.frame().lines[2].c_str());
+  status.recordInput(InputEvent{1, 12, InputState::Down});
+  TEST_ASSERT_EQUAL_STRING("12 D", status.frame().lines[2].c_str());
+  status.recordInput(InputEvent{2, 12, InputState::Up});
+  TEST_ASSERT_EQUAL_STRING("12 U", status.frame().lines[2].c_str());
+  status.recordInput(InputEvent{3, 5, InputState::Down});
+  TEST_ASSERT_EQUAL_STRING("5 D", status.frame().lines[2].c_str());
   status.recordInput(InputEvent{3, PhysicalInput::contact(0, 12, 1),
                                 InputState::Down});
-  TEST_ASSERT_EQUAL_STRING("GPIO 01-12 DOWN ",
-                           status.frame().lines[2].c_str());
+  TEST_ASSERT_EQUAL_STRING("1-12 D", status.frame().lines[2].c_str());
   status.recordInput(InputEvent{4, PhysicalInput::contact(0, 1, 12),
                                 InputState::Up});
-  TEST_ASSERT_EQUAL_STRING("GPIO 01-12 UP   ",
-                           status.frame().lines[2].c_str());
+  TEST_ASSERT_EQUAL_STRING("1-12 U", status.frame().lines[2].c_str());
 }
 
 void test_display_status_can_clear_stale_input_activity() {
@@ -396,8 +458,7 @@ void test_display_status_can_clear_stale_input_activity() {
 
   status.clearLastInput();
 
-  TEST_ASSERT_EQUAL_STRING("                ",
-                           status.frame().lines[2].c_str());
+  TEST_ASSERT_EQUAL_STRING("", status.frame().lines[2].c_str());
 }
 
 void test_suppresses_new_contact_that_closes_a_ghost_cycle() {
@@ -678,6 +739,8 @@ int main(int, char **) {
   RUN_TEST(test_runtime_topology_counts_direct_and_matrix_keys);
   RUN_TEST(test_board_profiles_enforce_exact_safe_pins);
   RUN_TEST(test_board_profiles_report_oled_capability);
+  RUN_TEST(test_rp2040_standalone_debug_topology_matches_keyboard_wiring);
+  RUN_TEST(test_rp2040_standalone_debug_accepts_only_matching_host_topology);
   RUN_TEST(test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match);
   RUN_TEST(test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins);
   RUN_TEST(test_formats_protocol_v4_hello_with_board_and_build);
@@ -696,7 +759,8 @@ int main(int, char **) {
   RUN_TEST(test_learning_reports_contact_and_restores_runtime_topology);
   RUN_TEST(test_rp2040_learning_accepts_gpio29_and_rejects_gpio23);
   RUN_TEST(test_learning_rejects_active_oled_pins);
-  RUN_TEST(test_display_status_frames_are_exactly_sixteen_characters);
+  RUN_TEST(test_display_status_frames_have_two_sixteen_character_status_lines);
+  RUN_TEST(test_standalone_debug_display_does_not_depend_on_usb_state);
   RUN_TEST(test_display_status_formats_last_direct_and_contact_edges);
   RUN_TEST(test_display_status_can_clear_stale_input_activity);
   RUN_TEST(test_suppresses_new_contact_that_closes_a_ghost_cycle);

@@ -6,6 +6,14 @@ TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 MAKEFILE="$ROOT/Makefile"
+FIRMWARE_MAIN="$ROOT/src/main.cpp"
+RP2040_PLATFORM="$ROOT/src/platform/rp2040.cpp"
+
+grep -Fq 'display->setFont(u8g2_font_6x13_tf);' "$RP2040_PLATFORM"
+grep -Fq 'makeRp2040StandaloneDebugTopology(platform::boardProfile())' \
+  "$FIRMWARE_MAIN"
+grep -Fq 'initializeStandaloneDisplay(nowMs);' "$FIRMWARE_MAIN"
+grep -Fq 'acceptsRp2040StandaloneHostTopology(*topology)' "$FIRMWARE_MAIN"
 
 target_body() {
   awk -v target="$1" '

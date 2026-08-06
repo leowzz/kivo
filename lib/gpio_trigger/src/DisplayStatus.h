@@ -18,6 +18,7 @@ struct DisplayFrame {
 class DisplayStatusModel {
  public:
   void setUsbConnected(bool connected) { usbConnected_ = connected; }
+  void setStandaloneDebug() { standaloneDebug_ = true; }
   void setReady(std::size_t keyCount);
   void setLearning(std::size_t pinCount);
   void setConfigError();
@@ -34,6 +35,7 @@ class DisplayStatusModel {
   };
 
   bool usbConnected_ = false;
+  bool standaloneDebug_ = false;
   Mode mode_ = Mode::Waiting;
   std::size_t count_ = 0;
   std::optional<PhysicalInput> lastInput_;

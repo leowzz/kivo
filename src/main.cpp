@@ -7,11 +7,13 @@
 #include "GpioTriggerController.h"
 #include "Handshake.h"
 #include "KeyActivityIndicator.h"
+#include "StandaloneDebugTopology.h"
 #include "TriggerProtocol.h"
 #include "platform/Platform.h"
 
 namespace {
 constexpr std::size_t kMaxResponseLineLength = 255;
+constexpr std::uint32_t kStandaloneDisplayStartupDelayMs = 500;
 std::string helloLine;
 
 GpioTriggerController controller(platform::boardProfile());
@@ -20,6 +22,9 @@ ResponseLineBuffer responseLines(kMaxResponseLineLength);
 TopologyBuilder topologyBuilder(platform::boardProfile());
 DisplayStatusModel displayStatus;
 bool helperConnected = false;
+bool standaloneDebugMode = false;
+bool standaloneDisplayPending = false;
+std::uint32_t standaloneDisplayStartedMs = 0;
 
 void writeLine(const std::string &line) {
   platform::write(line.c_str(), line.size());
@@ -74,13 +79,47 @@ void resetKeyIndicator() {
   platform::clearKeyColor();
 }
 
+void applyTopologyState(const RuntimeTopology &topology, std::uint32_t nowMs) {
+  resetKeyIndicator();
+  controller.configure(topology, nowMs);
+  applyRuntimePinModes();
+  displayStatus.setReady(topology.keyCount());
+  displayStatus.clearLastInput();
+}
+
+void activateTopology(const RuntimeTopology &topology, std::uint32_t nowMs) {
+  standaloneDisplayPending = false;
+  applyTopologyState(topology, nowMs);
+  platform::configureDisplay(topology.oled);
+  renderStatus();
+}
+
+void activateStandaloneTopology(const RuntimeTopology &topology,
+                                std::uint32_t nowMs) {
+  standaloneDebugMode = true;
+  displayStatus.setStandaloneDebug();
+  applyTopologyState(topology, nowMs);
+  standaloneDisplayPending = true;
+  standaloneDisplayStartedMs = nowMs;
+}
+
+void initializeStandaloneDisplay(std::uint32_t nowMs) {
+  if (!standaloneDisplayPending ||
+      nowMs - standaloneDisplayStartedMs < kStandaloneDisplayStartupDelayMs) {
+    return;
+  }
+  standaloneDisplayPending = false;
+  // Let TinyUSB service its first cycles and the OLED power stabilize first.
+  platform::configureDisplay(controller.topology().oled);
+  renderStatus();
+}
+
 void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
   const auto command = parseHelperCommand(line);
   if (!command.has_value()) {
     topologyBuilder.cancel();
     return;
   }
-
   switch (command->kind) {
     case HelperCommandKind::Hello:
       writeLine(helloLine);
@@ -118,13 +157,14 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
         configError(command->revision, "invalid_commit");
         return;
       }
-      resetKeyIndicator();
-      controller.configure(*topology, nowMs);
-      platform::configureDisplay(topology->oled);
-      applyRuntimePinModes();
-      displayStatus.setReady(topology->keyCount());
-      displayStatus.clearLastInput();
-      renderStatus();
+      if (standaloneDebugMode) {
+        writeLine(acceptsRp2040StandaloneHostTopology(*topology)
+                      ? "CONFIG_OK " + std::to_string(command->revision) + "\n"
+                      : "CONFIG_ERROR " + std::to_string(command->revision) +
+                            " standalone_mismatch\n");
+        return;
+      }
+      activateTopology(*topology, nowMs);
       writeLine("CONFIG_OK " + std::to_string(command->revision) + "\n");
       return;
     }
@@ -255,10 +295,16 @@ void scanLearningInputs(std::uint32_t nowMs) {
 void setup() {
   helloLine = formatHello(platform::boardProfile(), KIVO_FIRMWARE_BUILD_ID);
   platform::begin();
+  const auto debugTopology =
+      makeRp2040StandaloneDebugTopology(platform::boardProfile());
+  if (debugTopology.has_value()) {
+    activateStandaloneTopology(*debugTopology, millis());
+  }
 }
 
 void loop() {
   const std::uint32_t nowMs = millis();
+  initializeStandaloneDisplay(nowMs);
   const bool connected = platform::connected();
   if (connected != helperConnected) {
     displayStatus.setUsbConnected(connected);

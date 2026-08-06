@@ -21,7 +21,9 @@ constexpr std::size_t kHidReadyPollLimit = 100;
 constexpr std::uint8_t kKeyPixelBrightness = 64;
 constexpr std::uint8_t kOledI2cAddress = 0x3C;
 constexpr std::uint32_t kOledI2cClockHz = 100000;
-constexpr std::array<std::uint8_t, 3> kDisplayBaselines = {9, 18, 27};
+constexpr std::uint8_t kDisplayWidth = 128;
+constexpr std::array<std::uint8_t, 2> kStatusBaselines = {10, 29};
+constexpr std::uint8_t kInputBaseline = 20;
 std::unique_ptr<U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C> i2c0Display;
 std::unique_ptr<U8G2_SSD1306_128X32_UNIVISION_F_2ND_HW_I2C> i2c1Display;
 std::unique_ptr<U8G2_SSD1306_128X32_UNIVISION_F_SW_I2C> softwareDisplay;
@@ -124,7 +126,7 @@ void configureDisplay(const std::optional<OledConfig> &config) {
   display->setI2CAddress(kOledI2cAddress << 1U);
   display->setBusClock(kOledI2cClockHz);
   display->begin();
-  display->setFont(u8g2_font_5x7_tf);
+  display->setFont(u8g2_font_6x13_tf);
   display->clearBuffer();
   display->sendBuffer();
 }
@@ -135,8 +137,15 @@ void renderDisplay(const DisplayFrame &frame) {
     return;
   }
   display->clearBuffer();
-  for (std::size_t index = 0; index < frame.lines.size(); ++index) {
-    display->drawStr(0, kDisplayBaselines[index], frame.lines[index].c_str());
+  for (std::size_t index = 0; index < kStatusBaselines.size(); ++index) {
+    display->drawStr(0, kStatusBaselines[index], frame.lines[index].c_str());
+  }
+  if (!frame.lines[2].empty()) {
+    const auto inputWidth = display->getStrWidth(frame.lines[2].c_str());
+    const auto inputX = inputWidth < kDisplayWidth
+                            ? static_cast<std::uint8_t>(kDisplayWidth - inputWidth)
+                            : 0;
+    display->drawStr(inputX, kInputBaseline, frame.lines[2].c_str());
   }
   display->sendBuffer();
   lastDisplayFrame = frame;

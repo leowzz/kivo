@@ -1,7 +1,5 @@
 #include "DisplayStatus.h"
 
-#include <utility>
-
 namespace {
 constexpr std::size_t kDisplayColumns = 16;
 
@@ -21,10 +19,6 @@ std::string rightAlignedCount(std::string prefix, std::size_t count,
   return fitLine(prefix + countText + suffix);
 }
 
-std::string twoDigitPin(std::uint8_t pin) {
-  const auto value = std::to_string(pin);
-  return value.size() == 1 ? "0" + value : value;
-}
 }  // namespace
 
 void DisplayStatusModel::setReady(std::size_t keyCount) {
@@ -48,8 +42,10 @@ void DisplayStatusModel::clearLastInput() { lastInput_.reset(); }
 
 DisplayFrame DisplayStatusModel::frame() const {
   DisplayFrame result;
-  result.lines[0] =
-      usbConnected_ ? "KIVO      USB ON" : "KIVO     USB OFF";
+  result.lines[0] = standaloneDebug_
+                        ? fitLine("KIVO GPIO DEBUG")
+                        : usbConnected_ ? "KIVO      USB ON"
+                                        : "KIVO     USB OFF";
 
   switch (mode_) {
     case Mode::Waiting:
@@ -67,16 +63,14 @@ DisplayFrame DisplayStatusModel::frame() const {
   }
 
   if (!lastInput_.has_value()) {
-    result.lines[2] = fitLine("");
+    result.lines[2].clear();
   } else {
-    std::string input = "GPIO " + twoDigitPin(lastInput_->pinA);
+    std::string input = std::to_string(lastInput_->pinA);
     if (lastInput_->kind == PhysicalInputKind::Contact) {
-      input += "-" + twoDigitPin(lastInput_->pinB) + " ";
-    } else {
-      input += lastState_ == InputState::Down ? "     " : "       ";
+      input += "-" + std::to_string(lastInput_->pinB);
     }
-    input += lastState_ == InputState::Down ? "DOWN" : "UP";
-    result.lines[2] = fitLine(std::move(input));
+    input += lastState_ == InputState::Down ? " D" : " U";
+    result.lines[2] = input;
   }
   return result;
 }
