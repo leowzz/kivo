@@ -28,7 +28,7 @@ class FakeSerial:
 def test_smoke_requires_expected_protocol_responses() -> None:
     device = FakeSerial(
         [
-            b"HELLO 4 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n",
+            b"HELLO 5 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n",
             b"CONFIG_OK 1\n",
             b"CONFIG_ERROR 2 invalid_direct\n",
             b"LEARN_OK 3\n",
@@ -58,7 +58,7 @@ def test_smoke_requires_expected_protocol_responses() -> None:
 
 
 def test_smoke_ignores_duplicate_hello_before_command_ack() -> None:
-    hello = b"HELLO 4 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n"
+    hello = b"HELLO 5 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n"
     device = FakeSerial(
         [
             hello,
@@ -101,19 +101,19 @@ def test_smoke_rejects_wrong_hello() -> None:
 @pytest.mark.parametrize(
     "hello",
     [
-        "HELLO 4 rp2040 luatos-esp32s3-aio test-build 2 1 2",
-        "HELLO 4 esp32s3 other-board test-build 2 1 2",
-        "HELLO 4 esp32s3 luatos-esp32s3-aio other-build 2 1 2",
-        "HELLO 4 esp32s3 luatos-esp32s3-aio test-build",
-        "HELLO 4 esp32s3 luatos-esp32s3-aio test-build nope 1",
-        "HELLO 4 esp32s3 luatos-esp32s3-aio test-build 2 1",
-        "HELLO 4 esp32s3 luatos-esp32s3-aio test-build 2 1 1",
-        "HELLO 4 esp32s3 luatos-esp32s3-aio test-build 0",
-        "HELLO 4 esp32s3 luatos-esp32s3-aio test-build 1 -1",
-        "HELLO 4 esp32s3 luatos-esp32s3-aio test-build 1 256",
+        "HELLO 5 rp2040 luatos-esp32s3-aio test-build 2 1 2",
+        "HELLO 5 esp32s3 other-board test-build 2 1 2",
+        "HELLO 5 esp32s3 luatos-esp32s3-aio other-build 2 1 2",
+        "HELLO 5 esp32s3 luatos-esp32s3-aio test-build",
+        "HELLO 5 esp32s3 luatos-esp32s3-aio test-build nope 1",
+        "HELLO 5 esp32s3 luatos-esp32s3-aio test-build 2 1",
+        "HELLO 5 esp32s3 luatos-esp32s3-aio test-build 2 1 1",
+        "HELLO 5 esp32s3 luatos-esp32s3-aio test-build 0",
+        "HELLO 5 esp32s3 luatos-esp32s3-aio test-build 1 -1",
+        "HELLO 5 esp32s3 luatos-esp32s3-aio test-build 1 256",
     ],
 )
-def test_smoke_rejects_invalid_hello_v4(hello: str) -> None:
+def test_smoke_rejects_invalid_hello_v5(hello: str) -> None:
     with pytest.raises(RuntimeError, match="invalid HELLO"):
         run_smoke(
             FakeSerial([hello.encode() + b"\n"]),
@@ -139,7 +139,7 @@ def test_smoke_cli_requires_build_and_passes_it_to_run_arguments() -> None:
     assert args.build == "test-build"
     device = FakeSerial(
         [
-            b"HELLO 4 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n",
+            b"HELLO 5 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n",
             b"CONFIG_OK 1\n",
             b"CONFIG_ERROR 2 invalid_direct\n",
             b"LEARN_OK 3\n",
@@ -162,7 +162,7 @@ def test_smoke_cli_requires_build_and_passes_it_to_run_arguments() -> None:
     ],
 )
 def test_smoke_rejects_wrong_configuration_ack(response: bytes, message: str) -> None:
-    responses = [b"HELLO 4 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n"]
+    responses = [b"HELLO 5 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n"]
     if response.startswith(b"CONFIG_ERROR"):
         responses.append(b"CONFIG_OK 1\n")
     responses.append(response)
@@ -180,7 +180,7 @@ def test_smoke_rejects_wrong_configuration_ack(response: bytes, message: str) ->
 def test_smoke_rejects_wrong_learning_ack() -> None:
     device = FakeSerial(
         [
-            b"HELLO 4 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n",
+            b"HELLO 5 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n",
             b"CONFIG_OK 1\n",
             b"LEARN_OK 3\n",
         ]
@@ -199,7 +199,7 @@ def test_smoke_rejects_wrong_learning_ack() -> None:
 def test_smoke_actions_use_matching_event_and_sequential_done_steps() -> None:
     device = FakeSerial(
         [
-            b"HELLO 4 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n",
+            b"HELLO 5 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n",
             b"CONFIG_OK 1\n",
             b"LEARN_OK 2\n",
             b"LEARN_OK 2\n",
@@ -227,7 +227,7 @@ def test_smoke_actions_use_matching_event_and_sequential_done_steps() -> None:
 def test_smoke_rejects_wrong_action_completion(done: bytes) -> None:
     device = FakeSerial(
         [
-            b"HELLO 4 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n",
+            b"HELLO 5 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n",
             b"CONFIG_OK 1\n",
             b"LEARN_OK 2\n",
             b"LEARN_OK 2\n",

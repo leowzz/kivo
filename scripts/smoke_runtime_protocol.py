@@ -44,7 +44,7 @@ def expect_tokens(device: LineTransport, expected: list[str]) -> None:
 
 def validate_hello(line: str, family: str, board: str, build: str) -> None:
     parts = line.split()
-    expected = ["HELLO", "4", family, board, build]
+    expected = ["HELLO", "5", family, board, build]
     if parts[:5] != expected:
         raise RuntimeError(f"invalid HELLO: expected {' '.join(expected)!r}, got {line!r}")
     if len(parts) < 7:

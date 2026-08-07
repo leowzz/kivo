@@ -13,9 +13,14 @@
 #include "Rp2040OledBus.h"
 
 namespace {
-std::uint8_t const kKeyboardDescriptor[] = {TUD_HID_REPORT_DESC_KEYBOARD()};
+constexpr std::uint8_t kKeyboardReportId = 1;
+constexpr std::uint8_t kConsumerReportId = 2;
+std::uint8_t const kKeyboardDescriptor[] = {
+    TUD_HID_REPORT_DESC_KEYBOARD(HID_REPORT_ID(kKeyboardReportId)),
+    TUD_HID_REPORT_DESC_CONSUMER(HID_REPORT_ID(kConsumerReportId)),
+};
 Adafruit_USBD_HID keyboard(kKeyboardDescriptor, sizeof(kKeyboardDescriptor),
-                           HID_ITF_PROTOCOL_KEYBOARD, 2, false);
+                           HID_ITF_PROTOCOL_NONE, 2, false);
 Adafruit_NeoPixel keyPixel(1, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
 constexpr std::size_t kHidReadyPollLimit = 100;
 constexpr std::uint8_t kKeyPixelBrightness = 64;
@@ -91,7 +96,18 @@ bool sendHotkey(std::uint8_t modifiers, std::uint8_t keycode) {
         hid_keyboard_report_t report{};
         report.modifier = reportModifiers;
         report.keycode[0] = reportKeycode;
-        return keyboard.sendReport(0, &report, sizeof(report));
+        return keyboard.sendReport(kKeyboardReportId, &report, sizeof(report));
+      },
+      []() { delay(1); });
+}
+
+bool sendConsumerControl(std::uint16_t usage) {
+  if (TinyUSBDevice.suspended()) TinyUSBDevice.remoteWakeup();
+  return transmitConsumerReports(
+      usage, kHidReadyPollLimit, []() { return keyboard.ready(); },
+      [](std::uint16_t reportUsage) {
+        return keyboard.sendReport(kConsumerReportId, &reportUsage,
+                                   sizeof(reportUsage));
       },
       []() { delay(1); });
 }

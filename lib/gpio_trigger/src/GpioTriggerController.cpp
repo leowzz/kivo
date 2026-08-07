@@ -29,7 +29,7 @@ void GpioTriggerController::configure(const RuntimeTopology &topology,
       }
     }
   }
-  pendingEvents_.assign(inputs_.size(), std::nullopt);
+  pendingEvents_.clear();
 }
 
 std::optional<std::size_t> GpioTriggerController::inputIndex(
@@ -82,7 +82,7 @@ bool GpioTriggerController::beginLearning(
                          false, false, false, nowMs});
     }
   }
-  pendingEvents_.assign(inputs_.size(), std::nullopt);
+  pendingEvents_.clear();
   return true;
 }
 
@@ -133,7 +133,7 @@ std::optional<InputEvent> GpioTriggerController::updateInput(
   const auto inputState = state.stableActive ? InputState::Down : InputState::Up;
   const InputEvent event{nextEventId_++, state.input, inputState};
   if (inputState == InputState::Down && !isLearning()) {
-    pendingEvents_[index] = PendingEvent{event.id, 1, 0, nowMs};
+    pendingEvents_.push_back(PendingEvent{event.id, 1, 0, nowMs});
   }
   return event;
 }
@@ -171,38 +171,45 @@ ResponseAction GpioTriggerController::acceptStep(
   expire(nowMs);
   const auto pending =
       std::find_if(pendingEvents_.begin(), pendingEvents_.end(),
-                   [eventId](const auto &entry) {
-                     return entry.has_value() && entry->id == eventId;
-                   });
+                   [eventId](const auto &entry) { return entry.id == eventId; });
   if (pending == pendingEvents_.end()) return ResponseAction::Ignored;
   if (!execute) {
-    pending->reset();
+    pendingEvents_.erase(pending);
     return ResponseAction::Cleared;
   }
-  if (step == 0 || total == 0 || step > total || step != (*pending)->nextStep ||
-      ((*pending)->total != 0 && (*pending)->total != total)) {
+  if (step == 0 || total == 0 || step > total || step != pending->nextStep ||
+      (pending->total != 0 && pending->total != total)) {
     return ResponseAction::Ignored;
   }
-  (*pending)->total = total;
-  (*pending)->updatedMs = nowMs;
+  pending->total = total;
+  pending->updatedMs = nowMs;
   if (step == total) {
-    pending->reset();
+    pendingEvents_.erase(pending);
   } else {
-    ++(*pending)->nextStep;
+    ++pending->nextStep;
   }
   return ResponseAction::Execute;
 }
 
 void GpioTriggerController::expire(std::uint32_t nowMs) {
-  for (auto &entry : pendingEvents_) {
-    if (entry.has_value() &&
-        nowMs - entry->updatedMs >= kResponseTimeoutMs) {
-      entry.reset();
-    }
-  }
+  pendingEvents_.erase(
+      std::remove_if(pendingEvents_.begin(), pendingEvents_.end(),
+                     [nowMs](const auto &entry) {
+                       return nowMs - entry.updatedMs >= kResponseTimeoutMs;
+                     }),
+      pendingEvents_.end());
+}
+
+bool GpioTriggerController::keepPendingEventAlive(std::uint32_t eventId,
+                                                  std::uint32_t nowMs) {
+  const auto pending =
+      std::find_if(pendingEvents_.begin(), pendingEvents_.end(),
+                   [eventId](const auto &entry) { return entry.id == eventId; });
+  if (pending == pendingEvents_.end()) return false;
+  pending->updatedMs = nowMs;
+  return true;
 }
 
 bool GpioTriggerController::hasPendingEvent() const {
-  return std::any_of(pendingEvents_.begin(), pendingEvents_.end(),
-                     [](const auto &entry) { return entry.has_value(); });
+  return !pendingEvents_.empty();
 }

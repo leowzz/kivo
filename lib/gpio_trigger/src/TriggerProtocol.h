@@ -20,6 +20,9 @@ enum class HelperCommandKind {
   LearnEnd,
   Paste,
   Hotkey,
+  Delay,
+  Media,
+  Host,
   Skip,
 };
 
@@ -33,6 +36,8 @@ struct HelperCommand {
   std::uint8_t sourceIndex = 0;
   std::uint8_t modifierMask = 0;
   std::uint8_t keycode = 0;
+  std::uint16_t consumerUsage = 0;
+  std::uint32_t durationMs = 0;
   std::uint8_t oledSda = 0;
   std::uint8_t oledScl = 0;
   std::vector<std::uint8_t> pins;

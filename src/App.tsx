@@ -86,9 +86,15 @@ function isValidDraft(
   profile: DeviceProfile | undefined,
   boardProfiles: AppSnapshot["boardProfiles"],
 ) {
-  return Boolean(profile && Object.values(profile.actions).every((actions) => actions.every((action) =>
-    action.type === "paste" ? action.text.length > 0 : action.keys.length > 0
-  )) && hardwareProfilesAreValid(profile.hardware_profiles, boardProfiles));
+  return Boolean(profile && Object.values(profile.actions).every((actions) => actions.every((action) => {
+    switch (action.type) {
+      case "paste": return action.text.length > 0;
+      case "hotkey": return action.keys.length > 0;
+      case "delay": return Number.isInteger(action.duration_ms) && action.duration_ms >= 1 && action.duration_ms <= 60_000;
+      case "media": return action.command.length > 0;
+      case "open": return action.target.trim().length > 0 && action.target.length <= 2_048 && !action.target.includes("\0");
+    }
+  })) && hardwareProfilesAreValid(profile.hardware_profiles, boardProfiles));
 }
 
 function resolveButton(hardware: HardwareProfile | undefined, input: PhysicalInput) {

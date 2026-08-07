@@ -10,9 +10,9 @@ use crate::{
     paste::{Clock, PasteHandle, PasteReply, PasteRequest, SystemClock},
     profile::DeviceProfile,
     protocol::{
-        ActionSequence, DeviceMessage, HelloCapabilities, InputState, OLED_PROTOCOL_VERSION,
-        PhysicalInput, format_paste_command, is_hello_line, parse_device, topology_commands,
-        validate_hello,
+        ADVANCED_ACTION_PROTOCOL_VERSION, ActionSequence, DeviceMessage, HelloCapabilities,
+        InputState, OLED_PROTOCOL_VERSION, PhysicalInput, format_paste_command, is_hello_line,
+        parse_device, topology_commands, validate_hello,
     },
 };
 use serde::Serialize;
@@ -29,6 +29,9 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
+
+#[cfg(target_os = "macos")]
+use std::process::Command;
 
 const ACTION_ACK_TIMEOUT: Duration = Duration::from_millis(1800);
 const EMPTY_TOPOLOGY_DEBOUNCE_MS: u16 = 30;
@@ -91,6 +94,7 @@ pub struct SessionOutput {
     pub activities: Vec<RuntimeActivity>,
     pub paste_requests: Vec<PendingPaste>,
     pub completed_receive_sequences: Vec<u64>,
+    action_timeout: Option<Duration>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -119,6 +123,19 @@ pub struct DeviceSession {
     pending_reconfiguration: Option<PendingReconfiguration>,
     pending_learning: Option<LearningTarget>,
     learning: Option<ActiveLearning>,
+    target_opener: Arc<dyn TargetOpener>,
+}
+
+trait TargetOpener: Send + Sync {
+    fn open(&self, target: &str) -> Result<(), String>;
+}
+
+struct SystemTargetOpener;
+
+impl TargetOpener for SystemTargetOpener {
+    fn open(&self, target: &str) -> Result<(), String> {
+        open_target(target)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -181,6 +198,7 @@ impl DeviceSession {
             pending_reconfiguration: None,
             pending_learning: None,
             learning: None,
+            target_opener: Arc::new(SystemTargetOpener),
         }
     }
 
@@ -201,6 +219,7 @@ impl DeviceSession {
             pending_reconfiguration: None,
             pending_learning: None,
             learning: None,
+            target_opener: Arc::new(SystemTargetOpener),
         }
     }
 
@@ -640,6 +659,16 @@ impl DeviceSession {
             ));
             return;
         }
+        if runtime.profile.uses_advanced_actions()
+            && hello.protocol < ADVANCED_ACTION_PROTOCOL_VERSION
+        {
+            output.activities.push(activity_from_error(
+                crate::workspace::AppError::new("protocol_mismatch")
+                    .with_param("expected", ADVANCED_ACTION_PROTOCOL_VERSION.to_string())
+                    .with_param("actual", hello.protocol.to_string()),
+            ));
+            return;
+        }
         let reported_pins = hello.pins.iter().copied().collect::<BTreeSet<_>>();
         self.revision = revision.max(1);
         match topology_commands(hardware, self.revision, &reported_pins) {
@@ -837,13 +866,11 @@ impl DeviceSession {
     }
 
     fn emit_active_step(&mut self, output: &mut SessionOutput) {
-        let Some(sequence) = self.active.as_mut() else {
+        let target_opener = Arc::clone(&self.target_opener);
+        let Some(step) = self.active.as_mut().and_then(ActionSequence::next_step) else {
             return;
         };
-        let Some(step) = sequence.next_step() else {
-            return;
-        };
-        match &step.action {
+        let result = match &step.action {
             crate::profile::ButtonAction::Paste { text } => {
                 let request = PendingPaste {
                     receive_sequence: self.active_receive_sequence.unwrap_or_default(),
@@ -855,29 +882,50 @@ impl DeviceSession {
                 };
                 self.pending_paste = Some(request.clone());
                 output.paste_requests.push(request);
+                return;
             }
-            crate::profile::ButtonAction::Hotkey { .. } => match step.command(|_| Ok(())) {
-                Ok(line) => output.lines.push(line),
-                Err(error) => {
-                    sequence.abort();
-                    output.lines.push(format!("SKIP {}\n", step.event_id));
-                    output.activities.push(
-                        RuntimeActivity::new("action_step_failed")
-                            .with_param("button", step.button)
-                            .with_param("step", step.step.to_string())
-                            .with_detail(error)
-                            .with_context(self.active_context.clone()),
-                    );
-                    self.active = None;
-                    self.active_snapshot = None;
-                    self.active_context = None;
-                    if let Some(receive_sequence) = self.active_receive_sequence.take() {
-                        output.completed_receive_sequences.push(receive_sequence);
-                    }
-                    self.start_next(output);
-                }
-            },
+            crate::profile::ButtonAction::Hotkey { .. }
+            | crate::profile::ButtonAction::Media { .. } => step.command(|_| Ok(())),
+            crate::profile::ButtonAction::Delay { duration_ms } => {
+                output.action_timeout =
+                    Some(ACTION_ACK_TIMEOUT + Duration::from_millis(u64::from(*duration_ms)));
+                step.command(|_| Ok(()))
+            }
+            crate::profile::ButtonAction::Open { target } => target_opener
+                .open(target)
+                .and_then(|()| step.command(|_| Ok(()))),
+        };
+        match result {
+            Ok(line) => output.lines.push(line),
+            Err(error) => self.fail_action_step(output, &step, error),
         }
+    }
+
+    fn fail_action_step(
+        &mut self,
+        output: &mut SessionOutput,
+        step: &crate::protocol::ActionStep,
+        error: String,
+    ) {
+        if let Some(sequence) = self.active.as_mut() {
+            sequence.abort();
+        }
+        output.lines.push(format!("SKIP {}\n", step.event_id));
+        output.activities.push(
+            RuntimeActivity::new("action_step_failed")
+                .with_param("button", &step.button)
+                .with_param("step", step.step.to_string())
+                .with_detail(error)
+                .with_context(self.active_context.clone()),
+        );
+        self.active = None;
+        self.active_snapshot = None;
+        self.active_context = None;
+        self.pending_paste = None;
+        if let Some(receive_sequence) = self.active_receive_sequence.take() {
+            output.completed_receive_sequences.push(receive_sequence);
+        }
+        self.start_next(output);
     }
 
     pub fn grant_paste(&mut self, event_id: u64, step: u16) -> SessionOutput {
@@ -946,6 +994,9 @@ fn merge_output(target: &mut SessionOutput, mut source: SessionOutput) {
     target
         .completed_receive_sequences
         .append(&mut source.completed_receive_sequences);
+    if source.action_timeout.is_some() {
+        target.action_timeout = source.action_timeout;
+    }
 }
 
 fn activity_from_error(error: crate::workspace::AppError) -> RuntimeActivity {
@@ -1602,10 +1653,12 @@ fn write_isolated_output<W: Write + ?Sized>(
             .map_err(|error| format!("paste_submit_failed: {error}"))?;
         *pending_paste = Some(PendingPasteReply { request, replies });
     }
-    let sent_action = output
-        .lines
-        .iter()
-        .any(|line| line.starts_with("PASTE ") || line.starts_with("HOTKEY "));
+    let action_timeout = output.action_timeout.take().unwrap_or(ACTION_ACK_TIMEOUT);
+    let sent_action = output.lines.iter().any(|line| {
+        ["PASTE ", "HOTKEY ", "DELAY ", "MEDIA ", "HOST "]
+            .iter()
+            .any(|prefix| line.starts_with(prefix))
+    });
     for line in output.lines {
         writer
             .write_all(line.as_bytes())
@@ -1615,11 +1668,59 @@ fn write_isolated_output<W: Write + ?Sized>(
         .flush()
         .map_err(|error| format!("serial_write_failed: {error}"))?;
     if sent_action {
-        *action_deadline = Some(clock.monotonic_now() + ACTION_ACK_TIMEOUT);
+        *action_deadline = Some(clock.monotonic_now() + action_timeout);
     } else if completed_sequence {
         *action_deadline = None;
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn open_target(target: &str) -> Result<(), String> {
+    let status = Command::new("/usr/bin/open")
+        .arg("--")
+        .arg(target)
+        .status()
+        .map_err(|error| format!("open target: {error}"))?;
+    status
+        .success()
+        .then_some(())
+        .ok_or_else(|| format!("open target exited {status}"))
+}
+
+#[cfg(target_os = "windows")]
+fn open_target(target: &str) -> Result<(), String> {
+    use std::{iter, ptr};
+    use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
+
+    let operation = "open\0".encode_utf16().collect::<Vec<_>>();
+    let target = target
+        .encode_utf16()
+        .chain(iter::once(0))
+        .collect::<Vec<_>>();
+    let result = unsafe {
+        ShellExecuteW(
+            ptr::null_mut(),
+            operation.as_ptr(),
+            target.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if result as isize > 32 {
+        Ok(())
+    } else {
+        Err(format!(
+            "open target failed with shell code {}",
+            result as isize
+        ))
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn open_target(_: &str) -> Result<(), String> {
+    Err("opening targets is unsupported on this platform".into())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1700,8 +1801,21 @@ mod tests {
     use std::{
         cell::RefCell,
         collections::BTreeMap,
+        sync::Mutex,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    struct RecordingTargetOpener {
+        targets: Arc<Mutex<Vec<String>>>,
+        error: Option<String>,
+    }
+
+    impl TargetOpener for RecordingTargetOpener {
+        fn open(&self, target: &str) -> Result<(), String> {
+            self.targets.lock().unwrap().push(target.into());
+            self.error.clone().map_or(Ok(()), Err)
+        }
+    }
 
     fn runtime_model() -> RuntimeProfileSnapshot {
         RuntimeProfileSnapshot {
@@ -1925,6 +2039,28 @@ mod tests {
             session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
         assert_eq!(configured.activities[0].code, "topology_active");
         assert!(session.ready);
+    }
+
+    #[test]
+    fn protocol_v4_rejects_profiles_that_use_advanced_actions() {
+        let mut runtime = runtime_model();
+        runtime
+            .profile
+            .actions
+            .insert("A".into(), vec![ButtonAction::Delay { duration_ms: 200 }]);
+        let mut session = DeviceSession::new(runtime);
+
+        let rejected = session.on_message_deferred(hello(), 0, 100);
+
+        assert!(rejected.lines.is_empty());
+        assert_eq!(rejected.activities[0].code, "protocol_mismatch");
+        assert_eq!(
+            rejected.activities[0]
+                .params
+                .get("expected")
+                .map(String::as_str),
+            Some("5")
+        );
     }
 
     #[test]
@@ -2281,6 +2417,98 @@ mod tests {
 
         assert_eq!(output.lines, ["HOTKEY 42 1 1 0 40\n"]);
         assert!(output.paste_requests.is_empty());
+    }
+
+    #[test]
+    fn advanced_actions_preserve_order_and_open_through_the_host() {
+        let targets = Arc::new(Mutex::new(Vec::new()));
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            vec![
+                ButtonAction::Open {
+                    target: "https://example.com".into(),
+                },
+                ButtonAction::Delay { duration_ms: 200 },
+                ButtonAction::Media {
+                    command: crate::profile::MediaCommand::PlayPause,
+                },
+            ],
+        );
+        let mut session = DeviceSession::new(runtime);
+        session.target_opener = Arc::new(RecordingTargetOpener {
+            targets: Arc::clone(&targets),
+            error: None,
+        });
+        session.ready = true;
+
+        let first = session.on_message_deferred(
+            DeviceMessage::State {
+                event_id: 43,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            9,
+            125,
+        );
+        assert_eq!(first.lines, ["HOST 43 1 3\n"]);
+        assert_eq!(targets.lock().unwrap().as_slice(), ["https://example.com"]);
+
+        let second = session.on_message_deferred(
+            DeviceMessage::Done {
+                event_id: 43,
+                step: 1,
+            },
+            0,
+            126,
+        );
+        assert_eq!(second.lines, ["DELAY 43 2 3 200\n"]);
+        assert_eq!(
+            second.action_timeout,
+            Some(ACTION_ACK_TIMEOUT + Duration::from_millis(200))
+        );
+
+        let third = session.on_message_deferred(
+            DeviceMessage::Done {
+                event_id: 43,
+                step: 2,
+            },
+            0,
+            127,
+        );
+        assert_eq!(third.lines, ["MEDIA 43 3 3 205\n"]);
+    }
+
+    #[test]
+    fn failed_open_aborts_only_the_current_action_sequence() {
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            vec![ButtonAction::Open {
+                target: "bad-target".into(),
+            }],
+        );
+        let mut session = DeviceSession::new(runtime);
+        session.target_opener = Arc::new(RecordingTargetOpener {
+            targets: Arc::new(Mutex::new(Vec::new())),
+            error: Some("cannot open".into()),
+        });
+        session.ready = true;
+
+        let output = session.on_message_deferred(
+            DeviceMessage::State {
+                event_id: 44,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            10,
+            128,
+        );
+
+        assert_eq!(output.lines, ["SKIP 44\n"]);
+        assert_eq!(output.activities[1].code, "action_step_failed");
+        assert_eq!(output.completed_receive_sequences, [10]);
+        assert!(session.active.is_none());
     }
 
     #[test]
