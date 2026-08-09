@@ -1,15 +1,23 @@
 use crate::{
     coordinator::{
-        CandidateIssue, CandidateStatus, ConnectionDimension, DeviceStatus, EventLevel,
-        RuntimeDimension, RuntimeEvent,
+        AssignmentDimension, CandidateIssue, CandidateStatus, ConnectionDimension, DeviceMode,
+        DeviceStatus, EventLevel, IdentityDimension, RuntimeDimension, RuntimeEvent,
     },
     hardware::DeviceId,
+    workspace::RuntimeAssignment,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+        mpsc::{self, SyncSender, TrySendError},
+    },
+    thread::{self, JoinHandle},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tauri_plugin_log::{
     Builder, RotationStrategy, Target, TargetKind,
@@ -19,6 +27,9 @@ use tauri_plugin_log::{
 pub(crate) const LOG_TARGET: &str = "kivo::runtime";
 pub(crate) const MAX_FILE_SIZE: u128 = 10 * 1024 * 1024;
 pub(crate) const RETAINED_FILES: usize = 5;
+const LOG_QUEUE_CAPACITY: usize = 1024;
+
+static DISPATCHER: OnceLock<LogDispatcher> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -78,6 +89,16 @@ pub(crate) fn serialize_entry(entry: &RuntimeLogEntry) -> serde_json::Result<Str
     serde_json::to_string(entry)
 }
 
+pub(crate) fn metrics_initialization_failure_detail(error: &rusqlite::Error) -> String {
+    match error {
+        rusqlite::Error::SqliteFailure(error, _) => {
+            format!("sqlite_failure:{}", error.extended_code)
+        }
+        rusqlite::Error::InvalidPath(_) => "invalid_path".into(),
+        _ => "database_error".into(),
+    }
+}
+
 pub(crate) fn emit(entry: RuntimeLogEntry) {
     let line = match serialize_entry(&entry) {
         Ok(line) => line,
@@ -87,10 +108,163 @@ pub(crate) fn emit(entry: RuntimeLogEntry) {
         }
     };
 
-    match entry.level {
-        RuntimeLogLevel::Info => log::info!(target: LOG_TARGET, "{line}"),
-        RuntimeLogLevel::Warning => log::warn!(target: LOG_TARGET, "{line}"),
-        RuntimeLogLevel::Error => log::error!(target: LOG_TARGET, "{line}"),
+    if let Some(dispatcher) = DISPATCHER.get() {
+        let _ = dispatcher.try_enqueue(QueuedLogEntry {
+            level: entry.level,
+            line,
+        });
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct QueuedLogEntry {
+    level: RuntimeLogLevel,
+    line: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DispatchOutcome {
+    Accepted,
+    Dropped,
+    Stopped,
+}
+
+enum WorkerMessage {
+    Entry(QueuedLogEntry),
+    Shutdown,
+}
+
+trait LogSink: Send + 'static {
+    fn write(&mut self, entry: QueuedLogEntry);
+    fn flush(&mut self);
+}
+
+struct OfficialLogSink;
+
+impl LogSink for OfficialLogSink {
+    fn write(&mut self, entry: QueuedLogEntry) {
+        match entry.level {
+            RuntimeLogLevel::Info => log::info!(target: LOG_TARGET, "{}", entry.line),
+            RuntimeLogLevel::Warning => log::warn!(target: LOG_TARGET, "{}", entry.line),
+            RuntimeLogLevel::Error => log::error!(target: LOG_TARGET, "{}", entry.line),
+        }
+    }
+
+    fn flush(&mut self) {
+        log::logger().flush();
+    }
+}
+
+struct LogDispatcher {
+    sender: Mutex<Option<SyncSender<WorkerMessage>>>,
+    worker: Mutex<Option<JoinHandle<()>>>,
+    dropped_total: Arc<AtomicU64>,
+    dropped_unreported: Arc<AtomicU64>,
+}
+
+impl LogDispatcher {
+    fn start(capacity: usize, sink: impl LogSink) -> std::io::Result<Self> {
+        let (sender, receiver) = mpsc::sync_channel(capacity);
+        let dropped_total = Arc::new(AtomicU64::new(0));
+        let dropped_unreported = Arc::new(AtomicU64::new(0));
+        let worker_dropped = Arc::clone(&dropped_unreported);
+        let worker = thread::Builder::new()
+            .name("runtime-log-writer".into())
+            .spawn(move || {
+                let mut sink = sink;
+                while let Ok(message) = receiver.recv() {
+                    match message {
+                        WorkerMessage::Entry(entry) => {
+                            sink.write(entry);
+                            report_dropped_entries(&mut sink, &worker_dropped);
+                        }
+                        WorkerMessage::Shutdown => break,
+                    }
+                }
+                report_dropped_entries(&mut sink, &worker_dropped);
+                sink.flush();
+            })?;
+        Ok(Self {
+            sender: Mutex::new(Some(sender)),
+            worker: Mutex::new(Some(worker)),
+            dropped_total,
+            dropped_unreported,
+        })
+    }
+
+    fn try_enqueue(&self, entry: QueuedLogEntry) -> DispatchOutcome {
+        let sender = self
+            .sender
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(sender) = sender.as_ref() else {
+            return DispatchOutcome::Stopped;
+        };
+        match sender.try_send(WorkerMessage::Entry(entry)) {
+            Ok(()) => DispatchOutcome::Accepted,
+            Err(TrySendError::Full(_)) => {
+                self.dropped_total.fetch_add(1, Ordering::Relaxed);
+                self.dropped_unreported.fetch_add(1, Ordering::Relaxed);
+                DispatchOutcome::Dropped
+            }
+            Err(TrySendError::Disconnected(_)) => DispatchOutcome::Stopped,
+        }
+    }
+
+    #[cfg(test)]
+    fn dropped_count(&self) -> u64 {
+        self.dropped_total.load(Ordering::Relaxed)
+    }
+
+    fn shutdown(&self) {
+        let sender = self
+            .sender
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(sender) = sender {
+            let _ = sender.send(WorkerMessage::Shutdown);
+        }
+        if let Some(worker) = self
+            .worker
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+        {
+            let _ = worker.join();
+        }
+    }
+}
+
+fn report_dropped_entries(sink: &mut impl LogSink, dropped: &AtomicU64) {
+    let count = dropped.swap(0, Ordering::Relaxed);
+    if count == 0 {
+        return;
+    }
+    let entry = RuntimeLogEntry::new(
+        current_timestamp_ms(),
+        RuntimeLogLevel::Warning,
+        "runtime_log_entries_dropped",
+        serde_json::json!({"count": count, "policy": "drop_newest"}),
+    );
+    if let Ok(line) = serialize_entry(&entry) {
+        sink.write(QueuedLogEntry {
+            level: entry.level,
+            line,
+        });
+    }
+}
+
+fn current_timestamp_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+pub(crate) fn shutdown() {
+    if let Some(dispatcher) = DISPATCHER.get() {
+        dispatcher.shutdown();
     }
 }
 
@@ -152,6 +326,98 @@ pub(crate) struct DeviceLogInventory {
     last_scan_error: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceLogSnapshot<'a> {
+    device_id: &'a str,
+    connection: ConnectionDimension,
+    mode: Option<DeviceMode>,
+    identity: IdentityDimension,
+    assignment: AssignmentDimension,
+    runtime: RuntimeDimension,
+    raw_serial: &'a str,
+    port: Option<&'a str>,
+    controller_family_id: &'a str,
+    board_profile_id: &'a str,
+    firmware_build_id: Option<&'a str>,
+    runtime_assignment: Option<RuntimeAssignmentLogSnapshot<'a>>,
+    learning_active: bool,
+    latest_error_code: Option<&'a str>,
+}
+
+impl<'a> From<&'a DeviceStatus> for DeviceLogSnapshot<'a> {
+    fn from(status: &'a DeviceStatus) -> Self {
+        Self {
+            device_id: status.device_id.as_str(),
+            connection: status.connection,
+            mode: status.mode,
+            identity: status.identity,
+            assignment: status.assignment,
+            runtime: status.runtime,
+            raw_serial: &status.raw_serial,
+            port: status.port.as_deref(),
+            controller_family_id: &status.controller_family_id,
+            board_profile_id: &status.board_profile_id,
+            firmware_build_id: status.firmware_build_id.as_deref(),
+            runtime_assignment: status
+                .runtime_assignment
+                .as_ref()
+                .map(RuntimeAssignmentLogSnapshot::from),
+            learning_active: status.learning.is_some(),
+            latest_error_code: status
+                .latest_error
+                .as_ref()
+                .map(|error| error.code.as_str()),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeAssignmentLogSnapshot<'a> {
+    device_profile_id: &'a str,
+    hardware_profile_id: &'a str,
+}
+
+impl<'a> From<&'a RuntimeAssignment> for RuntimeAssignmentLogSnapshot<'a> {
+    fn from(assignment: &'a RuntimeAssignment) -> Self {
+        Self {
+            device_profile_id: &assignment.device_profile_id,
+            hardware_profile_id: &assignment.hardware_profile_id,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CandidateLogSnapshot<'a> {
+    key: &'a str,
+    device_id: Option<&'a str>,
+    mode: DeviceMode,
+    identity: IdentityDimension,
+    issue: CandidateIssue,
+    raw_serial: Option<&'a str>,
+    port: Option<&'a str>,
+    controller_family_id: &'a str,
+    board_profile_id: &'a str,
+}
+
+impl<'a> From<&'a CandidateStatus> for CandidateLogSnapshot<'a> {
+    fn from(status: &'a CandidateStatus) -> Self {
+        Self {
+            key: &status.key,
+            device_id: status.device_id.as_ref().map(DeviceId::as_str),
+            mode: status.mode,
+            identity: status.identity,
+            issue: status.issue,
+            raw_serial: status.raw_serial.as_deref(),
+            port: status.port.as_deref(),
+            controller_family_id: &status.controller_family_id,
+            board_profile_id: &status.board_profile_id,
+        }
+    }
+}
+
 impl DeviceLogInventory {
     pub(crate) fn observe(
         &mut self,
@@ -199,7 +465,23 @@ impl DeviceLogInventory {
             } else {
                 RuntimeLogLevel::Info
             };
-            if let Some(entry) = changed_entry(timestamp_ms, level, event, previous, Some(current))
+            if let Some(entry) =
+                device_changed_entry(timestamp_ms, level, event, previous, Some(current))
+            {
+                entries.push(entry);
+            }
+        }
+
+        for (device_id, previous) in &self.devices {
+            if !next_devices.contains_key(device_id)
+                && previous.connection == ConnectionDimension::Online
+                && let Some(entry) = device_changed_entry(
+                    timestamp_ms,
+                    RuntimeLogLevel::Warning,
+                    "device_disconnected",
+                    Some(previous),
+                    None,
+                )
             {
                 entries.push(entry);
             }
@@ -215,7 +497,7 @@ impl DeviceLogInventory {
             } else {
                 RuntimeLogLevel::Warning
             };
-            if let Some(entry) = changed_entry(
+            if let Some(entry) = candidate_changed_entry(
                 timestamp_ms,
                 level,
                 "device_candidate_changed",
@@ -228,7 +510,7 @@ impl DeviceLogInventory {
 
         for (key, previous) in &self.candidates {
             if !next_candidates.contains_key(key)
-                && let Some(entry) = changed_entry::<CandidateStatus>(
+                && let Some(entry) = candidate_changed_entry(
                     timestamp_ms,
                     RuntimeLogLevel::Info,
                     "device_candidate_resolved",
@@ -268,6 +550,42 @@ impl DeviceLogInventory {
             .with_detail(error),
         ]
     }
+}
+
+fn device_changed_entry(
+    timestamp_ms: u64,
+    level: RuntimeLogLevel,
+    event: &str,
+    previous: Option<&DeviceStatus>,
+    current: Option<&DeviceStatus>,
+) -> Option<RuntimeLogEntry> {
+    let previous = previous.map(DeviceLogSnapshot::from);
+    let current = current.map(DeviceLogSnapshot::from);
+    changed_entry(
+        timestamp_ms,
+        level,
+        event,
+        previous.as_ref(),
+        current.as_ref(),
+    )
+}
+
+fn candidate_changed_entry(
+    timestamp_ms: u64,
+    level: RuntimeLogLevel,
+    event: &str,
+    previous: Option<&CandidateStatus>,
+    current: Option<&CandidateStatus>,
+) -> Option<RuntimeLogEntry> {
+    let previous = previous.map(CandidateLogSnapshot::from);
+    let current = current.map(CandidateLogSnapshot::from);
+    changed_entry(
+        timestamp_ms,
+        level,
+        event,
+        previous.as_ref(),
+        current.as_ref(),
+    )
 }
 
 fn changed_entry<T: Serialize>(
@@ -318,26 +636,92 @@ pub(crate) fn install<R: tauri::Runtime>(
                 Target::new(TargetKind::Stderr).filter(|metadata| metadata.target() == LOG_TARGET),
             ])
             .build(),
-    )
+    )?;
+    if DISPATCHER.get().is_none() {
+        let dispatcher = LogDispatcher::start(LOG_QUEUE_CAPACITY, OfficialLogSink)?;
+        let _ = DISPATCHER.set(dispatcher);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        DeviceLogInventory, RuntimeLogEntry, RuntimeLogLevel, log_directory, runtime_event_entry,
-        serialize_entry,
+        DeviceLogInventory, DispatchOutcome, LogDispatcher, LogSink, QueuedLogEntry,
+        RuntimeLogEntry, RuntimeLogLevel, log_directory, metrics_initialization_failure_detail,
+        runtime_event_entry, serialize_entry,
     };
     use crate::{
         coordinator::{
             AssignmentDimension, CandidateIssue, CandidateStatus, ConnectionDimension, DeviceMode,
             DeviceStatus, EventLevel, IdentityDimension, RuntimeDimension, RuntimeEvent,
         },
-        device::RuntimeActivity,
+        device::{LearningTarget, RuntimeActivity},
         hardware::{DeviceId, ESP32S3_FAMILY_ID, LUATOS_ESP32S3_AIO_BOARD_ID},
         metrics::HomeMetricsSnapshot,
+        workspace::RuntimeAssignment,
     };
     use serde_json::json;
-    use std::path::Path;
+    use std::{
+        collections::BTreeSet,
+        path::Path,
+        sync::{Arc, Mutex, mpsc},
+        time::Duration,
+    };
+
+    struct RecordingSink {
+        entries: Arc<Mutex<Vec<QueuedLogEntry>>>,
+        flush_count: Arc<Mutex<usize>>,
+    }
+
+    impl LogSink for RecordingSink {
+        fn write(&mut self, entry: QueuedLogEntry) {
+            self.entries
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(entry);
+        }
+
+        fn flush(&mut self) {
+            *self
+                .flush_count
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) += 1;
+        }
+    }
+
+    struct BlockingSink {
+        started: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+        entries: Arc<Mutex<Vec<QueuedLogEntry>>>,
+    }
+
+    impl LogSink for BlockingSink {
+        fn write(&mut self, entry: QueuedLogEntry) {
+            if self
+                .entries
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_empty()
+            {
+                self.started.send(()).unwrap();
+                self.release.recv().unwrap();
+            }
+            self.entries
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(entry);
+        }
+
+        fn flush(&mut self) {}
+    }
+
+    fn queued(event: &str) -> QueuedLogEntry {
+        QueuedLogEntry {
+            level: RuntimeLogLevel::Info,
+            line: event.into(),
+        }
+    }
 
     fn device_status(connection: ConnectionDimension) -> DeviceStatus {
         let online = connection == ConnectionDimension::Online;
@@ -405,6 +789,131 @@ mod tests {
         assert_eq!(value["level"], "info");
         assert_eq!(value["event"], "application_started");
         assert_eq!(value["context"]["version"], "0.1.0");
+    }
+
+    #[test]
+    fn metrics_initialization_failure_detail_omits_invalid_paths() {
+        let private_path = "/Users/alice/private/client/metrics.sqlite3";
+        let detail = metrics_initialization_failure_detail(&rusqlite::Error::InvalidPath(
+            private_path.into(),
+        ));
+
+        assert_eq!(detail, "invalid_path");
+        assert!(!detail.contains("alice"));
+        assert!(!detail.contains("private"));
+        assert!(!detail.contains(private_path));
+    }
+
+    #[test]
+    fn log_dispatcher_writes_accepted_entries_in_fifo_order() {
+        let entries = Arc::new(Mutex::new(Vec::new()));
+        let flush_count = Arc::new(Mutex::new(0));
+        let dispatcher = LogDispatcher::start(
+            4,
+            RecordingSink {
+                entries: Arc::clone(&entries),
+                flush_count: Arc::clone(&flush_count),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            dispatcher.try_enqueue(queued("first")),
+            DispatchOutcome::Accepted
+        );
+        assert_eq!(
+            dispatcher.try_enqueue(queued("second")),
+            DispatchOutcome::Accepted
+        );
+        assert_eq!(
+            dispatcher.try_enqueue(queued("third")),
+            DispatchOutcome::Accepted
+        );
+        dispatcher.shutdown();
+
+        let lines = entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .filter(|entry| !entry.line.contains("runtime_log_entries_dropped"))
+            .map(|entry| entry.line.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(lines, ["first", "second", "third"]);
+    }
+
+    #[test]
+    fn log_dispatcher_drops_newest_entry_when_bounded_queue_is_full() {
+        let entries = Arc::new(Mutex::new(Vec::new()));
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let dispatcher = LogDispatcher::start(
+            1,
+            BlockingSink {
+                started: started_tx,
+                release: release_rx,
+                entries: Arc::clone(&entries),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            dispatcher.try_enqueue(queued("first")),
+            DispatchOutcome::Accepted
+        );
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(
+            dispatcher.try_enqueue(queued("second")),
+            DispatchOutcome::Accepted
+        );
+        assert_eq!(
+            dispatcher.try_enqueue(queued("newest")),
+            DispatchOutcome::Dropped
+        );
+        assert_eq!(dispatcher.dropped_count(), 1);
+        release_tx.send(()).unwrap();
+        dispatcher.shutdown();
+
+        let lines = entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .map(|entry| entry.line.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("runtime_log_entries_dropped"))
+        );
+        assert!(!lines.iter().any(|line| line == "newest"));
+    }
+
+    #[test]
+    fn log_dispatcher_shutdown_drains_accepted_entries_and_flushes_once() {
+        let entries = Arc::new(Mutex::new(Vec::new()));
+        let flush_count = Arc::new(Mutex::new(0));
+        let dispatcher = LogDispatcher::start(
+            8,
+            RecordingSink {
+                entries: Arc::clone(&entries),
+                flush_count: Arc::clone(&flush_count),
+            },
+        )
+        .unwrap();
+
+        for event in ["one", "two", "three", "four"] {
+            assert_eq!(
+                dispatcher.try_enqueue(queued(event)),
+                DispatchOutcome::Accepted
+            );
+        }
+        dispatcher.shutdown();
+
+        assert_eq!(entries.lock().unwrap().len(), 4);
+        assert_eq!(*flush_count.lock().unwrap(), 1);
+        assert_eq!(
+            dispatcher.try_enqueue(queued("after")),
+            DispatchOutcome::Stopped
+        );
     }
 
     #[test]
@@ -549,5 +1058,143 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn device_log_inventory_uses_allowlisted_status_projections() {
+        let device_name_secret = "Private desk owned by alice";
+        let device_error_secret = "/Users/alice/private/device-error.txt";
+        let candidate_error_secret = "/Users/alice/private/candidate-error.txt";
+        let learning_secret = "private-learning-profile";
+        let mut device = device_status(ConnectionDimension::Online);
+        device.name = device_name_secret.into();
+        device.pins = vec![201, 202, 203];
+        device.runtime_assignment = Some(RuntimeAssignment {
+            device_profile_id: "desk-profile".into(),
+            hardware_profile_id: "desk-hardware".into(),
+        });
+        let mut latest_error = RuntimeActivity::new("serial_open_failed");
+        latest_error
+            .params
+            .insert("rawError".into(), device_error_secret.into());
+        latest_error.detail = Some(device_error_secret.into());
+        device.latest_error = Some(latest_error);
+        device.learning = Some(LearningTarget {
+            device_id: device.device_id.clone(),
+            device_profile_id: learning_secret.into(),
+            hardware_profile_id: "private-learning-hardware".into(),
+            editing_revision: 991,
+            firmware_revision: 992,
+            pins: vec![204, 205],
+        });
+        let mut candidate = candidate_status(CandidateIssue::PortUnavailable);
+        candidate.latest_error = Some(candidate_error_secret.into());
+
+        let mut inventory = DeviceLogInventory::default();
+        let entries = inventory.observe(100, &[device], &[candidate]);
+        let line = entries
+            .iter()
+            .map(serialize_entry)
+            .collect::<serde_json::Result<Vec<_>>>()
+            .unwrap()
+            .join("\n");
+        let device_context = &entries
+            .iter()
+            .find(|entry| entry.event == "device_connected")
+            .unwrap()
+            .context["current"];
+        let candidate_context = &entries
+            .iter()
+            .find(|entry| entry.event == "device_candidate_changed")
+            .unwrap()
+            .context["current"];
+
+        assert_eq!(
+            device_context
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            [
+                "assignment",
+                "boardProfileId",
+                "connection",
+                "controllerFamilyId",
+                "deviceId",
+                "firmwareBuildId",
+                "identity",
+                "latestErrorCode",
+                "learningActive",
+                "mode",
+                "port",
+                "rawSerial",
+                "runtime",
+                "runtimeAssignment",
+            ]
+            .into_iter()
+            .collect()
+        );
+        assert_eq!(device_context["latestErrorCode"], "serial_open_failed");
+        assert_eq!(device_context["learningActive"], true);
+        assert_eq!(
+            device_context["runtimeAssignment"],
+            json!({
+                "deviceProfileId": "desk-profile",
+                "hardwareProfileId": "desk-hardware",
+            })
+        );
+        assert_eq!(
+            candidate_context
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            [
+                "boardProfileId",
+                "controllerFamilyId",
+                "deviceId",
+                "identity",
+                "issue",
+                "key",
+                "mode",
+                "port",
+                "rawSerial",
+            ]
+            .into_iter()
+            .collect()
+        );
+        for secret in [
+            device_name_secret,
+            device_error_secret,
+            candidate_error_secret,
+            learning_secret,
+            "201",
+            "202",
+            "203",
+            "204",
+            "205",
+        ] {
+            assert!(!line.contains(secret), "leaked {secret}");
+        }
+    }
+
+    #[test]
+    fn device_log_inventory_disconnects_only_disappearing_online_devices() {
+        let mut online_inventory = DeviceLogInventory::default();
+        online_inventory.observe(100, &[device_status(ConnectionDimension::Online)], &[]);
+
+        let disappeared = online_inventory.observe(200, &[], &[]);
+
+        assert_eq!(disappeared.len(), 1);
+        assert_eq!(disappeared[0].event, "device_disconnected");
+        assert_eq!(disappeared[0].level, RuntimeLogLevel::Warning);
+        assert_eq!(disappeared[0].context["previous"]["connection"], "online");
+        assert!(disappeared[0].context.get("current").is_none());
+
+        let mut offline_inventory = DeviceLogInventory::default();
+        offline_inventory.observe(300, &[device_status(ConnectionDimension::Offline)], &[]);
+        assert!(offline_inventory.observe(400, &[], &[]).is_empty());
     }
 }

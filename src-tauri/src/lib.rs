@@ -819,7 +819,7 @@ pub fn run() {
                             "metrics_initialization_failed",
                             serde_json::json!({}),
                         )
-                        .with_detail(error.to_string()),
+                        .with_detail(runtime_log::metrics_initialization_failure_detail(&error)),
                     );
                     None
                 }
@@ -998,6 +998,7 @@ pub fn run() {
                 "application_stopped",
                 serde_json::json!({}),
             ));
+            runtime_log::shutdown();
         }
         _ => {}
     });
