@@ -371,6 +371,7 @@ mod tests {
             controller_family_id: "esp32s3".into(),
             board_profile_id: "luatos-esp32s3-aio".into(),
             firmware_build_id: Some("test".into()),
+            firmware_protocol: Some(6),
             pins: vec![1],
             runtime_assignment: Some(RuntimeAssignment {
                 device_profile_id: "desk-profile".into(),

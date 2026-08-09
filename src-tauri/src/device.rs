@@ -12,9 +12,9 @@ use crate::{
     paste::{Clock, PasteHandle, PasteReply, PasteRequest, SystemClock},
     profile::{ActionTrigger, DeviceProfile},
     protocol::{
-        ADVANCED_ACTION_PROTOCOL_VERSION, ActionSequence, DeviceMessage, HelloCapabilities,
-        InputState, OLED_PROTOCOL_VERSION, PhysicalInput, format_paste_command, is_hello_line,
-        parse_device, topology_commands, validate_hello,
+        ActionSequence, DeviceMessage, HelloCapabilities, InputState, OLED_PROTOCOL_VERSION,
+        PhysicalInput, format_paste_command, is_hello_line, parse_device, topology_commands,
+        validate_hello,
     },
     trigger::{TriggerEdge, TriggerOccurrence, TriggerTracker},
 };
@@ -934,12 +934,11 @@ impl DeviceSession {
             ));
             return;
         }
-        if runtime.profile.uses_advanced_actions()
-            && hello.protocol < ADVANCED_ACTION_PROTOCOL_VERSION
-        {
+        let minimum_protocol = runtime.profile.minimum_protocol_version();
+        if hello.protocol < minimum_protocol {
             output.activities.push(activity_from_error(
-                crate::workspace::AppError::new("protocol_mismatch")
-                    .with_param("expected", ADVANCED_ACTION_PROTOCOL_VERSION.to_string())
+                crate::workspace::AppError::new("firmware_update_required")
+                    .with_param("expected", minimum_protocol.to_string())
                     .with_param("actual", hello.protocol.to_string()),
             ));
             return;
@@ -2650,7 +2649,7 @@ mod tests {
         let rejected = session.on_message_deferred(hello(), 0, 100);
 
         assert!(rejected.lines.is_empty());
-        assert_eq!(rejected.activities[0].code, "protocol_mismatch");
+        assert_eq!(rejected.activities[0].code, "firmware_update_required");
         assert_eq!(
             rejected.activities[0]
                 .params

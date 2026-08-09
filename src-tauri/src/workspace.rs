@@ -9,7 +9,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -73,6 +73,13 @@ pub enum Language {
 pub struct RuntimeAssignment {
     pub device_profile_id: String,
     pub hardware_profile_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct DuplicateProfileForDeviceRequest {
+    pub device_id: DeviceId,
+    pub source_profile: DeviceProfile,
+    pub name: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -250,6 +257,7 @@ impl RestoreOperations for SystemRestoreOperations {
 impl Workspace {
     pub fn load(config_directory: &Path, bundled_profiles: &Path) -> Result<Self, AppError> {
         Self::recover_interrupted_schema_v1_migration(config_directory)?;
+        Self::recover_interrupted_data_generation(config_directory)?;
         let settings_path = config_directory.join("data/settings.yaml");
         if settings_path.exists() {
             if read_schema_header(&settings_path)?.schema_version == LEGACY_SCHEMA_VERSION {
@@ -277,6 +285,42 @@ impl Workspace {
         }
         fs::rename(&backup_directory, &data_directory)
             .map_err(|error| io_error("recover_schema_v1_data", &backup_directory, error))
+    }
+
+    fn recover_interrupted_data_generation(config_directory: &Path) -> Result<(), AppError> {
+        let data_directory = config_directory.join("data");
+        let next_directory = config_directory.join("data.next");
+        let previous_directory = config_directory.join("data.previous");
+        if data_directory.exists() {
+            remove_directory_if_exists(&next_directory)?;
+            remove_directory_if_exists(&previous_directory)?;
+            return Ok(());
+        }
+
+        match (previous_directory.exists(), next_directory.exists()) {
+            (false, false) => Ok(()),
+            (true, false) => fs::rename(&previous_directory, &data_directory)
+                .map_err(|error| io_error("recover_previous_data", &previous_directory, error)),
+            (false, true) => {
+                if Self::load_data_directory(config_directory, &next_directory).is_err() {
+                    return Err(AppError::new("recover_data_generation_failed"));
+                }
+                fs::rename(&next_directory, &data_directory)
+                    .map_err(|error| io_error("recover_next_data", &next_directory, error))
+            }
+            (true, true) => {
+                if Self::load_data_directory(config_directory, &next_directory).is_ok() {
+                    fs::rename(&next_directory, &data_directory)
+                        .map_err(|error| io_error("recover_next_data", &next_directory, error))?;
+                    remove_directory_if_exists(&previous_directory)
+                } else {
+                    fs::rename(&previous_directory, &data_directory).map_err(|error| {
+                        io_error("recover_previous_data", &previous_directory, error)
+                    })?;
+                    remove_directory_if_exists(&next_directory)
+                }
+            }
+        }
     }
 
     fn migrate_schema_v1(config_directory: &Path) -> Result<Self, AppError> {
@@ -563,6 +607,87 @@ impl Workspace {
         self.update_device(id, |record| record.runtime_assignment = Some(value))
     }
 
+    pub fn duplicate_profile_for_device(
+        &mut self,
+        request: DuplicateProfileForDeviceRequest,
+    ) -> Result<DeviceProfile, AppError> {
+        let name = request.name.trim().to_owned();
+        if name.is_empty() {
+            return Err(AppError::new("invalid_profile_name"));
+        }
+        let source_id = request.source_profile.profile.id.clone();
+        if !self.profiles.contains_key(&source_id) {
+            return Err(AppError::new("unknown_profile").with_param("profile", &source_id));
+        }
+        let device = self.device(&request.device_id)?;
+        let mut profile = request.source_profile;
+        profile.profile.name = name.clone();
+        profile.profile.id = next_profile_id(&self.profiles, &name, &source_id);
+
+        let current_assignment = device.runtime_assignment.clone();
+        let preserved_index = current_assignment.as_ref().and_then(|assignment| {
+            (assignment.device_profile_id == source_id).then(|| {
+                profile.hardware_profiles.iter().position(|hardware| {
+                    hardware.id == assignment.hardware_profile_id
+                        && hardware.board_profile_id == device.board_profile_id
+                })
+            })
+        });
+        let selected_index = preserved_index
+            .flatten()
+            .or_else(|| unique_compatible_hardware_index(&profile, &device.board_profile_id))
+            .ok_or_else(|| AppError::new("hardware_resolution_required"))?;
+
+        profile.validate()?;
+        let old_hardware_id = profile.hardware_profiles[selected_index].id.clone();
+        let mut used_hardware_ids = BTreeSet::new();
+        let mut selected_hardware_id = None;
+        for hardware in &mut profile.hardware_profiles {
+            let original_id = hardware.id.clone();
+            let cloned_id = next_hardware_id(&used_hardware_ids, &original_id);
+            hardware.id = cloned_id.clone();
+            used_hardware_ids.insert(cloned_id.clone());
+            if original_id == old_hardware_id {
+                selected_hardware_id = Some(cloned_id);
+            }
+        }
+        let selected_hardware_id = selected_hardware_id.expect("selected hardware was cloned");
+        let selected_hardware = &profile.hardware_profiles[selected_index];
+        if selected_hardware.board_profile_id != device.board_profile_id {
+            return Err(AppError::new("assignment_board_mismatch")
+                .with_param("device_board_profile", &device.board_profile_id)
+                .with_param(
+                    "hardware_board_profile",
+                    &selected_hardware.board_profile_id,
+                ));
+        }
+
+        profile.validate()?;
+        let profile_id = profile.profile.id.clone();
+        let profile_path = self.profile_directory().join(format!("{profile_id}.yaml"));
+        if profile_path.exists() || self.profiles.contains_key(&profile_id) {
+            return Err(AppError::new("profile_already_exists").with_param("profile", profile_id));
+        }
+        let mut settings = self.settings.clone();
+        settings
+            .devices
+            .get_mut(&request.device_id)
+            .expect("device was validated")
+            .runtime_assignment = Some(RuntimeAssignment {
+            device_profile_id: profile_id.clone(),
+            hardware_profile_id: selected_hardware_id,
+        });
+
+        let mut staged_profiles = self.profiles.clone();
+        staged_profiles.insert(profile_id.clone(), profile.clone());
+        validate_settings(&settings, &staged_profiles)?;
+        let next_directory = self.stage_data_generation(&settings, &staged_profiles)?;
+        self.activate_staged_data_generation(&next_directory)?;
+        self.profiles.insert(profile_id, profile.clone());
+        self.settings = settings;
+        Ok(profile)
+    }
+
     fn validate_assignment(
         &self,
         id: &DeviceId,
@@ -801,6 +926,53 @@ impl Workspace {
         write_yaml(&self.data_directory().join("settings.yaml"), settings)
     }
 
+    fn stage_data_generation(
+        &self,
+        settings: &SettingsDocument,
+        profiles: &BTreeMap<String, DeviceProfile>,
+    ) -> Result<PathBuf, AppError> {
+        Self::recover_interrupted_data_generation(&self.config_directory)?;
+        let next_directory = self.config_directory.join("data.next");
+        remove_directory_if_exists(&next_directory)?;
+        if let Err(error) = write_data_directory(&next_directory, settings, profiles) {
+            let _ = fs::remove_dir_all(&next_directory);
+            return Err(error);
+        }
+
+        let source_metrics = self.data_directory().join("metrics.sqlite3");
+        if source_metrics.exists() {
+            let staged_metrics = next_directory.join("metrics.sqlite3");
+            if let Err(error) = fs::hard_link(&source_metrics, &staged_metrics) {
+                let _ = fs::remove_dir_all(&next_directory);
+                return Err(io_error("stage_metrics", &staged_metrics, error));
+            }
+        }
+        Ok(next_directory)
+    }
+
+    fn activate_staged_data_generation(&self, next_directory: &Path) -> Result<(), AppError> {
+        let data_directory = self.data_directory();
+        let previous_directory = self.config_directory.join("data.previous");
+        remove_directory_if_exists(&previous_directory)?;
+        if let Err(error) = fs::rename(&data_directory, &previous_directory) {
+            let _ = fs::remove_dir_all(next_directory);
+            return Err(io_error("stage_duplicate_data", &data_directory, error));
+        }
+        if let Err(error) = fs::rename(next_directory, &data_directory) {
+            let rollback = fs::rename(&previous_directory, &data_directory);
+            let _ = fs::remove_dir_all(next_directory);
+            return match rollback {
+                Ok(()) => Err(io_error("activate_duplicate_data", next_directory, error)),
+                Err(rollback) => Err(AppError::new("duplicate_profile_rollback_failed")
+                    .with_detail(format!(
+                        "activate duplicate data: {error}; restore previous data: {rollback}"
+                    ))),
+            };
+        }
+        let _ = fs::remove_dir_all(&previous_directory);
+        Ok(())
+    }
+
     fn data_directory(&self) -> PathBuf {
         self.config_directory.join("data")
     }
@@ -843,6 +1015,36 @@ fn next_profile_id(
         .map(|suffix| format!("{base}-{suffix}"))
         .find(|candidate| !profiles.contains_key(candidate))
         .expect("profile ID suffix exhausted")
+}
+
+fn next_hardware_id(used: &BTreeSet<String>, original: &str) -> String {
+    let base = format!("{}-copy", ascii_slug(original));
+    let base = if base == "-copy" {
+        "hardware-copy".to_owned()
+    } else {
+        base
+    };
+    if !used.contains(&base) {
+        return base;
+    }
+    (2..)
+        .map(|suffix| format!("{base}-{suffix}"))
+        .find(|candidate| !used.contains(candidate))
+        .expect("hardware ID suffix exhausted")
+}
+
+fn unique_compatible_hardware_index(
+    profile: &DeviceProfile,
+    board_profile_id: &str,
+) -> Option<usize> {
+    let candidates = profile
+        .hardware_profiles
+        .iter()
+        .enumerate()
+        .filter(|(_, hardware)| hardware.board_profile_id == board_profile_id)
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    (candidates.len() == 1).then_some(candidates[0])
 }
 
 fn collect_profiles(
@@ -1619,6 +1821,245 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_and_assign_is_atomic_and_generates_unique_ids() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let device_a =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SHARED-A").unwrap();
+        let device_b =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SHARED-B").unwrap();
+        workspace.enroll_device(device_a.clone()).unwrap();
+        workspace.enroll_device(device_b.clone()).unwrap();
+        let assignment = RuntimeAssignment {
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        workspace
+            .set_assignment(&device_a, assignment.clone())
+            .unwrap();
+        workspace
+            .set_assignment(&device_b, assignment.clone())
+            .unwrap();
+
+        let mut edited = workspace.profiles["red-phone-v1"].clone();
+        edited.trigger_settings.long_press_ms = 700;
+        let cloned = workspace
+            .duplicate_profile_for_device(DuplicateProfileForDeviceRequest {
+                device_id: device_a.clone(),
+                source_profile: edited,
+                name: "Phone copy".into(),
+            })
+            .unwrap();
+
+        assert_ne!(cloned.profile.id, "red-phone-v1");
+        assert_ne!(cloned.hardware_profiles[0].id, "esp-primary");
+        assert_eq!(cloned.trigger_settings.long_press_ms, 700);
+        assert_eq!(
+            workspace.settings.devices[&device_b]
+                .runtime_assignment
+                .as_ref()
+                .unwrap()
+                .device_profile_id,
+            "red-phone-v1"
+        );
+        assert_eq!(
+            workspace.settings.devices[&device_a]
+                .runtime_assignment
+                .as_ref()
+                .unwrap()
+                .device_profile_id,
+            cloned.profile.id
+        );
+        assert_eq!(
+            workspace.profiles["red-phone-v1"]
+                .trigger_settings
+                .long_press_ms,
+            500
+        );
+    }
+
+    #[test]
+    fn duplicate_generation_keeps_the_open_metrics_store_on_the_active_inode() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let device = DeviceId::new(
+            crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+            "METRICS-GENERATION",
+        )
+        .unwrap();
+        workspace.enroll_device(device.clone()).unwrap();
+        workspace
+            .set_assignment(
+                &device,
+                RuntimeAssignment {
+                    device_profile_id: "red-phone-v1".into(),
+                    hardware_profile_id: "esp-primary".into(),
+                },
+            )
+            .unwrap();
+        let metrics_path = directory.path("data/metrics.sqlite3");
+        let metrics = MetricsStore::open(&metrics_path).unwrap();
+        let attribution = MetricAttribution {
+            device_id: device.clone(),
+            device_name: "Metrics desk".into(),
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        metrics
+            .record_button_press(&attribution, "A", 1_720_086_400_000)
+            .unwrap();
+
+        workspace
+            .duplicate_profile_for_device(DuplicateProfileForDeviceRequest {
+                device_id: device,
+                source_profile: workspace.profiles["red-phone-v1"].clone(),
+                name: "Metrics copy".into(),
+            })
+            .unwrap();
+        metrics
+            .record_button_press(&attribution, "A", 1_720_086_400_001)
+            .unwrap();
+        drop(metrics);
+
+        let reopened = MetricsStore::open(&metrics_path).unwrap();
+        let backup = reopened.backup().unwrap();
+        assert_eq!(backup.button_metrics.len(), 1);
+        assert_eq!(backup.button_metrics[0].total_presses, 2);
+    }
+
+    #[test]
+    fn duplicate_and_assign_write_failure_rolls_back_profile_and_assignment() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let device =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "FAILURE").unwrap();
+        workspace.enroll_device(device.clone()).unwrap();
+        let assignment = RuntimeAssignment {
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        workspace
+            .set_assignment(&device, assignment.clone())
+            .unwrap();
+        let profiles_before = workspace.profiles.clone();
+        let settings_before = workspace.settings.clone();
+        let settings_bytes_before = fs::read(directory.path("data/settings.yaml")).unwrap();
+        fs::write(
+            directory.path("data.next"),
+            b"staging generation is unavailable",
+        )
+        .unwrap();
+
+        let error = workspace
+            .duplicate_profile_for_device(DuplicateProfileForDeviceRequest {
+                device_id: device,
+                source_profile: workspace.profiles["red-phone-v1"].clone(),
+                name: "Failure copy".into(),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, "remove_staging_directory");
+        assert_eq!(workspace.profiles, profiles_before);
+        assert_eq!(workspace.settings, settings_before);
+        assert_eq!(
+            fs::read(directory.path("data/settings.yaml")).unwrap(),
+            settings_bytes_before
+        );
+        assert_eq!(
+            fs::read_dir(directory.path("data/profiles"))
+                .unwrap()
+                .count(),
+            profiles_before.len()
+        );
+    }
+
+    #[test]
+    fn duplicate_and_assign_does_not_guess_same_hardware_id_across_profiles() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let device = DeviceId::new(
+            crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+            "CROSS-PROFILE",
+        )
+        .unwrap();
+        workspace.enroll_device(device.clone()).unwrap();
+        let other = workspace
+            .create_profile(CreateDeviceProfileRequest::Clone {
+                name: "Other profile".into(),
+                source_profile_id: "red-phone-v1".into(),
+            })
+            .unwrap()
+            .profile
+            .id
+            .clone();
+        let assignment = RuntimeAssignment {
+            device_profile_id: other,
+            hardware_profile_id: "esp-primary".into(),
+        };
+        workspace
+            .set_assignment(&device, assignment.clone())
+            .unwrap();
+        let profiles_before = workspace.profiles.clone();
+
+        let error = workspace
+            .duplicate_profile_for_device(DuplicateProfileForDeviceRequest {
+                device_id: device.clone(),
+                source_profile: workspace.profiles["red-phone-v1"].clone(),
+                name: "No guessed mapping".into(),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, "hardware_resolution_required");
+        assert_eq!(workspace.profiles, profiles_before);
+        assert_eq!(
+            workspace.settings.devices[&device]
+                .runtime_assignment
+                .as_ref()
+                .unwrap(),
+            &assignment
+        );
+    }
+
+    #[test]
+    fn duplicate_and_assign_profile_write_failure_leaves_workspace_unchanged() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let device = DeviceId::new(
+            crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+            "PROFILE-FAILURE",
+        )
+        .unwrap();
+        workspace.enroll_device(device.clone()).unwrap();
+        let assignment = RuntimeAssignment {
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        workspace.set_assignment(&device, assignment).unwrap();
+        let profiles_before = workspace.profiles.clone();
+        let settings_before = fs::read(directory.path("data/settings.yaml")).unwrap();
+        fs::write(
+            directory.path("data.next"),
+            b"staging generation is unavailable",
+        )
+        .unwrap();
+
+        let error = workspace
+            .duplicate_profile_for_device(DuplicateProfileForDeviceRequest {
+                device_id: device,
+                source_profile: workspace.profiles["red-phone-v1"].clone(),
+                name: "Profile write failure".into(),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, "remove_staging_directory");
+        assert_eq!(workspace.profiles, profiles_before);
+        assert_eq!(
+            fs::read(directory.path("data/settings.yaml")).unwrap(),
+            settings_before
+        );
+    }
+
+    #[test]
     fn complete_device_setup_allows_multiple_devices_to_share_one_profile() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
@@ -2119,6 +2560,43 @@ actions: {}
                 .exists()
         );
         assert!(!config_directory.join("data.next").exists());
+    }
+
+    #[test]
+    fn load_recovers_valid_next_generation_when_active_data_is_missing() {
+        let directory = TestDirectory::new();
+        let config_directory = directory.path("config");
+        let workspace = Workspace::create(&config_directory, vec![device_profile()]).unwrap();
+        let mut next_settings = workspace.settings.clone();
+        next_settings.language = Language::EnUs;
+        let next_directory = config_directory.join("data.next");
+        write_data_directory(&next_directory, &next_settings, &workspace.profiles).unwrap();
+        fs::rename(
+            config_directory.join("data"),
+            config_directory.join("data.previous"),
+        )
+        .unwrap();
+
+        let recovered = Workspace::load(&config_directory, &directory.path("bundled")).unwrap();
+
+        assert_eq!(recovered.settings.language, Language::EnUs);
+        assert!(!config_directory.join("data.previous").exists());
+        assert!(!config_directory.join("data.next").exists());
+    }
+
+    #[test]
+    fn load_discards_stale_next_generation_when_active_data_exists() {
+        let directory = TestDirectory::new();
+        let config_directory = directory.path("config");
+        let workspace = Workspace::create(&config_directory, vec![device_profile()]).unwrap();
+        let next_directory = config_directory.join("data.next");
+        write_data_directory(&next_directory, &workspace.settings, &workspace.profiles).unwrap();
+
+        let recovered = Workspace::load(&config_directory, &directory.path("bundled")).unwrap();
+
+        assert_eq!(recovered.settings.language, Language::ZhCn);
+        assert!(!config_directory.join("data.next").exists());
+        assert!(!config_directory.join("data.previous").exists());
     }
 
     #[test]

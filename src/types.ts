@@ -166,6 +166,7 @@ export interface DeviceStatus {
   controllerFamilyId: string;
   boardProfileId: string;
   firmwareBuildId: string | null;
+  firmwareProtocol?: number | null;
   capabilities: number[];
   runtimeAssignment: RuntimeAssignment | null;
   latestError: RuntimeActivity | null;

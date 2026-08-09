@@ -35,8 +35,8 @@ use std::{
 };
 use tauri::{Emitter, Manager};
 use workspace::{
-    AppError, AssignmentResolution, BackupPreview, EditorSettingsPatch, ImportPreview, Language,
-    RuntimeAssignment, Workspace,
+    AppError, AssignmentResolution, BackupPreview, DuplicateProfileForDeviceRequest,
+    EditorSettingsPatch, ImportPreview, Language, RuntimeAssignment, Workspace,
 };
 
 const DEVICE_SCAN_INTERVAL: Duration = Duration::from_millis(500);
@@ -416,8 +416,49 @@ fn save_runtime_assignment_inner(
 ) -> Result<AppSnapshot, AppError> {
     mutate_workspace(state, move |workspace, coordinator| {
         require_addressable_identity(coordinator, device_id)?;
+        validate_online_assignment_protocol(coordinator, workspace, device_id, &assignment)?;
         workspace.set_assignment(device_id, assignment)
     })
+}
+
+fn validate_online_assignment_protocol(
+    coordinator: Option<&RuntimeCoordinator>,
+    workspace: &Workspace,
+    device_id: &hardware::DeviceId,
+    assignment: &RuntimeAssignment,
+) -> Result<(), AppError> {
+    let profile = workspace
+        .profiles
+        .get(&assignment.device_profile_id)
+        .ok_or_else(|| AppError::new("unknown_profile"))?;
+    validate_online_firmware_protocol(coordinator, device_id, profile.minimum_protocol_version())
+}
+
+fn validate_online_firmware_protocol(
+    coordinator: Option<&RuntimeCoordinator>,
+    device_id: &hardware::DeviceId,
+    minimum: u16,
+) -> Result<(), AppError> {
+    let Some(status) = coordinator.and_then(|coordinator| {
+        coordinator
+            .devices()
+            .into_iter()
+            .find(|status| status.device_id == *device_id)
+    }) else {
+        return Ok(());
+    };
+    if status.connection != coordinator::ConnectionDimension::Online {
+        return Ok(());
+    }
+    let Some(actual) = status.firmware_protocol else {
+        return Ok(());
+    };
+    if actual < minimum {
+        return Err(AppError::new("firmware_update_required")
+            .with_param("expected", minimum.to_string())
+            .with_param("actual", actual.to_string()));
+    }
+    Ok(())
 }
 
 fn validate_setup_eligibility(
@@ -460,7 +501,24 @@ fn complete_device_setup_inner(
 ) -> Result<AppSnapshot, AppError> {
     mutate_workspace(state, move |workspace, coordinator| {
         require_setup_device(coordinator, device_id)?;
+        validate_online_assignment_protocol(coordinator, workspace, device_id, &assignment)?;
         workspace.complete_device_setup(device_id, name, assignment)
+    })
+}
+
+fn duplicate_profile_for_device_inner(
+    state: &AppState,
+    request: DuplicateProfileForDeviceRequest,
+) -> Result<AppSnapshot, AppError> {
+    mutate_workspace(state, move |workspace, coordinator| {
+        require_addressable_identity(coordinator, &request.device_id)?;
+        validate_online_firmware_protocol(
+            coordinator,
+            &request.device_id,
+            request.source_profile.minimum_protocol_version(),
+        )?;
+        workspace.duplicate_profile_for_device(request)?;
+        Ok(())
     })
 }
 
@@ -703,6 +761,17 @@ fn create_device_profile(
     let context = create_profile_operation_context(&request);
     runtime_log::operation(now_ms(), "device_profile_created", context, || {
         create_device_profile_inner(&state, request)
+    })
+}
+
+#[tauri::command]
+fn duplicate_profile_for_device(
+    state: tauri::State<'_, AppState>,
+    request: DuplicateProfileForDeviceRequest,
+) -> Result<AppSnapshot, AppError> {
+    let context = device_operation_context(&request.device_id);
+    runtime_log::operation(now_ms(), "profile_duplicated_for_device", context, || {
+        duplicate_profile_for_device_inner(&state, request)
     })
 }
 
@@ -1040,6 +1109,7 @@ pub fn run() {
             retry_candidate,
             save_device_profile,
             create_device_profile,
+            duplicate_profile_for_device,
             save_settings,
             rename_device,
             save_runtime_assignment,
@@ -1883,6 +1953,66 @@ mod tests {
             .code,
             "invalid_device_identity"
         );
+    }
+
+    #[test]
+    fn online_assignment_rejects_profiles_that_need_newer_firmware() {
+        let directory = TestDirectory::new();
+        let mut state = product_state(&directory.0, vec![product_profile()]);
+        let mut gated_profile = product_profile();
+        gated_profile.actions.insert(
+            "UP".into(),
+            TriggerActions {
+                release: vec![ButtonAction::Paste {
+                    text: "release".into(),
+                }],
+                ..TriggerActions::default()
+            },
+        );
+        state
+            .workspace
+            .write()
+            .unwrap()
+            .save_profile(gated_profile)
+            .unwrap();
+
+        let launcher = Arc::new(SaveLauncher::default());
+        let mut coordinator = RuntimeCoordinator::new(
+            Arc::new(SaveEnumerator),
+            launcher,
+            Arc::clone(&state.workspace),
+        );
+        coordinator.scan_once().unwrap();
+        coordinator.drain_worker_events();
+        state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
+
+        let device =
+            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
+                .unwrap();
+        let assignment = RuntimeAssignment {
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        let error = save_runtime_assignment_inner(&state, &device, assignment).unwrap_err();
+        assert_eq!(error.code, "firmware_update_required");
+        assert_eq!(error.params.get("expected"), Some(&"6".to_owned()));
+        assert_eq!(
+            state.workspace.read().unwrap().settings.devices[&device].runtime_assignment,
+            None
+        );
+
+        let draft = state.workspace.read().unwrap().profiles["red-phone-v1"].clone();
+        let duplicate_error = duplicate_profile_for_device_inner(
+            &state,
+            DuplicateProfileForDeviceRequest {
+                device_id: device.clone(),
+                source_profile: draft,
+                name: "Upgrade copy".into(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(duplicate_error.code, "firmware_update_required");
+        assert_eq!(state.workspace.read().unwrap().profiles.len(), 1);
     }
 
     #[test]

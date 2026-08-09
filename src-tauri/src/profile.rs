@@ -1,7 +1,9 @@
 use crate::{
     hardware::board_by_id,
     model::ModelLayout,
-    protocol::{PhysicalInput, encode_hotkey},
+    protocol::{
+        ADVANCED_ACTION_PROTOCOL_VERSION, OLED_PROTOCOL_VERSION, PhysicalInput, encode_hotkey,
+    },
     workspace::AppError,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
@@ -319,6 +321,43 @@ fn topology_signature(
 }
 
 impl DeviceProfile {
+    pub fn minimum_protocol_version(&self) -> u16 {
+        let mut required = 3;
+        if self
+            .hardware_profiles
+            .iter()
+            .any(|hardware| hardware.ssd1306.is_some())
+        {
+            required = required.max(OLED_PROTOCOL_VERSION);
+        }
+        for actions in self.actions.values() {
+            if !actions.release.is_empty()
+                || !actions.long_press.is_empty()
+                || !actions.double_press.is_empty()
+            {
+                required = required.max(crate::protocol::HOST_PROTOCOL_VERSION);
+            }
+            for action in actions.all() {
+                match action {
+                    ButtonAction::Hotkey { keys } => {
+                        if let Ok(chord) = encode_hotkey(keys)
+                            && chord.keycodes.len() != 1
+                        {
+                            required = required.max(crate::protocol::HOST_PROTOCOL_VERSION);
+                        }
+                    }
+                    ButtonAction::Delay { .. }
+                    | ButtonAction::Media { .. }
+                    | ButtonAction::Open { .. } => {
+                        required = required.max(ADVANCED_ACTION_PROTOCOL_VERSION);
+                    }
+                    ButtonAction::Paste { .. } => {}
+                }
+            }
+        }
+        required
+    }
+
     pub fn hardware_profile(&self, id: &str) -> Option<&HardwareProfile> {
         self.hardware_profiles
             .iter()
@@ -767,6 +806,48 @@ mod tests {
             TriggerActions::press(vec![ButtonAction::Open { target: " ".into() }]),
         );
         assert_eq!(profile.validate().unwrap_err().code, "invalid_open_target");
+    }
+
+    #[test]
+    fn profile_protocol_requirement_tracks_trigger_and_chord_features() {
+        let mut press_only = profile();
+        press_only.actions.insert(
+            "UP".into(),
+            TriggerActions::press(vec![ButtonAction::Hotkey {
+                keys: vec!["a".into()],
+            }]),
+        );
+        assert_eq!(press_only.minimum_protocol_version(), 3);
+
+        let mut release = press_only.clone();
+        release.actions.insert(
+            "UP".into(),
+            TriggerActions {
+                release: vec![ButtonAction::Paste {
+                    text: "released".into(),
+                }],
+                ..TriggerActions::default()
+            },
+        );
+        assert_eq!(release.minimum_protocol_version(), 6);
+
+        let mut multi_key = press_only.clone();
+        multi_key.actions.insert(
+            "UP".into(),
+            TriggerActions::press(vec![ButtonAction::Hotkey {
+                keys: vec!["a".into(), "b".into()],
+            }]),
+        );
+        assert_eq!(multi_key.minimum_protocol_version(), 6);
+
+        let mut modifier_only = press_only;
+        modifier_only.actions.insert(
+            "UP".into(),
+            TriggerActions::press(vec![ButtonAction::Hotkey {
+                keys: vec!["right_cmd".into()],
+            }]),
+        );
+        assert_eq!(modifier_only.minimum_protocol_version(), 6);
     }
 
     #[test]

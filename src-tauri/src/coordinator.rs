@@ -167,6 +167,8 @@ pub struct DeviceStatus {
     pub controller_family_id: String,
     pub board_profile_id: String,
     pub firmware_build_id: Option<String>,
+    #[serde(rename = "firmwareProtocol")]
+    pub firmware_protocol: Option<u16>,
     #[serde(rename = "capabilities")]
     pub pins: Vec<u8>,
     pub runtime_assignment: Option<RuntimeAssignment>,
@@ -632,6 +634,7 @@ impl RuntimeCoordinator {
                     status.latest_error = Some(RuntimeActivity::new("duplicate_identity"));
                     status.port = None;
                     status.firmware_build_id = None;
+                    status.firmware_protocol = None;
                     status.pins.clear();
                     status.learning = None;
                 }
@@ -678,6 +681,7 @@ impl RuntimeCoordinator {
                                 status.runtime = RuntimeDimension::Inactive;
                                 status.port = None;
                                 status.firmware_build_id = None;
+                                status.firmware_protocol = None;
                                 status.pins.clear();
                                 status.learning = None;
                                 status.latest_error = Some(runtime_error(error));
@@ -765,6 +769,7 @@ impl RuntimeCoordinator {
                 status.runtime = RuntimeDimension::Inactive;
                 status.port = None;
                 status.firmware_build_id = None;
+                status.firmware_protocol = None;
                 status.pins.clear();
                 status.latest_error = None;
                 status.learning = None;
@@ -862,6 +867,7 @@ impl RuntimeCoordinator {
                         status.runtime = RuntimeDimension::Inactive;
                         status.latest_error = None;
                     } else if activity.code == "topology_rejected"
+                        || activity.code == "firmware_update_required"
                         || activity.code.ends_with("failed")
                         || activity.code.ends_with("mismatch")
                         || activity.code.ends_with("timeout")
@@ -886,6 +892,7 @@ impl RuntimeCoordinator {
                     status.mode = None;
                     status.runtime = RuntimeDimension::Inactive;
                     status.firmware_build_id = None;
+                    status.firmware_protocol = None;
                     status.pins.clear();
                     status.port = None;
                     status.learning = None;
@@ -969,6 +976,7 @@ impl RuntimeCoordinator {
             status.mode = Some(DeviceMode::Runtime);
             status.identity = IdentityDimension::Valid;
             status.firmware_build_id = Some(capabilities.firmware_build_id.clone());
+            status.firmware_protocol = Some(capabilities.protocol);
             status.pins = capabilities.pins;
             status.port = self.workers.get(&device_id).map(|slot| slot.port.clone());
             status.runtime = if profile.is_some() {
@@ -1454,6 +1462,7 @@ fn set_observed(
     status.board_profile_id = observation.board().id.into();
     if observation.mode() == DeviceMode::Bootloader {
         status.firmware_build_id = None;
+        status.firmware_protocol = None;
         status.pins.clear();
         status.learning = None;
         status.latest_error = None;
@@ -1501,6 +1510,7 @@ fn candidate_issue(
                 }
                 Some(
                     "protocol_mismatch"
+                    | "firmware_update_required"
                     | "controller_family_mismatch"
                     | "board_profile_mismatch"
                     | "capability_mismatch",
@@ -1602,6 +1612,7 @@ fn offline_status(
         controller_family_id: board.family_id.into(),
         board_profile_id: board.id.into(),
         firmware_build_id: None,
+        firmware_protocol: None,
         pins: Vec::new(),
         runtime_assignment,
         latest_error: None,
