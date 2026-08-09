@@ -2,7 +2,7 @@
 
 把实体按键变成电脑里的文字与快捷键。
 
-[下载最新版本](https://github.com/leowzz/kivo/releases/latest) · [快速上手](#快速上手) · [本地开发](#本地开发)
+[下载最新版本](https://github.com/leowzz/kivo/releases/latest) · [快速上手](#快速上手) · [刷入固件](#刷入固件) · [本地开发](#本地开发)
 
 ![小黑操作 Kivo 插线台，把实体按键接成文字和快捷键](assets/readme-illustrations/01-kivo-switchboard.png)
 
@@ -22,13 +22,42 @@ Kivo 是一套由设备固件和 Tauri 桌面 helper 组成的实体按键工作
 ## 快速上手
 
 1. 从 [Releases](https://github.com/leowzz/kivo/releases/latest) 下载 macOS 安装包或 Windows x64 安装程序。
-2. 连接已经刷入 Kivo 固件的受支持控制器。通过身份与协议校验后，Kivo 会自动登记这台设备。
+2. 按照[刷入固件](#刷入固件)为受支持的控制器刷入对应固件，然后连接控制器。通过身份与协议校验后，Kivo 会自动登记这台设备。
 3. 新建 Device Profile，或从已有配置复制/导入。Device Profile 决定可见按键布局与动作。
 4. 为目标板卡创建 Hardware Profile，通过手动配置或学习模式把实体输入映射到按键。
 5. 在“按键行为”中配置文字粘贴或快捷键，然后在“设备管理”中保存 Runtime Assignment。
 6. 按下实体按键，在首页确认动作、计数和活动记录。
 
 新登记的设备在获得有效 Runtime Assignment 前不会执行动作。编辑中的 Device Profile 也不会自动替换任何设备正在使用的配置。
+
+## 刷入固件
+
+从 [最新 Release](https://github.com/leowzz/kivo/releases/latest) 下载与板卡对应的固件：
+
+| 板卡 | 选择这个文件 |
+|---|---|
+| LuatOS ESP32-S3-AIO | `kivo-vX.Y.Z-esp32s3.bin` |
+| VCC-GND YD-RP2040 | `kivo-vX.Y.Z-rp2040.uf2` |
+
+### YD-RP2040：拖入文件管理器
+
+1. 让板卡进入 BOOTSEL 模式：
+   - 板卡尚未连接时，按住 **BOOT**，插入 USB；看到 `RPI-RP2` 磁盘后松开 **BOOT**。
+   - 板卡已经连接时，按住 **BOOT**，短按一次 **RESET**，然后松开 **BOOT**。
+2. 在 Finder 或文件资源管理器中打开 `RPI-RP2`。
+3. 把 `kivo-vX.Y.Z-rp2040.uf2` 拖进磁盘。复制完成后磁盘会自动退出，板卡会运行 Kivo 固件。
+
+### ESP32-S3：在浏览器中选择固件
+
+ESP32-S3 的下载模式不会显示成磁盘。请使用 Chrome 或 Edge：
+
+1. 下载 `kivo-vX.Y.Z-esp32s3.bin`，打开 Espressif 官方的 [ESP Tool](https://espressif.github.io/esptool-js/)。
+2. 按住板卡的 **BOOT**，短按一次 **RESET/RST**，然后松开 **BOOT**。
+3. 点击 **Connect**，选择刚出现的 ESP32-S3 串口。
+4. 点击 **Add File**，地址填写 `0x0`，选择下载的 `.bin` 文件。
+5. 点击 **Program**。完成后短按一次 **RESET/RST**，板卡会运行 Kivo 固件。
+
+只使用上表中与板卡匹配的文件。刷写完成后保持 USB 连接，Kivo 会自动检测设备。
 
 ## 配置怎样组合
 
