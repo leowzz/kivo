@@ -95,34 +95,6 @@ void test_rp2040_standalone_debug_topology_matches_keyboard_wiring() {
       makeRp2040StandaloneDebugTopology(kLuatOsEsp32S3Aio).has_value());
 }
 
-void test_rp2040_standalone_debug_accepts_only_matching_host_topology() {
-  const auto configured =
-      makeRp2040StandaloneDebugTopology(kVccGndYdRp2040);
-  TEST_ASSERT_TRUE(configured.has_value());
-  TEST_ASSERT_TRUE(acceptsRp2040StandaloneHostTopology(*configured));
-
-  auto differentRevision = *configured;
-  differentRevision.revision = 42;
-  TEST_ASSERT_TRUE(acceptsRp2040StandaloneHostTopology(differentRevision));
-
-  RuntimeTopology empty;
-  empty.revision = 43;
-  empty.debounceMs = 1000;
-  TEST_ASSERT_TRUE(acceptsRp2040StandaloneHostTopology(empty));
-
-  auto differentDebounce = *configured;
-  differentDebounce.debounceMs = 31;
-  TEST_ASSERT_FALSE(acceptsRp2040StandaloneHostTopology(differentDebounce));
-
-  auto missingInput = *configured;
-  missingInput.directs[0].pins.pop_back();
-  TEST_ASSERT_FALSE(acceptsRp2040StandaloneHostTopology(missingInput));
-
-  auto missingOled = *configured;
-  missingOled.oled.reset();
-  TEST_ASSERT_FALSE(acceptsRp2040StandaloneHostTopology(missingOled));
-}
-
 void test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match() {
   TEST_ASSERT_EQUAL(platform::Rp2040OledBus::I2c0,
                     platform::selectRp2040OledBus(28, 29));
@@ -477,7 +449,7 @@ void test_display_status_frames_have_two_sixteen_character_status_lines() {
 
 void test_standalone_debug_display_does_not_depend_on_usb_state() {
   DisplayStatusModel status;
-  status.setStandaloneDebug();
+  status.setStandaloneDebug(true);
   status.setReady(18);
 
   TEST_ASSERT_EQUAL_STRING("KIVO GPIO DEBUG ",
@@ -487,6 +459,18 @@ void test_standalone_debug_display_does_not_depend_on_usb_state() {
                            status.frame().lines[0].c_str());
   TEST_ASSERT_EQUAL_STRING("READY    18 KEYS",
                            status.frame().lines[1].c_str());
+}
+
+void test_standalone_debug_display_returns_to_managed_usb_status() {
+  DisplayStatusModel status;
+  status.setStandaloneDebug(true);
+  status.setUsbConnected(true);
+  status.setReady(18);
+
+  status.setStandaloneDebug(false);
+
+  TEST_ASSERT_EQUAL_STRING("KIVO      USB ON",
+                           status.frame().lines[0].c_str());
 }
 
 void test_display_status_formats_last_direct_and_contact_edges() {
@@ -816,7 +800,6 @@ int main(int, char **) {
   RUN_TEST(test_board_profiles_enforce_exact_safe_pins);
   RUN_TEST(test_board_profiles_report_oled_capability);
   RUN_TEST(test_rp2040_standalone_debug_topology_matches_keyboard_wiring);
-  RUN_TEST(test_rp2040_standalone_debug_accepts_only_matching_host_topology);
   RUN_TEST(test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match);
   RUN_TEST(test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins);
   RUN_TEST(test_formats_protocol_v5_hello_with_board_and_build);
@@ -839,6 +822,7 @@ int main(int, char **) {
   RUN_TEST(test_learning_rejects_active_oled_pins);
   RUN_TEST(test_display_status_frames_have_two_sixteen_character_status_lines);
   RUN_TEST(test_standalone_debug_display_does_not_depend_on_usb_state);
+  RUN_TEST(test_standalone_debug_display_returns_to_managed_usb_status);
   RUN_TEST(test_display_status_formats_last_direct_and_contact_edges);
   RUN_TEST(test_display_status_can_clear_stale_input_activity);
   RUN_TEST(test_suppresses_new_contact_that_closes_a_ghost_cycle);

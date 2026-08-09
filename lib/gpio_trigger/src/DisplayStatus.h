@@ -18,7 +18,7 @@ struct DisplayFrame {
 class DisplayStatusModel {
  public:
   void setUsbConnected(bool connected) { usbConnected_ = connected; }
-  void setStandaloneDebug() { standaloneDebug_ = true; }
+  void setStandaloneDebug(bool enabled) { standaloneDebug_ = enabled; }
   void setReady(std::size_t keyCount);
   void setLearning(std::size_t pinCount);
   void setConfigError();

@@ -23,7 +23,6 @@ ResponseLineBuffer responseLines(kMaxResponseLineLength);
 TopologyBuilder topologyBuilder(platform::boardProfile());
 DisplayStatusModel displayStatus;
 bool helperConnected = false;
-bool standaloneDebugMode = false;
 bool standaloneDisplayPending = false;
 std::uint32_t standaloneDisplayStartedMs = 0;
 
@@ -100,15 +99,16 @@ void applyTopologyState(const RuntimeTopology &topology, std::uint32_t nowMs) {
 
 void activateTopology(const RuntimeTopology &topology, std::uint32_t nowMs) {
   standaloneDisplayPending = false;
-  applyTopologyState(topology, nowMs);
+  displayStatus.setStandaloneDebug(false);
+  // Release the old display before its I2C pins are reassigned by the topology.
   platform::configureDisplay(topology.oled);
+  applyTopologyState(topology, nowMs);
   renderStatus();
 }
 
 void activateStandaloneTopology(const RuntimeTopology &topology,
                                 std::uint32_t nowMs) {
-  standaloneDebugMode = true;
-  displayStatus.setStandaloneDebug();
+  displayStatus.setStandaloneDebug(true);
   applyTopologyState(topology, nowMs);
   standaloneDisplayPending = true;
   standaloneDisplayStartedMs = nowMs;
@@ -166,13 +166,6 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
       const auto topology = topologyBuilder.commit(command->revision);
       if (!topology.has_value()) {
         configError(command->revision, "invalid_commit");
-        return;
-      }
-      if (standaloneDebugMode) {
-        writeLine(acceptsRp2040StandaloneHostTopology(*topology)
-                      ? "CONFIG_OK " + std::to_string(command->revision) + "\n"
-                      : "CONFIG_ERROR " + std::to_string(command->revision) +
-                            " standalone_mismatch\n");
         return;
       }
       activateTopology(*topology, nowMs);
