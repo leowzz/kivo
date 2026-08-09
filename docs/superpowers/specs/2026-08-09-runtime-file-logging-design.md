@@ -4,7 +4,7 @@
 
 ## Goal
 
-Add bounded, persistent diagnostic logging to Kivo's runtime data directory. The
+Add bounded, persistent diagnostic logging to Kivo's configuration directory. The
 logs must cover application lifecycle, device processing, every physical input,
 every action step, configuration operations, and failures without recording
 pasted text or other sensitive action payloads.
@@ -16,7 +16,7 @@ rotation implementation. During Tauri setup, resolve the existing application
 configuration directory and register a `TargetKind::Folder` target at:
 
 ```text
-<app_config_dir>/data/log/
+<app_config_dir>/log/
 ```
 
 The active file is `kivo.log`. Configure a maximum file size of 10 MiB and

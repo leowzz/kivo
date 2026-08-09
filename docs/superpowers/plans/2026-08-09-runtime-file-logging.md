@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add bounded JSON Lines runtime logs under `data/log` that cover lifecycle, device state, every input and action, configuration operations, and failures without storing pasted text or open targets.
+**Goal:** Add bounded JSON Lines runtime logs under `log` that cover lifecycle, device state, every input and action, configuration operations, and failures without storing pasted text or open targets.
 
 **Architecture:** A new `runtime_log.rs` module owns official `tauri-plugin-log` setup, JSON serialization, scan-state deduplication, and a bounded asynchronous dispatcher whose worker thread performs all sink writes. `device.rs` emits sanitized action lifecycle activities into the existing `RuntimeEvent` pipeline, while `lib.rs` records enriched events, device transitions, lifecycle, and command outcomes.
 
@@ -64,10 +64,10 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn log_directory_is_nested_under_runtime_data() {
+    fn log_directory_is_outside_transactional_data() {
         assert_eq!(
             log_directory(Path::new("/tmp/kivo")),
-            Path::new("/tmp/kivo/data/log")
+            Path::new("/tmp/kivo/log")
         );
     }
 
@@ -148,7 +148,7 @@ impl RuntimeLogEntry {
 }
 
 pub(crate) fn log_directory(config_directory: &Path) -> PathBuf {
-    config_directory.join("data/log")
+    config_directory.join("log")
 }
 
 pub(crate) fn serialize_entry(entry: &RuntimeLogEntry) -> serde_json::Result<String> {
