@@ -246,7 +246,7 @@ impl DeviceSession {
         &mut self,
         snapshot: Option<Arc<RuntimeProfileSnapshot>>,
     ) -> SessionOutput {
-        self.clear_gestures();
+        self.reset_gestures();
         self.profile = snapshot.clone();
         if let Some(pending) = self.pending_reconfiguration.as_mut() {
             pending.snapshot = snapshot;
@@ -263,7 +263,7 @@ impl DeviceSession {
         self.end_active_learning(&mut output);
         self.pending_learning = None;
         self.settle_queued(&mut output);
-        self.clear_gestures();
+        self.reset_gestures();
         self.ready = false;
         self.configuring = None;
         self.profile = snapshot.clone();
@@ -307,7 +307,7 @@ impl DeviceSession {
         self.configuring = None;
         self.ready = false;
         self.settle_queued(&mut output);
-        self.clear_gestures();
+        self.reset_gestures();
         self.pending_learning = Some(target);
         self.start_pending_control(&mut output);
         output
@@ -933,13 +933,13 @@ impl DeviceSession {
         self.pending_reconfiguration = None;
         self.pending_learning = None;
         self.learning = None;
-        self.clear_gestures();
+        self.reset_gestures();
+        self.pending_receive_sequences.clear();
     }
 
-    fn clear_gestures(&mut self) {
+    fn reset_gestures(&mut self) {
         self.triggers.reset();
         self.trigger_metadata.clear();
-        self.pending_receive_sequences.clear();
     }
 
     fn settle_queued(&mut self, output: &mut SessionOutput) {
@@ -2037,7 +2037,7 @@ fn write_isolated_output<W: Write + ?Sized>(
     }
     let action_timeout = output.action_timeout.take().unwrap_or(ACTION_ACK_TIMEOUT);
     let sent_action = output.lines.iter().any(|line| {
-        ["PASTE ", "HOTKEY ", "DELAY ", "MEDIA ", "HOST "]
+        ["PASTE ", "HOTKEY ", "CHORD ", "DELAY ", "MEDIA ", "HOST "]
             .iter()
             .any(|prefix| line.starts_with(prefix))
     });
@@ -2905,6 +2905,51 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_update_preserves_pending_press_and_double_sequence_bookkeeping() {
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            TriggerActions {
+                press: vec![ButtonAction::Hotkey {
+                    keys: vec!["a".into()],
+                }],
+                double_press: vec![ButtonAction::Hotkey {
+                    keys: vec!["b".into()],
+                }],
+                ..TriggerActions::default()
+            },
+        );
+        let mut updated = runtime.clone();
+        updated.profile.profile.name = "Updated".into();
+        let mut session = DeviceSession::new(runtime);
+        session.on_message_deferred(protocol6_hello(), 0, 100);
+        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
+
+        session.on_line_deferred("STATE 1 DIRECT 6 DOWN\n", 1, 0);
+        session.on_line_deferred("STATE 2 DIRECT 6 UP\n", 2, 10);
+        session.on_line_deferred("DONE 1 1\n", 3, 11);
+        let second = session.on_line_deferred("STATE 3 DIRECT 6 DOWN\n", 4, 20);
+        assert!(
+            second
+                .lines
+                .iter()
+                .any(|line| line.starts_with("CHORD 2 1 1"))
+        );
+
+        session.update_snapshot(Some(Arc::new(updated)));
+        let double = session.on_line_deferred("DONE 2 1\n", 5, 21);
+        assert!(
+            double
+                .lines
+                .iter()
+                .any(|line| line.starts_with("CHORD 3 1 1"))
+        );
+        assert!(double.completed_receive_sequences.is_empty());
+        let completed = session.on_line_deferred("DONE 3 1\n", 6, 22);
+        assert_eq!(completed.completed_receive_sequences, [4]);
+    }
+
+    #[test]
     fn deferred_paste_action_activity_is_sanitized_and_advances_in_order() {
         let mut runtime = runtime_model();
         runtime.profile.actions.insert(
@@ -3056,7 +3101,7 @@ mod tests {
         let stop = AtomicBool::new(false);
         let barrier = RwLock::new(());
         let mut action = SessionOutput::default();
-        action.lines.push("HOTKEY 10 1 1 0 40\n".into());
+        action.lines.push("CHORD 10 1 1 0 1 40\n".into());
 
         write_isolated_output(
             &start,
