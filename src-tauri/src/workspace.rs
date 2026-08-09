@@ -141,6 +141,11 @@ struct SchemaV2DeviceProfile {
     actions: BTreeMap<String, Vec<ButtonAction>>,
 }
 
+struct ReadProfile {
+    profile: DeviceProfile,
+    migrated_from_schema_v2: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct EditorSettingsPatch {
     pub schema_version: u16,
@@ -344,11 +349,16 @@ impl Workspace {
             false,
         )?;
         let mut profiles = BTreeMap::new();
+        let mut migrated_profiles = Vec::new();
         let profile_directory = data_directory.join("profiles");
         for path in yaml_files(&profile_directory, "read_profiles")? {
-            let profile = read_profile(&path, false, true)?;
+            let read = read_profile(&path, false, true)?;
+            let profile = read.profile;
             profile.validate()?;
             validate_profile_filename(&path, &profile)?;
+            if read.migrated_from_schema_v2 {
+                migrated_profiles.push((path, profile.profile.id.clone()));
+            }
             if profiles
                 .insert(profile.profile.id.clone(), profile)
                 .is_some()
@@ -357,6 +367,9 @@ impl Workspace {
             }
         }
         validate_settings(&settings, &profiles)?;
+        for (path, id) in migrated_profiles {
+            write_yaml(&path, &profiles[&id])?;
+        }
         Ok(Self {
             config_directory: config_directory.to_owned(),
             settings,
@@ -851,7 +864,7 @@ fn collect_profiles(
 fn load_bundled_profiles(directory: &Path) -> Result<Vec<DeviceProfile>, AppError> {
     let mut profiles = Vec::new();
     for path in yaml_files(directory, "read_bundled_profiles")? {
-        let profile = read_profile(&path, true, false)?;
+        let profile = read_profile(&path, true, false)?.profile;
         profile.validate()?;
         validate_profile_filename(&path, &profile)?;
         profiles.push(profile);
@@ -1268,24 +1281,31 @@ fn activate_schema_v1_migration(
 }
 
 fn read_profile_limited(path: &Path) -> Result<DeviceProfile, AppError> {
-    read_profile(path, true, true)
+    read_profile(path, true, true).map(|read| read.profile)
 }
 
 fn read_profile(
     path: &Path,
     limited: bool,
     allow_schema_v2: bool,
-) -> Result<DeviceProfile, AppError> {
+) -> Result<ReadProfile, AppError> {
     let contents = read_yaml_contents(path, limited)?;
     let header: SchemaHeader = serde_yaml_ng::from_str(&contents)
         .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?;
     match header.schema_version {
         PROFILE_SCHEMA_VERSION => serde_yaml_ng::from_str(&contents)
+            .map(|profile| ReadProfile {
+                profile,
+                migrated_from_schema_v2: false,
+            })
             .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string())),
         PREVIOUS_PROFILE_SCHEMA_VERSION if allow_schema_v2 => {
             let profile: SchemaV2DeviceProfile = serde_yaml_ng::from_str(&contents)
                 .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?;
-            Ok(migrate_schema_v2_profile(profile))
+            Ok(ReadProfile {
+                profile: migrate_schema_v2_profile(profile),
+                migrated_from_schema_v2: true,
+            })
         }
         _ => Err(AppError::new("unsupported_profile_schema")),
     }
@@ -1926,6 +1946,18 @@ actions:
         assert_eq!(workspace.profiles["phone"].schema_version, 3);
         assert!(matches!(actions.press[0], ButtonAction::Open { .. }));
         assert!(matches!(actions.press[1], ButtonAction::Media { .. }));
+
+        let persisted = fs::read_to_string(data_directory.join("profiles/phone.yaml")).unwrap();
+        assert!(persisted.starts_with("schema_version: 3\n"));
+        let persisted: DeviceProfile = serde_yaml_ng::from_str(&persisted).unwrap();
+        assert!(matches!(
+            persisted.actions["HANDSET"].press[0],
+            ButtonAction::Open { .. }
+        ));
+        assert!(matches!(
+            persisted.actions["HANDSET"].press[1],
+            ButtonAction::Media { .. }
+        ));
     }
 
     #[test]
