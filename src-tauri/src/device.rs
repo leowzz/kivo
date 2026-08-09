@@ -607,11 +607,15 @@ impl DeviceSession {
         }
         output.activities.push(activity);
         let Some(snapshot) = action_snapshot else {
-            output.lines.push(format!("SKIP {event_id}\n"));
+            if state == InputState::Down {
+                output.lines.push(format!("SKIP {event_id}\n"));
+            }
             output.completed_receive_sequences.push(receive_sequence);
-            output
-                .activities
-                .push(RuntimeActivity::new("input_before_configuration").with_context(context));
+            if state == InputState::Down {
+                output
+                    .activities
+                    .push(RuntimeActivity::new("input_before_configuration").with_context(context));
+            }
             return;
         };
 
