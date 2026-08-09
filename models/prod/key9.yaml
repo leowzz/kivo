@@ -1,4 +1,4 @@
-schema_version: 2
+schema_version: 3
 profile:
   id: key9
   name: key9
@@ -21,6 +21,9 @@ profile:
         - { id: K7, label: k7 }
         - { id: K8, label: k8 }
         - { id: K9, label: k9 }
+trigger_settings:
+  long_press_ms: 500
+  double_press_ms: 300
 hardware_profiles:
   - id: hardware
     name: Default hardware

@@ -145,6 +145,7 @@ pub mod test_support {
         paste::{ClipboardWriter, Clock, PasteCoordinator},
         profile::{
             ButtonAction, DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION,
+            TriggerActions, TriggerSettings,
         },
         workspace::{RuntimeAssignment, Workspace},
     };
@@ -1124,7 +1125,10 @@ mod tests {
             WorkerEvent, WorkerLauncher, WorkerStart,
         },
         metrics::MetricAttribution,
-        profile::{ButtonAction, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION},
+        profile::{
+            ButtonAction, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION, TriggerActions,
+            TriggerSettings,
+        },
     };
     use std::{
         collections::BTreeMap,
@@ -1430,6 +1434,7 @@ mod tests {
         DeviceProfile {
             schema_version: PROFILE_SCHEMA_VERSION,
             profile: profile::test_model_layout(),
+            trigger_settings: TriggerSettings::default(),
             hardware_profiles: vec![HardwareProfile {
                 id: "esp-primary".into(),
                 name: "ESP primary".into(),
@@ -1726,9 +1731,9 @@ mod tests {
         let mut updated = product_profile();
         updated.actions.insert(
             "UP".into(),
-            vec![ButtonAction::Paste {
+            TriggerActions::press(vec![ButtonAction::Paste {
                 text: "离线保存".into(),
-            }],
+            }]),
         );
 
         let snapshot = save_profile_inner(&state, updated.clone()).unwrap();
@@ -2251,9 +2256,9 @@ mod tests {
         let mut updated = product_profile();
         updated.actions.insert(
             "UP".into(),
-            vec![ButtonAction::Paste {
+            TriggerActions::press(vec![ButtonAction::Paste {
                 text: "online paste".into(),
-            }],
+            }]),
         );
 
         save_profile_inner(&state, updated).unwrap();
@@ -2265,7 +2270,11 @@ mod tests {
             panic!("expected one action-only snapshot update");
         };
         assert_eq!(
-            snapshot.profile.actions.get("UP"),
+            snapshot
+                .profile
+                .actions
+                .get("UP")
+                .map(|triggers| &triggers.press),
             Some(&vec![ButtonAction::Paste {
                 text: "online paste".into(),
             }])

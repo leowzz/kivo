@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::profile::{TriggerActions, TriggerSettings};
 use crate::{
     hardware::{BoardProfile, board_by_id},
     profile::{ButtonAction, HardwareProfile, InputSource, MediaCommand},
@@ -629,6 +631,7 @@ mod tests {
                     ],
                 }],
             },
+            trigger_settings: TriggerSettings::default(),
             hardware_profiles: vec![HardwareProfile {
                 id: "esp-primary".into(),
                 name: "ESP primary".into(),
@@ -643,14 +646,14 @@ mod tests {
             }],
             actions: BTreeMap::from([(
                 "A".into(),
-                vec![
+                TriggerActions::press(vec![
                     ButtonAction::Paste {
                         text: "第一步".into(),
                     },
                     ButtonAction::Paste {
                         text: "第二步".into(),
                     },
-                ],
+                ]),
             )]),
         }
     }
@@ -833,7 +836,7 @@ mod tests {
     #[test]
     fn waits_for_done_before_returning_the_next_action() {
         let model = device_profile();
-        let actions = model.actions["A"].clone();
+        let actions = model.actions["A"].press.clone();
         let first_action = actions[0].clone();
         let mut sequence = ActionSequence::new(9, "A".into(), actions);
 

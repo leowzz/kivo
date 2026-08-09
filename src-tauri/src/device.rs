@@ -1,5 +1,7 @@
 #[cfg(test)]
 use crate::hardware::board_by_runtime_usb;
+#[cfg(test)]
+use crate::profile::{TriggerActions, TriggerSettings};
 use crate::{
     coordinator::{
         CapturedInput, DeviceWorker, RuntimeEventContext, WorkerCommand, WorkerEvent,
@@ -8,7 +10,7 @@ use crate::{
     hardware::{BoardProfile, DeviceId},
     metrics::{HomeMetricsSnapshot, MetricAttribution, MetricsStore},
     paste::{Clock, PasteHandle, PasteReply, PasteRequest, SystemClock},
-    profile::DeviceProfile,
+    profile::{ActionTrigger, DeviceProfile},
     protocol::{
         ADVANCED_ACTION_PROTOCOL_VERSION, ActionSequence, DeviceMessage, HelloCapabilities,
         InputState, OLED_PROTOCOL_VERSION, PhysicalInput, format_paste_command, is_hello_line,
@@ -860,7 +862,7 @@ impl DeviceSession {
                 .profile
                 .actions
                 .get(&button)
-                .cloned()
+                .map(|triggers| triggers.actions_for(ActionTrigger::Press).to_vec())
                 .unwrap_or_default();
             if actions.is_empty() {
                 output.lines.push(format!("SKIP {}\n", queued.event_id));
@@ -1942,6 +1944,7 @@ mod tests {
                         }],
                     }],
                 },
+                trigger_settings: TriggerSettings::default(),
                 hardware_profiles: vec![HardwareProfile {
                     id: "esp-primary".into(),
                     name: "ESP primary".into(),
@@ -1955,14 +1958,14 @@ mod tests {
                 }],
                 actions: BTreeMap::from([(
                     "A".into(),
-                    vec![
+                    TriggerActions::press(vec![
                         ButtonAction::Paste {
                             text: "第一步".into(),
                         },
                         ButtonAction::Paste {
                             text: "第二步".into(),
                         },
-                    ],
+                    ]),
                 )]),
             },
         }
@@ -2224,10 +2227,10 @@ mod tests {
     #[test]
     fn protocol_v4_rejects_profiles_that_use_advanced_actions() {
         let mut runtime = runtime_model();
-        runtime
-            .profile
-            .actions
-            .insert("A".into(), vec![ButtonAction::Delay { duration_ms: 200 }]);
+        runtime.profile.actions.insert(
+            "A".into(),
+            TriggerActions::press(vec![ButtonAction::Delay { duration_ms: 200 }]),
+        );
         let mut session = DeviceSession::new(runtime);
 
         let rejected = session.on_message_deferred(hello(), 0, 100);
@@ -2396,14 +2399,14 @@ mod tests {
         let mut runtime = runtime_model();
         runtime.profile.actions.insert(
             "A".into(),
-            vec![
+            TriggerActions::press(vec![
                 ButtonAction::Paste {
                     text: "甲乙丙".into(),
                 },
                 ButtonAction::Hotkey {
                     keys: vec!["primary".into(), "enter".into()],
                 },
-            ],
+            ]),
         );
         let mut session = DeviceSession::new(runtime);
         session.ready = true;
@@ -2495,9 +2498,9 @@ mod tests {
         let mut runtime = runtime_model();
         runtime.profile.actions.insert(
             "A".into(),
-            vec![ButtonAction::Paste {
+            TriggerActions::press(vec![ButtonAction::Paste {
                 text: secret.into(),
-            }],
+            }]),
         );
         let mut session = DeviceSession::new(runtime);
         session.ready = true;
@@ -2591,9 +2594,9 @@ mod tests {
         let mut old = runtime_model();
         old.profile.actions.insert(
             "A".into(),
-            vec![ButtonAction::Paste {
+            TriggerActions::press(vec![ButtonAction::Paste {
                 text: secret.into(),
-            }],
+            }]),
         );
         let old = Arc::new(old);
         let device_id = old.metric_attribution.device_id.clone();
@@ -2719,9 +2722,9 @@ mod tests {
         let mut runtime = runtime_model();
         runtime.profile.actions.insert(
             "A".into(),
-            vec![ButtonAction::Hotkey {
+            TriggerActions::press(vec![ButtonAction::Hotkey {
                 keys: vec!["enter".into()],
-            }],
+            }]),
         );
         let mut session = DeviceSession::new(runtime);
         session.ready = true;
@@ -2746,7 +2749,7 @@ mod tests {
         let mut runtime = runtime_model();
         runtime.profile.actions.insert(
             "A".into(),
-            vec![
+            TriggerActions::press(vec![
                 ButtonAction::Open {
                     target: "https://example.com".into(),
                 },
@@ -2754,7 +2757,7 @@ mod tests {
                 ButtonAction::Media {
                     command: crate::profile::MediaCommand::PlayPause,
                 },
-            ],
+            ]),
         );
         let mut session = DeviceSession::new(runtime);
         session.target_opener = Arc::new(RecordingTargetOpener {
@@ -2810,9 +2813,9 @@ mod tests {
         let mut runtime = runtime_model();
         runtime.profile.actions.insert(
             "A".into(),
-            vec![ButtonAction::Open {
+            TriggerActions::press(vec![ButtonAction::Open {
                 target: target.into(),
-            }],
+            }]),
         );
         let mut session = DeviceSession::new(runtime);
         session.target_opener = Arc::new(RecordingTargetOpener {
@@ -2853,9 +2856,9 @@ mod tests {
         let mut runtime = runtime_model();
         runtime.profile.actions.insert(
             "A".into(),
-            vec![ButtonAction::Open {
+            TriggerActions::press(vec![ButtonAction::Open {
                 target: target.into(),
-            }],
+            }]),
         );
         let mut session = DeviceSession::new(runtime);
         session.target_opener = Arc::new(RecordingTargetOpener {
@@ -2907,9 +2910,9 @@ mod tests {
         let mut updated = runtime_model();
         updated.profile.actions.insert(
             "A".into(),
-            vec![ButtonAction::Paste {
+            TriggerActions::press(vec![ButtonAction::Paste {
                 text: "新动作".into(),
-            }],
+            }]),
         );
         let swapped = session.update_snapshot(Some(Arc::new(updated)));
         assert!(swapped.lines.is_empty());

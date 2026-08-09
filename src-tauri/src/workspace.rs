@@ -3,7 +3,7 @@ use crate::{
     metrics::{MetricsBackup, MetricsStore},
     profile::{
         ButtonAction, CreateDeviceProfileRequest, DeviceProfile, HardwareProfile, InputSource,
-        PROFILE_SCHEMA_VERSION, blank_device_profile,
+        PROFILE_SCHEMA_VERSION, TriggerActions, TriggerSettings, blank_device_profile,
     },
     storage::atomic_write,
 };
@@ -17,6 +17,7 @@ use std::{
 pub const SETTINGS_SCHEMA_VERSION: u16 = 2;
 pub const BACKUP_SCHEMA_VERSION: u16 = 2;
 const LEGACY_SCHEMA_VERSION: u16 = 1;
+const PREVIOUS_PROFILE_SCHEMA_VERSION: u16 = 2;
 const MAX_IMPORT_BYTES: u64 = 10 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -126,6 +127,16 @@ struct LegacyModelConfig {
     schema_version: u16,
     model: crate::model::ModelLayout,
     hardware: LegacyHardwareConfig,
+    #[serde(default)]
+    actions: BTreeMap<String, Vec<ButtonAction>>,
+}
+
+#[derive(Deserialize)]
+struct SchemaV2DeviceProfile {
+    schema_version: u16,
+    profile: crate::model::ModelLayout,
+    #[serde(default)]
+    hardware_profiles: Vec<HardwareProfile>,
     #[serde(default)]
     actions: BTreeMap<String, Vec<ButtonAction>>,
 }
@@ -335,12 +346,7 @@ impl Workspace {
         let mut profiles = BTreeMap::new();
         let profile_directory = data_directory.join("profiles");
         for path in yaml_files(&profile_directory, "read_profiles")? {
-            let profile: DeviceProfile = read_versioned_yaml(
-                &path,
-                PROFILE_SCHEMA_VERSION,
-                "unsupported_profile_schema",
-                false,
-            )?;
+            let profile = read_profile(&path, false, true)?;
             profile.validate()?;
             validate_profile_filename(&path, &profile)?;
             if profiles
@@ -845,12 +851,7 @@ fn collect_profiles(
 fn load_bundled_profiles(directory: &Path) -> Result<Vec<DeviceProfile>, AppError> {
     let mut profiles = Vec::new();
     for path in yaml_files(directory, "read_bundled_profiles")? {
-        let profile: DeviceProfile = read_versioned_yaml(
-            &path,
-            PROFILE_SCHEMA_VERSION,
-            "unsupported_profile_schema",
-            true,
-        )?;
+        let profile = read_profile(&path, true, false)?;
         profile.validate()?;
         validate_profile_filename(&path, &profile)?;
         profiles.push(profile);
@@ -956,7 +957,11 @@ fn hardware_binding_count(profile: &DeviceProfile) -> usize {
 }
 
 fn action_count(profile: &DeviceProfile) -> usize {
-    profile.actions.values().map(Vec::len).sum()
+    profile
+        .actions
+        .values()
+        .map(TriggerActions::action_count)
+        .sum()
 }
 
 fn validate_profile_filename(path: &Path, profile: &DeviceProfile) -> Result<(), AppError> {
@@ -1210,6 +1215,7 @@ fn migrate_schema_v1_model(legacy: LegacyModelConfig) -> Result<DeviceProfile, A
     let profile = DeviceProfile {
         schema_version: PROFILE_SCHEMA_VERSION,
         profile: legacy.model,
+        trigger_settings: TriggerSettings::default(),
         hardware_profiles: vec![HardwareProfile {
             id: board.id.into(),
             name: board.display_name.into(),
@@ -1218,7 +1224,11 @@ fn migrate_schema_v1_model(legacy: LegacyModelConfig) -> Result<DeviceProfile, A
             ssd1306: None,
             inputs: legacy.hardware.inputs,
         }],
-        actions: legacy.actions,
+        actions: legacy
+            .actions
+            .into_iter()
+            .map(|(button, actions)| (button, TriggerActions::press(actions)))
+            .collect(),
     };
     profile.validate()?;
     Ok(profile)
@@ -1258,12 +1268,42 @@ fn activate_schema_v1_migration(
 }
 
 fn read_profile_limited(path: &Path) -> Result<DeviceProfile, AppError> {
-    read_versioned_yaml(
-        path,
-        PROFILE_SCHEMA_VERSION,
-        "unsupported_profile_schema",
-        true,
-    )
+    read_profile(path, true, true)
+}
+
+fn read_profile(
+    path: &Path,
+    limited: bool,
+    allow_schema_v2: bool,
+) -> Result<DeviceProfile, AppError> {
+    let contents = read_yaml_contents(path, limited)?;
+    let header: SchemaHeader = serde_yaml_ng::from_str(&contents)
+        .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?;
+    match header.schema_version {
+        PROFILE_SCHEMA_VERSION => serde_yaml_ng::from_str(&contents)
+            .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string())),
+        PREVIOUS_PROFILE_SCHEMA_VERSION if allow_schema_v2 => {
+            let profile: SchemaV2DeviceProfile = serde_yaml_ng::from_str(&contents)
+                .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?;
+            Ok(migrate_schema_v2_profile(profile))
+        }
+        _ => Err(AppError::new("unsupported_profile_schema")),
+    }
+}
+
+fn migrate_schema_v2_profile(legacy: SchemaV2DeviceProfile) -> DeviceProfile {
+    debug_assert_eq!(legacy.schema_version, PREVIOUS_PROFILE_SCHEMA_VERSION);
+    DeviceProfile {
+        schema_version: PROFILE_SCHEMA_VERSION,
+        profile: legacy.profile,
+        trigger_settings: TriggerSettings::default(),
+        hardware_profiles: legacy.hardware_profiles,
+        actions: legacy
+            .actions
+            .into_iter()
+            .map(|(button, actions)| (button, TriggerActions::press(actions)))
+            .collect(),
+    }
 }
 
 fn read_versioned_yaml<T: for<'de> Deserialize<'de>>(
@@ -1272,6 +1312,17 @@ fn read_versioned_yaml<T: for<'de> Deserialize<'de>>(
     unsupported_code: &str,
     limited: bool,
 ) -> Result<T, AppError> {
+    let contents = read_yaml_contents(path, limited)?;
+    let header: SchemaHeader = serde_yaml_ng::from_str(&contents)
+        .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?;
+    if header.schema_version != expected {
+        return Err(AppError::new(unsupported_code));
+    }
+    serde_yaml_ng::from_str(&contents)
+        .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))
+}
+
+fn read_yaml_contents(path: &Path, limited: bool) -> Result<String, AppError> {
     if limited {
         let metadata = fs::metadata(path).map_err(|error| io_error("read_file", path, error))?;
         if metadata.len() > MAX_IMPORT_BYTES {
@@ -1280,14 +1331,7 @@ fn read_versioned_yaml<T: for<'de> Deserialize<'de>>(
             );
         }
     }
-    let contents = fs::read_to_string(path).map_err(|error| io_error("read_file", path, error))?;
-    let header: SchemaHeader = serde_yaml_ng::from_str(&contents)
-        .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?;
-    if header.schema_version != expected {
-        return Err(AppError::new(unsupported_code));
-    }
-    serde_yaml_ng::from_str(&contents)
-        .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))
+    fs::read_to_string(path).map_err(|error| io_error("read_file", path, error))
 }
 
 fn write_yaml(path: &Path, value: &impl Serialize) -> Result<(), AppError> {
@@ -1388,6 +1432,7 @@ mod tests {
         DeviceProfile {
             schema_version: PROFILE_SCHEMA_VERSION,
             profile: layout(),
+            trigger_settings: TriggerSettings::default(),
             hardware_profiles: vec![
                 hardware("esp-primary", crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID),
                 hardware(
@@ -1398,14 +1443,14 @@ mod tests {
             ],
             actions: BTreeMap::from([(
                 "A".into(),
-                vec![
+                TriggerActions::press(vec![
                     ButtonAction::Paste {
                         text: "你好\n".into(),
                     },
                     ButtonAction::Hotkey {
                         keys: vec!["enter".into()],
                     },
-                ],
+                ]),
             )]),
         }
     }
@@ -1845,6 +1890,79 @@ mod tests {
     }
 
     #[test]
+    fn load_migrates_schema_v2_actions_to_press_without_reordering() {
+        let directory = TestDirectory::new();
+        let config_directory = directory.path("config");
+        let data_directory = config_directory.join("data");
+        fs::create_dir_all(data_directory.join("profiles")).unwrap();
+        fs::write(
+            data_directory.join("settings.yaml"),
+            "schema_version: 2\neditor_profile: phone\nlanguage: en-US\ndevices: {}\n",
+        )
+        .unwrap();
+        fs::write(
+            data_directory.join("profiles/phone.yaml"),
+            r#"schema_version: 2
+profile:
+  id: phone
+  name: Phone
+  groups:
+    - id: keys
+      columns: 1
+      buttons:
+        - { id: HANDSET, label: HANDSET }
+hardware_profiles: []
+actions:
+  HANDSET:
+    - { type: open, target: Phone.app }
+    - { type: media, command: play_pause }
+"#,
+        )
+        .unwrap();
+
+        let workspace = Workspace::load_existing(&config_directory).unwrap();
+        let actions = &workspace.profiles["phone"].actions["HANDSET"];
+
+        assert_eq!(workspace.profiles["phone"].schema_version, 3);
+        assert!(matches!(actions.press[0], ButtonAction::Open { .. }));
+        assert!(matches!(actions.press[1], ButtonAction::Media { .. }));
+    }
+
+    #[test]
+    fn preview_and_import_migrate_schema_v2_profiles_without_changing_the_id() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let import_path = directory.path("phone.yaml");
+        fs::write(
+            &import_path,
+            r#"schema_version: 2
+profile:
+  id: phone
+  name: Phone
+  groups:
+    - id: keys
+      columns: 1
+      buttons:
+        - { id: HANDSET, label: HANDSET }
+hardware_profiles: []
+actions:
+  HANDSET:
+    - { type: delay, duration_ms: 10 }
+"#,
+        )
+        .unwrap();
+
+        let preview = workspace.preview_profile(&import_path).unwrap();
+        assert_eq!(preview.profile_id, "phone");
+        assert_eq!(preview.action_count, 1);
+
+        workspace.import_profile(&import_path).unwrap();
+        let profile = &workspace.profiles["phone"];
+        assert_eq!(profile.schema_version, PROFILE_SCHEMA_VERSION);
+        assert_eq!(profile.actions["HANDSET"].press.len(), 1);
+    }
+
+    #[test]
     fn load_migrates_schema_v1_workspace_without_losing_model_data() {
         let directory = TestDirectory::new();
         let config_directory = directory.path("config");
@@ -1894,7 +2012,7 @@ legacy:
         let profile = &workspace.profiles["pad_06"];
         assert_eq!(profile.schema_version, PROFILE_SCHEMA_VERSION);
         assert_eq!(
-            profile.actions["DIGIT_1"][0],
+            profile.actions["DIGIT_1"].press[0],
             ButtonAction::Paste {
                 text: "migrated".into(),
             }
@@ -2630,7 +2748,7 @@ actions: {}
     }
 
     #[test]
-    fn bundled_loader_accepts_only_yaml_v2_profiles() {
+    fn bundled_loader_accepts_only_yaml_v3_profiles() {
         let directory = TestDirectory::new();
         fs::write(directory.path("ignored.json"), "{}").unwrap();
         fs::write(
@@ -2645,7 +2763,7 @@ actions: {}
     }
 
     #[test]
-    fn bundled_product_profile_is_valid_v2_yaml() {
+    fn bundled_product_profile_is_valid_v3_yaml() {
         let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../models/prod");
         let profiles = load_bundled_profiles(&directory).unwrap();
         assert_eq!(profiles.len(), 1);

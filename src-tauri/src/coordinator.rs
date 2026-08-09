@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::profile::{TriggerActions, TriggerSettings};
 use crate::{
     device::{LearningTarget, RuntimeActivity, RuntimeProfileSnapshot},
     hardware::{BoardProfile, DeviceId, HardwareRegistry, compiled_registry},
@@ -2101,6 +2103,7 @@ mod tests {
         DeviceProfile {
             schema_version: PROFILE_SCHEMA_VERSION,
             profile: crate::profile::test_model_layout(),
+            trigger_settings: TriggerSettings::default(),
             hardware_profiles: vec![HardwareProfile {
                 id: "esp".into(),
                 name: "ESP".into(),
@@ -2427,18 +2430,18 @@ mod tests {
         }];
         old_profile.actions.insert(
             "UP".into(),
-            vec![ButtonAction::Paste {
+            TriggerActions::press(vec![ButtonAction::Paste {
                 text: "old action".into(),
-            }],
+            }]),
         );
         let mut new_profile = old_profile.clone();
         new_profile.profile.id = "new-profile".into();
         new_profile.profile.name = "New profile".into();
         new_profile.actions.insert(
             "UP".into(),
-            vec![ButtonAction::Paste {
+            TriggerActions::press(vec![ButtonAction::Paste {
                 text: "new action".into(),
-            }],
+            }]),
         );
         {
             let mut workspace = coordinator.workspace.write().unwrap();
@@ -2528,7 +2531,7 @@ mod tests {
         assert_eq!(forwarded, &captured);
         assert_eq!(new_snapshot.profile.profile.id, "new-profile");
         assert_eq!(
-            forwarded.runtime_profile.as_ref().unwrap().profile.actions["UP"][0],
+            forwarded.runtime_profile.as_ref().unwrap().profile.actions["UP"].press[0],
             ButtonAction::Paste {
                 text: "old action".into()
             }
@@ -3181,9 +3184,9 @@ mod tests {
         let mut new = old.clone();
         new.actions.insert(
             "UP".into(),
-            vec![crate::profile::ButtonAction::Paste {
+            TriggerActions::press(vec![crate::profile::ButtonAction::Paste {
                 text: "updated".into(),
-            }],
+            }]),
         );
         coordinator
             .workspace
