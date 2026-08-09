@@ -26,7 +26,7 @@ use tauri_plugin_log::{
 
 pub(crate) const LOG_TARGET: &str = "kivo::runtime";
 pub(crate) const MAX_FILE_SIZE: u128 = 10 * 1024 * 1024;
-pub(crate) const RETAINED_FILES: usize = 5;
+pub(crate) const RETAINED_ARCHIVES: usize = 5;
 const LOG_QUEUE_CAPACITY: usize = 1024;
 
 static DISPATCHER: OnceLock<LogDispatcher> = OnceLock::new();
@@ -785,7 +785,7 @@ pub(crate) fn install<R: tauri::Runtime>(
             .level(LevelFilter::Info)
             .clear_format()
             .max_file_size(MAX_FILE_SIZE)
-            .rotation_strategy(RotationStrategy::KeepSome(RETAINED_FILES))
+            .rotation_strategy(RotationStrategy::KeepSome(RETAINED_ARCHIVES))
             .targets([
                 Target::new(TargetKind::Folder {
                     path: log_directory(config_directory),

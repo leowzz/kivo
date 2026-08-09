@@ -20,9 +20,10 @@ configuration directory and register a `TargetKind::Folder` target at:
 ```
 
 The active file is `kivo.log`. Configure a maximum file size of 10 MiB and
-`RotationStrategy::KeepSome(5)`. The plugin counts the active file within this
-limit, so the directory contains at most five Kivo log files. The plugin creates
-the directory when needed and appends to the current file across launches.
+`RotationStrategy::KeepSome(5)`. The plugin retains up to five archived files in
+addition to the active file, so the directory contains at most six Kivo log
+files. The plugin creates the directory when needed and appends to the current
+file across launches.
 
 Register the plugin after the application data path is available in `setup`.
 Plugin registration failure is reported to stderr but does not prevent the
@@ -117,9 +118,11 @@ Implementation follows test-driven development:
    including paste success and failure.
 3. Add failing tests for lifecycle, device transition, scan error, and command
    result records at their integration boundaries.
-4. Add a plugin integration test using a temporary folder and a small maximum
-   size. Produce enough entries to rotate and assert that the number of matching
-   files does not exceed the configured `KeepSome` limit.
+4. Add a plugin integration test whose parent process seeds historical archives
+   in a temporary folder and whose child process owns the process-global logger.
+   Produce exactly one rotation, wait for the child to exit, and assert that
+   `KeepSome(3)` leaves three archives plus the active file with no collision
+   `.bak` file.
 5. Run Rust tests, `cargo fmt --check`, and Clippy. Run the repository's broader
    verification when the implementation touches shared frontend contracts.
 
