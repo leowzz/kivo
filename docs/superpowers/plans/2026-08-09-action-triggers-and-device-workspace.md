@@ -1187,7 +1187,7 @@ Run: `make test`
 
 Expected: the aggregate release, Python, native firmware, Rust, Clippy, frontend, and build gate passes.
 
-Note: The repository-local `.venv/bin/pio` native test and both firmware builds passed. The `make`/`uv run pio` wrappers remain unverified because the user-level `/Users/leo/.config/uv/uv.toml` is invalid TOML (`line 4: -e [[index]]`); it was not changed.
+Note: The repository-local `.venv/bin/pio` native test and both firmware builds passed. The `make`/`uv run pio` wrappers fail before running because the user-level `/Users/leo/.config/uv/uv.toml` is invalid TOML (`line 4: -e [[index]]`); it was not changed.
 
 - [x] **Step 3: Start the app and capture Playwright evidence**
 
