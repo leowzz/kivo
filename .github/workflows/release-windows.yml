@@ -9,6 +9,42 @@ permissions:
   contents: write
 
 jobs:
+  firmware-build:
+    name: Build release firmware
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python and uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      - name: Install firmware dependencies
+        run: uv sync --locked
+
+      - name: Build firmware
+        run: |
+          KIVO_FIRMWARE_BUILD_ID="${GITHUB_REF_NAME}" uv run pio run -e esp32s3
+          KIVO_FIRMWARE_BUILD_ID="${GITHUB_REF_NAME}" uv run pio run -e rp2040
+
+      - name: Stage release firmware
+        run: |
+          mkdir release-firmware
+          cp .pio/build/esp32s3/firmware.factory.bin "release-firmware/kivo-${GITHUB_REF_NAME}-esp32s3.bin"
+          cp .pio/build/rp2040/firmware.uf2 "release-firmware/kivo-${GITHUB_REF_NAME}-rp2040.uf2"
+
+      - name: Upload staged firmware
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-firmware
+          path: release-firmware/
+          if-no-files-found: error
+          retention-days: 1
+
   release:
     name: Build and publish ${{ matrix.name }}
     strategy:
@@ -59,7 +95,26 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Kivo ${{ github.ref_name }}"
-          releaseBody: "macOS universal DMG and Windows x64 installer."
+          releaseBody: "macOS universal DMG, Windows x64 installer, and ESP32-S3 and RP2040 firmware."
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+
+  firmware-publish:
+    name: Publish release firmware
+    needs: [release, firmware-build]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download staged firmware
+        uses: actions/download-artifact@v7
+        with:
+          name: release-firmware
+          path: release-firmware
+
+      - name: Upload firmware to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          gh release upload "${GITHUB_REF_NAME}" release-firmware/* --clobber
+          --repo "${GITHUB_REPOSITORY}"
