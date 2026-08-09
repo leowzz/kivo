@@ -404,11 +404,11 @@ do
   offset="${entry%%:*}"
   image="${entry#*:}"
   size="$(wc -c < "$image" | tr -d ' ')"
-  cmp -n "$size" -i "$offset" "$merged" "$image"
+  dd if="$merged" bs=1 skip="$offset" count="$size" 2>/dev/null | cmp - "$image"
 done
 ```
 
-Expected: all four `cmp` calls exit zero.
+Expected: all four sliced-image comparisons exit zero.
 
 - [ ] **Step 4: Run the repository regression suite**
 
