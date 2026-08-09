@@ -408,7 +408,7 @@ struct RuntimePoll {
 }
 ```
 
-Update existing tests to read named fields. In `setup`, call `runtime_log::install(app.handle(), &config_directory)` and fall back to `eprintln!` on failure. Emit `application_started`, `application_ready`, `application_exit_requested`, and `application_stopped`. Log workspace and metrics initialization errors without changing their existing return/fallback behavior.
+Update existing tests to read named fields. In `setup`, call `Workspace::load` first and do not install the runtime logger before it has completed initialization or schema migration. Only then call `runtime_log::install(app.handle(), &config_directory)` and fall back to `eprintln!` on failure. If workspace loading fails, report the failure to stderr only because the file logger is not safely available yet. Emit `application_started`, `application_ready`, `application_exit_requested`, and `application_stopped`. Log metrics initialization errors without changing their existing return/fallback behavior.
 
 In the coordinator thread, keep one inventory, emit deduplicated scan entries, then call `emit_runtime_event` for every enriched event before sending the unchanged event to the frontend.
 

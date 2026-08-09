@@ -752,17 +752,7 @@ impl Workspace {
                 return Err(restore_error(error, recovery));
             }
         };
-        if let Err(error) = activate_runtime_log_directory(&previous_directory, &data_directory) {
-            let recovery = recover_original_generation(
-                RestoreGenerationState::RestoredActive,
-                &data_directory,
-                &next_directory,
-                &previous_directory,
-                metrics,
-                operations,
-            );
-            return Err(restore_error(error, recovery));
-        }
+        activate_runtime_log_directory(&previous_directory, &data_directory);
         self.settings = restored.settings;
         self.profiles = restored.profiles;
         let _ = operations.remove_dir_all(&previous_directory);
@@ -1001,16 +991,15 @@ fn remove_directory_if_exists(path: &Path) -> Result<(), AppError> {
     }
 }
 
-fn activate_runtime_log_directory(
-    previous_directory: &Path,
-    data_directory: &Path,
-) -> Result<(), AppError> {
+fn activate_runtime_log_directory(previous_directory: &Path, data_directory: &Path) {
     let previous_log_directory = previous_directory.join("log");
-    if !previous_log_directory.exists() {
-        return Ok(());
+    match fs::rename(&previous_log_directory, data_directory.join("log")) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            eprintln!("preserve runtime log directory: {error}");
+        }
     }
-    fs::rename(&previous_log_directory, data_directory.join("log"))
-        .map_err(|error| io_error("activate_runtime_logs", &previous_log_directory, error))
 }
 
 #[derive(Clone, Copy)]
@@ -2371,28 +2360,45 @@ actions: {}
     }
 
     #[test]
-    fn failed_runtime_log_activation_rolls_back_workspace_memory_and_disk() {
+    fn blocked_runtime_log_activation_does_not_rollback_restore() {
         let directory = TestDirectory::new();
-        let (backup, mut target, metrics, original_settings, _) = restore_fixture(&directory);
+        let (backup, mut target, metrics, original_settings, original_metrics) =
+            restore_fixture(&directory);
         let log_path = target.config_directory.join("data/log/kivo.log");
         fs::create_dir_all(log_path.parent().unwrap()).unwrap();
         fs::write(&log_path, b"original log\n").unwrap();
         let mut operations =
             InjectedRestoreOperations::default().create_log_directory_before_reopen();
 
-        let error = target
+        target
             .restore_backup_with_operations(&backup, &metrics, &mut operations)
-            .unwrap_err();
+            .unwrap();
 
-        assert_eq!(error.code, "activate_runtime_logs");
-        assert_eq!(target.settings, original_settings);
+        assert_ne!(target.settings, original_settings);
+        assert_eq!(target.settings.language, Language::EnUs);
+        assert_eq!(target.profiles.len(), 2);
+        assert_ne!(metrics.backup().unwrap(), original_metrics);
         assert_eq!(
             Workspace::load_existing(&target.config_directory)
                 .unwrap()
                 .settings,
-            original_settings
+            target.settings
         );
-        assert_eq!(fs::read(&log_path).unwrap(), b"original log\n");
+        assert!(!target.config_directory.join("data.previous").exists());
+    }
+
+    #[test]
+    fn restore_without_a_runtime_log_directory_succeeds() {
+        let directory = TestDirectory::new();
+        let (backup, mut target, metrics, _, _) = restore_fixture(&directory);
+        let log_directory = target.config_directory.join("data/log");
+        assert!(!log_directory.exists());
+
+        target.restore_backup(&backup, &metrics).unwrap();
+
+        assert_eq!(target.settings.language, Language::EnUs);
+        assert_eq!(target.profiles.len(), 2);
+        assert!(!log_directory.exists());
     }
 
     #[test]
