@@ -46,7 +46,7 @@
 - Modify: `src-tauri/src/workspace.rs:106-135,234-359,830-963,1196-1237,1390-1970`
 - Modify: `models/prod/key9.yaml:1-42`
 
-- [ ] **Step 1: Write failing schema, validation, and migration tests**
+- [x] **Step 1: Write failing schema, validation, and migration tests**
 
 Add tests that deserialize missing groups as empty, omit empty groups during serialization, reject timing outside the approved bounds, migrate every schema-2 Action to `press`, and migrate schema 1 directly to schema 3 without changing IDs or Action order:
 
@@ -97,13 +97,13 @@ actions:
 }
 ```
 
-- [ ] **Step 2: Run focused Rust tests and verify the red state**
+- [x] **Step 2: Run focused Rust tests and verify the red state**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml schema_v3 -- --nocapture`
 
 Expected: FAIL because `TriggerSettings`, `TriggerActions`, and schema 2 profile migration do not exist.
 
-- [ ] **Step 3: Add the v3 types, defaults, validation, and version-aware loader**
+- [x] **Step 3: Add the v3 types, defaults, validation, and version-aware loader**
 
 Use these canonical types in `profile.rs`:
 
@@ -156,7 +156,7 @@ impl TriggerActions {
 
 Add `trigger_settings: TriggerSettings` to `DeviceProfile`, change `actions` to `BTreeMap<String, TriggerActions>`, and validate `100..=5000` plus `100..=1000`. In `workspace.rs`, add one `read_device_profile(path, allow_schema_2)` function: inspect `SchemaHeader`, deserialize schema 3 directly, or deserialize schema 2 into a private `LegacyDeviceProfileV2` and map every `Vec<ButtonAction>` to `TriggerActions { press, ..Default::default() }`. Use it from workspace load, import preview, and import commit; bundled profiles accept schema 3 only. Atomically rewrite migrated workspace files, make `migrate_schema_v1_model` use the same grouping rule, and keep imported IDs unchanged. Change `action_count` to sum all four lists. Update `models/prod/key9.yaml` to `schema_version: 3` and add default `trigger_settings`.
 
-- [ ] **Step 4: Run all profile/workspace tests**
+- [x] **Step 4: Run all profile/workspace tests**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml profile`
 
@@ -166,7 +166,7 @@ Run: `cargo test --manifest-path src-tauri/Cargo.toml workspace`
 
 Expected: PASS with migrated files serialized as schema 3.
 
-- [ ] **Step 5: Commit the schema boundary**
+- [x] **Step 5: Commit the schema boundary**
 
 ```bash
 git add src-tauri/src/profile.rs src-tauri/src/workspace.rs models/prod/key9.yaml
@@ -182,7 +182,7 @@ git commit -m "feat: add triggered action profile schema"
 - Modify: `src/hotkey.ts:1-110`
 - Modify: `src/hotkey.test.ts:1-180`
 
-- [ ] **Step 1: Write failing Rust and TypeScript chord tests**
+- [x] **Step 1: Write failing Rust and TypeScript chord tests**
 
 Cover all eight modifier bits, legacy aliases, F13-F24, six distinct ordinary keys, modifier-only chords, duplicate HID usages, and a seventh key:
 
@@ -218,7 +218,7 @@ test("validates modifier-only and six-key chords", () => {
 });
 ```
 
-- [ ] **Step 2: Verify both focused suites fail**
+- [x] **Step 2: Verify both focused suites fail**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml encode_hotkey -- --nocapture`
 
@@ -228,7 +228,7 @@ Run: `npm test -- src/hotkey.test.ts`
 
 Expected: FAIL because physical side tokens and six-key validation are missing.
 
-- [ ] **Step 3: Implement one shared token vocabulary in Rust and TypeScript**
+- [x] **Step 3: Implement one shared token vocabulary in Rust and TypeScript**
 
 Change Rust encoding to:
 
@@ -260,7 +260,7 @@ pub fn encode_hotkey(keys: &[String]) -> Result<EncodedChord, String> {
 
 Map `ctrl/shift/alt/option/cmd` to left bits, `primary` to left GUI on macOS and left Ctrl otherwise, and explicit `left_*`/`right_*` to bits 0-7. In TypeScript export `HOTKEY_CATEGORIES`, `keyboardCodeToToken`, `isModifierToken`, `validateHotkey`, and `formatHotkey`; keep the same canonical token strings and HID aliases as Rust. Update profile validation to call `encode_hotkey` for every hotkey Action.
 
-- [ ] **Step 4: Run chord and profile validation suites**
+- [x] **Step 4: Run chord and profile validation suites**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml encode_hotkey`
 
@@ -270,7 +270,7 @@ Run: `npm test -- src/hotkey.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit chord encoding**
+- [x] **Step 5: Commit chord encoding**
 
 ```bash
 git add src-tauri/src/protocol.rs src-tauri/src/profile.rs src/hotkey.ts src/hotkey.test.ts
@@ -292,7 +292,7 @@ git commit -m "feat: support six-key sided hotkey chords"
 - Modify: `scripts/smoke_runtime_protocol.py`
 - Modify: `test/test_runtime_smoke.py`
 
-- [ ] **Step 1: Write failing host and native protocol-v6 tests**
+- [x] **Step 1: Write failing host and native protocol-v6 tests**
 
 Assert `HOST_PROTOCOL_VERSION == 6`, CHORD formatting, exact key count, unique nonzero supported usages, modifier-only acceptance, active-run creation on step 1, ordered later steps, SKIP, and no pending Action entry on a v6 `STATE` edge:
 
@@ -335,7 +335,7 @@ void test_v6_run_starts_on_step_one_and_is_independent_of_input_ids() {
 }
 ```
 
-- [ ] **Step 2: Verify the protocol tests fail**
+- [x] **Step 2: Verify the protocol tests fail**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml protocol -- --nocapture`
 
@@ -345,7 +345,7 @@ Run: `uv run pio test -e native`
 
 Expected: FAIL because `CHORD` and `ActionRunController` are absent.
 
-- [ ] **Step 3: Implement the v6 contract without deleting the legacy path**
+- [x] **Step 3: Implement the v6 contract without deleting the legacy path**
 
 Set `HOST_PROTOCOL_VERSION` to 6 and retain `MIN_SUPPORTED_PROTOCOL_VERSION = 3`. Rename `ActionStep.event_id` and `ActionSequence.event_id` to `run_id`; include `trigger: ActionTrigger` for activity attribution. Add `command_v6`, while `command_legacy` continues emitting one-key `HOTKEY` and returns `protocol_update_required` for modifier-only or multi-key chords.
 
@@ -388,7 +388,7 @@ class ActionRunController {
 
 `parseHelperCommand` must verify the CHORD count equals the remaining tokens, count is at most six, usages are unique and supported, mask/key combination is nonempty, and the full line stays within the existing 255-byte bound. Parse `DONE` on the host as `DeviceMessage::Done { run_id, step }`. Remove pending Action ownership from `GpioTriggerController`; protocol-v6 `updateInput` only emits debounced state, while `ActionRunController` accepts host-created runs. Keep protocol 3-5 compatibility entirely in the host's legacy command path because those devices run their existing firmware. Update the runtime smoke script to expect `HELLO 6` and validate a CHORD/DONE exchange.
 
-- [ ] **Step 4: Run protocol and native suites**
+- [x] **Step 4: Run protocol and native suites**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml protocol`
 
@@ -402,7 +402,7 @@ Run: `uv run pytest test/test_runtime_smoke.py`
 
 Expected: PASS with protocol-v6 fixture traffic.
 
-- [ ] **Step 5: Commit the wire contract**
+- [x] **Step 5: Commit the wire contract**
 
 ```bash
 git add src-tauri/src/protocol.rs lib/gpio_trigger/src/TriggerProtocol.h lib/gpio_trigger/src/TriggerProtocol.cpp lib/gpio_trigger/src/ActionRunController.h lib/gpio_trigger/src/ActionRunController.cpp lib/gpio_trigger/src/GpioTriggerController.h lib/gpio_trigger/src/GpioTriggerController.cpp test/test_gpio_trigger/test_main.cpp scripts/smoke_runtime_protocol.py test/test_runtime_smoke.py
@@ -420,7 +420,7 @@ git commit -m "feat: add protocol v6 action runs and chords"
 - Modify: `src/main.cpp:1-280`
 - Modify: `test/test_gpio_trigger/test_main.cpp:720-849`
 
-- [ ] **Step 1: Write failing native HID transport tests**
+- [x] **Step 1: Write failing native HID transport tests**
 
 Extract report construction into a platform-neutral helper and verify six usages, all modifier bits, modifier-only press, empty release, and transport backpressure:
 
@@ -455,13 +455,13 @@ void test_input_scanning_continues_while_delay_run_is_active() {
 }
 ```
 
-- [ ] **Step 2: Verify the native suite fails**
+- [x] **Step 2: Verify the native suite fails**
 
 Run: `uv run pio test -e native`
 
 Expected: FAIL because the platform API accepts one `keycode`.
 
-- [ ] **Step 3: Implement six-slot reports and wire CHORD dispatch**
+- [x] **Step 3: Implement six-slot reports and wire CHORD dispatch**
 
 Use this platform contract:
 
@@ -472,7 +472,7 @@ bool sendHotkey(std::uint8_t modifiers, const KeyboardUsages &keycodes);
 
 In RP2040 fill `hid_keyboard_report_t.keycode[0..5]`; in ESP32-S3 fill `KeyReport.keys[0..5]`. Both implementations must send the complete pressed report and then zeroed release report, waiting for both report slots as the current transport does. In `main.cpp`, copy `command->keycodes` into the fixed array for CHORD, keep HOTKEY for v3-v5, acknowledge with `DONE <run_id> <step>`, and clear `ActionRunController` on reconnect, configuration commit, and `SKIP`.
 
-- [ ] **Step 4: Run native and both firmware builds**
+- [x] **Step 4: Run native and both firmware builds**
 
 Run: `uv run pio test -e native`
 
@@ -486,7 +486,7 @@ Run: `make build-rp2040`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the HID implementation**
+- [x] **Step 5: Commit the HID implementation**
 
 ```bash
 git add src/platform/Platform.h src/platform/HidReportTransport.h src/platform/rp2040.cpp src/platform/esp32s3.cpp src/main.cpp test/test_gpio_trigger/test_main.cpp
@@ -500,7 +500,7 @@ git commit -m "feat: send six-key HID chord reports"
 - Create: `src-tauri/src/trigger.rs`
 - Modify: `src-tauri/src/lib.rs:1-30`
 
-- [ ] **Step 1: Write exhaustive fake-clock tests in the new module**
+- [x] **Step 1: Write exhaustive fake-clock tests in the new module**
 
 Define tests for Press, Release, Long Press once, Double Press on Down-Up-Down, Press-before-Double ordering, long-press invalidation, second-press long hold, duplicate edges, reset, and independent inputs:
 
@@ -529,13 +529,13 @@ fn complete_second_down_emits_press_before_double_press() {
 }
 ```
 
-- [ ] **Step 2: Run the module test and verify it fails to compile**
+- [x] **Step 2: Run the module test and verify it fails to compile**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml trigger -- --nocapture`
 
 Expected: FAIL because `trigger.rs` and `TriggerTracker` do not exist.
 
-- [ ] **Step 3: Implement deterministic edge and deadline state**
+- [x] **Step 3: Implement deterministic edge and deadline state**
 
 Use these public interfaces:
 
@@ -579,13 +579,13 @@ fn edge(
 }
 ```
 
-- [ ] **Step 4: Run the trigger suite**
+- [x] **Step 4: Run the trigger suite**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml trigger`
 
 Expected: PASS for all edge, timer, reset, and independent-input cases.
 
-- [ ] **Step 5: Commit the trigger engine**
+- [x] **Step 5: Commit the trigger engine**
 
 ```bash
 git add src-tauri/src/trigger.rs src-tauri/src/lib.rs
@@ -600,7 +600,7 @@ git commit -m "feat: recognize host-side action triggers"
 - Modify: `src-tauri/src/coordinator.rs:280-390,620-720,1040-1120,1440-1580,2260-3060`
 - Modify: `src-tauri/src/protocol.rs:357-488`
 
-- [ ] **Step 1: Write failing DeviceSession integration tests**
+- [x] **Step 1: Write failing DeviceSession integration tests**
 
 Cover v6 Down/Up triggering, timer polling without serial input, host run IDs differing from input IDs, queue serialization, reset events, timeout and malformed-ack isolation, metrics on Down only, and v3-v5 legacy behavior:
 
@@ -627,13 +627,13 @@ fn timer_poll_fires_long_press_and_later_queue_survives_timeout() {
 }
 ```
 
-- [ ] **Step 2: Run focused DeviceSession tests and verify the red state**
+- [x] **Step 2: Run focused DeviceSession tests and verify the red state**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml device::tests -- --nocapture`
 
 Expected: FAIL because sessions queue only Down input IDs and have no timer poll.
 
-- [ ] **Step 3: Replace `QueuedInput` with trigger occurrences and branch by negotiated protocol**
+- [x] **Step 3: Replace `QueuedInput` with trigger occurrences and branch by negotiated protocol**
 
 Add fields `triggers: TriggerTracker` and `next_run_id: u64` to `DeviceSession`. For v6, pass every stable edge into the tracker, enqueue each returned occurrence in sequence order, allocate a host run ID when an occurrence starts, load Actions from `TriggerActions::get`, and emit `command_v6`. For v3-v5, respond only to Down using the event ID and `press` group via `command_legacy`; always emit `SKIP <event_id>` if there is no compatible Press Action so old firmware clears its pending response.
 
@@ -650,7 +650,7 @@ impl DeviceSession {
 
 Call `clear_gestures` on disconnect, assignment/snapshot replacement, topology reconfiguration, and learning entry. Record `input_state` for physical edges and `trigger_occurred` with `button`/`trigger` for derived occurrences. Keep `MetricPress` on Down edges only. On a timeout or malformed `DONE`, abort and `SKIP` only the active run, emit structured `action_timeout` or `invalid_action_acknowledgement` activity, and immediately start the next queued occurrence. Update the coordinator worker loop to use `recv_timeout` bounded by `next_trigger_deadline_ms`, then call `poll_triggers(clock.monotonic_ms())` even if no serial line arrives.
 
-- [ ] **Step 4: Run runtime, coordinator, and protocol tests**
+- [x] **Step 4: Run runtime, coordinator, and protocol tests**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml device::tests`
 
@@ -664,7 +664,7 @@ Run: `cargo test --manifest-path src-tauri/Cargo.toml protocol::tests`
 
 Expected: PASS for v3-v6 Action sequencing.
 
-- [ ] **Step 5: Commit runtime integration**
+- [x] **Step 5: Commit runtime integration**
 
 ```bash
 git add src-tauri/src/device.rs src-tauri/src/coordinator.rs src-tauri/src/protocol.rs
@@ -681,7 +681,7 @@ git commit -m "feat: execute triggered actions with host run ids"
 - Modify: `src-tauri/src/coordinator.rs:1440-1580,1720-1780`
 - Modify: `src-tauri/src/lib.rs:320-490,650-830,1010-1060,1880-1980`
 
-- [ ] **Step 1: Write failing compatibility and transaction tests**
+- [x] **Step 1: Write failing compatibility and transaction tests**
 
 Test that non-Press groups, multiple ordinary keys, and modifier-only chords require v6; schema-v3 Press with one ordinary key still works on v3-v5; ambiguous mappings do not change assignment; and clone failure leaves disk and assignment untouched:
 
@@ -715,7 +715,7 @@ fn edited_phone_profile() -> DeviceProfile {
 }
 ```
 
-- [ ] **Step 2: Verify focused tests fail**
+- [x] **Step 2: Verify focused tests fail**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml minimum_protocol_version -- --nocapture`
 
@@ -725,7 +725,7 @@ Run: `cargo test --manifest-path src-tauri/Cargo.toml duplicate_and_assign -- --
 
 Expected: FAIL because the clone-and-assign transaction does not exist.
 
-- [ ] **Step 3: Implement capability status, profile resolution, and one transaction command**
+- [x] **Step 3: Implement capability status, profile resolution, and one transaction command**
 
 Add `DeviceProfile::minimum_protocol_version() -> u16`. Return 6 for any nonempty `release`, `long_press`, or `double_press` group, or any hotkey whose encoded chord has zero or more than one ordinary usages; otherwise preserve existing OLED/media/open gating.
 
@@ -746,7 +746,7 @@ pub fn duplicate_profile_for_device(
 
 Require `source_profile.profile.id` to identify an existing profile, but clone the submitted validated draft so unsaved I/O, layout, timing, or Action changes become part of the device-only copy without changing the shared source. Build the cloned profiles/settings in memory, allocate unique IDs with the existing slug/unique helpers, rewrite every cloned Hardware Profile ID and the selected Hardware Profile ID in the assignment, validate the new assignment against the device board, write profile plus settings to a staged data generation, then replace in-memory state only after durable writes succeed. Expose `duplicate_profile_for_device` as a logged Tauri command in `lib.rs`, include it in `generate_handler!`, and fan the changed snapshot to only affected workers. When a selected configuration has no preserved compatible mapping or more than one candidate, return `hardware_resolution_required` without mutating the assignment. Before persisting a runtime assignment for an online device, have `lib.rs` compare the observed firmware protocol with `profile.minimum_protocol_version()` and return `firmware_update_required` if it is too old; offline assignments are validated when the device next connects. Surface a connected incompatibility as update-required status rather than `invalid_assignment`.
 
-- [ ] **Step 4: Run workspace, command, and coordinator tests**
+- [x] **Step 4: Run workspace, command, and coordinator tests**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml duplicate_profile_for_device`
 
@@ -756,7 +756,7 @@ Run: `cargo test --manifest-path src-tauri/Cargo.toml firmware_update_required`
 
 Expected: PASS for protocol 3-5 and protocol 6 fixtures.
 
-- [ ] **Step 5: Commit ownership and compatibility operations**
+- [x] **Step 5: Commit ownership and compatibility operations**
 
 ```bash
 git add src-tauri/src/profile.rs src-tauri/src/workspace.rs src-tauri/src/device.rs src-tauri/src/coordinator.rs src-tauri/src/lib.rs
@@ -775,7 +775,7 @@ git commit -m "feat: gate v6 profiles and clone shared configurations"
 - Modify: `src/Keypad.tsx`
 - Modify: `src/Keypad.test.tsx`
 
-- [ ] **Step 1: Write failing type-flow and autosave tests**
+- [x] **Step 1: Write failing type-flow and autosave tests**
 
 Add a test that selects profile B in Button Behavior without changing device A's assignment, edits profile B, switches Device Management to profile A, and observes profile B saved through the serialized queue. Add Keypad count coverage across trigger groups:
 
@@ -800,13 +800,13 @@ test("counts actions in every trigger group", () => {
 });
 ```
 
-- [ ] **Step 2: Verify frontend tests fail**
+- [x] **Step 2: Verify frontend tests fail**
 
 Run: `npm test -- src/App.test.tsx src/Keypad.test.tsx`
 
 Expected: FAIL because schema-v3 action groups and independent Device Management drafts are unsupported.
 
-- [ ] **Step 3: Add canonical frontend types and generalize profile drafts**
+- [x] **Step 3: Add canonical frontend types and generalize profile drafts**
 
 Use:
 
@@ -825,13 +825,13 @@ export type DeviceProfile = {
 
 Replace editor-only draft lookup with `profileDraftsRef` plus `profileById(id)` and `updateProfile(id, updater)`. Feed a single `useAutosave` value containing the currently dirty profile ID/profile and flush before switching either editor profile or managed device. `applySnapshot(snapshot, true)` must merge server profiles with unsaved drafts by profile ID. Add `manualSaveProfileIds`: while a shared configuration is being edited in Device Management I/O Mapping, Key Layout, or Configuration Settings, keep its validated draft locally and suspend autosave until the user chooses Save shared configuration; choosing Duplicate sends that draft to the atomic clone-and-assign command and then discards only the old shared-profile draft. Keep the Button Behavior selector wired to `save_editor_settings`; Device Management assignment remains wired only to runtime assignment commands. Update preview fixtures and Keypad counts for all four lists.
 
-- [ ] **Step 4: Run App, autosave, preview, and Keypad tests**
+- [x] **Step 4: Run App, autosave, preview, and Keypad tests**
 
 Run: `npm test -- src/App.test.tsx src/App.preview.test.tsx src/useAutosave.test.tsx src/Keypad.test.tsx`
 
 Expected: PASS with no cross-talk between editor selection and device assignment.
 
-- [ ] **Step 5: Commit the frontend data flow**
+- [x] **Step 5: Commit the frontend data flow**
 
 ```bash
 git add src/types.ts src/preview.ts src/App.tsx src/App.test.tsx src/App.preview.test.tsx src/Keypad.tsx src/Keypad.test.tsx
@@ -851,7 +851,7 @@ git commit -m "feat: manage schema v3 profile drafts independently"
 - Modify: `src/i18n.ts`
 - Modify: `src/i18n.test.ts`
 
-- [ ] **Step 1: Write failing interaction tests**
+- [x] **Step 1: Write failing interaction tests**
 
 Test categories/search, multi-select, six-key lockout, removable chips, modifier-only Save, left/right disclosure, recording until all keyup events, Escape capture, intercepted-key manual fallback, local draft Cancel, default `press`/`hotkey`, trigger move, and Delete:
 
@@ -879,13 +879,13 @@ test("recording preserves sides and commits after every key is released", async 
 });
 ```
 
-- [ ] **Step 2: Run the new component tests and verify the red state**
+- [x] **Step 2: Run the new component tests and verify the red state**
 
 Run: `npm test -- src/HotkeyPicker.test.tsx src/ActionDialog.test.tsx`
 
 Expected: FAIL because both modules are absent.
 
-- [ ] **Step 3: Implement the picker and dialog as controlled draft components**
+- [x] **Step 3: Implement the picker and dialog as controlled draft components**
 
 `HotkeyPicker` accepts `{ value, onChange, language, error? }`, renders Common, Function Keys F1-F24, Letters, Numbers, Symbols, Navigation, and Numeric Keypad in that order, exposes each token as a checkbox, and derives selection state from canonical HID usage rather than display labels. Do not include laptop Fn. The compact modifier row is `primary`, `cmd`, `ctrl`, `alt`, `shift`; the disclosure offers eight physical modifiers and resolves each generic alias only to its corresponding left bit before checking conflicts, allowing left and right variants together. Disable an unselected ordinary key at count six while leaving selected keys removable. During recording, map `KeyboardEvent.code` on keydown, wait until every captured code receives keyup, treat Escape as an ordinary captured usage, and if the result contains more than six ordinary keys show `too_many_keys` without replacing the previous chord. Manual category selection remains available when the OS intercepts a shortcut.
 
@@ -906,13 +906,13 @@ type ActionDialogProps = {
 
 Initialize create mode to `{ trigger: "press", action: { type: "hotkey", keys: [] } }`. Keep all mutations in local state, validate before calling `onSave`, stop dialog close on Escape while recording, restore normal Escape-to-Cancel otherwise, and expose Delete only in edit mode. Add translated accessible names and CSS with `width: min(680px, calc(100vw - 32px))`, wrapped chips, fixed-height choices, and narrower key-grid columns below 640px.
 
-- [ ] **Step 4: Run dialog, picker, hotkey, and i18n suites**
+- [x] **Step 4: Run dialog, picker, hotkey, and i18n suites**
 
 Run: `npm test -- src/HotkeyPicker.test.tsx src/ActionDialog.test.tsx src/hotkey.test.ts src/i18n.test.ts`
 
 Expected: PASS, including keyboard-only operation and six-key announcements.
 
-- [ ] **Step 5: Commit Action editing primitives**
+- [x] **Step 5: Commit Action editing primitives**
 
 ```bash
 git add src/HotkeyPicker.tsx src/HotkeyPicker.test.tsx src/ActionDialog.tsx src/ActionDialog.test.tsx src/hotkey.ts src/styles/views.css src/i18n.ts src/i18n.test.ts
@@ -929,7 +929,7 @@ git commit -m "feat: add compact triggered Action dialog"
 - Modify: `src/styles/views.css`
 - Modify: `src/i18n.ts`
 
-- [ ] **Step 1: Write failing summary and ordering tests**
+- [x] **Step 1: Write failing summary and ordering tests**
 
 Test fixed trigger order, omitted empty sections, concise content, edit/add launch, trigger move to destination tail, deletion, and movement constrained to one group:
 
@@ -957,13 +957,13 @@ test("changing trigger appends the Action to the destination group", async () =>
 });
 ```
 
-- [ ] **Step 2: Verify the current editor fails the new behavior**
+- [x] **Step 2: Verify the current editor fails the new behavior**
 
 Run: `npm test -- src/ActionEditor.test.tsx`
 
 Expected: FAIL because the editor renders large inline Action cards and flat Actions.
 
-- [ ] **Step 3: Reduce ActionEditor to summaries plus dialog state**
+- [x] **Step 3: Reduce ActionEditor to summaries plus dialog state**
 
 Change its props to `actions: TriggerActions` and `onChange(actions: TriggerActions)`. Render groups using:
 
@@ -974,13 +974,13 @@ type EditingTarget = { trigger: ActionTrigger; index: number } | "create" | null
 
 Each row is a stable-height button with type icon, `actionSummary(action)`, and icon-only move controls with `aria-label`/`title`. On save, replace in place when the trigger is unchanged; otherwise remove the source and append to destination. Empty group keys remain arrays in memory. `App.tsx` passes `profile.actions[selectedButtonId] ?? emptyTriggerActions()` and removes the old flat list mutation.
 
-- [ ] **Step 4: Run Behavior and App regression tests**
+- [x] **Step 4: Run Behavior and App regression tests**
 
 Run: `npm test -- src/ActionEditor.test.tsx src/App.test.tsx`
 
 Expected: PASS for create/edit/cancel/delete and independent editor selection.
 
-- [ ] **Step 5: Commit the Button Behavior redesign**
+- [x] **Step 5: Commit the Button Behavior redesign**
 
 ```bash
 git add src/ActionEditor.tsx src/ActionEditor.test.tsx src/App.tsx src/styles/views.css src/i18n.ts
@@ -1002,7 +1002,7 @@ git commit -m "feat: group button Actions by trigger"
 - Modify: `src/styles/views.css`
 - Modify: `src/i18n.ts`
 
-- [ ] **Step 1: Write failing Device Management workflow tests**
+- [x] **Step 1: Write failing Device Management workflow tests**
 
 Cover device selection, compact configuration assignment, preserved unique hardware mapping, ambiguous inline resolver, Overview/I/O Mapping/Key Layout tabs as page content, disconnect behavior, persistent shared warning, timing save, and atomic duplicate command:
 
@@ -1037,13 +1037,13 @@ test("duplicate command assigns only the selected device", async () => {
 });
 ```
 
-- [ ] **Step 2: Verify Device Management tests fail**
+- [x] **Step 2: Verify Device Management tests fail**
 
 Run: `npm test -- src/DeviceManagement.test.tsx src/ConfigurationSettingsDialog.test.tsx src/HardwareMapping.test.tsx`
 
 Expected: FAIL because tabs/settings dialog/shared warning and embedded Layout Editor are absent.
 
-- [ ] **Step 3: Consolidate physical-device editing under Device Management**
+- [x] **Step 3: Consolidate physical-device editing under Device Management**
 
 Give `DeviceManagement` a controlled `selectedDeviceId` and `onSelectedDeviceChange`, plus `onChangeProfile`, `onSaveSharedProfile`, learning callbacks, and `onDuplicateProfileForDevice`. Track `tab: "overview" | "io" | "layout"`. The `Use configuration` select resolves compatible hardware with this exact order: preserve the current mapping if it belongs to the selected profile and matches the board; else assign the only compatible mapping; else keep the stored assignment unchanged, set tab to `io`, and render a required inline hardware select plus Apply.
 
@@ -1064,13 +1064,13 @@ type ConfigurationSettingsDialogProps = {
 
 Use number inputs with `min/max` values `100/5000` and `100/1000`; validate integer values locally. Save updates only `trigger_settings`, labeling the command `Save shared configuration` when `sharedDeviceCount > 1`. Duplicate submits the complete current profile draft to the backend transaction and closes only after success. Keep the dialog limited to timing and duplicate controls. Render the same persistent shared warning above both the I/O Mapping and Key Layout tab content; its Save shared configuration command explicitly flushes the suspended draft, while Duplicate and use only for this device preserves the source and assigns the validated draft clone.
 
-- [ ] **Step 4: Run Device Management, mapping, layout, and App tests**
+- [x] **Step 4: Run Device Management, mapping, layout, and App tests**
 
 Run: `npm test -- src/DeviceManagement.test.tsx src/ConfigurationSettingsDialog.test.tsx src/HardwareMapping.test.tsx src/App.test.tsx`
 
 Expected: PASS for assignment resolution, shared ownership, offline editing, learning, and embedded pages.
 
-- [ ] **Step 5: Commit the device-centered workspace**
+- [x] **Step 5: Commit the device-centered workspace**
 
 ```bash
 git add src/ConfigurationSettingsDialog.tsx src/ConfigurationSettingsDialog.test.tsx src/DeviceManagement.tsx src/DeviceManagement.test.tsx src/HardwareMapping.tsx src/HardwareMapping.test.tsx src/LayoutEditor.tsx src/App.tsx src/styles/views.css src/i18n.ts
@@ -1090,7 +1090,7 @@ git commit -m "feat: consolidate configuration under device management"
 - Modify: `src/i18n.ts`
 - Modify: `src/i18n.test.ts`
 
-- [ ] **Step 1: Write failing navigation and accessibility tests**
+- [x] **Step 1: Write failing navigation and accessibility tests**
 
 Assert the sidebar has exactly four destinations, Configuration Files has no editor selector, Button Behavior has its own selector, icon controls have names/tooltips, and narrow layouts do not create modal I/O/Layout surfaces:
 
@@ -1107,19 +1107,19 @@ test("shows four destinations and keeps editor selection on Button Behavior", as
 });
 ```
 
-- [ ] **Step 2: Verify App and i18n tests fail**
+- [x] **Step 2: Verify App and i18n tests fail**
 
 Run: `npm test -- src/App.test.tsx src/App.preview.test.tsx src/i18n.test.ts`
 
 Expected: FAIL because old hardware/layout navigation and the Configuration Files editor selector remain.
 
-- [ ] **Step 3: Finish navigation and responsive states**
+- [x] **Step 3: Finish navigation and responsive states**
 
 Reduce `View` to `"home" | "devices" | "behavior" | "data"`; label `data` as Configuration Files. Remove Hardware Mapping and Key Layout sidebar buttons, render the configuration selector in the Button Behavior heading, and remove the `model-picker` editor control from Configuration Files. Render a configuration list with device-usage counts and per-item Export, Duplicate, and Delete commands; retain Create, Import, Backup, and Restore. Duplicate opens the existing clone form with the row's profile as source and never changes a device assignment.
 
 Add preview fixtures for: Button Behavior grouped summary, Action dialog, Device Management I/O tab, Layout tab, shared warning, and Configuration Settings dialog. In CSS, stack the device list above its tab workspace below 760px, keep I/O/Layout in normal page scroll, wrap toolbars without changing icon-button dimensions, and ensure dialogs use `max-height: calc(100vh - 32px); overflow: auto`. Add `title` to every icon-only button and visible focus styles to tabs, checkboxes, chips, and disclosures. Keep letter spacing at `0`.
 
-- [ ] **Step 4: Run all frontend tests and production build**
+- [x] **Step 4: Run all frontend tests and production build**
 
 Run: `npm test`
 
@@ -1129,7 +1129,7 @@ Run: `npm run build`
 
 Expected: PASS with no TypeScript or Vite errors.
 
-- [ ] **Step 5: Commit the finished information architecture**
+- [x] **Step 5: Commit the finished information architecture**
 
 ```bash
 git add src/App.tsx src/App.test.tsx src/App.preview.test.tsx src/preview.ts src/styles/app.css src/styles/views.css src/i18n.ts src/i18n.test.ts
@@ -1143,7 +1143,7 @@ git commit -m "feat: finish device workspace navigation"
 - Modify only if verification exposes a defect: files owned by Tasks 1-12
 - Add generated evidence: `docs/verification/screenshots/action-triggers-*.png`
 
-- [ ] **Step 1: Run formatting and whitespace checks**
+- [x] **Step 1: Run formatting and whitespace checks**
 
 Run: `cargo fmt --manifest-path src-tauri/Cargo.toml`
 
@@ -1187,7 +1187,9 @@ Run: `make test`
 
 Expected: the aggregate release, Python, native firmware, Rust, Clippy, frontend, and build gate passes.
 
-- [ ] **Step 3: Start the app and capture Playwright evidence**
+Note: The repository-local `.venv/bin/pio` native test and both firmware builds passed. The `make`/`uv run pio` wrappers remain unverified because the user-level `/Users/leo/.config/uv/uv.toml` is invalid TOML (`line 4: -e [[index]]`); it was not changed.
+
+- [x] **Step 3: Start the app and capture Playwright evidence**
 
 Run: `npm run dev -- --host 127.0.0.1`
 
@@ -1223,7 +1225,9 @@ make upload-esp32s3 BUILD_ID="0.1.0+trigger-v6"
 
 On each board verify: handset pickup runs Press; hangup runs Release; holding beyond 500 ms runs Long Press once; Down-Up-Down within 300 ms runs Double Press after the second Press; a six-key chord produces one pressed and one release report; a right Command/right Alt chord preserves right-side modifier bits; modifier-only chord executes; input scanning continues during a 3000 ms Delay. Then connect protocol-5 firmware and verify Press plus one ordinary key remains functional while v6-only profiles show firmware update required.
 
-- [ ] **Step 5: Review final scope and commit verification evidence**
+Note: Physical flashing and board-level acceptance were not run in this session because no RP2040 or ESP32-S3 device was connected.
+
+- [x] **Step 5: Review final scope and commit verification evidence**
 
 Run: `git status --short`
 
