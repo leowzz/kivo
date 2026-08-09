@@ -20,9 +20,10 @@ configuration directory and register a `TargetKind::Folder` target at:
 ```
 
 The active file is `kivo.log`. Configure a maximum file size of 10 MiB and
-`RotationStrategy::KeepSome(5)`. The plugin counts the active file within this
-limit, so the directory contains at most five Kivo log files. The plugin creates
-the directory when needed and appends to the current file across launches.
+`RotationStrategy::KeepSome(5)`. The plugin retains up to five archived files in
+addition to the active file, so the directory contains at most six Kivo log
+files. The plugin creates the directory when needed and appends to the current
+file across launches.
 
 Register the plugin after the application data path is available in `setup`.
 Plugin registration failure is reported to stderr but does not prevent the
@@ -44,6 +45,32 @@ small common envelope:
 
 The log crate target is restricted to Kivo's explicit runtime logging target so
 unstructured dependency messages do not contaminate the JSON Lines file.
+
+## Async Dispatch And Backpressure
+
+Runtime producers serialize entries and enqueue them to one shared dispatcher;
+only the dispatcher's worker thread calls the log sink. Producers never wait for
+file I/O. The dispatcher reserves space separately for 1024 normal entries and
+128 priority lifecycle or operation entries. A reservation covers both queued
+and currently-writing entries and is released only after the sink write returns,
+so the sum of accepted entries remains bounded while the sink is stalled.
+
+Enqueue is nonblocking with respect to the worker and sink. When a class has no
+remaining reservation, the dispatcher drops the newest entry and increments
+that class's independent overflow counters. The worker coalesces pending counts
+into structured `runtime_log_entries_dropped` records with only `class`
+(`normal` or `priority`), `count`, and `policy: drop_newest` context fields.
+Dropped payloads and arbitrary detail are never copied into overflow records.
+Accepted normal and priority entries share one channel and retain their enqueue
+order.
+
+Clean shutdown is separately protected from both reserves. Under the same
+ordering lock used by producers, shutdown closes producer access, appends the
+final `application_stopped` entry, and then appends the shutdown marker. The
+worker drains every accepted entry, writes any pending overflow summaries before
+the final lifecycle entry, writes `application_stopped`, flushes the sink, and
+exits. Saturated normal or priority reserves therefore cannot suppress the final
+entry or change application shutdown behavior.
 
 ## Event Sources
 
@@ -117,9 +144,11 @@ Implementation follows test-driven development:
    including paste success and failure.
 3. Add failing tests for lifecycle, device transition, scan error, and command
    result records at their integration boundaries.
-4. Add a plugin integration test using a temporary folder and a small maximum
-   size. Produce enough entries to rotate and assert that the number of matching
-   files does not exceed the configured `KeepSome` limit.
+4. Add a plugin integration test whose parent process seeds historical archives
+   in a temporary folder and whose child process owns the process-global logger.
+   Produce exactly one rotation, wait for the child to exit, and assert that
+   `KeepSome(3)` leaves three archives plus the active file with no collision
+   `.bak` file.
 5. Run Rust tests, `cargo fmt --check`, and Clippy. Run the repository's broader
    verification when the implementation touches shared frontend contracts.
 

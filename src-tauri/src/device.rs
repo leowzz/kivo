@@ -322,6 +322,11 @@ impl DeviceSession {
         let mut output = SessionOutput::default();
         if let Some(mut sequence) = self.active.take() {
             let event_id = sequence.event_id();
+            let detail = if code == "action_step_failed" && sequence.is_awaiting_paste() {
+                Some("clipboard_write_failed".into())
+            } else {
+                detail
+            };
             sequence.abort();
             output.lines.push(format!("SKIP {event_id}\n"));
             let mut activity = RuntimeActivity::new(code);
@@ -402,7 +407,7 @@ impl DeviceSession {
                 output.activities.push(
                     RuntimeActivity::new("topology_rejected")
                         .with_param("revision", revision.to_string())
-                        .with_param("deviceCode", code),
+                        .with_param("deviceCode", configuration_error_code(&code)),
                 );
             }
             DeviceMessage::State {
@@ -531,26 +536,31 @@ impl DeviceSession {
         context: Option<RuntimeEventContext>,
         output: &mut SessionOutput,
     ) {
+        let button = metric_snapshot.as_ref().and_then(|runtime| {
+            runtime
+                .profile
+                .button_for(&runtime.hardware_profile_id, &input)
+                .map(str::to_owned)
+        });
         let metric_press = (state == InputState::Down)
-            .then_some(metric_snapshot.as_ref())
+            .then(|| metric_snapshot.as_ref().zip(button.as_deref()))
             .flatten()
-            .and_then(|runtime| {
-                runtime
-                    .profile
-                    .button_for(&runtime.hardware_profile_id, &input)
-                    .map(|button_id| MetricPress {
-                        attribution: runtime.metric_attribution.clone(),
-                        button_id: button_id.into(),
-                        occurred_at_ms,
-                    })
+            .map(|(runtime, button_id)| MetricPress {
+                attribution: runtime.metric_attribution.clone(),
+                button_id: button_id.into(),
+                occurred_at_ms,
             });
-        output.activities.push(RuntimeActivity {
+        let mut activity = RuntimeActivity {
             input: Some(input),
             pressed: Some(state == InputState::Down),
             context: context.clone(),
             metric_press,
             ..RuntimeActivity::new("input_state")
-        });
+        };
+        if let Some(button) = button {
+            activity.params.insert("button".into(), button);
+        }
+        output.activities.push(activity);
         if state == InputState::Down {
             if let Some(snapshot) = action_snapshot {
                 self.queue.push_back(QueuedInput {
@@ -779,24 +789,31 @@ impl DeviceSession {
                 .push(RuntimeActivity::new("unexpected_action_acknowledgement"));
             return;
         };
-        if let Err(error) = sequence.acknowledge(event_id, step) {
-            let active_event = sequence.event_id();
-            output.lines.push(format!("SKIP {active_event}\n"));
-            output.activities.push(
-                RuntimeActivity::new("invalid_action_acknowledgement")
-                    .with_detail(error)
-                    .with_context(self.active_context.clone()),
-            );
-            self.active = None;
-            self.active_snapshot = None;
-            self.active_context = None;
-            self.pending_paste = None;
-            if let Some(receive_sequence) = self.active_receive_sequence.take() {
-                output.completed_receive_sequences.push(receive_sequence);
+        let completed = match sequence.acknowledge(event_id, step) {
+            Ok(completed) => completed,
+            Err(error) => {
+                let active_event = sequence.event_id();
+                output.lines.push(format!("SKIP {active_event}\n"));
+                output.activities.push(
+                    RuntimeActivity::new("invalid_action_acknowledgement")
+                        .with_detail(error)
+                        .with_context(self.active_context.clone()),
+                );
+                self.active = None;
+                self.active_snapshot = None;
+                self.active_context = None;
+                self.pending_paste = None;
+                if let Some(receive_sequence) = self.active_receive_sequence.take() {
+                    output.completed_receive_sequences.push(receive_sequence);
+                }
+                self.start_next(output);
+                return;
             }
-            self.start_next(output);
-            return;
-        }
+        };
+        output.activities.push(
+            action_activity("action_step_completed", &completed)
+                .with_context(self.active_context.clone()),
+        );
         if sequence.is_complete() {
             self.active = None;
             self.active_snapshot = None;
@@ -870,6 +887,9 @@ impl DeviceSession {
         let Some(step) = self.active.as_mut().and_then(ActionSequence::next_step) else {
             return;
         };
+        output.activities.push(
+            action_activity("action_step_started", &step).with_context(self.active_context.clone()),
+        );
         let result = match &step.action {
             crate::profile::ButtonAction::Paste { text } => {
                 let request = PendingPaste {
@@ -893,6 +913,7 @@ impl DeviceSession {
             }
             crate::profile::ButtonAction::Open { target } => target_opener
                 .open(target)
+                .map_err(|_| "open_target_failed".to_owned())
                 .and_then(|()| step.command(|_| Ok(()))),
         };
         match result {
@@ -911,11 +932,16 @@ impl DeviceSession {
             sequence.abort();
         }
         output.lines.push(format!("SKIP {}\n", step.event_id));
+        let detail = if matches!(&step.action, crate::profile::ButtonAction::Open { .. }) {
+            "open_target_failed".into()
+        } else {
+            error
+        };
         output.activities.push(
             RuntimeActivity::new("action_step_failed")
                 .with_param("button", &step.button)
                 .with_param("step", step.step.to_string())
-                .with_detail(error)
+                .with_detail(detail)
                 .with_context(self.active_context.clone()),
         );
         self.active = None;
@@ -965,16 +991,74 @@ impl DeviceSession {
                     &mut output,
                     self.grant_paste(request.event_id, request.step),
                 ),
-                Err(error) => {
+                Err(_error) => {
                     merge_output(
                         &mut output,
-                        self.fail_active_deferred("action_step_failed", Some(error)),
+                        self.fail_active_deferred(
+                            "action_step_failed",
+                            Some("clipboard_write_failed".into()),
+                        ),
                     );
                 }
             }
         }
         output
     }
+}
+
+fn action_activity(code: &str, step: &crate::protocol::ActionStep) -> RuntimeActivity {
+    let mut activity = RuntimeActivity::new(code)
+        .with_param("eventId", step.event_id.to_string())
+        .with_param("button", &step.button)
+        .with_param("step", step.step.to_string())
+        .with_param("total", step.total.to_string());
+    match &step.action {
+        crate::profile::ButtonAction::Paste { text } => {
+            activity.params.insert("actionKind".into(), "paste".into());
+            activity
+                .params
+                .insert("characterCount".into(), text.chars().count().to_string());
+        }
+        crate::profile::ButtonAction::Hotkey { keys } => {
+            activity.params.insert("actionKind".into(), "hotkey".into());
+            activity.params.insert("keys".into(), keys.join("+"));
+        }
+        crate::profile::ButtonAction::Delay { duration_ms } => {
+            activity.params.insert("actionKind".into(), "delay".into());
+            activity
+                .params
+                .insert("durationMs".into(), duration_ms.to_string());
+        }
+        crate::profile::ButtonAction::Media { command } => {
+            activity.params.insert("actionKind".into(), "media".into());
+            let command = match command {
+                crate::profile::MediaCommand::PlayPause => "play_pause",
+                crate::profile::MediaCommand::PreviousTrack => "previous_track",
+                crate::profile::MediaCommand::NextTrack => "next_track",
+                crate::profile::MediaCommand::Stop => "stop",
+                crate::profile::MediaCommand::VolumeUp => "volume_up",
+                crate::profile::MediaCommand::VolumeDown => "volume_down",
+                crate::profile::MediaCommand::Mute => "mute",
+            };
+            activity.params.insert("command".into(), command.into());
+        }
+        crate::profile::ButtonAction::Open { target } => {
+            activity.params.insert("actionKind".into(), "open".into());
+            activity.params.insert(
+                "targetKind".into(),
+                if target.contains("://") {
+                    "url"
+                } else {
+                    "path"
+                }
+                .into(),
+            );
+            activity
+                .params
+                .insert("characterCount".into(), target.chars().count().to_string());
+        }
+    }
+    activity
 }
 
 #[cfg(test)]
@@ -996,6 +1080,19 @@ fn merge_output(target: &mut SessionOutput, mut source: SessionOutput) {
         .append(&mut source.completed_receive_sequences);
     if source.action_timeout.is_some() {
         target.action_timeout = source.action_timeout;
+    }
+}
+
+fn configuration_error_code(code: &str) -> &str {
+    match code {
+        "invalid_begin"
+        | "invalid_direct"
+        | "invalid_matrix"
+        | "invalid_oled"
+        | "invalid_commit"
+        | "invalid_learning"
+        | "invalid_learning_revision" => code,
+        _ => "device_configuration_error",
     }
 }
 
@@ -1412,10 +1509,13 @@ fn run_isolated_worker_inner(
                         stop,
                     )?;
                 }
-                Ok(PasteReply::ClipboardError(error)) => {
+                Ok(PasteReply::ClipboardError(_error)) => {
                     pending_paste = None;
                     active_paste_ack = None;
-                    let output = session.fail_active_deferred("action_step_failed", Some(error));
+                    let output = session.fail_active_deferred(
+                        "action_step_failed",
+                        Some("clipboard_write_failed".into()),
+                    );
                     write_isolated_output(
                         start,
                         events,
@@ -1784,6 +1884,7 @@ fn now_ms() -> u64 {
 mod tests {
     use super::*;
     use crate::{
+        coordinator::{EventLevel, RuntimeEvent},
         hardware::DeviceId,
         metrics::{MetricAttribution, MetricsStore},
         model::{ButtonDefinition, ButtonGroup, ModelLayout},
@@ -1902,6 +2003,14 @@ mod tests {
             },
             &mut |_| Ok(()),
         );
+        let release = session.on_message(
+            DeviceMessage::State {
+                event_id: 1,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Up,
+            },
+            &mut |_| Ok(()),
+        );
 
         let update = persist_metrics(&store, &output.activities[0], timestamp)
             .unwrap()
@@ -1909,6 +2018,8 @@ mod tests {
 
         assert_eq!(update.today_presses, 1);
         assert_eq!(update.logs[0].message, "A pressed");
+        assert_eq!(output.activities[0].params["button"], "A");
+        assert_eq!(release.activities[0].params["button"], "A");
         drop(store);
         std::fs::remove_file(path).unwrap();
     }
@@ -2036,6 +2147,78 @@ mod tests {
             session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
         assert_eq!(configured.activities[0].code, "topology_active");
         assert!(session.ready);
+    }
+
+    fn configuration_rejection(device_code: &str) -> RuntimeActivity {
+        let mut session = DeviceSession::new(runtime_model());
+        let configuring = session.on_message_deferred(hello(), 0, 100);
+        assert_eq!(configuring.lines.first().unwrap(), "CONFIG_BEGIN 1 30\n");
+
+        let rejected = session.on_message_deferred(
+            DeviceMessage::ConfigError {
+                revision: 1,
+                code: device_code.into(),
+            },
+            0,
+            101,
+        );
+
+        assert_eq!(rejected.activities.len(), 1);
+        rejected.activities.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn known_firmware_configuration_error_codes_are_preserved() {
+        for code in [
+            "invalid_begin",
+            "invalid_direct",
+            "invalid_matrix",
+            "invalid_oled",
+            "invalid_commit",
+            "invalid_learning",
+            "invalid_learning_revision",
+        ] {
+            let activity = configuration_rejection(code);
+            assert_eq!(
+                activity.params.get("deviceCode").map(String::as_str),
+                Some(code)
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_firmware_configuration_error_is_sanitized_before_runtime_activity() {
+        let secret = "/Users/alice/private/firmware.txt?token=secret-config-123";
+
+        let activity = configuration_rejection(secret);
+
+        assert_eq!(activity.code, "topology_rejected");
+        assert_eq!(
+            activity.params.get("deviceCode").map(String::as_str),
+            Some("device_configuration_error")
+        );
+        let activity_fields = format!("{activity:?}");
+        let event = RuntimeEvent {
+            timestamp_ms: 101,
+            level: EventLevel::Error,
+            device_id: DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456")
+                .unwrap(),
+            raw_serial: "ABCDEF123456".into(),
+            controller_family_id: crate::hardware::ESP32S3_FAMILY_ID.into(),
+            board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+            port: None,
+            device_profile_id: Some("phone".into()),
+            hardware_profile_id: Some("esp-primary".into()),
+            home_update: None,
+            activity,
+        };
+        let entry = crate::runtime_log::runtime_event_entry(&event).unwrap();
+        let serialized = crate::runtime_log::serialize_entry(&entry).unwrap();
+
+        for private_value in [secret, "/Users/alice", "secret-config-123"] {
+            assert!(!activity_fields.contains(private_value));
+            assert!(!serialized.contains(private_value));
+        }
     }
 
     #[test]
@@ -2209,16 +2392,16 @@ mod tests {
     }
 
     #[test]
-    fn deferred_paste_waits_for_global_grant_before_emitting_device_command() {
+    fn deferred_paste_action_activity_is_sanitized_and_advances_in_order() {
         let mut runtime = runtime_model();
         runtime.profile.actions.insert(
             "A".into(),
             vec![
                 ButtonAction::Paste {
-                    text: "global".into(),
+                    text: "甲乙丙".into(),
                 },
                 ButtonAction::Hotkey {
-                    keys: vec!["enter".into()],
+                    keys: vec!["primary".into(), "enter".into()],
                 },
             ],
         );
@@ -2236,6 +2419,23 @@ mod tests {
         );
 
         assert!(pending.lines.is_empty());
+        let started = &pending.activities[1];
+        assert_eq!(started.code, "action_step_started");
+        assert_eq!(
+            started.params,
+            BTreeMap::from([
+                ("eventId".into(), "41".into()),
+                ("button".into(), "A".into()),
+                ("step".into(), "1".into()),
+                ("total".into(), "2".into()),
+                ("actionKind".into(), "paste".into()),
+                ("characterCount".into(), "3".into()),
+            ])
+        );
+        let activity_debug = format!("{started:?}");
+        let activity_json = serde_json::to_string(started).unwrap();
+        assert!(!activity_debug.contains("甲乙丙"));
+        assert!(!activity_json.contains("甲乙丙"));
         assert_eq!(
             pending.paste_requests,
             vec![PendingPaste {
@@ -2243,7 +2443,7 @@ mod tests {
                 event_id: 41,
                 step: 1,
                 total: 2,
-                text: "global".into(),
+                text: "甲乙丙".into(),
                 context: None,
             }]
         );
@@ -2258,8 +2458,19 @@ mod tests {
             0,
             124,
         );
-        assert_eq!(next.lines, ["HOTKEY 41 2 2 0 40\n"]);
+        let primary_modifier = if cfg!(target_os = "macos") { 8 } else { 1 };
+        assert_eq!(
+            next.lines,
+            [format!("HOTKEY 41 2 2 {primary_modifier} 40\n")]
+        );
         assert!(next.paste_requests.is_empty());
+        assert_eq!(next.activities.len(), 2);
+        assert_eq!(next.activities[0].code, "action_step_completed");
+        assert_eq!(next.activities[0].params["actionKind"], "paste");
+        assert_eq!(next.activities[0].params["step"], "1");
+        assert_eq!(next.activities[1].code, "action_step_started");
+        assert_eq!(next.activities[1].params["actionKind"], "hotkey");
+        assert_eq!(next.activities[1].params["keys"], "primary+enter");
     }
 
     struct FailingClipboard;
@@ -2268,6 +2479,48 @@ mod tests {
         fn write(&self, _text: &str) -> Result<(), String> {
             Err("clipboard unavailable".into())
         }
+    }
+
+    struct EchoClipboard;
+
+    impl ClipboardWriter for EchoClipboard {
+        fn write(&self, text: &str) -> Result<(), String> {
+            Err(text.into())
+        }
+    }
+
+    #[test]
+    fn immediate_paste_failure_redacts_clipboard_error() {
+        let secret = "甲乙丙";
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            vec![ButtonAction::Paste {
+                text: secret.into(),
+            }],
+        );
+        let mut session = DeviceSession::new(runtime);
+        session.ready = true;
+
+        let output = session.on_message(
+            DeviceMessage::State {
+                event_id: 46,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            &mut |text| Err(text.into()),
+        );
+
+        let failed = output
+            .activities
+            .iter()
+            .find(|activity| activity.code == "action_step_failed")
+            .unwrap();
+        assert_eq!(failed.detail.as_deref(), Some("clipboard_write_failed"));
+        let activity_debug = format!("{:?}", output.activities);
+        let activity_json = serde_json::to_string(&output.activities).unwrap();
+        assert!(!activity_debug.contains(secret));
+        assert!(!activity_json.contains(secret));
     }
 
     #[test]
@@ -2334,7 +2587,15 @@ mod tests {
 
     #[test]
     fn deferred_paste_failure_keeps_captured_context_after_overtaking_reconfigure() {
-        let old = Arc::new(runtime_model());
+        let secret = "甲乙丙";
+        let mut old = runtime_model();
+        old.profile.actions.insert(
+            "A".into(),
+            vec![ButtonAction::Paste {
+                text: secret.into(),
+            }],
+        );
+        let old = Arc::new(old);
         let device_id = old.metric_attribution.device_id.clone();
         let old_context = RuntimeEventContext::from_snapshot(10, Some(old.as_ref()))
             .with_port("/dev/old-captured");
@@ -2367,9 +2628,9 @@ mod tests {
         assert!(queued.paste_requests.is_empty());
         let configured =
             session.on_message_deferred(DeviceMessage::ConfigOk { revision: 2 }, 0, 21);
-        assert_eq!(configured.paste_requests[0].text, "第一步");
+        assert_eq!(configured.paste_requests[0].text, secret);
 
-        let paste = PasteCoordinator::with_timeout(FailingClipboard, Duration::from_millis(100));
+        let paste = PasteCoordinator::with_timeout(EchoClipboard, Duration::from_millis(100));
         paste.handle().register_sequence(77).unwrap();
         let start = WorkerStart {
             generation: 9,
@@ -2404,13 +2665,9 @@ mod tests {
             .replies
             .recv_timeout(Duration::from_secs(1))
             .unwrap();
-        assert_eq!(
-            reply,
-            PasteReply::ClipboardError("clipboard unavailable".into())
-        );
+        assert_eq!(reply, PasteReply::ClipboardError(secret.into()));
         pending_paste = None;
-        let failed = session
-            .fail_active_deferred("action_step_failed", Some("clipboard unavailable".into()));
+        let failed = session.fail_active_deferred("action_step_failed", Some(secret.into()));
         write_isolated_output(
             &start,
             &events,
@@ -2426,29 +2683,34 @@ mod tests {
             &stop,
         )
         .unwrap();
-        let event = received_events
+        let activities = received_events
             .try_iter()
-            .find(|event| {
-                matches!(
-                    event,
-                    WorkerEvent::Activity { activity, .. }
-                        if activity.code == "action_step_failed"
-                )
+            .filter_map(|event| match event {
+                WorkerEvent::Activity {
+                    device_id,
+                    context,
+                    activity,
+                    ..
+                } => Some((device_id, context, activity)),
+                _ => None,
             })
+            .collect::<Vec<_>>();
+        let (actual_device, context, failed) = activities
+            .iter()
+            .find(|(_, _, activity)| activity.code == "action_step_failed")
             .unwrap();
-        let WorkerEvent::Activity {
-            device_id: actual_device,
-            context,
-            ..
-        } = event
-        else {
-            unreachable!();
-        };
 
-        assert_eq!(actual_device, device_id);
+        assert_eq!(*actual_device, device_id);
         assert_eq!(context.device_profile_id.as_deref(), Some("phone"));
         assert_eq!(context.hardware_profile_id.as_deref(), Some("esp-primary"));
         assert_eq!(context.port.as_deref(), Some("/dev/old-captured"));
+        assert_eq!(failed.detail.as_deref(), Some("clipboard_write_failed"));
+        for (_, _, activity) in &activities {
+            let activity_debug = format!("{activity:?}");
+            let activity_json = serde_json::to_string(activity).unwrap();
+            assert!(!activity_debug.contains(secret));
+            assert!(!activity_json.contains(secret));
+        }
         paste.shutdown();
     }
 
@@ -2536,21 +2798,69 @@ mod tests {
             127,
         );
         assert_eq!(third.lines, ["MEDIA 43 3 3 205\n"]);
+        assert_eq!(third.activities[1].code, "action_step_started");
+        assert_eq!(third.activities[1].params["actionKind"], "media");
+        assert_eq!(third.activities[1].params["command"], "play_pause");
+        assert!(!third.activities[1].params.contains_key("mediaCommand"));
     }
 
     #[test]
-    fn failed_open_aborts_only_the_current_action_sequence() {
+    fn open_action_activity_redacts_target() {
+        let target = "https://example.test/private?token=secret";
         let mut runtime = runtime_model();
         runtime.profile.actions.insert(
             "A".into(),
             vec![ButtonAction::Open {
-                target: "bad-target".into(),
+                target: target.into(),
             }],
         );
         let mut session = DeviceSession::new(runtime);
         session.target_opener = Arc::new(RecordingTargetOpener {
             targets: Arc::new(Mutex::new(Vec::new())),
-            error: Some("cannot open".into()),
+            error: None,
+        });
+        session.ready = true;
+
+        let output = session.on_message_deferred(
+            DeviceMessage::State {
+                event_id: 45,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            11,
+            129,
+        );
+
+        let started = &output.activities[1];
+        assert_eq!(started.code, "action_step_started");
+        assert_eq!(started.params["actionKind"], "open");
+        assert_eq!(started.params["targetKind"], "url");
+        assert_eq!(
+            started.params["characterCount"],
+            target.chars().count().to_string()
+        );
+        let activity_debug = format!("{started:?}");
+        let activity_json = serde_json::to_string(started).unwrap();
+        for private_value in ["private", "secret", target] {
+            assert!(!activity_debug.contains(private_value));
+            assert!(!activity_json.contains(private_value));
+        }
+    }
+
+    #[test]
+    fn failed_open_aborts_only_the_current_action_sequence() {
+        let target = "https://example.test/private?token=secret";
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            vec![ButtonAction::Open {
+                target: target.into(),
+            }],
+        );
+        let mut session = DeviceSession::new(runtime);
+        session.target_opener = Arc::new(RecordingTargetOpener {
+            targets: Arc::new(Mutex::new(Vec::new())),
+            error: Some(target.into()),
         });
         session.ready = true;
 
@@ -2565,7 +2875,16 @@ mod tests {
         );
 
         assert_eq!(output.lines, ["SKIP 44\n"]);
-        assert_eq!(output.activities[1].code, "action_step_failed");
+        assert_eq!(output.activities[1].code, "action_step_started");
+        let failed = &output.activities[2];
+        assert_eq!(failed.code, "action_step_failed");
+        assert_eq!(failed.detail.as_deref(), Some("open_target_failed"));
+        let activity_debug = format!("{:?}", output.activities);
+        let activity_json = serde_json::to_string(&output.activities).unwrap();
+        for private_value in [target, "private", "secret"] {
+            assert!(!activity_debug.contains(private_value));
+            assert!(!activity_json.contains(private_value));
+        }
         assert_eq!(output.completed_receive_sequences, [10]);
         assert!(session.active.is_none());
     }

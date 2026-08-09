@@ -42,8 +42,12 @@ pub(crate) struct DeviceScan {
 
 pub(crate) fn enumerate_devices(enumerator: &dyn UsbEnumerator) -> Result<DeviceScan, String> {
     Ok(DeviceScan {
-        serial: enumerator.serial_ports()?,
-        bootloader: enumerator.usb_devices()?,
+        serial: enumerator
+            .serial_ports()
+            .map_err(|_| "serial_enumeration_failed".to_owned())?,
+        bootloader: enumerator
+            .usb_devices()
+            .map_err(|_| "usb_enumeration_failed".to_owned())?,
     })
 }
 
@@ -1367,8 +1371,13 @@ impl RuntimeCoordinator {
 
 fn activity_level(code: &str) -> EventLevel {
     match code {
-        "topology_active" | "topology_cleared" | "input_state" | "learning_ready"
-        | "learning_input" => EventLevel::Info,
+        "topology_active"
+        | "topology_cleared"
+        | "input_state"
+        | "learning_ready"
+        | "learning_input"
+        | "action_step_started"
+        | "action_step_completed" => EventLevel::Info,
         "input_before_configuration"
         | "unexpected_action_acknowledgement"
         | "unmapped_input"
