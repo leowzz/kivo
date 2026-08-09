@@ -286,6 +286,7 @@ impl RuntimeEventContext {
 pub struct CapturedInput {
     pub(crate) context: RuntimeEventContext,
     pub(crate) runtime_profile: Option<Arc<RuntimeProfileSnapshot>>,
+    pub(crate) monotonic_ms: u64,
     pub(crate) event_id: u64,
     pub(crate) input: PhysicalInput,
     pub(crate) state: InputState,
@@ -2299,6 +2300,7 @@ mod tests {
             captured: CapturedInput {
                 context: RuntimeEventContext::unassigned(timestamp_ms),
                 runtime_profile: None,
+                monotonic_ms: timestamp_ms,
                 event_id,
                 input: PhysicalInput::Direct { gpio: 6 },
                 state: InputState::Down,
