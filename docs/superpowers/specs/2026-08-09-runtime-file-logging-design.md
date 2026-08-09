@@ -46,6 +46,32 @@ small common envelope:
 The log crate target is restricted to Kivo's explicit runtime logging target so
 unstructured dependency messages do not contaminate the JSON Lines file.
 
+## Async Dispatch And Backpressure
+
+Runtime producers serialize entries and enqueue them to one shared dispatcher;
+only the dispatcher's worker thread calls the log sink. Producers never wait for
+file I/O. The dispatcher reserves space separately for 1024 normal entries and
+128 priority lifecycle or operation entries. A reservation covers both queued
+and currently-writing entries and is released only after the sink write returns,
+so the sum of accepted entries remains bounded while the sink is stalled.
+
+Enqueue is nonblocking with respect to the worker and sink. When a class has no
+remaining reservation, the dispatcher drops the newest entry and increments
+that class's independent overflow counters. The worker coalesces pending counts
+into structured `runtime_log_entries_dropped` records with only `class`
+(`normal` or `priority`), `count`, and `policy: drop_newest` context fields.
+Dropped payloads and arbitrary detail are never copied into overflow records.
+Accepted normal and priority entries share one channel and retain their enqueue
+order.
+
+Clean shutdown is separately protected from both reserves. Under the same
+ordering lock used by producers, shutdown closes producer access, appends the
+final `application_stopped` entry, and then appends the shutdown marker. The
+worker drains every accepted entry, writes any pending overflow summaries before
+the final lifecycle entry, writes `application_stopped`, flushes the sink, and
+exits. Saturated normal or priority reserves therefore cannot suppress the final
+entry or change application shutdown behavior.
+
 ## Event Sources
 
 ### Application Lifecycle

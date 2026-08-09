@@ -28,6 +28,7 @@ pub(crate) const LOG_TARGET: &str = "kivo::runtime";
 pub(crate) const MAX_FILE_SIZE: u128 = 10 * 1024 * 1024;
 pub(crate) const RETAINED_ARCHIVES: usize = 5;
 const LOG_QUEUE_CAPACITY: usize = 1024;
+const PRIORITY_LOG_QUEUE_CAPACITY: usize = 128;
 
 static DISPATCHER: OnceLock<LogDispatcher> = OnceLock::new();
 
@@ -170,11 +171,18 @@ enum DispatchOutcome {
     Stopped,
 }
 
+#[derive(Clone, Copy)]
+enum DispatchClass {
+    Normal,
+    Priority,
+}
+
 enum WorkerMessage {
     Entry {
         entry: QueuedLogEntry,
-        normal_reserved: bool,
+        class: DispatchClass,
     },
+    FinalEntry(QueuedLogEntry),
     Shutdown,
 }
 
@@ -199,81 +207,97 @@ impl LogSink for OfficialLogSink {
     }
 }
 
+#[derive(Clone)]
+struct DispatchClassState {
+    capacity: usize,
+    reserved: Arc<AtomicUsize>,
+    dropped_total: Arc<AtomicU64>,
+    dropped_unreported: Arc<AtomicU64>,
+}
+
+impl DispatchClassState {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            reserved: Arc::new(AtomicUsize::new(0)),
+            dropped_total: Arc::new(AtomicU64::new(0)),
+            dropped_unreported: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    fn reserve(&self) -> bool {
+        self.reserved
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |reserved| {
+                (reserved < self.capacity).then_some(reserved + 1)
+            })
+            .is_ok()
+    }
+
+    fn release(&self) {
+        self.reserved.fetch_sub(1, Ordering::Release);
+    }
+
+    fn record_drop(&self) {
+        self.dropped_total.fetch_add(1, Ordering::Relaxed);
+        self.dropped_unreported.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 struct LogDispatcher {
     sender: Mutex<Option<Sender<WorkerMessage>>>,
     worker: Mutex<Option<JoinHandle<()>>>,
-    normal_capacity: usize,
-    normal_queued: Arc<AtomicUsize>,
-    dropped_total: Arc<AtomicU64>,
-    dropped_unreported: Arc<AtomicU64>,
+    normal: DispatchClassState,
+    priority: DispatchClassState,
 }
 
 impl LogDispatcher {
     fn start(capacity: usize, sink: impl LogSink) -> std::io::Result<Self> {
         let (sender, receiver) = mpsc::channel();
-        let normal_queued = Arc::new(AtomicUsize::new(0));
-        let dropped_total = Arc::new(AtomicU64::new(0));
-        let dropped_unreported = Arc::new(AtomicU64::new(0));
-        let worker_normal_queued = Arc::clone(&normal_queued);
-        let worker_dropped = Arc::clone(&dropped_unreported);
+        let normal = DispatchClassState::new(capacity);
+        let priority = DispatchClassState::new(PRIORITY_LOG_QUEUE_CAPACITY);
+        let worker_normal = normal.clone();
+        let worker_priority = priority.clone();
         let worker = thread::Builder::new()
             .name("runtime-log-writer".into())
             .spawn(move || {
                 let mut sink = sink;
                 while let Ok(message) = receiver.recv() {
                     match message {
-                        WorkerMessage::Entry {
-                            entry,
-                            normal_reserved,
-                        } => {
-                            if normal_reserved {
-                                worker_normal_queued.fetch_sub(1, Ordering::Release);
-                            }
+                        WorkerMessage::Entry { entry, class } => {
                             sink.write(entry);
-                            report_dropped_entries(&mut sink, &worker_dropped);
+                            match class {
+                                DispatchClass::Normal => worker_normal.release(),
+                                DispatchClass::Priority => worker_priority.release(),
+                            }
+                            report_dropped_entries(&mut sink, &worker_normal, &worker_priority);
+                        }
+                        WorkerMessage::FinalEntry(entry) => {
+                            report_dropped_entries(&mut sink, &worker_normal, &worker_priority);
+                            sink.write(entry);
                         }
                         WorkerMessage::Shutdown => break,
                     }
                 }
-                report_dropped_entries(&mut sink, &worker_dropped);
+                report_dropped_entries(&mut sink, &worker_normal, &worker_priority);
                 sink.flush();
             })?;
         Ok(Self {
             sender: Mutex::new(Some(sender)),
             worker: Mutex::new(Some(worker)),
-            normal_capacity: capacity,
-            normal_queued,
-            dropped_total,
-            dropped_unreported,
+            normal,
+            priority,
         })
     }
 
     fn try_enqueue(&self, entry: QueuedLogEntry) -> DispatchOutcome {
-        let sender = self
-            .sender
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(sender) = sender.as_ref() else {
-            return DispatchOutcome::Stopped;
-        };
-        if !self.reserve_normal_slot() {
-            self.dropped_total.fetch_add(1, Ordering::Relaxed);
-            self.dropped_unreported.fetch_add(1, Ordering::Relaxed);
-            return DispatchOutcome::Dropped;
-        }
-        match sender.send(WorkerMessage::Entry {
-            entry,
-            normal_reserved: true,
-        }) {
-            Ok(()) => DispatchOutcome::Accepted,
-            Err(_) => {
-                self.normal_queued.fetch_sub(1, Ordering::Release);
-                DispatchOutcome::Stopped
-            }
-        }
+        self.enqueue(entry, DispatchClass::Normal)
     }
 
     fn enqueue_priority(&self, entry: QueuedLogEntry) -> DispatchOutcome {
+        self.enqueue(entry, DispatchClass::Priority)
+    }
+
+    fn enqueue(&self, entry: QueuedLogEntry, class: DispatchClass) -> DispatchOutcome {
         let sender = self
             .sender
             .lock()
@@ -281,26 +305,21 @@ impl LogDispatcher {
         let Some(sender) = sender.as_ref() else {
             return DispatchOutcome::Stopped;
         };
-        match sender.send(WorkerMessage::Entry {
-            entry,
-            normal_reserved: false,
-        }) {
-            Ok(()) => DispatchOutcome::Accepted,
-            Err(_) => DispatchOutcome::Stopped,
+        let state = match class {
+            DispatchClass::Normal => &self.normal,
+            DispatchClass::Priority => &self.priority,
+        };
+        if !state.reserve() {
+            state.record_drop();
+            return DispatchOutcome::Dropped;
         }
-    }
-
-    fn reserve_normal_slot(&self) -> bool {
-        self.normal_queued
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
-                (queued < self.normal_capacity).then_some(queued + 1)
-            })
-            .is_ok()
-    }
-
-    #[cfg(test)]
-    fn dropped_count(&self) -> u64 {
-        self.dropped_total.load(Ordering::Relaxed)
+        match sender.send(WorkerMessage::Entry { entry, class }) {
+            Ok(()) => DispatchOutcome::Accepted,
+            Err(_) => {
+                state.release();
+                DispatchOutcome::Stopped
+            }
+        }
     }
 
     #[cfg(test)]
@@ -320,10 +339,7 @@ impl LogDispatcher {
             .take();
         if let Some(sender) = sender {
             if let Some(entry) = final_entry {
-                let _ = sender.send(WorkerMessage::Entry {
-                    entry,
-                    normal_reserved: false,
-                });
+                let _ = sender.send(WorkerMessage::FinalEntry(entry));
             }
             let _ = sender.send(WorkerMessage::Shutdown);
         }
@@ -338,7 +354,16 @@ impl LogDispatcher {
     }
 }
 
-fn report_dropped_entries(sink: &mut impl LogSink, dropped: &AtomicU64) {
+fn report_dropped_entries(
+    sink: &mut impl LogSink,
+    normal: &DispatchClassState,
+    priority: &DispatchClassState,
+) {
+    report_dropped_class(sink, "normal", &normal.dropped_unreported);
+    report_dropped_class(sink, "priority", &priority.dropped_unreported);
+}
+
+fn report_dropped_class(sink: &mut impl LogSink, class: &str, dropped: &AtomicU64) {
     let count = dropped.swap(0, Ordering::Relaxed);
     if count == 0 {
         return;
@@ -347,7 +372,7 @@ fn report_dropped_entries(sink: &mut impl LogSink, dropped: &AtomicU64) {
         current_timestamp_ms(),
         RuntimeLogLevel::Warning,
         "runtime_log_entries_dropped",
-        serde_json::json!({"count": count, "policy": "drop_newest"}),
+        serde_json::json!({"class": class, "count": count, "policy": "drop_newest"}),
     );
     if let Ok(line) = serialize_entry(&entry) {
         sink.write(QueuedLogEntry {
@@ -808,19 +833,20 @@ mod tests {
     use super::{
         DeviceLogInventory, DispatchOutcome, LogDispatcher, LogSink, QueuedLogEntry,
         RuntimeLogEntry, RuntimeLogLevel, log_directory, metrics_initialization_failure_detail,
-        operation, operation_entry, queued_entry, runtime_event_entry, serialize_entry,
+        operation, operation_entry, runtime_event_entry, serialize_entry,
     };
     use crate::{
         coordinator::{
-            AssignmentDimension, CandidateIssue, CandidateStatus, ConnectionDimension, DeviceMode,
-            DeviceStatus, EventLevel, IdentityDimension, RuntimeDimension, RuntimeEvent,
+            AssignmentDimension, BootloaderObservation, CandidateIssue, CandidateStatus,
+            ConnectionDimension, DeviceMode, DeviceStatus, EventLevel, IdentityDimension,
+            RuntimeDimension, RuntimeEvent, SerialObservation, UsbEnumerator, enumerate_devices,
         },
         device::{LearningTarget, RuntimeActivity},
         hardware::{DeviceId, ESP32S3_FAMILY_ID, LUATOS_ESP32S3_AIO_BOARD_ID},
         metrics::HomeMetricsSnapshot,
         workspace::{AppError, RuntimeAssignment},
     };
-    use serde_json::json;
+    use serde_json::{Value, json};
     use std::{
         cell::Cell,
         collections::BTreeSet,
@@ -854,6 +880,7 @@ mod tests {
         started: mpsc::Sender<()>,
         release: mpsc::Receiver<()>,
         entries: Arc<Mutex<Vec<QueuedLogEntry>>>,
+        flush_count: Arc<Mutex<usize>>,
     }
 
     impl LogSink for BlockingSink {
@@ -873,7 +900,12 @@ mod tests {
                 .push(entry);
         }
 
-        fn flush(&mut self) {}
+        fn flush(&mut self) {
+            *self
+                .flush_count
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) += 1;
+        }
     }
 
     fn queued(event: &str) -> QueuedLogEntry {
@@ -1046,8 +1078,9 @@ mod tests {
     }
 
     #[test]
-    fn log_dispatcher_accepts_priority_operation_when_normal_queue_is_full() {
+    fn log_dispatcher_priority_acceptance_is_finite_while_sink_is_stalled() {
         let entries = Arc::new(Mutex::new(Vec::new()));
+        let flush_count = Arc::new(Mutex::new(0));
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         let dispatcher = LogDispatcher::start(
@@ -1056,6 +1089,7 @@ mod tests {
                 started: started_tx,
                 release: release_rx,
                 entries: Arc::clone(&entries),
+                flush_count: Arc::clone(&flush_count),
             },
         )
         .unwrap();
@@ -1065,48 +1099,119 @@ mod tests {
             DispatchOutcome::Accepted
         );
         started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert_eq!(
-            dispatcher.try_enqueue(queued("second")),
-            DispatchOutcome::Accepted
-        );
-        assert_eq!(
-            dispatcher.try_enqueue(queued("newest")),
-            DispatchOutcome::Dropped
-        );
-        let operation_result: Result<(), AppError> = Ok(());
-        let operation_entry = queued_entry(operation_entry(
-            100,
-            "runtime_assignment_saved",
-            json!({"deviceId": "device-1"}),
-            &operation_result,
-        ))
-        .unwrap();
-        let operation_line = operation_entry.line.clone();
-        assert_eq!(
-            dispatcher.enqueue_priority(operation_entry),
-            DispatchOutcome::Accepted
-        );
-        assert_eq!(dispatcher.dropped_count(), 1);
+        let accepted = (0..128)
+            .filter(|index| {
+                dispatcher.enqueue_priority(queued(&format!("priority-{index}")))
+                    == DispatchOutcome::Accepted
+            })
+            .count();
+        let overflow = dispatcher.enqueue_priority(queued("priority-overflow"));
         release_tx.send(()).unwrap();
         dispatcher.shutdown();
 
-        let lines = entries
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .iter()
-            .map(|entry| entry.line.clone())
-            .collect::<Vec<_>>();
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("runtime_log_entries_dropped"))
+        assert_eq!(accepted, 128);
+        assert_eq!(overflow, DispatchOutcome::Dropped);
+        assert_eq!(*flush_count.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn log_dispatcher_reports_classed_overflow_before_protected_shutdown_entry() {
+        let entries = Arc::new(Mutex::new(Vec::new()));
+        let flush_count = Arc::new(Mutex::new(0));
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let dispatcher = LogDispatcher::start(
+            1,
+            BlockingSink {
+                started: started_tx,
+                release: release_rx,
+                entries: Arc::clone(&entries),
+                flush_count: Arc::clone(&flush_count),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            dispatcher.try_enqueue(queued("first")),
+            DispatchOutcome::Accepted
         );
-        let accepted_lines = lines
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let normal_secret = "/Users/alice/private/normal-overflow?token=secret-normal";
+        assert_eq!(
+            dispatcher.try_enqueue(queued(normal_secret)),
+            DispatchOutcome::Dropped
+        );
+        assert_eq!(
+            dispatcher.try_enqueue(queued("second-normal-overflow")),
+            DispatchOutcome::Dropped
+        );
+        let accepted_priority = (0..128)
+            .filter(|index| {
+                dispatcher.enqueue_priority(queued(&format!("priority-{index}")))
+                    == DispatchOutcome::Accepted
+            })
+            .count();
+        let priority_secret = "/Users/alice/private/priority-overflow?token=secret-priority";
+        assert_eq!(
+            dispatcher.enqueue_priority(queued(priority_secret)),
+            DispatchOutcome::Dropped
+        );
+        assert_eq!(
+            dispatcher.enqueue_priority(queued("second-priority-overflow")),
+            DispatchOutcome::Dropped
+        );
+        assert_eq!(
+            dispatcher.enqueue_priority(queued("third-priority-overflow")),
+            DispatchOutcome::Dropped
+        );
+        assert_eq!(accepted_priority, 128);
+
+        release_tx.send(()).unwrap();
+        dispatcher.shutdown_with_entry(queued("application_stopped"));
+
+        let entries = entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let summaries = entries
             .iter()
-            .filter(|line| !line.contains("runtime_log_entries_dropped"))
-            .cloned()
+            .filter_map(|entry| serde_json::from_str::<Value>(&entry.line).ok())
+            .filter(|entry| entry["event"] == "runtime_log_entries_dropped")
             .collect::<Vec<_>>();
-        assert_eq!(accepted_lines, ["first", "second", &operation_line]);
+        assert_eq!(summaries.len(), 2);
+        assert!(summaries.iter().any(|entry| {
+            entry["context"] == json!({"class": "normal", "count": 2, "policy": "drop_newest"})
+        }));
+        assert!(summaries.iter().any(|entry| {
+            entry["context"] == json!({"class": "priority", "count": 3, "policy": "drop_newest"})
+        }));
+        let accepted = entries
+            .iter()
+            .filter(|entry| !entry.line.contains("runtime_log_entries_dropped"))
+            .map(|entry| entry.line.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(accepted.len(), 130);
+        assert_eq!(accepted.first().copied(), Some("first"));
+        assert_eq!(accepted.get(1).copied(), Some("priority-0"));
+        assert_eq!(accepted.get(128).copied(), Some("priority-127"));
+        assert_eq!(accepted.last().copied(), Some("application_stopped"));
+        let persisted = entries
+            .iter()
+            .map(|entry| entry.line.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for private_value in [
+            normal_secret,
+            priority_secret,
+            "secret-normal",
+            "secret-priority",
+        ] {
+            assert!(!persisted.contains(private_value));
+        }
+        assert_eq!(*flush_count.lock().unwrap(), 1);
+        assert_eq!(
+            dispatcher.try_enqueue(queued("after")),
+            DispatchOutcome::Stopped
+        );
     }
 
     #[test]
@@ -1289,6 +1394,75 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    struct SerialEnumerationFailure(&'static str);
+
+    impl UsbEnumerator for SerialEnumerationFailure {
+        fn serial_ports(&self) -> Result<Vec<SerialObservation>, String> {
+            Err(self.0.into())
+        }
+
+        fn usb_devices(&self) -> Result<Vec<BootloaderObservation>, String> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct UsbEnumerationFailure(&'static str);
+
+    impl UsbEnumerator for UsbEnumerationFailure {
+        fn serial_ports(&self) -> Result<Vec<SerialObservation>, String> {
+            Ok(Vec::new())
+        }
+
+        fn usb_devices(&self) -> Result<Vec<BootloaderObservation>, String> {
+            Err(self.0.into())
+        }
+    }
+
+    #[test]
+    fn serial_enumeration_errors_are_sanitized_before_runtime_logging() {
+        let secret = "/Users/alice/private/serial-device.txt?token=secret-123";
+        let other_secret = "/Volumes/private/other-device?token=secret-456";
+        let first_error = enumerate_devices(&SerialEnumerationFailure(secret))
+            .err()
+            .expect("serial enumeration should fail");
+        let second_error = enumerate_devices(&SerialEnumerationFailure(other_secret))
+            .err()
+            .expect("serial enumeration should fail");
+        let mut inventory = DeviceLogInventory::default();
+
+        assert_eq!(first_error, "serial_enumeration_failed");
+        assert_eq!(second_error, "serial_enumeration_failed");
+        let entries = inventory.observe_scan_error(100, Some(&first_error));
+        assert!(
+            inventory
+                .observe_scan_error(200, Some(&second_error))
+                .is_empty()
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].detail.as_deref(),
+            Some("serial_enumeration_failed")
+        );
+        let fields = format!("{:?}", entries[0]);
+        let serialized = serialize_entry(&entries[0]).unwrap();
+        for private_value in [secret, other_secret, "/Users/alice", "secret-123"] {
+            assert!(!fields.contains(private_value));
+            assert!(!serialized.contains(private_value));
+        }
+    }
+
+    #[test]
+    fn usb_enumeration_errors_are_sanitized_at_the_enumeration_boundary() {
+        let secret = "/Users/alice/private/usb-device.txt?token=secret-789";
+
+        let error = enumerate_devices(&UsbEnumerationFailure(secret))
+            .err()
+            .expect("USB enumeration should fail");
+
+        assert_eq!(error, "usb_enumeration_failed");
+        assert!(!error.contains(secret));
     }
 
     #[test]

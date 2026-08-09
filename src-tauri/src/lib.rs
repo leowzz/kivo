@@ -1328,7 +1328,7 @@ mod tests {
     }
 
     #[test]
-    fn device_scan_errors_are_preserved_in_runtime_poll() {
+    fn device_scan_errors_are_sanitized_in_runtime_poll() {
         let directory = TestDirectory::new();
         let workspace = Workspace::create(&directory.0, vec![product_profile()]).unwrap();
         let coordinator = Mutex::new(RuntimeCoordinator::new(
@@ -1347,7 +1347,7 @@ mod tests {
         loop {
             let poll = poll_runtime_coordinator(&mut scanner, &coordinator);
             if let Some(error) = poll.scan_error {
-                assert_eq!(error, "serial discovery unavailable");
+                assert_eq!(error, "serial_enumeration_failed");
                 assert!(poll.scan.is_none());
                 assert!(poll.events.is_empty());
                 break;

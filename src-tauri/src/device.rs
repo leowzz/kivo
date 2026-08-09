@@ -407,7 +407,7 @@ impl DeviceSession {
                 output.activities.push(
                     RuntimeActivity::new("topology_rejected")
                         .with_param("revision", revision.to_string())
-                        .with_param("deviceCode", code),
+                        .with_param("deviceCode", configuration_error_code(&code)),
                 );
             }
             DeviceMessage::State {
@@ -1080,6 +1080,19 @@ fn merge_output(target: &mut SessionOutput, mut source: SessionOutput) {
         .append(&mut source.completed_receive_sequences);
     if source.action_timeout.is_some() {
         target.action_timeout = source.action_timeout;
+    }
+}
+
+fn configuration_error_code(code: &str) -> &str {
+    match code {
+        "invalid_begin"
+        | "invalid_direct"
+        | "invalid_matrix"
+        | "invalid_oled"
+        | "invalid_commit"
+        | "invalid_learning"
+        | "invalid_learning_revision" => code,
+        _ => "device_configuration_error",
     }
 }
 
@@ -1871,6 +1884,7 @@ fn now_ms() -> u64 {
 mod tests {
     use super::*;
     use crate::{
+        coordinator::{EventLevel, RuntimeEvent},
         hardware::DeviceId,
         metrics::{MetricAttribution, MetricsStore},
         model::{ButtonDefinition, ButtonGroup, ModelLayout},
@@ -2133,6 +2147,78 @@ mod tests {
             session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
         assert_eq!(configured.activities[0].code, "topology_active");
         assert!(session.ready);
+    }
+
+    fn configuration_rejection(device_code: &str) -> RuntimeActivity {
+        let mut session = DeviceSession::new(runtime_model());
+        let configuring = session.on_message_deferred(hello(), 0, 100);
+        assert_eq!(configuring.lines.first().unwrap(), "CONFIG_BEGIN 1 30\n");
+
+        let rejected = session.on_message_deferred(
+            DeviceMessage::ConfigError {
+                revision: 1,
+                code: device_code.into(),
+            },
+            0,
+            101,
+        );
+
+        assert_eq!(rejected.activities.len(), 1);
+        rejected.activities.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn known_firmware_configuration_error_codes_are_preserved() {
+        for code in [
+            "invalid_begin",
+            "invalid_direct",
+            "invalid_matrix",
+            "invalid_oled",
+            "invalid_commit",
+            "invalid_learning",
+            "invalid_learning_revision",
+        ] {
+            let activity = configuration_rejection(code);
+            assert_eq!(
+                activity.params.get("deviceCode").map(String::as_str),
+                Some(code)
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_firmware_configuration_error_is_sanitized_before_runtime_activity() {
+        let secret = "/Users/alice/private/firmware.txt?token=secret-config-123";
+
+        let activity = configuration_rejection(secret);
+
+        assert_eq!(activity.code, "topology_rejected");
+        assert_eq!(
+            activity.params.get("deviceCode").map(String::as_str),
+            Some("device_configuration_error")
+        );
+        let activity_fields = format!("{activity:?}");
+        let event = RuntimeEvent {
+            timestamp_ms: 101,
+            level: EventLevel::Error,
+            device_id: DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456")
+                .unwrap(),
+            raw_serial: "ABCDEF123456".into(),
+            controller_family_id: crate::hardware::ESP32S3_FAMILY_ID.into(),
+            board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+            port: None,
+            device_profile_id: Some("phone".into()),
+            hardware_profile_id: Some("esp-primary".into()),
+            home_update: None,
+            activity,
+        };
+        let entry = crate::runtime_log::runtime_event_entry(&event).unwrap();
+        let serialized = crate::runtime_log::serialize_entry(&entry).unwrap();
+
+        for private_value in [secret, "/Users/alice", "secret-config-123"] {
+            assert!(!activity_fields.contains(private_value));
+            assert!(!serialized.contains(private_value));
+        }
     }
 
     #[test]

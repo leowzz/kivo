@@ -4,7 +4,7 @@
 
 **Goal:** Add bounded JSON Lines runtime logs under `data/log` that cover lifecycle, device state, every input and action, configuration operations, and failures without storing pasted text or open targets.
 
-**Architecture:** A new `runtime_log.rs` module owns official `tauri-plugin-log` setup, JSON serialization, and scan-state deduplication. `device.rs` emits sanitized action lifecycle activities into the existing `RuntimeEvent` pipeline, while `lib.rs` records enriched events, device transitions, lifecycle, and command outcomes.
+**Architecture:** A new `runtime_log.rs` module owns official `tauri-plugin-log` setup, JSON serialization, scan-state deduplication, and a bounded asynchronous dispatcher whose worker thread performs all sink writes. `device.rs` emits sanitized action lifecycle activities into the existing `RuntimeEvent` pipeline, while `lib.rs` records enriched events, device transitions, lifecycle, and command outcomes.
 
 **Tech Stack:** Rust 2024, Tauri 2.11, `tauri-plugin-log` 2.9, Serde/JSON, Rust unit and integration tests.
 
@@ -19,6 +19,30 @@
 - Modify `src-tauri/src/device.rs`: emit sanitized action start/completion activities.
 - Modify `src-tauri/src/coordinator.rs`: classify new successful action activities as info.
 - Modify `src-tauri/src/lib.rs`: install logging and connect runtime, scan, lifecycle, and command events.
+
+## Actual Async Dispatcher Semantics
+
+The completed dispatcher has one worker thread and one shared FIFO channel.
+Normal runtime events have 1024 reservations; priority lifecycle and operation
+events have 128 separate reservations. Reservations include both waiting and
+in-flight writes and are released only after the worker finishes the sink write,
+which keeps accepted message memory logically bounded even if the sink stalls.
+Both producer paths return immediately with an accepted, dropped, or stopped
+outcome and never wait for file I/O.
+
+Normal and priority drops use separate total and unreported counters. At each
+drain opportunity, the worker coalesces unreported counts into stable
+`runtime_log_entries_dropped` JSON entries whose context is exactly the dispatch
+`class`, dropped `count`, and `drop_newest` policy; overflow entries never copy a
+dropped payload or arbitrary detail. Accepted entries from both classes retain
+the shared worker's enqueue order.
+
+`shutdown_with_entry` bypasses both reserves under the producer ordering lock.
+It closes the dispatcher to new producers, queues a protected final
+`application_stopped` entry after all accepted work, and then queues shutdown.
+The worker drains accepted entries and overflow summaries, writes the final
+entry, flushes the sink, and exits. This ordering remains intact when either or
+both reserves are saturated.
 
 ### Task 1: Logging Foundation
 
