@@ -40,10 +40,22 @@ const NAMED_KEYS: Record<string, string> = {
   NumpadEqual: "numpad_equal",
 };
 
-const MODIFIER_CODES = new Set([
-  "MetaLeft", "MetaRight", "ControlLeft", "ControlRight",
-  "AltLeft", "AltRight", "ShiftLeft", "ShiftRight",
+const MODIFIER_TOKENS = new Set([
+  "primary", "cmd", "ctrl", "alt", "option", "shift",
+  "left_cmd", "right_cmd", "left_ctrl", "right_ctrl",
+  "left_alt", "right_alt", "left_shift", "right_shift",
 ]);
+
+const MODIFIER_CODES: Record<string, string> = {
+  MetaLeft: "left_cmd",
+  MetaRight: "right_cmd",
+  ControlLeft: "left_ctrl",
+  ControlRight: "right_ctrl",
+  AltLeft: "left_alt",
+  AltRight: "right_alt",
+  ShiftLeft: "left_shift",
+  ShiftRight: "right_shift",
+};
 
 const HOTKEY_LABELS: Record<string, string> = {
   alt: "Option",
@@ -52,6 +64,14 @@ const HOTKEY_LABELS: Record<string, string> = {
   ctrl: "Control",
   shift: "Shift",
   primary: "Cmd/Ctrl",
+  left_cmd: "Left Command",
+  right_cmd: "Right Command",
+  left_ctrl: "Left Control",
+  right_ctrl: "Right Control",
+  left_alt: "Left Option",
+  right_alt: "Right Option",
+  left_shift: "Left Shift",
+  right_shift: "Right Shift",
   enter: "Enter",
   escape: "Escape",
   backspace: "Backspace",
@@ -95,6 +115,106 @@ const HOTKEY_LABELS: Record<string, string> = {
   numpad_equal: "Numpad =",
 };
 
+export const HOTKEY_CATEGORIES = [
+  {
+    name: "Common",
+    tokens: [
+      "primary", "cmd", "ctrl", "alt", "option", "shift",
+      "left_cmd", "right_cmd", "left_ctrl", "right_ctrl",
+      "left_alt", "right_alt", "left_shift", "right_shift",
+      "enter", "escape", "backspace", "tab", "space", "caps_lock",
+    ],
+  },
+  { name: "Function Keys F1-F24", tokens: Array.from({ length: 24 }, (_, index) => `f${index + 1}`) },
+  { name: "Letters", tokens: [..."abcdefghijklmnopqrstuvwxyz"] },
+  { name: "Numbers", tokens: [..."0123456789"] },
+  {
+    name: "Symbols",
+    tokens: [
+      "backtick", "minus", "equal", "left_bracket", "right_bracket", "backslash",
+      "semicolon", "quote", "comma", "period", "slash",
+    ],
+  },
+  {
+    name: "Navigation",
+    tokens: [
+      "insert", "delete", "home", "end", "page_up", "page_down", "up", "down", "left", "right",
+      "print_screen", "scroll_lock", "pause", "application",
+    ],
+  },
+  {
+    name: "Numeric Keypad",
+    tokens: [
+      "num_lock", ...Array.from({ length: 10 }, (_, index) => `numpad_${index}`),
+      "numpad_decimal", "numpad_divide", "numpad_multiply", "numpad_subtract",
+      "numpad_add", "numpad_enter", "numpad_equal",
+    ],
+  },
+] as const;
+
+const ORDINARY_TOKENS = new Set(HOTKEY_CATEGORIES.flatMap((category) => category.tokens)
+  .filter((token) => !MODIFIER_TOKENS.has(token)));
+
+function canonicalOrdinaryToken(token: string) {
+  if (token === "pageup") return "page_up";
+  if (token === "pagedown") return "page_down";
+  return token;
+}
+
+function modifierBit(token: string): number | null {
+  switch (token) {
+    case "primary": return navigator.platform.includes("Mac") ? 0x08 : 0x01;
+    case "cmd":
+    case "left_cmd": return 0x08;
+    case "right_cmd": return 0x80;
+    case "ctrl":
+    case "left_ctrl": return 0x01;
+    case "right_ctrl": return 0x10;
+    case "shift":
+    case "left_shift": return 0x02;
+    case "right_shift": return 0x20;
+    case "alt":
+    case "option":
+    case "left_alt": return 0x04;
+    case "right_alt": return 0x40;
+    default: return null;
+  }
+}
+
+export function keyboardCodeToToken(code: string): string | null {
+  if (MODIFIER_CODES[code]) return MODIFIER_CODES[code];
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3).toLowerCase();
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  if (/^F(?:[1-9]|1[0-9]|2[0-4])$/.test(code)) return code.toLowerCase();
+  if (/^Numpad[0-9]$/.test(code)) return `numpad_${code.slice(6)}`;
+  return NAMED_KEYS[code] ?? null;
+}
+
+export function isModifierToken(token: string) {
+  return MODIFIER_TOKENS.has(token.toLowerCase());
+}
+
+export function validateHotkey(keys: string[]): "empty_hotkey" | "duplicate_key" | "too_many_keys" | "unsupported_key" | null {
+  if (keys.length === 0) return "empty_hotkey";
+
+  const modifiers = new Set<number>();
+  const ordinary = new Set<string>();
+  for (const key of keys) {
+    const token = key.toLowerCase();
+    const bit = modifierBit(token);
+    if (bit !== null) {
+      if (modifiers.has(bit)) return "duplicate_key";
+      modifiers.add(bit);
+      continue;
+    }
+    const ordinaryToken = canonicalOrdinaryToken(token);
+    if (!ORDINARY_TOKENS.has(ordinaryToken)) return "unsupported_key";
+    if (ordinary.has(ordinaryToken)) return "duplicate_key";
+    ordinary.add(ordinaryToken);
+  }
+  return ordinary.size > 6 ? "too_many_keys" : null;
+}
+
 export function formatHotkey(keys: string[]) {
   return keys
     .map((key) => HOTKEY_LABELS[key.toLowerCase()] ?? key.toUpperCase())
@@ -102,14 +222,8 @@ export function formatHotkey(keys: string[]) {
 }
 
 export function normalizeHotkey(event: KeyboardEvent): string[] | null {
-  if (MODIFIER_CODES.has(event.code)) return null;
-
-  let key: string | undefined;
-  if (/^Key[A-Z]$/.test(event.code)) key = event.code.slice(3).toLowerCase();
-  else if (/^Digit[0-9]$/.test(event.code)) key = event.code.slice(5);
-  else if (/^F(?:[1-9]|1[0-9]|2[0-4])$/.test(event.code)) key = event.code.toLowerCase();
-  else if (/^Numpad[0-9]$/.test(event.code)) key = `numpad_${event.code.slice(6)}`;
-  else key = NAMED_KEYS[event.code];
+  const key = keyboardCodeToToken(event.code);
+  if (key && isModifierToken(key)) return null;
   if (!key) throw new Error(`Unsupported shortcut key: ${event.code}`);
 
   const keys: string[] = [];

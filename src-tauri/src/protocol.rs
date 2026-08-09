@@ -373,10 +373,13 @@ impl ActionStep {
                 Ok(format_paste_command(self.event_id, self.step, self.total))
             }
             ButtonAction::Hotkey { keys } => {
-                let (modifiers, keycode) = encode_hotkey(keys)?;
+                let chord = encode_hotkey(keys)?;
+                let [keycode] = chord.keycodes.as_slice() else {
+                    return Err("legacy hotkey protocol requires exactly one ordinary key".into());
+                };
                 Ok(format!(
-                    "HOTKEY {} {} {} {modifiers} {keycode}\n",
-                    self.event_id, self.step, self.total
+                    "HOTKEY {} {} {} {} {keycode}\n",
+                    self.event_id, self.step, self.total, chord.modifier_mask
                 ))
             }
             ButtonAction::Delay { duration_ms } => Ok(format!(
@@ -495,9 +498,19 @@ pub enum InputState {
     Up,
 }
 
-pub fn encode_hotkey(keys: &[String]) -> Result<(u8, u8), String> {
-    let mut modifiers = 0;
-    let mut keycode = None;
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EncodedChord {
+    pub modifier_mask: u8,
+    pub keycodes: Vec<u8>,
+}
+
+pub fn encode_hotkey(keys: &[String]) -> Result<EncodedChord, String> {
+    if keys.is_empty() {
+        return Err("empty hotkey".into());
+    }
+
+    let mut modifier_mask = 0;
+    let mut keycodes = BTreeSet::new();
     for key in keys {
         let key = key.to_ascii_lowercase();
         let modifier = match key.as_str() {
@@ -507,13 +520,21 @@ pub fn encode_hotkey(keys: &[String]) -> Result<(u8, u8), String> {
             "shift" => Some(0x02),
             "alt" | "option" => Some(0x04),
             "cmd" => Some(0x08),
+            "left_ctrl" => Some(0x01),
+            "left_shift" => Some(0x02),
+            "left_alt" => Some(0x04),
+            "left_cmd" => Some(0x08),
+            "right_ctrl" => Some(0x10),
+            "right_shift" => Some(0x20),
+            "right_alt" => Some(0x40),
+            "right_cmd" => Some(0x80),
             _ => None,
         };
         if let Some(modifier) = modifier {
-            if modifiers & modifier != 0 {
+            if modifier_mask & modifier != 0 {
                 return Err(format!("duplicate modifier {key}"));
             }
-            modifiers |= modifier;
+            modifier_mask |= modifier;
             continue;
         }
         let function_key = key
@@ -579,13 +600,17 @@ pub fn encode_hotkey(keys: &[String]) -> Result<(u8, u8), String> {
             _ if numpad_digit.is_some() => numpad_digit.unwrap(),
             _ => return Err(format!("unknown key {key}")),
         };
-        if keycode.replace(code).is_some() {
-            return Err("hotkey must have exactly one ordinary key".into());
+        if !keycodes.insert(code) {
+            return Err(format!("duplicate key {key}"));
         }
     }
-    keycode
-        .map(|keycode| (modifiers, keycode))
-        .ok_or_else(|| "hotkey must have exactly one ordinary key".into())
+    if keycodes.len() > 6 {
+        return Err("too many ordinary keys".into());
+    }
+    Ok(EncodedChord {
+        modifier_mask,
+        keycodes: keycodes.into_iter().collect(),
+    })
 }
 
 pub fn media_usage(command: MediaCommand) -> u16 {
@@ -853,15 +878,24 @@ mod tests {
 
     #[test]
     fn encodes_function_punctuation_and_numpad_keys() {
-        assert_eq!(encode_hotkey(&["f1".into()]).unwrap(), (0, 0x3a));
-        assert_eq!(encode_hotkey(&["f24".into()]).unwrap(), (0, 0x73));
+        assert_eq!(encode_hotkey(&["f1".into()]).unwrap(), chord(0, &[0x3a]));
+        assert_eq!(encode_hotkey(&["f24".into()]).unwrap(), chord(0, &[0x73]));
         assert_eq!(
             encode_hotkey(&["shift".into(), "left_bracket".into()]).unwrap(),
-            (0x02, 0x2f)
+            chord(0x02, &[0x2f])
         );
-        assert_eq!(encode_hotkey(&["numpad_0".into()]).unwrap(), (0, 0x62));
-        assert_eq!(encode_hotkey(&["numpad_add".into()]).unwrap(), (0, 0x57));
-        assert_eq!(encode_hotkey(&["print_screen".into()]).unwrap(), (0, 0x46));
+        assert_eq!(
+            encode_hotkey(&["numpad_0".into()]).unwrap(),
+            chord(0, &[0x62])
+        );
+        assert_eq!(
+            encode_hotkey(&["numpad_add".into()]).unwrap(),
+            chord(0, &[0x57])
+        );
+        assert_eq!(
+            encode_hotkey(&["print_screen".into()]).unwrap(),
+            chord(0, &[0x46])
+        );
     }
 
     #[test]
@@ -873,7 +907,7 @@ mod tests {
         };
         assert_eq!(
             encode_hotkey(&["primary".into(), "v".into()]).unwrap(),
-            (expected, 0x19)
+            chord(expected, &[0x19])
         );
     }
 
@@ -986,9 +1020,30 @@ mod tests {
     fn encodes_hid_hotkeys() {
         assert_eq!(
             encode_hotkey(&["cmd".into(), "shift".into(), "k".into()]),
-            Ok((10, 14))
+            Ok(chord(10, &[14]))
         );
-        assert_eq!(encode_hotkey(&["page_down".into()]), Ok((0, 78)));
+        assert_eq!(encode_hotkey(&["page_down".into()]), Ok(chord(0, &[78])));
+    }
+
+    #[test]
+    fn encodes_sided_modifiers_and_six_ordinary_keys() {
+        let chord = encode_hotkey(
+            &["left_cmd", "right_cmd", "a", "b", "c", "d", "e", "f"].map(str::to_owned),
+        )
+        .unwrap();
+
+        assert_eq!(chord.modifier_mask, 0x88);
+        assert_eq!(chord.keycodes, vec![0x04, 0x05, 0x06, 0x07, 0x08, 0x09]);
+    }
+
+    #[test]
+    fn accepts_modifier_only_and_rejects_duplicate_usage_or_seventh_key() {
+        assert_eq!(
+            encode_hotkey(&["right_alt".into()]).unwrap().keycodes,
+            Vec::<u8>::new()
+        );
+        assert!(encode_hotkey(&["a".into(), "A".into()]).is_err());
+        assert!(encode_hotkey(&["a", "b", "c", "d", "e", "f", "g"].map(str::to_owned),).is_err());
     }
 
     #[test]
@@ -1005,15 +1060,15 @@ mod tests {
 
     #[test]
     fn encodes_backtick_hotkey() {
-        assert_eq!(encode_hotkey(&["backtick".into()]), Ok((0, 0x35)));
+        assert_eq!(encode_hotkey(&["backtick".into()]), Ok(chord(0, &[0x35])));
     }
 
     #[test]
     fn rejects_malformed_hotkeys() {
         for keys in [
             vec!["cmd", "cmd", "k"],
-            vec!["cmd"],
-            vec!["k", "l"],
+            vec!["a", "A"],
+            vec!["left_alt", "option", "k"],
             vec!["cmd", "unknown"],
         ] {
             assert!(
@@ -1021,6 +1076,13 @@ mod tests {
                     .is_err(),
                 "{keys:?} must be rejected"
             );
+        }
+    }
+
+    fn chord(modifier_mask: u8, keycodes: &[u8]) -> EncodedChord {
+        EncodedChord {
+            modifier_mask,
+            keycodes: keycodes.to_vec(),
         }
     }
 }
