@@ -4,7 +4,7 @@
 
 **Goal:** Add bounded JSON Lines runtime logs under `data/log` that cover lifecycle, device state, every input and action, configuration operations, and failures without storing pasted text or open targets.
 
-**Architecture:** A new `runtime_log.rs` module owns official `tauri-plugin-log` setup, JSON serialization, and scan-state deduplication. `device.rs` emits sanitized action lifecycle activities into the existing `RuntimeEvent` pipeline, while `lib.rs` records enriched events, device transitions, lifecycle, and command outcomes.
+**Architecture:** A new `runtime_log.rs` module owns official `tauri-plugin-log` setup, JSON serialization, scan-state deduplication, and a bounded asynchronous dispatcher whose worker thread performs all sink writes. `device.rs` emits sanitized action lifecycle activities into the existing `RuntimeEvent` pipeline, while `lib.rs` records enriched events, device transitions, lifecycle, and command outcomes.
 
 **Tech Stack:** Rust 2024, Tauri 2.11, `tauri-plugin-log` 2.9, Serde/JSON, Rust unit and integration tests.
 
@@ -19,6 +19,30 @@
 - Modify `src-tauri/src/device.rs`: emit sanitized action start/completion activities.
 - Modify `src-tauri/src/coordinator.rs`: classify new successful action activities as info.
 - Modify `src-tauri/src/lib.rs`: install logging and connect runtime, scan, lifecycle, and command events.
+
+## Actual Async Dispatcher Semantics
+
+The completed dispatcher has one worker thread and one shared FIFO channel.
+Normal runtime events have 1024 reservations; priority lifecycle and operation
+events have 128 separate reservations. Reservations include both waiting and
+in-flight writes and are released only after the worker finishes the sink write,
+which keeps accepted message memory logically bounded even if the sink stalls.
+Both producer paths return immediately with an accepted, dropped, or stopped
+outcome and never wait for file I/O.
+
+Normal and priority drops use separate total and unreported counters. At each
+drain opportunity, the worker coalesces unreported counts into stable
+`runtime_log_entries_dropped` JSON entries whose context is exactly the dispatch
+`class`, dropped `count`, and `drop_newest` policy; overflow entries never copy a
+dropped payload or arbitrary detail. Accepted entries from both classes retain
+the shared worker's enqueue order.
+
+`shutdown_with_entry` bypasses both reserves under the producer ordering lock.
+It closes the dispatcher to new producers, queues a protected final
+`application_stopped` entry after all accepted work, and then queues shutdown.
+The worker drains accepted entries and overflow summaries, writes the final
+entry, flushes the sink, and exits. This ordering remains intact when either or
+both reserves are saturated.
 
 ### Task 1: Logging Foundation
 
@@ -88,7 +112,7 @@ use tauri_plugin_log::{
 
 pub(crate) const LOG_TARGET: &str = "kivo::runtime";
 pub(crate) const MAX_FILE_SIZE: u128 = 10 * 1024 * 1024;
-pub(crate) const RETAINED_FILES: usize = 5;
+pub(crate) const RETAINED_ARCHIVES: usize = 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -153,7 +177,7 @@ pub(crate) fn install<R: Runtime>(app: &tauri::AppHandle<R>, config_directory: &
             .level(LevelFilter::Info)
             .clear_format()
             .max_file_size(MAX_FILE_SIZE)
-            .rotation_strategy(RotationStrategy::KeepSome(RETAINED_FILES))
+            .rotation_strategy(RotationStrategy::KeepSome(RETAINED_ARCHIVES))
             .targets([
                 Target::new(TargetKind::Folder {
                     path: log_directory(config_directory),
@@ -357,10 +381,10 @@ let mut inventory = DeviceLogInventory::default();
 assert_eq!(inventory.observe(100, &[device_status(ConnectionDimension::Online)], &[])[0].event, "device_connected");
 assert!(inventory.observe(200, &[device_status(ConnectionDimension::Online)], &[]).is_empty());
 assert_eq!(inventory.observe(300, &[device_status(ConnectionDimension::Offline)], &[])[0].event, "device_disconnected");
-assert_eq!(inventory.observe_scan_error(400, Some("usb unavailable")).len(), 1);
-assert!(inventory.observe_scan_error(500, Some("usb unavailable")).is_empty());
+assert_eq!(inventory.observe_scan_error(400, Some("usb_enumeration_failed")).len(), 1);
+assert!(inventory.observe_scan_error(500, Some("usb_enumeration_failed")).is_empty());
 assert!(inventory.observe_scan_error(600, None).is_empty());
-assert_eq!(inventory.observe_scan_error(700, Some("usb unavailable")).len(), 1);
+assert_eq!(inventory.observe_scan_error(700, Some("usb_enumeration_failed")).len(), 1);
 ```
 
 - [ ] **Step 2: Run RED**
@@ -408,7 +432,7 @@ struct RuntimePoll {
 }
 ```
 
-Update existing tests to read named fields. In `setup`, call `runtime_log::install(app.handle(), &config_directory)` and fall back to `eprintln!` on failure. Emit `application_started`, `application_ready`, `application_exit_requested`, and `application_stopped`. Log workspace and metrics initialization errors without changing their existing return/fallback behavior.
+Update existing tests to read named fields. In `setup`, call `Workspace::load` first and do not install the runtime logger before it has completed initialization or schema migration. Only then call `runtime_log::install(app.handle(), &config_directory)` and fall back to `eprintln!` on failure. If workspace loading fails, report the failure to stderr only because the file logger is not safely available yet. Emit `application_started`, `application_ready`, `application_exit_requested`, and `application_stopped`. Log metrics initialization errors without changing their existing return/fallback behavior.
 
 In the coordinator thread, keep one inventory, emit deduplicated scan entries, then call `emit_runtime_event` for every enriched event before sending the unchanged event to the frontend.
 
@@ -535,68 +559,145 @@ git commit -m "feat: log runtime configuration operations"
 
 **Files:**
 - Create: `src-tauri/tests/runtime_log_rotation.rs`
-- Modify only when verification exposes a defect: files from Tasks 1-4
+- Modify: `src-tauri/src/runtime_log.rs`
+- Modify: `docs/superpowers/specs/2026-08-09-runtime-file-logging-design.md`
+- Modify: `docs/superpowers/plans/2026-08-09-runtime-file-logging.md`
 
 - [ ] **Step 1: Write the real rotation test**
 
-Create a single integration-test binary so its process-global logger cannot conflict with unit tests:
+Create a parent/child integration test. The parent owns the temporary directory
+and seeds five distinct historical archives. Only the child installs the
+process-global logger, writes two oversized records to trigger exactly one
+rotation, and exits before the parent inspects or removes the directory:
 
 ```rust
-use std::fs;
+use std::{env, error::Error, fs, path::Path, process::Command};
 use tauri_plugin_log::{
     Builder, RotationStrategy, Target, TargetKind,
     log::{LevelFilter, info},
 };
 
+const CHILD_DIRECTORY_ENV: &str = "KIVO_RUNTIME_LOG_ROTATION_CHILD_DIRECTORY";
+const LOG_TARGET: &str = "kivo::runtime";
+const PRE_ROTATION_SENTINEL: &str = "pre_rotation_sentinel";
+const POST_ROTATION_SENTINEL: &str = "post_rotation_sentinel";
+
 #[test]
-fn official_plugin_bounds_rotated_runtime_logs() {
-    let directory = tempfile::tempdir().unwrap();
-    let app = tauri::test::mock_builder()
+fn official_plugin_bounds_rotated_runtime_logs() -> Result<(), Box<dyn Error>> {
+    if let Some(directory) = env::var_os(CHILD_DIRECTORY_ENV) {
+        return write_rotating_logs(Path::new(&directory));
+    }
+
+    let directory = tempfile::tempdir()?;
+    for second in 0..5 {
+        fs::write(
+            directory
+                .path()
+                .join(format!("kivo_2020-01-01_00-00-0{second}.log")),
+            format!("historical seed {second}\n"),
+        )?;
+    }
+
+    let output = Command::new(env::current_exe()?)
+        .env(CHILD_DIRECTORY_ENV, directory.path())
+        .args([
+            "--exact",
+            "official_plugin_bounds_rotated_runtime_logs",
+            "--nocapture",
+        ])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "rotation child failed with {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let mut all_names = Vec::new();
+    for entry in fs::read_dir(directory.path())? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            all_names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+    }
+    all_names.sort();
+    let log_names = all_names
+        .iter()
+        .filter(|name| {
+            name.as_str() == "kivo.log"
+                || (name.starts_with("kivo_") && name.ends_with(".log"))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(log_names.len(), 4);
+    assert!(!all_names.iter().any(|name| name.ends_with(".bak")));
+
+    let archive_names = log_names
+        .iter()
+        .filter(|name| name.as_str() != "kivo.log")
+        .collect::<Vec<_>>();
+    assert_eq!(archive_names.len(), 3);
+    let mut sentinel_archives = Vec::new();
+    for name in archive_names {
+        let contents = fs::read_to_string(directory.path().join(name))?;
+        if contents.contains(PRE_ROTATION_SENTINEL) {
+            sentinel_archives.push(name);
+        }
+    }
+    assert_eq!(sentinel_archives.len(), 1);
+
+    let active = fs::read_to_string(directory.path().join("kivo.log"))?;
+    assert!(active.contains(POST_ROTATION_SENTINEL));
+    assert!(!active.contains(PRE_ROTATION_SENTINEL));
+    Ok(())
+}
+
+fn write_rotating_logs(directory: &Path) -> Result<(), Box<dyn Error>> {
+    let _app = tauri::test::mock_builder()
         .plugin(
             Builder::new()
                 .level(LevelFilter::Info)
                 .clear_format()
                 .max_file_size(256)
                 .rotation_strategy(RotationStrategy::KeepSome(3))
-                .targets([Target::new(TargetKind::Folder {
-                    path: directory.path().to_path_buf(),
-                    file_name: Some("kivo".into()),
-                })])
+                .targets([
+                    Target::new(TargetKind::Folder {
+                        path: directory.to_path_buf(),
+                        file_name: Some("kivo".into()),
+                    })
+                    .filter(|metadata| metadata.target() == LOG_TARGET),
+                ])
                 .build(),
         )
-        .build(tauri::test::mock_context(tauri::test::noop_assets()))
-        .unwrap();
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))?;
 
-    for sequence in 0..100 {
-        info!(
-            target: "kivo::runtime",
-            "{{\"timestampMs\":{sequence},\"event\":\"rotation_probe\",\"padding\":\"0123456789012345678901234567890123456789\"}}"
-        );
-    }
+    let padding = "0123456789".repeat(32);
+    info!(target: LOG_TARGET, "{{\"event\":\"{PRE_ROTATION_SENTINEL}\",\"padding\":\"{padding}\"}}");
+    info!(target: LOG_TARGET, "{{\"event\":\"{POST_ROTATION_SENTINEL}\",\"padding\":\"{padding}\"}}");
     tauri_plugin_log::log::logger().flush();
-
-    let files = fs::read_dir(directory.path())
-        .unwrap()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_name().to_string_lossy().starts_with("kivo"))
-        .collect::<Vec<_>>();
-    assert!(!files.is_empty());
-    assert!(files.len() <= 3, "rotation left {} files", files.len());
-    drop(app);
+    Ok(())
 }
 ```
+
+Rename the production constant to `RETAINED_ARCHIVES` without changing its
+value or the `RotationStrategy::KeepSome(5)` policy. Document that this means up
+to five archives plus the active file, or six matching Kivo log files total.
 
 - [ ] **Step 2: Verify real rotation**
 
 Run `cargo test --manifest-path src-tauri/Cargo.toml --test runtime_log_rotation -- --nocapture`.
 
-Expected: one test passes and no more than three matching files remain.
+Expected: one test passes with exactly three archives plus `kivo.log`, no `.bak`
+file, the pre-rotation sentinel in one archive, and the post-rotation sentinel
+only in the active file.
 
 - [ ] **Step 3: Run complete Rust verification**
 
 ```bash
 cargo fmt --manifest-path src-tauri/Cargo.toml
 cargo test --manifest-path src-tauri/Cargo.toml
+cargo check --manifest-path src-tauri/Cargo.toml --all-targets
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 ```
@@ -627,6 +728,6 @@ Expected: action log records contain only counts and kinds; `runtime_log.rs` nev
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src-tauri/tests/runtime_log_rotation.rs src-tauri/src src-tauri/Cargo.toml src-tauri/Cargo.lock
-git commit -m "test: verify bounded runtime log rotation"
+git add src-tauri/tests/runtime_log_rotation.rs src-tauri/src/runtime_log.rs docs/superpowers/specs/2026-08-09-runtime-file-logging-design.md docs/superpowers/plans/2026-08-09-runtime-file-logging.md
+git commit -m "fix: verify official log retention semantics"
 ```
