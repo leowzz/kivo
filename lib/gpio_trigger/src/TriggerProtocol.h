@@ -20,6 +20,7 @@ enum class HelperCommandKind {
   LearnEnd,
   Paste,
   Hotkey,
+  Chord,
   Delay,
   Media,
   Host,
@@ -29,13 +30,17 @@ enum class HelperCommandKind {
 struct HelperCommand {
   HelperCommandKind kind;
   std::uint32_t revision = 0;
-  std::uint32_t eventId = 0;
+  union {
+    std::uint32_t runId = 0;
+    std::uint32_t eventId;
+  };
   std::uint16_t debounceMs = 0;
   std::uint16_t step = 0;
   std::uint16_t total = 0;
   std::uint8_t sourceIndex = 0;
   std::uint8_t modifierMask = 0;
   std::uint8_t keycode = 0;
+  std::vector<std::uint8_t> keycodes;
   std::uint16_t consumerUsage = 0;
   std::uint32_t durationMs = 0;
   std::uint8_t oledSda = 0;
@@ -59,5 +64,5 @@ class ResponseLineBuffer {
 
 std::string formatInputEvent(const InputEvent &event);
 std::string formatLearningEvent(const InputEvent &event);
-std::string formatDone(std::uint32_t eventId, std::uint16_t step);
+std::string formatDone(std::uint32_t runId, std::uint16_t step);
 std::optional<HelperCommand> parseHelperCommand(std::string_view line);

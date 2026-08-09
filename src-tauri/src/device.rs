@@ -12,9 +12,9 @@ use crate::{
     paste::{Clock, PasteHandle, PasteReply, PasteRequest, SystemClock},
     profile::{ActionTrigger, DeviceProfile},
     protocol::{
-        ADVANCED_ACTION_PROTOCOL_VERSION, ActionSequence, DeviceMessage, HelloCapabilities,
-        InputState, OLED_PROTOCOL_VERSION, PhysicalInput, format_paste_command, is_hello_line,
-        parse_device, topology_commands, validate_hello,
+        ACTION_RUN_PROTOCOL_VERSION, ADVANCED_ACTION_PROTOCOL_VERSION, ActionSequence,
+        DeviceMessage, HelloCapabilities, InputState, OLED_PROTOCOL_VERSION, PhysicalInput,
+        format_paste_command, is_hello_line, parse_device, topology_commands, validate_hello,
     },
 };
 use serde::Serialize;
@@ -116,6 +116,7 @@ pub struct DeviceSession {
     revision: u32,
     configuring: Option<ConfigurationInFlight>,
     ready: bool,
+    next_run_id: u64,
     active: Option<ActionSequence>,
     active_snapshot: Option<Arc<RuntimeProfileSnapshot>>,
     active_context: Option<RuntimeEventContext>,
@@ -191,6 +192,7 @@ impl DeviceSession {
             revision: 0,
             configuring: None,
             ready: false,
+            next_run_id: 1,
             active: None,
             active_snapshot: None,
             active_context: None,
@@ -212,6 +214,7 @@ impl DeviceSession {
             revision: 0,
             configuring: None,
             ready: false,
+            next_run_id: 1,
             active: None,
             active_snapshot: None,
             active_context: None,
@@ -323,14 +326,14 @@ impl DeviceSession {
     pub fn fail_active_deferred(&mut self, code: &str, detail: Option<String>) -> SessionOutput {
         let mut output = SessionOutput::default();
         if let Some(mut sequence) = self.active.take() {
-            let event_id = sequence.event_id();
+            let run_id = sequence.run_id();
             let detail = if code == "action_step_failed" && sequence.is_awaiting_paste() {
                 Some("clipboard_write_failed".into())
             } else {
                 detail
             };
             sequence.abort();
-            output.lines.push(format!("SKIP {event_id}\n"));
+            output.lines.push(format!("SKIP {run_id}\n"));
             let mut activity = RuntimeActivity::new(code);
             activity.detail = detail;
             activity.context = self.active_context.clone();
@@ -431,7 +434,7 @@ impl DeviceSession {
                     &mut output,
                 );
             }
-            DeviceMessage::Done { event_id, step } => self.handle_done(event_id, step, &mut output),
+            DeviceMessage::Done { run_id, step } => self.handle_done(run_id, step, &mut output),
             DeviceMessage::LearnOk { revision }
                 if self
                     .learning
@@ -784,18 +787,18 @@ impl DeviceSession {
         }
     }
 
-    fn handle_done(&mut self, event_id: u64, step: u16, output: &mut SessionOutput) {
+    fn handle_done(&mut self, run_id: u64, step: u16, output: &mut SessionOutput) {
         let Some(sequence) = self.active.as_mut() else {
             output
                 .activities
                 .push(RuntimeActivity::new("unexpected_action_acknowledgement"));
             return;
         };
-        let completed = match sequence.acknowledge(event_id, step) {
+        let completed = match sequence.acknowledge(run_id, step) {
             Ok(completed) => completed,
             Err(error) => {
-                let active_event = sequence.event_id();
-                output.lines.push(format!("SKIP {active_event}\n"));
+                let active_run = sequence.run_id();
+                output.lines.push(format!("SKIP {active_run}\n"));
                 output.activities.push(
                     RuntimeActivity::new("invalid_action_acknowledgement")
                         .with_detail(error)
@@ -876,7 +879,22 @@ impl DeviceSession {
                 );
                 continue;
             }
-            self.active = Some(ActionSequence::new(queued.event_id, button, actions));
+            let Some(run_id) = self.next_action_run_id(queued.event_id) else {
+                output.lines.push(format!("SKIP {}\n", queued.event_id));
+                output
+                    .completed_receive_sequences
+                    .push(queued.receive_sequence);
+                output
+                    .activities
+                    .push(RuntimeActivity::new("action_run_id_exhausted"));
+                continue;
+            };
+            self.active = Some(ActionSequence::new(
+                run_id,
+                button,
+                ActionTrigger::Press,
+                actions,
+            ));
             self.active_snapshot = Some(queued.snapshot);
             self.active_context = queued.context;
             self.active_receive_sequence = Some(queued.receive_sequence);
@@ -884,8 +902,27 @@ impl DeviceSession {
         }
     }
 
+    fn uses_action_runs(&self) -> bool {
+        self.hello
+            .as_ref()
+            .is_some_and(|hello| hello.protocol >= ACTION_RUN_PROTOCOL_VERSION)
+    }
+
+    fn next_action_run_id(&mut self, legacy_event_id: u64) -> Option<u64> {
+        if !self.uses_action_runs() {
+            return (legacy_event_id != 0).then_some(legacy_event_id);
+        }
+        let run_id = self.next_run_id;
+        if run_id == 0 {
+            return None;
+        }
+        self.next_run_id = self.next_run_id.checked_add(1).unwrap_or(0);
+        Some(run_id)
+    }
+
     fn emit_active_step(&mut self, output: &mut SessionOutput) {
         let target_opener = Arc::clone(&self.target_opener);
+        let uses_action_runs = self.uses_action_runs();
         let Some(step) = self.active.as_mut().and_then(ActionSequence::next_step) else {
             return;
         };
@@ -896,7 +933,7 @@ impl DeviceSession {
             crate::profile::ButtonAction::Paste { text } => {
                 let request = PendingPaste {
                     receive_sequence: self.active_receive_sequence.unwrap_or_default(),
-                    event_id: step.event_id,
+                    event_id: step.run_id,
                     step: step.step,
                     total: step.total,
                     text: text.clone(),
@@ -907,16 +944,32 @@ impl DeviceSession {
                 return;
             }
             crate::profile::ButtonAction::Hotkey { .. }
-            | crate::profile::ButtonAction::Media { .. } => step.command(|_| Ok(())),
+            | crate::profile::ButtonAction::Media { .. } => {
+                if uses_action_runs {
+                    step.command_v6(|_| Ok(()))
+                } else {
+                    step.command_legacy(|_| Ok(()))
+                }
+            }
             crate::profile::ButtonAction::Delay { duration_ms } => {
                 output.action_timeout =
                     Some(ACTION_ACK_TIMEOUT + Duration::from_millis(u64::from(*duration_ms)));
-                step.command(|_| Ok(()))
+                if uses_action_runs {
+                    step.command_v6(|_| Ok(()))
+                } else {
+                    step.command_legacy(|_| Ok(()))
+                }
             }
             crate::profile::ButtonAction::Open { target } => target_opener
                 .open(target)
                 .map_err(|_| "open_target_failed".to_owned())
-                .and_then(|()| step.command(|_| Ok(()))),
+                .and_then(|()| {
+                    if uses_action_runs {
+                        step.command_v6(|_| Ok(()))
+                    } else {
+                        step.command_legacy(|_| Ok(()))
+                    }
+                }),
         };
         match result {
             Ok(line) => output.lines.push(line),
@@ -933,7 +986,7 @@ impl DeviceSession {
         if let Some(sequence) = self.active.as_mut() {
             sequence.abort();
         }
-        output.lines.push(format!("SKIP {}\n", step.event_id));
+        output.lines.push(format!("SKIP {}\n", step.run_id));
         let detail = if matches!(&step.action, crate::profile::ButtonAction::Open { .. }) {
             "open_target_failed".into()
         } else {
@@ -1010,7 +1063,7 @@ impl DeviceSession {
 
 fn action_activity(code: &str, step: &crate::protocol::ActionStep) -> RuntimeActivity {
     let mut activity = RuntimeActivity::new(code)
-        .with_param("eventId", step.event_id.to_string())
+        .with_param("runId", step.run_id.to_string())
         .with_param("button", &step.button)
         .with_param("step", step.step.to_string())
         .with_param("total", step.total.to_string());
@@ -1066,9 +1119,7 @@ fn action_activity(code: &str, step: &crate::protocol::ActionStep) -> RuntimeAct
 #[cfg(test)]
 fn message_event_id(message: &DeviceMessage) -> Option<u64> {
     match message {
-        DeviceMessage::State { event_id, .. } | DeviceMessage::Done { event_id, .. } => {
-            Some(*event_id)
-        }
+        DeviceMessage::State { event_id, .. } => Some(*event_id),
         _ => None,
     }
 }
@@ -1599,16 +1650,16 @@ fn run_isolated_worker_inner(
                             })
                             .map_err(|_| "coordinator_stopped".to_owned())?;
                     }
-                    DeviceMessage::Done { event_id, step } => {
-                        if active_paste_ack == Some((event_id, step)) {
-                            if paste.complete(&start.device_id, event_id, step).is_err() {
+                    DeviceMessage::Done { run_id, step } => {
+                        if active_paste_ack == Some((run_id, step)) {
+                            if paste.complete(&start.device_id, run_id, step).is_err() {
                                 continue;
                             }
                             active_paste_ack = None;
                             pending_paste = None;
                         }
                         let output = session.on_message_deferred(
-                            DeviceMessage::Done { event_id, step },
+                            DeviceMessage::Done { run_id, step },
                             0,
                             received_at_ms,
                         );
@@ -2374,24 +2425,55 @@ mod tests {
         );
         assert!(queued.lines.is_empty());
 
-        let second = session.on_message(
-            DeviceMessage::Done {
-                event_id: 9,
-                step: 1,
-            },
-            &mut copy,
-        );
+        let second = session.on_message(DeviceMessage::Done { run_id: 9, step: 1 }, &mut copy);
         assert_eq!(copied.borrow().as_slice(), ["第一步", "第二步"]);
         assert!(second.lines[0].contains(" 9 2 2"));
-        let next_press = session.on_message(
-            DeviceMessage::Done {
-                event_id: 9,
-                step: 2,
-            },
-            &mut copy,
-        );
+        let next_press = session.on_message(DeviceMessage::Done { run_id: 9, step: 2 }, &mut copy);
         assert_eq!(copied.borrow().as_slice(), ["第一步", "第二步", "第一步"]);
         assert!(next_press.lines[0].contains(" 10 1 2"));
+    }
+
+    #[test]
+    fn protocol_v6_allocates_monotonic_runs_independent_of_input_events() {
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            TriggerActions::press(vec![ButtonAction::Hotkey {
+                keys: vec!["ctrl".into(), "a".into(), "b".into()],
+            }]),
+        );
+        let mut session = DeviceSession::new(runtime);
+        let DeviceMessage::Hello(mut capabilities) = hello() else {
+            unreachable!();
+        };
+        capabilities.protocol = 6;
+        session.on_message_deferred(DeviceMessage::Hello(capabilities), 0, 100);
+        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
+
+        let first = session.on_message_deferred(
+            DeviceMessage::State {
+                event_id: 41,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            41,
+            102,
+        );
+        assert_eq!(first.lines, ["CHORD 1 1 1 1 2 4 5\n"]);
+        assert_eq!(first.activities[1].params["runId"], "1");
+
+        session.on_message_deferred(DeviceMessage::Done { run_id: 1, step: 1 }, 0, 103);
+        let second = session.on_message_deferred(
+            DeviceMessage::State {
+                event_id: 99,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            99,
+            104,
+        );
+        assert_eq!(second.lines, ["CHORD 2 1 1 1 2 4 5\n"]);
+        assert_eq!(second.activities[1].params["runId"], "2");
     }
 
     #[test]
@@ -2427,7 +2509,7 @@ mod tests {
         assert_eq!(
             started.params,
             BTreeMap::from([
-                ("eventId".into(), "41".into()),
+                ("runId".into(), "41".into()),
                 ("button".into(), "A".into()),
                 ("step".into(), "1".into()),
                 ("total".into(), "2".into()),
@@ -2455,7 +2537,7 @@ mod tests {
         assert_eq!(granted.lines, [format_paste_command(41, 1, 2)]);
         let next = session.on_message_deferred(
             DeviceMessage::Done {
-                event_id: 41,
+                run_id: 41,
                 step: 1,
             },
             0,
@@ -2780,7 +2862,7 @@ mod tests {
 
         let second = session.on_message_deferred(
             DeviceMessage::Done {
-                event_id: 43,
+                run_id: 43,
                 step: 1,
             },
             0,
@@ -2794,7 +2876,7 @@ mod tests {
 
         let third = session.on_message_deferred(
             DeviceMessage::Done {
-                event_id: 43,
+                run_id: 43,
                 step: 2,
             },
             0,
@@ -2920,7 +3002,7 @@ mod tests {
         session.grant_paste(50, 1);
         let second = session.on_message_deferred(
             DeviceMessage::Done {
-                event_id: 50,
+                run_id: 50,
                 step: 1,
             },
             0,
@@ -2930,7 +3012,7 @@ mod tests {
         session.grant_paste(50, 2);
         session.on_message_deferred(
             DeviceMessage::Done {
-                event_id: 50,
+                run_id: 50,
                 step: 2,
             },
             0,
@@ -2986,7 +3068,7 @@ mod tests {
         session.grant_paste(60, 1);
         let old_second = session.on_message_deferred(
             DeviceMessage::Done {
-                event_id: 60,
+                run_id: 60,
                 step: 1,
             },
             0,
@@ -2996,7 +3078,7 @@ mod tests {
         session.grant_paste(60, 2);
         let configured = session.on_message_deferred(
             DeviceMessage::Done {
-                event_id: 60,
+                run_id: 60,
                 step: 2,
             },
             0,

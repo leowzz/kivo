@@ -2,15 +2,16 @@
 use crate::profile::{TriggerActions, TriggerSettings};
 use crate::{
     hardware::{BoardProfile, board_by_id},
-    profile::{ButtonAction, HardwareProfile, InputSource, MediaCommand},
+    profile::{ActionTrigger, ButtonAction, HardwareProfile, InputSource, MediaCommand},
     workspace::AppError,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-pub const HOST_PROTOCOL_VERSION: u16 = 5;
+pub const HOST_PROTOCOL_VERSION: u16 = 6;
 pub const OLED_PROTOCOL_VERSION: u16 = 4;
 pub const ADVANCED_ACTION_PROTOCOL_VERSION: u16 = 5;
+pub const ACTION_RUN_PROTOCOL_VERSION: u16 = 6;
 const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -36,7 +37,7 @@ pub enum DeviceMessage {
         state: InputState,
     },
     Done {
-        event_id: u64,
+        run_id: u64,
         step: u16,
     },
     LearnOk {
@@ -134,10 +135,10 @@ pub fn parse_device(line: &str) -> Option<DeviceMessage> {
                 state: parse_state(state)?,
             })
         }
-        ["DONE", event_id, step] => {
-            let event_id = event_id.parse().ok()?;
+        ["DONE", run_id, step] => {
+            let run_id = run_id.parse().ok()?;
             let step = step.parse().ok()?;
-            (event_id > 0 && step > 0).then_some(DeviceMessage::Done { event_id, step })
+            (run_id > 0 && step > 0).then_some(DeviceMessage::Done { run_id, step })
         }
         ["LEARN_OK", revision] => Some(DeviceMessage::LearnOk {
             revision: revision.parse().ok()?,
@@ -358,19 +359,24 @@ fn join_pins(pins: impl Iterator<Item = u8>) -> String {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ActionStep {
-    pub event_id: u64,
+    pub run_id: u64,
     pub button: String,
+    pub trigger: ActionTrigger,
     pub step: u16,
     pub total: u16,
     pub action: ButtonAction,
 }
 
 impl ActionStep {
-    pub fn command(&self, copy: impl FnOnce(&str) -> Result<(), String>) -> Result<String, String> {
+    pub fn command_legacy(
+        &self,
+        copy: impl FnOnce(&str) -> Result<(), String>,
+    ) -> Result<String, String> {
+        self.validate_coordinates()?;
         match &self.action {
             ButtonAction::Paste { text } => {
                 copy(text)?;
-                Ok(format_paste_command(self.event_id, self.step, self.total))
+                Ok(format_paste_command(self.run_id, self.step, self.total))
             }
             ButtonAction::Hotkey { keys } => {
                 let chord = encode_hotkey(keys)?;
@@ -379,42 +385,99 @@ impl ActionStep {
                 };
                 Ok(format!(
                     "HOTKEY {} {} {} {} {keycode}\n",
-                    self.event_id, self.step, self.total, chord.modifier_mask
+                    self.run_id, self.step, self.total, chord.modifier_mask
                 ))
             }
             ButtonAction::Delay { duration_ms } => Ok(format!(
                 "DELAY {} {} {} {duration_ms}\n",
-                self.event_id, self.step, self.total
+                self.run_id, self.step, self.total
             )),
             ButtonAction::Media { command } => Ok(format!(
                 "MEDIA {} {} {} {}\n",
-                self.event_id,
+                self.run_id,
                 self.step,
                 self.total,
                 media_usage(*command)
             )),
             ButtonAction::Open { .. } => Ok(format!(
                 "HOST {} {} {}\n",
-                self.event_id, self.step, self.total
+                self.run_id, self.step, self.total
             )),
         }
     }
+
+    pub fn command_v6(
+        &self,
+        copy: impl FnOnce(&str) -> Result<(), String>,
+    ) -> Result<String, String> {
+        self.validate_coordinates()?;
+        match &self.action {
+            ButtonAction::Paste { text } => {
+                copy(text)?;
+                Ok(format_paste_command(self.run_id, self.step, self.total))
+            }
+            ButtonAction::Hotkey { keys } => {
+                let chord = encode_hotkey(keys)?;
+                let keycodes = chord.keycodes.iter().map(u8::to_string).collect::<Vec<_>>();
+                let mut command = format!(
+                    "CHORD {} {} {} {} {}",
+                    self.run_id,
+                    self.step,
+                    self.total,
+                    chord.modifier_mask,
+                    keycodes.len(),
+                );
+                if !keycodes.is_empty() {
+                    command.push(' ');
+                    command.push_str(&keycodes.join(" "));
+                }
+                command.push('\n');
+                if command.len() > 255 {
+                    return Err("action command exceeds protocol line limit".into());
+                }
+                Ok(command)
+            }
+            ButtonAction::Delay { duration_ms } => Ok(format!(
+                "DELAY {} {} {} {duration_ms}\n",
+                self.run_id, self.step, self.total
+            )),
+            ButtonAction::Media { command } => Ok(format!(
+                "MEDIA {} {} {} {}\n",
+                self.run_id,
+                self.step,
+                self.total,
+                media_usage(*command)
+            )),
+            ButtonAction::Open { .. } => Ok(format!(
+                "HOST {} {} {}\n",
+                self.run_id, self.step, self.total
+            )),
+        }
+    }
+
+    fn validate_coordinates(&self) -> Result<(), String> {
+        if self.run_id == 0 || self.step == 0 || self.total == 0 || self.step > self.total {
+            return Err("invalid action run coordinates".into());
+        }
+        Ok(())
+    }
 }
 
-pub(crate) fn format_paste_command(event_id: u64, step: u16, total: u16) -> String {
+pub(crate) fn format_paste_command(run_id: u64, step: u16, total: u16) -> String {
     if cfg!(target_os = "macos") {
-        format!("PASTE {event_id} {step} {total}\n")
+        format!("PASTE {run_id} {step} {total}\n")
     } else if cfg!(target_os = "windows") {
-        format!("HOTKEY {event_id} {step} {total} 3 25\n")
+        format!("HOTKEY {run_id} {step} {total} 3 25\n")
     } else {
-        format!("HOTKEY {event_id} {step} {total} 1 25\n")
+        format!("HOTKEY {run_id} {step} {total} 1 25\n")
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct ActionSequence {
-    event_id: u64,
+    run_id: u64,
     button: String,
+    trigger: ActionTrigger,
     actions: Vec<ButtonAction>,
     next: usize,
     awaiting: Option<u16>,
@@ -422,10 +485,16 @@ pub struct ActionSequence {
 }
 
 impl ActionSequence {
-    pub fn new(event_id: u64, button: String, actions: Vec<ButtonAction>) -> Self {
+    pub fn new(
+        run_id: u64,
+        button: String,
+        trigger: ActionTrigger,
+        actions: Vec<ButtonAction>,
+    ) -> Self {
         Self {
-            event_id,
+            run_id,
             button,
+            trigger,
             actions,
             next: 0,
             awaiting: None,
@@ -441,22 +510,24 @@ impl ActionSequence {
         let total = u16::try_from(self.actions.len()).ok()?;
         self.awaiting = Some(step);
         Some(ActionStep {
-            event_id: self.event_id,
+            run_id: self.run_id,
             button: self.button.clone(),
+            trigger: self.trigger,
             step,
             total,
             action: self.actions[self.next].clone(),
         })
     }
 
-    pub fn acknowledge(&mut self, event_id: u64, step: u16) -> Result<ActionStep, String> {
-        if event_id != self.event_id || self.awaiting != Some(step) {
+    pub fn acknowledge(&mut self, run_id: u64, step: u16) -> Result<ActionStep, String> {
+        if run_id != self.run_id || self.awaiting != Some(step) {
             self.failed = true;
             return Err("invalid_action_acknowledgement".into());
         }
         let completed = ActionStep {
-            event_id: self.event_id,
+            run_id: self.run_id,
             button: self.button.clone(),
+            trigger: self.trigger,
             step,
             total: u16::try_from(self.actions.len()).map_err(|_| "invalid_action_count")?,
             action: self.actions[self.next].clone(),
@@ -471,8 +542,8 @@ impl ActionSequence {
         self.awaiting = None;
     }
 
-    pub fn event_id(&self) -> u64 {
-        self.event_id
+    pub fn run_id(&self) -> u64 {
+        self.run_id
     }
 
     pub fn is_complete(&self) -> bool {
@@ -726,10 +797,7 @@ mod tests {
         );
         assert_eq!(
             parse_device("DONE 9 2\n"),
-            Some(DeviceMessage::Done {
-                event_id: 9,
-                step: 2,
-            })
+            Some(DeviceMessage::Done { run_id: 9, step: 2 })
         );
     }
 
@@ -776,6 +844,17 @@ mod tests {
         assert!(matches!(
             message,
             DeviceMessage::Hello(HelloCapabilities { protocol: 3, .. })
+        ));
+    }
+
+    #[test]
+    fn parses_protocol_v6_hello() {
+        let message =
+            parse_device("HELLO 6 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 3 0 11 22").unwrap();
+
+        assert!(matches!(
+            message,
+            DeviceMessage::Hello(HelloCapabilities { protocol: 6, .. })
         ));
     }
 
@@ -863,12 +942,12 @@ mod tests {
         let model = device_profile();
         let actions = model.actions["A"].press.clone();
         let first_action = actions[0].clone();
-        let mut sequence = ActionSequence::new(9, "A".into(), actions);
+        let mut sequence = ActionSequence::new(9, "A".into(), ActionTrigger::Press, actions);
 
         assert_eq!(sequence.next_step().unwrap().step, 1);
         assert!(sequence.next_step().is_none());
         let completed = sequence.acknowledge(9, 1).unwrap();
-        assert_eq!(completed.event_id, 9);
+        assert_eq!(completed.run_id, 9);
         assert_eq!(completed.button, "A");
         assert_eq!(completed.step, 1);
         assert_eq!(completed.total, 2);
@@ -914,8 +993,9 @@ mod tests {
     #[test]
     fn formats_advanced_action_commands() {
         let step = |action| ActionStep {
-            event_id: 12,
+            run_id: 12,
             button: "A".into(),
+            trigger: ActionTrigger::Press,
             step: 2,
             total: 4,
             action,
@@ -923,7 +1003,7 @@ mod tests {
 
         assert_eq!(
             step(ButtonAction::Delay { duration_ms: 250 })
-                .command(|_| Ok(()))
+                .command_legacy(|_| Ok(()))
                 .unwrap(),
             "DELAY 12 2 4 250\n"
         );
@@ -931,7 +1011,7 @@ mod tests {
             step(ButtonAction::Media {
                 command: MediaCommand::PlayPause,
             })
-            .command(|_| Ok(()))
+            .command_legacy(|_| Ok(()))
             .unwrap(),
             "MEDIA 12 2 4 205\n"
         );
@@ -939,9 +1019,50 @@ mod tests {
             step(ButtonAction::Open {
                 target: "https://example.com".into(),
             })
-            .command(|_| Ok(()))
+            .command_legacy(|_| Ok(()))
             .unwrap(),
             "HOST 12 2 4\n"
+        );
+    }
+
+    #[test]
+    fn formats_v6_chord_command() {
+        let step = ActionStep {
+            run_id: 7,
+            button: "A".into(),
+            trigger: ActionTrigger::Press,
+            step: 1,
+            total: 1,
+            action: ButtonAction::Hotkey {
+                keys: vec!["right_cmd".into(), "a".into(), "b".into()],
+            },
+        };
+        assert_eq!(
+            step.command_v6(|_| Ok(())).unwrap(),
+            "CHORD 7 1 1 128 2 4 5\n"
+        );
+    }
+
+    #[test]
+    fn legacy_hotkey_rejects_multi_key_and_modifier_only_chords() {
+        let step = |keys| ActionStep {
+            run_id: 7,
+            button: "A".into(),
+            trigger: ActionTrigger::Press,
+            step: 1,
+            total: 1,
+            action: ButtonAction::Hotkey { keys },
+        };
+
+        assert!(
+            step(vec!["a".into(), "b".into()])
+                .command_legacy(|_| Ok(()))
+                .is_err()
+        );
+        assert!(
+            step(vec!["right_cmd".into()])
+                .command_legacy(|_| Ok(()))
+                .is_err()
         );
     }
 

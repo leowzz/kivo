@@ -2,6 +2,7 @@
 
 #include "BoardProfile.h"
 #include "DisplayStatus.h"
+#include "ActionRunController.h"
 #include "GpioTriggerController.h"
 #include "Handshake.h"
 #include "InputTopology.h"
@@ -113,9 +114,9 @@ void test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins() {
                     platform::selectRp2040OledBus(5, 6));
 }
 
-void test_formats_protocol_v5_hello_with_board_and_build() {
+void test_formats_protocol_v6_hello_with_board_and_build() {
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 5 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 27 "
+      "HELLO 6 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 27 "
       "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 26 "
       "27 28 29\n",
       formatHello(kVccGndYdRp2040, "0.1.0+gabc1234").c_str());
@@ -696,6 +697,44 @@ void test_rejects_malformed_hotkey_response() {
   TEST_ASSERT_FALSE(parseHelperCommand("HOTKEY 42 1 1 10 165\n").has_value());
 }
 
+void test_parses_v6_chord_and_rejects_malformed_chords() {
+  const auto chord = parseHelperCommand("CHORD 7 1 2 128 2 4 5\n");
+  TEST_ASSERT_TRUE(chord.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::Chord, chord->kind);
+  TEST_ASSERT_EQUAL_UINT8(2, chord->keycodes.size());
+  TEST_ASSERT_EQUAL_UINT8(5, chord->keycodes[1]);
+  TEST_ASSERT_TRUE(parseHelperCommand("CHORD 8 1 1 128 0\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("CHORD 8 1 1 0 0\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("CHORD 8 1 1 0 2 4 4\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("CHORD 8 1 1 0 1 0\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("CHORD 8 1 1 0 7 4 5 6 7 8 9 10\n")
+                        .has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("CHORD 8 1 1 1 2 4\n").has_value());
+}
+
+void test_v6_run_starts_on_step_one_and_is_independent_of_input_ids() {
+  ActionRunController runs;
+  TEST_ASSERT_EQUAL(ResponseAction::Ignored, runs.acceptStep(41, 2, 2, 0));
+  TEST_ASSERT_EQUAL(ResponseAction::Execute, runs.acceptStep(41, 1, 2, 1));
+  TEST_ASSERT_EQUAL(ResponseAction::Execute, runs.acceptStep(41, 2, 2, 2));
+  TEST_ASSERT_FALSE(runs.hasActiveRun());
+}
+
+void test_v6_run_cancel_keepalive_and_expiry() {
+  ActionRunController runs;
+  TEST_ASSERT_EQUAL(ResponseAction::Execute, runs.acceptStep(42, 1, 2, 1));
+  TEST_ASSERT_TRUE(runs.keepAlive(42, 2000));
+  runs.expire(3999);
+  TEST_ASSERT_TRUE(runs.hasActiveRun());
+  runs.expire(4000);
+  TEST_ASSERT_FALSE(runs.hasActiveRun());
+
+  TEST_ASSERT_EQUAL(ResponseAction::Execute, runs.acceptStep(43, 1, 2, 4001));
+  TEST_ASSERT_EQUAL(ResponseAction::Cleared, runs.cancel(43));
+  TEST_ASSERT_FALSE(runs.hasActiveRun());
+  TEST_ASSERT_EQUAL(ResponseAction::Ignored, runs.cancel(43));
+}
+
 void test_discards_the_rest_of_an_overlong_physical_line() {
   ResponseLineBuffer lines(16);
 
@@ -802,7 +841,7 @@ int main(int, char **) {
   RUN_TEST(test_rp2040_standalone_debug_topology_matches_keyboard_wiring);
   RUN_TEST(test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match);
   RUN_TEST(test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins);
-  RUN_TEST(test_formats_protocol_v5_hello_with_board_and_build);
+  RUN_TEST(test_formats_protocol_v6_hello_with_board_and_build);
   RUN_TEST(test_rejects_empty_firmware_build_id);
   RUN_TEST(test_rejects_whitespace_in_firmware_build_id);
   RUN_TEST(test_contact_edge_reports_unordered_pair_once_after_debounce);
@@ -839,6 +878,9 @@ int main(int, char **) {
   RUN_TEST(test_rejects_malformed_responses);
   RUN_TEST(test_parses_hotkey_response);
   RUN_TEST(test_rejects_malformed_hotkey_response);
+  RUN_TEST(test_parses_v6_chord_and_rejects_malformed_chords);
+  RUN_TEST(test_v6_run_starts_on_step_one_and_is_independent_of_input_ids);
+  RUN_TEST(test_v6_run_cancel_keepalive_and_expiry);
   RUN_TEST(test_discards_the_rest_of_an_overlong_physical_line);
   RUN_TEST(test_only_matching_paste_response_requests_keypress);
   RUN_TEST(test_matching_hotkey_response_requests_execution);

@@ -42,9 +42,15 @@ def expect_tokens(device: LineTransport, expected: list[str]) -> None:
     raise RuntimeError(f"expected {' '.join(expected)!r}, got too many asynchronous events")
 
 
-def validate_hello(line: str, family: str, board: str, build: str) -> None:
+def validate_hello(
+    line: str,
+    family: str,
+    board: str,
+    build: str,
+    protocol_version: int = 6,
+) -> None:
     parts = line.split()
-    expected = ["HELLO", "5", family, board, build]
+    expected = ["HELLO", str(protocol_version), family, board, build]
     if parts[:5] != expected:
         raise RuntimeError(f"invalid HELLO: expected {' '.join(expected)!r}, got {line!r}")
     if len(parts) < 7:
@@ -109,11 +115,14 @@ def run_smoke(
     rejected_pins: list[int],
     build: str,
     exercise_actions: bool = False,
+    protocol_version: int = 6,
 ) -> None:
     if not valid_pins:
         raise RuntimeError("valid pins are required")
+    if protocol_version < 3 or protocol_version > 6:
+        raise RuntimeError("unsupported protocol version")
     write_line(device, "HELLO\n")
-    validate_hello(read_line(device), family, board, build)
+    validate_hello(read_line(device), family, board, build, protocol_version)
 
     revision = 1
     send_topology(device, revision, valid_pins, expect_ok=True)
@@ -130,10 +139,14 @@ def run_smoke(
 
     if exercise_actions:
         event_id = state_down_event(device)
-        write_line(device, f"PASTE {event_id} 1 2\n")
-        expect_tokens(device, ["DONE", str(event_id), "1"])
-        write_line(device, f"HOTKEY {event_id} 2 2 1 25\n")
-        expect_tokens(device, ["DONE", str(event_id), "2"])
+        run_id = 1 if protocol_version >= 6 else event_id
+        write_line(device, f"PASTE {run_id} 1 2\n")
+        expect_tokens(device, ["DONE", str(run_id), "1"])
+        if protocol_version >= 6:
+            write_line(device, f"CHORD {run_id} 2 2 1 1 25\n")
+        else:
+            write_line(device, f"HOTKEY {run_id} 2 2 1 25\n")
+        expect_tokens(device, ["DONE", str(run_id), "2"])
 
 
 def parse_pins(value: str) -> list[int]:
