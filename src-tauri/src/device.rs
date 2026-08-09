@@ -12,9 +12,9 @@ use crate::{
     paste::{Clock, PasteHandle, PasteReply, PasteRequest, SystemClock},
     profile::{ActionTrigger, DeviceProfile},
     protocol::{
-        ACTION_RUN_PROTOCOL_VERSION, ADVANCED_ACTION_PROTOCOL_VERSION, ActionSequence,
-        DeviceMessage, HelloCapabilities, InputState, OLED_PROTOCOL_VERSION, PhysicalInput,
-        format_paste_command, is_hello_line, parse_device, topology_commands, validate_hello,
+        ADVANCED_ACTION_PROTOCOL_VERSION, ActionSequence, DeviceMessage, HelloCapabilities,
+        InputState, OLED_PROTOCOL_VERSION, PhysicalInput, format_paste_command, is_hello_line,
+        parse_device, topology_commands, validate_hello,
     },
 };
 use serde::Serialize;
@@ -116,7 +116,6 @@ pub struct DeviceSession {
     revision: u32,
     configuring: Option<ConfigurationInFlight>,
     ready: bool,
-    next_run_id: u64,
     active: Option<ActionSequence>,
     active_snapshot: Option<Arc<RuntimeProfileSnapshot>>,
     active_context: Option<RuntimeEventContext>,
@@ -192,7 +191,6 @@ impl DeviceSession {
             revision: 0,
             configuring: None,
             ready: false,
-            next_run_id: 1,
             active: None,
             active_snapshot: None,
             active_context: None,
@@ -214,7 +212,6 @@ impl DeviceSession {
             revision: 0,
             configuring: None,
             ready: false,
-            next_run_id: 1,
             active: None,
             active_snapshot: None,
             active_context: None,
@@ -879,18 +876,8 @@ impl DeviceSession {
                 );
                 continue;
             }
-            let Some(run_id) = self.next_action_run_id(queued.event_id) else {
-                output.lines.push(format!("SKIP {}\n", queued.event_id));
-                output
-                    .completed_receive_sequences
-                    .push(queued.receive_sequence);
-                output
-                    .activities
-                    .push(RuntimeActivity::new("action_run_id_exhausted"));
-                continue;
-            };
             self.active = Some(ActionSequence::new(
-                run_id,
+                queued.event_id,
                 button,
                 ActionTrigger::Press,
                 actions,
@@ -902,27 +889,8 @@ impl DeviceSession {
         }
     }
 
-    fn uses_action_runs(&self) -> bool {
-        self.hello
-            .as_ref()
-            .is_some_and(|hello| hello.protocol >= ACTION_RUN_PROTOCOL_VERSION)
-    }
-
-    fn next_action_run_id(&mut self, legacy_event_id: u64) -> Option<u64> {
-        if !self.uses_action_runs() {
-            return (legacy_event_id != 0).then_some(legacy_event_id);
-        }
-        let run_id = self.next_run_id;
-        if run_id == 0 {
-            return None;
-        }
-        self.next_run_id = self.next_run_id.checked_add(1).unwrap_or(0);
-        Some(run_id)
-    }
-
     fn emit_active_step(&mut self, output: &mut SessionOutput) {
         let target_opener = Arc::clone(&self.target_opener);
-        let uses_action_runs = self.uses_action_runs();
         let Some(step) = self.active.as_mut().and_then(ActionSequence::next_step) else {
             return;
         };
@@ -944,32 +912,16 @@ impl DeviceSession {
                 return;
             }
             crate::profile::ButtonAction::Hotkey { .. }
-            | crate::profile::ButtonAction::Media { .. } => {
-                if uses_action_runs {
-                    step.command_v6(|_| Ok(()))
-                } else {
-                    step.command_legacy(|_| Ok(()))
-                }
-            }
+            | crate::profile::ButtonAction::Media { .. } => step.command_legacy(|_| Ok(())),
             crate::profile::ButtonAction::Delay { duration_ms } => {
                 output.action_timeout =
                     Some(ACTION_ACK_TIMEOUT + Duration::from_millis(u64::from(*duration_ms)));
-                if uses_action_runs {
-                    step.command_v6(|_| Ok(()))
-                } else {
-                    step.command_legacy(|_| Ok(()))
-                }
+                step.command_legacy(|_| Ok(()))
             }
             crate::profile::ButtonAction::Open { target } => target_opener
                 .open(target)
                 .map_err(|_| "open_target_failed".to_owned())
-                .and_then(|()| {
-                    if uses_action_runs {
-                        step.command_v6(|_| Ok(()))
-                    } else {
-                        step.command_legacy(|_| Ok(()))
-                    }
-                }),
+                .and_then(|()| step.command_legacy(|_| Ok(()))),
         };
         match result {
             Ok(line) => output.lines.push(line),
@@ -2434,12 +2386,12 @@ mod tests {
     }
 
     #[test]
-    fn protocol_v6_allocates_monotonic_runs_independent_of_input_events() {
+    fn protocol_v6_keeps_legacy_event_dispatch_until_session_integration() {
         let mut runtime = runtime_model();
         runtime.profile.actions.insert(
             "A".into(),
             TriggerActions::press(vec![ButtonAction::Hotkey {
-                keys: vec!["ctrl".into(), "a".into(), "b".into()],
+                keys: vec!["ctrl".into(), "a".into()],
             }]),
         );
         let mut session = DeviceSession::new(runtime);
@@ -2459,10 +2411,17 @@ mod tests {
             41,
             102,
         );
-        assert_eq!(first.lines, ["CHORD 1 1 1 1 2 4 5\n"]);
-        assert_eq!(first.activities[1].params["runId"], "1");
+        assert_eq!(first.lines, ["HOTKEY 41 1 1 1 4\n"]);
+        assert_eq!(first.activities[1].params["runId"], "41");
 
-        session.on_message_deferred(DeviceMessage::Done { run_id: 1, step: 1 }, 0, 103);
+        session.on_message_deferred(
+            DeviceMessage::Done {
+                run_id: 41,
+                step: 1,
+            },
+            0,
+            103,
+        );
         let second = session.on_message_deferred(
             DeviceMessage::State {
                 event_id: 99,
@@ -2472,8 +2431,8 @@ mod tests {
             99,
             104,
         );
-        assert_eq!(second.lines, ["CHORD 2 1 1 1 2 4 5\n"]);
-        assert_eq!(second.activities[1].params["runId"], "2");
+        assert_eq!(second.lines, ["HOTKEY 99 1 1 1 4\n"]);
+        assert_eq!(second.activities[1].params["runId"], "99");
     }
 
     #[test]

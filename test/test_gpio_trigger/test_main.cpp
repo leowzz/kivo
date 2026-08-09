@@ -697,6 +697,17 @@ void test_rejects_malformed_hotkey_response() {
   TEST_ASSERT_FALSE(parseHelperCommand("HOTKEY 42 1 1 10 165\n").has_value());
 }
 
+void test_accepts_at_most_254_byte_protocol_lines() {
+  const std::string command = "PASTE 1 1 1\n";
+  const auto at_limit = std::string(254 - command.size(), ' ') + command;
+  TEST_ASSERT_EQUAL_UINT32(254, at_limit.size());
+  TEST_ASSERT_TRUE(parseHelperCommand(at_limit).has_value());
+
+  const auto over_limit = std::string(255 - command.size(), ' ') + command;
+  TEST_ASSERT_EQUAL_UINT32(255, over_limit.size());
+  TEST_ASSERT_FALSE(parseHelperCommand(over_limit).has_value());
+}
+
 void test_parses_v6_chord_and_rejects_malformed_chords() {
   const auto chord = parseHelperCommand("CHORD 7 1 2 128 2 4 5\n");
   TEST_ASSERT_TRUE(chord.has_value());
@@ -878,6 +889,7 @@ int main(int, char **) {
   RUN_TEST(test_rejects_malformed_responses);
   RUN_TEST(test_parses_hotkey_response);
   RUN_TEST(test_rejects_malformed_hotkey_response);
+  RUN_TEST(test_accepts_at_most_254_byte_protocol_lines);
   RUN_TEST(test_parses_v6_chord_and_rejects_malformed_chords);
   RUN_TEST(test_v6_run_starts_on_step_one_and_is_independent_of_input_ids);
   RUN_TEST(test_v6_run_cancel_keepalive_and_expiry);

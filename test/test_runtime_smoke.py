@@ -248,7 +248,7 @@ def test_smoke_rejects_wrong_action_completion(done: bytes) -> None:
 
 
 @pytest.mark.parametrize("protocol_version", [3, 4, 5])
-def test_smoke_preserves_legacy_hello_fixtures(protocol_version: int) -> None:
+def test_smoke_preserves_legacy_event_id_action_exchange(protocol_version: int) -> None:
     device = FakeSerial(
         [
             (
@@ -258,6 +258,9 @@ def test_smoke_preserves_legacy_hello_fixtures(protocol_version: int) -> None:
             b"CONFIG_OK 1\n",
             b"LEARN_OK 2\n",
             b"LEARN_OK 2\n",
+            b"STATE 7 DIRECT 1 DOWN\n",
+            b"DONE 7 1\n",
+            b"DONE 7 2\n",
         ]
     )
 
@@ -269,4 +272,7 @@ def test_smoke_preserves_legacy_hello_fixtures(protocol_version: int) -> None:
         valid_pins=[1, 2],
         rejected_pins=[],
         protocol_version=protocol_version,
+        exercise_actions=True,
     )
+
+    assert device.writes[-2:] == [b"PASTE 7 1 2\n", b"HOTKEY 7 2 2 1 25\n"]

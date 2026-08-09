@@ -11,7 +11,6 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 pub const HOST_PROTOCOL_VERSION: u16 = 6;
 pub const OLED_PROTOCOL_VERSION: u16 = 4;
 pub const ADVANCED_ACTION_PROTOCOL_VERSION: u16 = 5;
-pub const ACTION_RUN_PROTOCOL_VERSION: u16 = 6;
 const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -94,7 +93,7 @@ pub fn validate_hello(
 }
 
 pub fn parse_device(line: &str) -> Option<DeviceMessage> {
-    if line.len() > 255 {
+    if line.len() >= 255 {
         return None;
     }
     if is_hello_line(line) {
@@ -406,6 +405,7 @@ impl ActionStep {
         }
     }
 
+    #[allow(dead_code)]
     pub fn command_v6(
         &self,
         copy: impl FnOnce(&str) -> Result<(), String>,
@@ -432,7 +432,7 @@ impl ActionStep {
                     command.push_str(&keycodes.join(" "));
                 }
                 command.push('\n');
-                if command.len() > 255 {
+                if command.len() >= 255 {
                     return Err("action command exceeds protocol line limit".into());
                 }
                 Ok(command)
@@ -799,6 +799,20 @@ mod tests {
             parse_device("DONE 9 2\n"),
             Some(DeviceMessage::Done { run_id: 9, step: 2 })
         );
+    }
+
+    #[test]
+    fn accepts_at_most_254_byte_protocol_lines() {
+        let at_limit = format!("CONFIG_ERROR 1 {}\n", "x".repeat(238));
+        assert_eq!(at_limit.len(), 254);
+        assert!(matches!(
+            parse_device(&at_limit),
+            Some(DeviceMessage::ConfigError { revision: 1, .. })
+        ));
+
+        let over_limit = format!("CONFIG_ERROR 1 {}\n", "x".repeat(239));
+        assert_eq!(over_limit.len(), 255);
+        assert!(parse_device(&over_limit).is_none());
     }
 
     #[test]

@@ -144,7 +144,7 @@ std::string formatDone(std::uint32_t runId, std::uint16_t step) {
 }
 
 std::optional<HelperCommand> parseHelperCommand(std::string_view line) {
-  if (line.size() > 255) return std::nullopt;
+  if (line.size() >= 255) return std::nullopt;
   trimLineEnd(line);
   const auto kind = takeToken(line);
   if (!kind.has_value()) return std::nullopt;
