@@ -13,8 +13,8 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicU64, Ordering},
-        mpsc::{self, SyncSender, TrySendError},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        mpsc::{self, Sender},
     },
     thread::{self, JoinHandle},
     time::{SystemTime, UNIX_EPOCH},
@@ -100,19 +100,31 @@ pub(crate) fn metrics_initialization_failure_detail(error: &rusqlite::Error) -> 
 }
 
 pub(crate) fn emit(entry: RuntimeLogEntry) {
-    let line = match serialize_entry(&entry) {
-        Ok(line) => line,
-        Err(error) => {
-            eprintln!("failed to serialize runtime log entry: {error}");
-            return;
-        }
-    };
+    if let Some(entry) = queued_entry(entry)
+        && let Some(dispatcher) = DISPATCHER.get()
+    {
+        let _ = dispatcher.try_enqueue(entry);
+    }
+}
 
-    if let Some(dispatcher) = DISPATCHER.get() {
-        let _ = dispatcher.try_enqueue(QueuedLogEntry {
+pub(crate) fn emit_lifecycle(entry: RuntimeLogEntry) {
+    if let Some(entry) = queued_entry(entry)
+        && let Some(dispatcher) = DISPATCHER.get()
+    {
+        let _ = dispatcher.enqueue_lifecycle(entry);
+    }
+}
+
+fn queued_entry(entry: RuntimeLogEntry) -> Option<QueuedLogEntry> {
+    match serialize_entry(&entry) {
+        Ok(line) => Some(QueuedLogEntry {
             level: entry.level,
             line,
-        });
+        }),
+        Err(error) => {
+            eprintln!("failed to serialize runtime log entry: {error}");
+            None
+        }
     }
 }
 
@@ -130,7 +142,10 @@ enum DispatchOutcome {
 }
 
 enum WorkerMessage {
-    Entry(QueuedLogEntry),
+    Entry {
+        entry: QueuedLogEntry,
+        normal_reserved: bool,
+    },
     Shutdown,
 }
 
@@ -156,17 +171,21 @@ impl LogSink for OfficialLogSink {
 }
 
 struct LogDispatcher {
-    sender: Mutex<Option<SyncSender<WorkerMessage>>>,
+    sender: Mutex<Option<Sender<WorkerMessage>>>,
     worker: Mutex<Option<JoinHandle<()>>>,
+    normal_capacity: usize,
+    normal_queued: Arc<AtomicUsize>,
     dropped_total: Arc<AtomicU64>,
     dropped_unreported: Arc<AtomicU64>,
 }
 
 impl LogDispatcher {
     fn start(capacity: usize, sink: impl LogSink) -> std::io::Result<Self> {
-        let (sender, receiver) = mpsc::sync_channel(capacity);
+        let (sender, receiver) = mpsc::channel();
+        let normal_queued = Arc::new(AtomicUsize::new(0));
         let dropped_total = Arc::new(AtomicU64::new(0));
         let dropped_unreported = Arc::new(AtomicU64::new(0));
+        let worker_normal_queued = Arc::clone(&normal_queued);
         let worker_dropped = Arc::clone(&dropped_unreported);
         let worker = thread::Builder::new()
             .name("runtime-log-writer".into())
@@ -174,7 +193,13 @@ impl LogDispatcher {
                 let mut sink = sink;
                 while let Ok(message) = receiver.recv() {
                     match message {
-                        WorkerMessage::Entry(entry) => {
+                        WorkerMessage::Entry {
+                            entry,
+                            normal_reserved,
+                        } => {
+                            if normal_reserved {
+                                worker_normal_queued.fetch_sub(1, Ordering::Release);
+                            }
                             sink.write(entry);
                             report_dropped_entries(&mut sink, &worker_dropped);
                         }
@@ -187,6 +212,8 @@ impl LogDispatcher {
         Ok(Self {
             sender: Mutex::new(Some(sender)),
             worker: Mutex::new(Some(worker)),
+            normal_capacity: capacity,
+            normal_queued,
             dropped_total,
             dropped_unreported,
         })
@@ -200,15 +227,46 @@ impl LogDispatcher {
         let Some(sender) = sender.as_ref() else {
             return DispatchOutcome::Stopped;
         };
-        match sender.try_send(WorkerMessage::Entry(entry)) {
-            Ok(()) => DispatchOutcome::Accepted,
-            Err(TrySendError::Full(_)) => {
-                self.dropped_total.fetch_add(1, Ordering::Relaxed);
-                self.dropped_unreported.fetch_add(1, Ordering::Relaxed);
-                DispatchOutcome::Dropped
-            }
-            Err(TrySendError::Disconnected(_)) => DispatchOutcome::Stopped,
+        if !self.reserve_normal_slot() {
+            self.dropped_total.fetch_add(1, Ordering::Relaxed);
+            self.dropped_unreported.fetch_add(1, Ordering::Relaxed);
+            return DispatchOutcome::Dropped;
         }
+        match sender.send(WorkerMessage::Entry {
+            entry,
+            normal_reserved: true,
+        }) {
+            Ok(()) => DispatchOutcome::Accepted,
+            Err(_) => {
+                self.normal_queued.fetch_sub(1, Ordering::Release);
+                DispatchOutcome::Stopped
+            }
+        }
+    }
+
+    fn enqueue_lifecycle(&self, entry: QueuedLogEntry) -> DispatchOutcome {
+        let sender = self
+            .sender
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(sender) = sender.as_ref() else {
+            return DispatchOutcome::Stopped;
+        };
+        match sender.send(WorkerMessage::Entry {
+            entry,
+            normal_reserved: false,
+        }) {
+            Ok(()) => DispatchOutcome::Accepted,
+            Err(_) => DispatchOutcome::Stopped,
+        }
+    }
+
+    fn reserve_normal_slot(&self) -> bool {
+        self.normal_queued
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
+                (queued < self.normal_capacity).then_some(queued + 1)
+            })
+            .is_ok()
     }
 
     #[cfg(test)]
@@ -216,13 +274,28 @@ impl LogDispatcher {
         self.dropped_total.load(Ordering::Relaxed)
     }
 
+    #[cfg(test)]
     fn shutdown(&self) {
+        self.finish(None);
+    }
+
+    fn shutdown_with_entry(&self, entry: QueuedLogEntry) {
+        self.finish(Some(entry));
+    }
+
+    fn finish(&self, final_entry: Option<QueuedLogEntry>) {
         let sender = self
             .sender
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take();
         if let Some(sender) = sender {
+            if let Some(entry) = final_entry {
+                let _ = sender.send(WorkerMessage::Entry {
+                    entry,
+                    normal_reserved: false,
+                });
+            }
             let _ = sender.send(WorkerMessage::Shutdown);
         }
         if let Some(worker) = self
@@ -262,9 +335,14 @@ fn current_timestamp_ms() -> u64 {
         .as_millis() as u64
 }
 
-pub(crate) fn shutdown() {
+pub(crate) fn shutdown_with_entry(entry: RuntimeLogEntry) {
+    let entry = queued_entry(entry);
     if let Some(dispatcher) = DISPATCHER.get() {
-        dispatcher.shutdown();
+        if let Some(entry) = entry {
+            dispatcher.shutdown_with_entry(entry);
+        } else {
+            dispatcher.finish(None);
+        }
     }
 }
 
@@ -367,8 +445,60 @@ impl<'a> From<&'a DeviceStatus> for DeviceLogSnapshot<'a> {
             latest_error_code: status
                 .latest_error
                 .as_ref()
-                .map(|error| error.code.as_str()),
+                .map(|error| stable_runtime_activity_code(&error.code)),
         }
+    }
+}
+
+fn stable_runtime_activity_code(code: &str) -> &'static str {
+    for (prefix, stable) in [
+        ("serial_open_failed:", "serial_open_failed"),
+        ("serial_handshake_failed:", "serial_handshake_failed"),
+        ("serial_read_failed:", "serial_read_failed"),
+        ("serial_write_failed:", "serial_write_failed"),
+        ("metrics_write_failed:", "metrics_write_failed"),
+        ("paste_submit_failed:", "paste_submit_failed"),
+    ] {
+        if code.starts_with(prefix) {
+            return stable;
+        }
+    }
+    match code {
+        "action_step_completed" => "action_step_completed",
+        "action_step_failed" => "action_step_failed",
+        "assignment_board_mismatch" => "assignment_board_mismatch",
+        "device_disconnected" => "device_disconnected",
+        "device_offline" => "device_offline",
+        "device_worker_stopped" => "device_worker_stopped",
+        "duplicate_identity" => "duplicate_identity",
+        "empty_action_list" => "empty_action_list",
+        "input_before_configuration" => "input_before_configuration",
+        "input_state" => "input_state",
+        "invalid_action_acknowledgement" => "invalid_action_acknowledgement",
+        "invalid_assignment" => "invalid_assignment",
+        "invalid_learning_target" => "invalid_learning_target",
+        "invalid_topology" => "invalid_topology",
+        "learning_input" => "learning_input",
+        "learning_ready" => "learning_ready",
+        "learning_session_active" => "learning_session_active",
+        "metrics_write_failed" => "metrics_write_failed",
+        "no_runtime_assignment" => "no_runtime_assignment",
+        "paste_coordinator_stopped" => "paste_coordinator_stopped",
+        "paste_grant_mismatch" => "paste_grant_mismatch",
+        "paste_submit_failed" => "paste_submit_failed",
+        "protocol_mismatch" => "protocol_mismatch",
+        "serial_handshake_failed" => "serial_handshake_failed",
+        "serial_handshake_timeout" => "serial_handshake_timeout",
+        "serial_open_failed" => "serial_open_failed",
+        "serial_read_failed" => "serial_read_failed",
+        "serial_write_failed" => "serial_write_failed",
+        "topology_active" => "topology_active",
+        "topology_cleared" => "topology_cleared",
+        "topology_rejected" => "topology_rejected",
+        "unexpected_action_acknowledgement" => "unexpected_action_acknowledgement",
+        "unexpected_paste_grant" => "unexpected_paste_grant",
+        "unmapped_input" => "unmapped_input",
+        _ => "runtime_error",
     }
 }
 
@@ -869,6 +999,10 @@ mod tests {
             dispatcher.try_enqueue(queued("newest")),
             DispatchOutcome::Dropped
         );
+        assert_eq!(
+            dispatcher.enqueue_lifecycle(queued("application_ready")),
+            DispatchOutcome::Accepted
+        );
         assert_eq!(dispatcher.dropped_count(), 1);
         release_tx.send(()).unwrap();
         dispatcher.shutdown();
@@ -885,6 +1019,7 @@ mod tests {
                 .any(|line| line.contains("runtime_log_entries_dropped"))
         );
         assert!(!lines.iter().any(|line| line == "newest"));
+        assert!(lines.iter().any(|line| line == "application_ready"));
     }
 
     #[test]
@@ -906,9 +1041,18 @@ mod tests {
                 DispatchOutcome::Accepted
             );
         }
-        dispatcher.shutdown();
+        dispatcher.shutdown_with_entry(queued("application_stopped"));
 
-        assert_eq!(entries.lock().unwrap().len(), 4);
+        let lines = entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .map(|entry| entry.line.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            lines,
+            ["one", "two", "three", "four", "application_stopped"]
+        );
         assert_eq!(*flush_count.lock().unwrap(), 1);
         assert_eq!(
             dispatcher.try_enqueue(queued("after")),
@@ -1064,6 +1208,8 @@ mod tests {
     fn device_log_inventory_uses_allowlisted_status_projections() {
         let device_name_secret = "Private desk owned by alice";
         let device_error_secret = "/Users/alice/private/device-error.txt";
+        let prefixed_code_secret = "/Users/alice/private/serial-device.txt";
+        let unknown_code_secret = "diagnostic_token_abc123";
         let candidate_error_secret = "/Users/alice/private/candidate-error.txt";
         let learning_secret = "private-learning-profile";
         let mut device = device_status(ConnectionDimension::Online);
@@ -1073,7 +1219,8 @@ mod tests {
             device_profile_id: "desk-profile".into(),
             hardware_profile_id: "desk-hardware".into(),
         });
-        let mut latest_error = RuntimeActivity::new("serial_open_failed");
+        let mut latest_error =
+            RuntimeActivity::new(format!("serial_open_failed: {prefixed_code_secret}"));
         latest_error
             .params
             .insert("rawError".into(), device_error_secret.into());
@@ -1091,9 +1238,13 @@ mod tests {
         candidate.latest_error = Some(candidate_error_secret.into());
 
         let mut inventory = DeviceLogInventory::default();
+        let mut unknown_error_device = device.clone();
+        unknown_error_device.latest_error = Some(RuntimeActivity::new(unknown_code_secret));
         let entries = inventory.observe(100, &[device], &[candidate]);
+        let unknown_error_entries = inventory.observe(200, &[unknown_error_device], &[]);
         let line = entries
             .iter()
+            .chain(&unknown_error_entries)
             .map(serialize_entry)
             .collect::<serde_json::Result<Vec<_>>>()
             .unwrap()
@@ -1136,6 +1287,10 @@ mod tests {
             .collect()
         );
         assert_eq!(device_context["latestErrorCode"], "serial_open_failed");
+        assert_eq!(
+            unknown_error_entries[0].context["current"]["latestErrorCode"],
+            "runtime_error"
+        );
         assert_eq!(device_context["learningActive"], true);
         assert_eq!(
             device_context["runtimeAssignment"],
@@ -1168,6 +1323,8 @@ mod tests {
         for secret in [
             device_name_secret,
             device_error_secret,
+            prefixed_code_secret,
+            unknown_code_secret,
             candidate_error_secret,
             learning_secret,
             "201",

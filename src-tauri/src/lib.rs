@@ -803,7 +803,7 @@ pub fn run() {
             if let Err(error) = runtime_log::install(app.handle(), &config_directory) {
                 eprintln!("failed to install runtime logger: {error}");
             }
-            runtime_log::emit(runtime_log::RuntimeLogEntry::new(
+            runtime_log::emit_lifecycle(runtime_log::RuntimeLogEntry::new(
                 now_ms(),
                 runtime_log::RuntimeLogLevel::Info,
                 "application_started",
@@ -912,7 +912,7 @@ pub fn run() {
                 scan_requested,
                 coordinator_thread: Mutex::new(Some(coordinator_thread)),
             });
-            runtime_log::emit(runtime_log::RuntimeLogEntry::new(
+            runtime_log::emit_lifecycle(runtime_log::RuntimeLogEntry::new(
                 now_ms(),
                 runtime_log::RuntimeLogLevel::Info,
                 "application_ready",
@@ -967,7 +967,7 @@ pub fn run() {
             }
         }
         tauri::RunEvent::ExitRequested { .. } => {
-            runtime_log::emit(runtime_log::RuntimeLogEntry::new(
+            runtime_log::emit_lifecycle(runtime_log::RuntimeLogEntry::new(
                 now_ms(),
                 runtime_log::RuntimeLogLevel::Info,
                 "application_exit_requested",
@@ -992,13 +992,12 @@ pub fn run() {
             if let Some(paste) = &state.paste {
                 paste.shutdown();
             }
-            runtime_log::emit(runtime_log::RuntimeLogEntry::new(
+            runtime_log::shutdown_with_entry(runtime_log::RuntimeLogEntry::new(
                 now_ms(),
                 runtime_log::RuntimeLogLevel::Info,
                 "application_stopped",
                 serde_json::json!({}),
             ));
-            runtime_log::shutdown();
         }
         _ => {}
     });
