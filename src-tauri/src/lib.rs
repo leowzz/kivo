@@ -6,6 +6,8 @@ mod model;
 mod paste;
 mod profile;
 mod protocol;
+#[allow(dead_code)] // Runtime event producers are connected in subsequent work.
+mod runtime_log;
 mod storage;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod tray;

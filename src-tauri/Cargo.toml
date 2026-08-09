@@ -20,6 +20,7 @@ nusb = "0.2.5"
 serialport = { version = "4.9", default-features = false }
 tauri = { version = "2.11.5", features = ["image-png", "tray-icon"] }
 tauri-plugin-dialog = "2.7.2"
+tauri-plugin-log = "2.9.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [
