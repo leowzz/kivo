@@ -752,6 +752,17 @@ impl Workspace {
                 return Err(restore_error(error, recovery));
             }
         };
+        if let Err(error) = activate_runtime_log_directory(&previous_directory, &data_directory) {
+            let recovery = recover_original_generation(
+                RestoreGenerationState::RestoredActive,
+                &data_directory,
+                &next_directory,
+                &previous_directory,
+                metrics,
+                operations,
+            );
+            return Err(restore_error(error, recovery));
+        }
         self.settings = restored.settings;
         self.profiles = restored.profiles;
         let _ = operations.remove_dir_all(&previous_directory);
@@ -988,6 +999,18 @@ fn remove_directory_if_exists(path: &Path) -> Result<(), AppError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(io_error("remove_staging_directory", path, error)),
     }
+}
+
+fn activate_runtime_log_directory(
+    previous_directory: &Path,
+    data_directory: &Path,
+) -> Result<(), AppError> {
+    let previous_log_directory = previous_directory.join("log");
+    if !previous_log_directory.exists() {
+        return Ok(());
+    }
+    fs::rename(&previous_log_directory, data_directory.join("log"))
+        .map_err(|error| io_error("activate_runtime_logs", &previous_log_directory, error))
 }
 
 #[derive(Clone, Copy)]
@@ -1319,6 +1342,8 @@ mod tests {
     };
     use std::{
         collections::VecDeque,
+        fs::OpenOptions,
+        io::Write,
         sync::atomic::{AtomicU64, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -1585,6 +1610,7 @@ mod tests {
     struct InjectedRestoreOperations {
         rename_failures: BTreeMap<(String, String), usize>,
         reopen_failures: VecDeque<bool>,
+        create_log_directory_before_reopen: bool,
     }
 
     impl InjectedRestoreOperations {
@@ -1595,6 +1621,11 @@ mod tests {
 
         fn fail_reopens(mut self, failures: impl IntoIterator<Item = bool>) -> Self {
             self.reopen_failures.extend(failures);
+            self
+        }
+
+        fn create_log_directory_before_reopen(mut self) -> Self {
+            self.create_log_directory_before_reopen = true;
             self
         }
     }
@@ -1623,6 +1654,12 @@ mod tests {
             metrics: &MetricsStore,
             path: &Path,
         ) -> Result<(), rusqlite::Error> {
+            if self.create_log_directory_before_reopen {
+                self.create_log_directory_before_reopen = false;
+                let log_directory = path.parent().unwrap().join("log");
+                fs::create_dir_all(&log_directory).unwrap();
+                fs::write(log_directory.join("blocker"), b"block log activation").unwrap();
+            }
             if self.reopen_failures.pop_front() == Some(true) {
                 return Err(rusqlite::Error::InvalidQuery);
             }
@@ -2274,6 +2311,88 @@ actions: {}
             restored_metrics.activity_logs[0].hardware_profile_id,
             "esp-primary"
         );
+    }
+
+    #[test]
+    fn restore_keeps_open_runtime_log_writes_at_the_active_log_path() {
+        let directory = TestDirectory::new();
+        let (backup, mut target, metrics, _, _) = restore_fixture(&directory);
+        let log_path = target.config_directory.join("data/log/kivo.log");
+        fs::create_dir_all(log_path.parent().unwrap()).unwrap();
+        let mut log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .unwrap();
+        log.write_all(b"before restore\n").unwrap();
+        log.flush().unwrap();
+
+        target.restore_backup(&backup, &metrics).unwrap();
+
+        log.write_all(b"after restore\n").unwrap();
+        log.flush().unwrap();
+
+        assert_eq!(
+            fs::read(&log_path).unwrap(),
+            b"before restore\nafter restore\n"
+        );
+        assert!(!target.config_directory.join("data.previous").exists());
+    }
+
+    #[test]
+    fn failed_restore_rollback_keeps_open_runtime_log_writes_at_the_active_log_path() {
+        let directory = TestDirectory::new();
+        let (backup, mut target, metrics, _, _) = restore_fixture(&directory);
+        let log_path = target.config_directory.join("data/log/kivo.log");
+        fs::create_dir_all(log_path.parent().unwrap()).unwrap();
+        let mut log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .unwrap();
+        log.write_all(b"before rollback\n").unwrap();
+        log.flush().unwrap();
+        let mut operations =
+            InjectedRestoreOperations::default().fail_rename("data.next", "data", 1);
+
+        let error = target
+            .restore_backup_with_operations(&backup, &metrics, &mut operations)
+            .unwrap_err();
+
+        assert_eq!(error.code, "activate_restore");
+        log.write_all(b"after rollback\n").unwrap();
+        log.flush().unwrap();
+        assert_eq!(
+            fs::read(&log_path).unwrap(),
+            b"before rollback\nafter rollback\n"
+        );
+        assert!(!target.config_directory.join("data.previous").exists());
+        assert!(!target.config_directory.join("data.next").exists());
+    }
+
+    #[test]
+    fn failed_runtime_log_activation_rolls_back_workspace_memory_and_disk() {
+        let directory = TestDirectory::new();
+        let (backup, mut target, metrics, original_settings, _) = restore_fixture(&directory);
+        let log_path = target.config_directory.join("data/log/kivo.log");
+        fs::create_dir_all(log_path.parent().unwrap()).unwrap();
+        fs::write(&log_path, b"original log\n").unwrap();
+        let mut operations =
+            InjectedRestoreOperations::default().create_log_directory_before_reopen();
+
+        let error = target
+            .restore_backup_with_operations(&backup, &metrics, &mut operations)
+            .unwrap_err();
+
+        assert_eq!(error.code, "activate_runtime_logs");
+        assert_eq!(target.settings, original_settings);
+        assert_eq!(
+            Workspace::load_existing(&target.config_directory)
+                .unwrap()
+                .settings,
+            original_settings
+        );
+        assert_eq!(fs::read(&log_path).unwrap(), b"original log\n");
     }
 
     #[test]
