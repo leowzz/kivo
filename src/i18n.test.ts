@@ -15,6 +15,12 @@ describe("i18n", () => {
     expect(t("zh-CN", "model.actionCount", { count: 2 })).toBe("2 项行为");
   });
 
+  test("includes translated action picker labels", () => {
+    expect(t("zh-CN", "behavior.trigger")).toBe("触发方式");
+    expect(t("en-US", "behavior.recordShortcut")).toBe("Record shortcut");
+    expect(t("en-US", "behavior.removeKey", { key: "A" })).toBe("Remove A");
+  });
+
   test("uses the approved device registry glossary without visible model terminology", () => {
     expect(t("zh-CN", "model.label")).toBe("设备配置");
     expect(t("zh-CN", "model.select")).toBe("当前编辑配置");

@@ -161,6 +161,26 @@ function canonicalOrdinaryToken(token: string) {
   return token;
 }
 
+/** Returns the canonical usage identity used by the picker for selection state. */
+export function canonicalHotkeyToken(token: string) {
+  const normalized = token.toLowerCase();
+  switch (normalized) {
+    case "primary":
+      return navigator.platform.includes("Mac") ? "left_cmd" : "left_ctrl";
+    case "cmd":
+      return "left_cmd";
+    case "ctrl":
+      return "left_ctrl";
+    case "alt":
+    case "option":
+      return "left_alt";
+    case "shift":
+      return "left_shift";
+    default:
+      return canonicalOrdinaryToken(normalized);
+  }
+}
+
 function modifierBit(token: string): number | null {
   switch (token) {
     case "primary": return navigator.platform.includes("Mac") ? 0x08 : 0x01;
