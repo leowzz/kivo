@@ -13,7 +13,7 @@ pub const OLED_PROTOCOL_VERSION: u16 = 4;
 pub const ADVANCED_ACTION_PROTOCOL_VERSION: u16 = 5;
 const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 3;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum PhysicalInput {
     Direct { gpio: u8 },

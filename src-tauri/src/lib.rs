@@ -10,6 +10,8 @@ mod runtime_log;
 mod storage;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod tray;
+#[allow(dead_code)]
+mod trigger;
 mod workspace;
 
 use coordinator::{
