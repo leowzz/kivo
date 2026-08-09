@@ -30,7 +30,25 @@ pub enum CreateDeviceProfileRequest {
 pub enum ButtonAction {
     Paste { text: String },
     Hotkey { keys: Vec<String> },
+    Delay { duration_ms: u32 },
+    Media { command: MediaCommand },
+    Open { target: String },
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaCommand {
+    PlayPause,
+    PreviousTrack,
+    NextTrack,
+    Stop,
+    VolumeUp,
+    VolumeDown,
+    Mute,
+}
+
+pub const MAX_DELAY_MS: u32 = 60_000;
+pub const MAX_OPEN_TARGET_LENGTH: usize = 2_048;
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -353,11 +371,39 @@ impl DeviceProfile {
                                 .with_param("detail", detail)
                         })?;
                     }
-                    ButtonAction::Paste { .. } => {}
+                    ButtonAction::Delay { duration_ms }
+                        if !(1..=MAX_DELAY_MS).contains(duration_ms) =>
+                    {
+                        return Err(AppError::new("invalid_delay")
+                            .with_param("button", button)
+                            .with_param("maximum", MAX_DELAY_MS.to_string()));
+                    }
+                    ButtonAction::Open { target }
+                        if target.trim().is_empty()
+                            || target.len() > MAX_OPEN_TARGET_LENGTH
+                            || target.contains('\0') =>
+                    {
+                        return Err(
+                            AppError::new("invalid_open_target").with_param("button", button)
+                        );
+                    }
+                    ButtonAction::Paste { .. }
+                    | ButtonAction::Delay { .. }
+                    | ButtonAction::Media { .. }
+                    | ButtonAction::Open { .. } => {}
                 }
             }
         }
         Ok(())
+    }
+
+    pub fn uses_advanced_actions(&self) -> bool {
+        self.actions.values().flatten().any(|action| {
+            matches!(
+                action,
+                ButtonAction::Delay { .. } | ButtonAction::Media { .. } | ButtonAction::Open { .. }
+            )
+        })
     }
 }
 
@@ -522,6 +568,39 @@ mod tests {
         assert!(change.host_mapping_changed);
         assert!(change.topology_hardware_profile_ids.is_empty());
         assert_eq!(change.device_profile_id, "red-phone-v1");
+    }
+
+    #[test]
+    fn validates_and_detects_advanced_actions() {
+        let mut profile = profile();
+        profile.actions.insert(
+            "UP".into(),
+            vec![
+                ButtonAction::Delay { duration_ms: 200 },
+                ButtonAction::Media {
+                    command: MediaCommand::Mute,
+                },
+                ButtonAction::Open {
+                    target: "https://example.com".into(),
+                },
+            ],
+        );
+
+        assert!(profile.validate().is_ok());
+        assert!(profile.uses_advanced_actions());
+
+        profile.actions.insert(
+            "UP".into(),
+            vec![ButtonAction::Delay {
+                duration_ms: MAX_DELAY_MS + 1,
+            }],
+        );
+        assert_eq!(profile.validate().unwrap_err().code, "invalid_delay");
+
+        profile
+            .actions
+            .insert("UP".into(), vec![ButtonAction::Open { target: " ".into() }]);
+        assert_eq!(profile.validate().unwrap_err().code, "invalid_open_target");
     }
 
     #[test]

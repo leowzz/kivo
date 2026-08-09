@@ -45,9 +45,24 @@ test("formats the backtick key as its symbol", () => {
   expect(formatHotkey(["backtick"])).toBe("`");
 });
 
+test("normalizes function, punctuation, and numpad keys", () => {
+  const event = (code: string) => ({
+    code,
+    metaKey: false,
+    shiftKey: false,
+    ctrlKey: false,
+    altKey: false,
+  } as KeyboardEvent);
+
+  expect(normalizeHotkey(event("F24"))).toEqual(["f24"]);
+  expect(normalizeHotkey(event("BracketLeft"))).toEqual(["left_bracket"]);
+  expect(normalizeHotkey(event("NumpadAdd"))).toEqual(["numpad_add"]);
+  expect(normalizeHotkey(event("Numpad0"))).toEqual(["numpad_0"]);
+});
+
 test("rejects unsupported keys", () => {
   expect(() => normalizeHotkey({
-    code: "NumpadAdd",
+    code: "IntlRo",
     metaKey: false,
     shiftKey: false,
     ctrlKey: false,

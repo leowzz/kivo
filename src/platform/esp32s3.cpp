@@ -2,12 +2,14 @@
 #include <USB.h>
 #include <USBCDC.h>
 #include <USBHIDKeyboard.h>
+#include <USBHIDConsumerControl.h>
 
 #include "platform/Platform.h"
 
 namespace {
 USBCDC usbSerial;
 USBHIDKeyboard keyboard;
+USBHIDConsumerControl consumerControl;
 }  // namespace
 
 namespace platform {
@@ -21,6 +23,7 @@ void begin() {
 
   usbSerial.begin(115200);
   keyboard.begin();
+  consumerControl.begin();
   USB.begin();
 }
 
@@ -42,6 +45,13 @@ bool sendHotkey(std::uint8_t modifiers, std::uint8_t keycode) {
   delay(10);
   keyboard.releaseAll();
   return true;
+}
+
+bool sendConsumerControl(std::uint16_t usage) {
+  const bool pressed = consumerControl.press(usage) > 0;
+  delay(10);
+  const bool released = consumerControl.release() > 0;
+  return pressed && released;
 }
 
 void configureDisplay(const std::optional<OledConfig> &) {}

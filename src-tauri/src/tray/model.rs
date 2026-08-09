@@ -7,7 +7,7 @@ use crate::{
     },
     hardware::DeviceId,
     model::ButtonDefinition,
-    profile::ButtonAction,
+    profile::{ButtonAction, MediaCommand},
     workspace::{AssignmentResolution, Language, Workspace},
 };
 
@@ -215,6 +215,27 @@ fn format_action(action: &ButtonAction, kind: SummaryKind) -> String {
             .map(|key| key_abbreviation(key))
             .collect::<Vec<_>>()
             .join(""),
+        ButtonAction::Delay { duration_ms } => format!("{duration_ms} ms"),
+        ButtonAction::Media { command } => match command {
+            MediaCommand::PlayPause => "Play/Pause",
+            MediaCommand::PreviousTrack => "Previous",
+            MediaCommand::NextTrack => "Next",
+            MediaCommand::Stop => "Stop",
+            MediaCommand::VolumeUp => "Volume +",
+            MediaCommand::VolumeDown => "Volume -",
+            MediaCommand::Mute => "Mute",
+        }
+        .into(),
+        ButtonAction::Open { target } => {
+            let limit = match kind {
+                SummaryKind::Primary => PRIMARY_PASTE_LIMIT,
+                SummaryKind::Detail => DETAIL_PASTE_LIMIT,
+            };
+            format!(
+                "Open {}",
+                truncate_chars(&collapse_whitespace(target), limit)
+            )
+        }
     }
 }
 
@@ -224,6 +245,7 @@ fn key_abbreviation(key: &str) -> String {
         "alt" | "option" => "⌥".into(),
         "ctrl" => "⌃".into(),
         "shift" => "⇧".into(),
+        "primary" => "⌘/Ctrl".into(),
         "enter" => "↩".into(),
         "tab" => "⇥".into(),
         "backspace" => "⌫".into(),

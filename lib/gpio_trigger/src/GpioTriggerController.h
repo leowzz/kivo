@@ -63,6 +63,7 @@ class GpioTriggerController {
                             std::uint16_t total, bool execute,
                             std::uint32_t nowMs);
   void expire(std::uint32_t nowMs);
+  bool keepPendingEventAlive(std::uint32_t eventId, std::uint32_t nowMs);
   bool hasPendingEvent() const;
   const RuntimeTopology &topology() const { return topology_; }
 
@@ -93,5 +94,5 @@ class GpioTriggerController {
   std::optional<std::uint32_t> learningRevision_;
   std::vector<std::uint8_t> learningPins_;
   std::uint32_t nextEventId_ = 1;
-  std::vector<std::optional<PendingEvent>> pendingEvents_;
+  std::vector<PendingEvent> pendingEvents_;
 };

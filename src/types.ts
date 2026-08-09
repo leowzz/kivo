@@ -3,7 +3,19 @@ export type EventLevel = "info" | "warning" | "error";
 
 export type ButtonAction =
   | { type: "paste"; text: string }
-  | { type: "hotkey"; keys: string[] };
+  | { type: "hotkey"; keys: string[] }
+  | { type: "delay"; duration_ms: number }
+  | { type: "media"; command: MediaCommand }
+  | { type: "open"; target: string };
+
+export type MediaCommand =
+  | "play_pause"
+  | "previous_track"
+  | "next_track"
+  | "stop"
+  | "volume_up"
+  | "volume_down"
+  | "mute";
 
 export interface ModelButton {
   id: string;

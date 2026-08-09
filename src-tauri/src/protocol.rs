@@ -1,13 +1,14 @@
 use crate::{
     hardware::{BoardProfile, board_by_id},
-    profile::{ButtonAction, HardwareProfile, InputSource},
+    profile::{ButtonAction, HardwareProfile, InputSource, MediaCommand},
     workspace::AppError,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-pub const HOST_PROTOCOL_VERSION: u16 = 4;
+pub const HOST_PROTOCOL_VERSION: u16 = 5;
 pub const OLED_PROTOCOL_VERSION: u16 = 4;
+pub const ADVANCED_ACTION_PROTOCOL_VERSION: u16 = 5;
 const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -376,6 +377,21 @@ impl ActionStep {
                     self.event_id, self.step, self.total
                 ))
             }
+            ButtonAction::Delay { duration_ms } => Ok(format!(
+                "DELAY {} {} {} {duration_ms}\n",
+                self.event_id, self.step, self.total
+            )),
+            ButtonAction::Media { command } => Ok(format!(
+                "MEDIA {} {} {} {}\n",
+                self.event_id,
+                self.step,
+                self.total,
+                media_usage(*command)
+            )),
+            ButtonAction::Open { .. } => Ok(format!(
+                "HOST {} {} {}\n",
+                self.event_id, self.step, self.total
+            )),
         }
     }
 }
@@ -468,6 +484,8 @@ pub fn encode_hotkey(keys: &[String]) -> Result<(u8, u8), String> {
     for key in keys {
         let key = key.to_ascii_lowercase();
         let modifier = match key.as_str() {
+            "primary" if cfg!(target_os = "macos") => Some(0x08),
+            "primary" => Some(0x01),
             "ctrl" => Some(0x01),
             "shift" => Some(0x02),
             "alt" | "option" => Some(0x04),
@@ -481,6 +499,22 @@ pub fn encode_hotkey(keys: &[String]) -> Result<(u8, u8), String> {
             modifiers |= modifier;
             continue;
         }
+        let function_key = key
+            .strip_prefix('f')
+            .and_then(|number| number.parse::<u8>().ok())
+            .and_then(|number| match number {
+                1..=12 => Some(0x3a + number - 1),
+                13..=24 => Some(0x68 + number - 13),
+                _ => None,
+            });
+        let numpad_digit = key
+            .strip_prefix("numpad_")
+            .and_then(|number| number.parse::<u8>().ok())
+            .and_then(|number| match number {
+                1..=9 => Some(0x59 + number - 1),
+                0 => Some(0x62),
+                _ => None,
+            });
         let code = match key.as_bytes() {
             [letter @ b'a'..=b'z'] => letter - b'a' + 0x04,
             [digit @ b'1'..=b'9'] => digit - b'1' + 0x1e,
@@ -490,7 +524,22 @@ pub fn encode_hotkey(keys: &[String]) -> Result<(u8, u8), String> {
             b"backspace" => 0x2a,
             b"tab" => 0x2b,
             b"space" => 0x2c,
+            b"minus" => 0x2d,
+            b"equal" => 0x2e,
+            b"left_bracket" => 0x2f,
+            b"right_bracket" => 0x30,
+            b"backslash" => 0x31,
+            b"semicolon" => 0x33,
+            b"quote" => 0x34,
             b"backtick" => 0x35,
+            b"comma" => 0x36,
+            b"period" => 0x37,
+            b"slash" => 0x38,
+            b"caps_lock" => 0x39,
+            b"print_screen" => 0x46,
+            b"scroll_lock" => 0x47,
+            b"pause" => 0x48,
+            b"insert" => 0x49,
             b"home" => 0x4a,
             b"pageup" | b"page_up" => 0x4b,
             b"delete" => 0x4c,
@@ -500,6 +549,17 @@ pub fn encode_hotkey(keys: &[String]) -> Result<(u8, u8), String> {
             b"left" => 0x50,
             b"down" => 0x51,
             b"up" => 0x52,
+            b"num_lock" => 0x53,
+            b"numpad_divide" => 0x54,
+            b"numpad_multiply" => 0x55,
+            b"numpad_subtract" => 0x56,
+            b"numpad_add" => 0x57,
+            b"numpad_enter" => 0x58,
+            b"numpad_decimal" => 0x63,
+            b"application" => 0x65,
+            b"numpad_equal" => 0x67,
+            _ if function_key.is_some() => function_key.unwrap(),
+            _ if numpad_digit.is_some() => numpad_digit.unwrap(),
             _ => return Err(format!("unknown key {key}")),
         };
         if keycode.replace(code).is_some() {
@@ -509,6 +569,18 @@ pub fn encode_hotkey(keys: &[String]) -> Result<(u8, u8), String> {
     keycode
         .map(|keycode| (modifiers, keycode))
         .ok_or_else(|| "hotkey must have exactly one ordinary key".into())
+}
+
+pub fn media_usage(command: MediaCommand) -> u16 {
+    match command {
+        MediaCommand::PlayPause => 0x00cd,
+        MediaCommand::PreviousTrack => 0x00b6,
+        MediaCommand::NextTrack => 0x00b5,
+        MediaCommand::Stop => 0x00b7,
+        MediaCommand::VolumeUp => 0x00e9,
+        MediaCommand::VolumeDown => 0x00ea,
+        MediaCommand::Mute => 0x00e2,
+    }
 }
 
 #[cfg(test)]
@@ -753,6 +825,66 @@ mod tests {
         assert!(sequence.next_step().is_none());
         sequence.acknowledge(9, 1).unwrap();
         assert_eq!(sequence.next_step().unwrap().step, 2);
+    }
+
+    #[test]
+    fn encodes_function_punctuation_and_numpad_keys() {
+        assert_eq!(encode_hotkey(&["f1".into()]).unwrap(), (0, 0x3a));
+        assert_eq!(encode_hotkey(&["f24".into()]).unwrap(), (0, 0x73));
+        assert_eq!(
+            encode_hotkey(&["shift".into(), "left_bracket".into()]).unwrap(),
+            (0x02, 0x2f)
+        );
+        assert_eq!(encode_hotkey(&["numpad_0".into()]).unwrap(), (0, 0x62));
+        assert_eq!(encode_hotkey(&["numpad_add".into()]).unwrap(), (0, 0x57));
+        assert_eq!(encode_hotkey(&["print_screen".into()]).unwrap(), (0, 0x46));
+    }
+
+    #[test]
+    fn primary_modifier_resolves_for_the_host_platform() {
+        let expected = if cfg!(target_os = "macos") {
+            0x08
+        } else {
+            0x01
+        };
+        assert_eq!(
+            encode_hotkey(&["primary".into(), "v".into()]).unwrap(),
+            (expected, 0x19)
+        );
+    }
+
+    #[test]
+    fn formats_advanced_action_commands() {
+        let step = |action| ActionStep {
+            event_id: 12,
+            button: "A".into(),
+            step: 2,
+            total: 4,
+            action,
+        };
+
+        assert_eq!(
+            step(ButtonAction::Delay { duration_ms: 250 })
+                .command(|_| Ok(()))
+                .unwrap(),
+            "DELAY 12 2 4 250\n"
+        );
+        assert_eq!(
+            step(ButtonAction::Media {
+                command: MediaCommand::PlayPause,
+            })
+            .command(|_| Ok(()))
+            .unwrap(),
+            "MEDIA 12 2 4 205\n"
+        );
+        assert_eq!(
+            step(ButtonAction::Open {
+                target: "https://example.com".into(),
+            })
+            .command(|_| Ok(()))
+            .unwrap(),
+            "HOST 12 2 4\n"
+        );
     }
 
     #[test]

@@ -1866,6 +1866,60 @@ mod tests {
     }
 
     #[test]
+    fn live_update_save_sends_action_only_snapshot_to_assigned_workers() {
+        let directory = TestDirectory::new();
+        let mut state = product_state(&directory.0, vec![product_profile()]);
+        let launcher = Arc::new(SaveLauncher::default());
+        let mut coordinator = RuntimeCoordinator::new(
+            Arc::new(SaveEnumerator),
+            launcher.clone(),
+            Arc::clone(&state.workspace),
+        );
+        coordinator.scan_once().unwrap();
+        coordinator.drain_worker_events();
+        let device_id =
+            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
+                .unwrap();
+        {
+            let mut workspace = state.workspace.write().unwrap();
+            workspace
+                .set_assignment(
+                    &device_id,
+                    workspace::RuntimeAssignment {
+                        device_profile_id: "red-phone-v1".into(),
+                        hardware_profile_id: "esp-primary".into(),
+                    },
+                )
+                .unwrap();
+        }
+        coordinator.sync_profiles();
+        launcher.commands.lock().unwrap().clear();
+        state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
+        let mut updated = product_profile();
+        updated.actions.insert(
+            "UP".into(),
+            vec![ButtonAction::Paste {
+                text: "online paste".into(),
+            }],
+        );
+
+        save_profile_inner(&state, updated).unwrap();
+
+        let commands = launcher.commands.lock().unwrap();
+        let [WorkerCommand::UpdateSnapshot(Some(snapshot))] =
+            commands.get(&device_id).unwrap().as_slice()
+        else {
+            panic!("expected one action-only snapshot update");
+        };
+        assert_eq!(
+            snapshot.profile.actions.get("UP"),
+            Some(&vec![ButtonAction::Paste {
+                text: "online paste".into(),
+            }])
+        );
+    }
+
+    #[test]
     fn workspace_command_saves_only_editor_preferences() {
         let directory = TestDirectory::new();
         let state = product_state(&directory.0, vec![product_profile()]);

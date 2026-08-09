@@ -5,6 +5,22 @@
 
 namespace {
 constexpr std::size_t kMaxProtocolPinCount = 23;
+constexpr std::uint32_t kMaxDelayMs = 60000;
+
+bool isSupportedConsumerUsage(std::uint32_t usage) {
+  switch (usage) {
+    case 0x00B5:
+    case 0x00B6:
+    case 0x00B7:
+    case 0x00CD:
+    case 0x00E2:
+    case 0x00E9:
+    case 0x00EA:
+      return true;
+    default:
+      return false;
+  }
+}
 
 std::optional<std::uint32_t> parseNumber(std::string_view value) {
   if (value.empty()) return std::nullopt;
@@ -216,21 +232,46 @@ std::optional<HelperCommand> parseHelperCommand(std::string_view line) {
     command.eventId = *eventId;
     return command;
   }
-  if (*kind != "PASTE" && *kind != "HOTKEY") return std::nullopt;
+  if (*kind != "PASTE" && *kind != "HOTKEY" && *kind != "DELAY" &&
+      *kind != "MEDIA" && *kind != "HOST") {
+    return std::nullopt;
+  }
   const auto step = takeNumber(line);
   const auto total = takeNumber(line);
   if (!step.has_value() || !total.has_value() || *step == 0 || *total == 0 ||
       *step > *total || *total > std::numeric_limits<std::uint16_t>::max()) {
     return std::nullopt;
   }
-  HelperCommand command{*kind == "PASTE" ? HelperCommandKind::Paste
-                                          : HelperCommandKind::Hotkey};
+  HelperCommandKind commandKind = HelperCommandKind::Host;
+  if (*kind == "PASTE") commandKind = HelperCommandKind::Paste;
+  if (*kind == "HOTKEY") commandKind = HelperCommandKind::Hotkey;
+  if (*kind == "DELAY") commandKind = HelperCommandKind::Delay;
+  if (*kind == "MEDIA") commandKind = HelperCommandKind::Media;
+  HelperCommand command{commandKind};
   command.eventId = *eventId;
   command.step = static_cast<std::uint16_t>(*step);
   command.total = static_cast<std::uint16_t>(*total);
-  if (*kind == "PASTE") {
+  if (*kind == "PASTE" || *kind == "HOST") {
     return takeToken(line).has_value() ? std::nullopt
                                        : std::optional<HelperCommand>{command};
+  }
+  if (*kind == "DELAY") {
+    const auto duration = takeNumber(line);
+    if (!duration.has_value() || *duration == 0 || *duration > kMaxDelayMs ||
+        takeToken(line).has_value()) {
+      return std::nullopt;
+    }
+    command.durationMs = *duration;
+    return command;
+  }
+  if (*kind == "MEDIA") {
+    const auto usage = takeNumber(line);
+    if (!usage.has_value() || !isSupportedConsumerUsage(*usage) ||
+        takeToken(line).has_value()) {
+      return std::nullopt;
+    }
+    command.consumerUsage = static_cast<std::uint16_t>(*usage);
+    return command;
   }
   const auto mask = takeNumber(line);
   const auto keycode = takeNumber(line);

@@ -1,6 +1,5 @@
 #include "StandaloneDebugTopology.h"
 
-#include <algorithm>
 #include <array>
 
 namespace {
@@ -22,18 +21,4 @@ std::optional<RuntimeTopology> makeRp2040StandaloneDebugTopology(
     return std::nullopt;
   }
   return builder.commit(kRevision);
-}
-
-bool acceptsRp2040StandaloneHostTopology(const RuntimeTopology &topology) {
-  if (topology.directs.empty() && topology.matrices.empty() &&
-      !topology.oled.has_value()) {
-    return true;
-  }
-  return topology.debounceMs == kDebounceMs && topology.directs.size() == 1 &&
-         topology.directs[0].index == 0 &&
-         topology.directs[0].pins.size() == kInputPins.size() &&
-         std::equal(topology.directs[0].pins.begin(),
-                    topology.directs[0].pins.end(), kInputPins.begin()) &&
-         topology.matrices.empty() && topology.oled.has_value() &&
-         topology.oled->sda == kOled.sda && topology.oled->scl == kOled.scl;
 }

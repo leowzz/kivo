@@ -95,34 +95,6 @@ void test_rp2040_standalone_debug_topology_matches_keyboard_wiring() {
       makeRp2040StandaloneDebugTopology(kLuatOsEsp32S3Aio).has_value());
 }
 
-void test_rp2040_standalone_debug_accepts_only_matching_host_topology() {
-  const auto configured =
-      makeRp2040StandaloneDebugTopology(kVccGndYdRp2040);
-  TEST_ASSERT_TRUE(configured.has_value());
-  TEST_ASSERT_TRUE(acceptsRp2040StandaloneHostTopology(*configured));
-
-  auto differentRevision = *configured;
-  differentRevision.revision = 42;
-  TEST_ASSERT_TRUE(acceptsRp2040StandaloneHostTopology(differentRevision));
-
-  RuntimeTopology empty;
-  empty.revision = 43;
-  empty.debounceMs = 1000;
-  TEST_ASSERT_TRUE(acceptsRp2040StandaloneHostTopology(empty));
-
-  auto differentDebounce = *configured;
-  differentDebounce.debounceMs = 31;
-  TEST_ASSERT_FALSE(acceptsRp2040StandaloneHostTopology(differentDebounce));
-
-  auto missingInput = *configured;
-  missingInput.directs[0].pins.pop_back();
-  TEST_ASSERT_FALSE(acceptsRp2040StandaloneHostTopology(missingInput));
-
-  auto missingOled = *configured;
-  missingOled.oled.reset();
-  TEST_ASSERT_FALSE(acceptsRp2040StandaloneHostTopology(missingOled));
-}
-
 void test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match() {
   TEST_ASSERT_EQUAL(platform::Rp2040OledBus::I2c0,
                     platform::selectRp2040OledBus(28, 29));
@@ -141,9 +113,9 @@ void test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins() {
                     platform::selectRp2040OledBus(5, 6));
 }
 
-void test_formats_protocol_v4_hello_with_board_and_build() {
+void test_formats_protocol_v5_hello_with_board_and_build() {
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 4 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 27 "
+      "HELLO 5 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 27 "
       "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 26 "
       "27 28 29\n",
       formatHello(kVccGndYdRp2040, "0.1.0+gabc1234").c_str());
@@ -310,6 +282,20 @@ void test_parses_learning_and_ordered_action_commands() {
   TEST_ASSERT_EQUAL(HelperCommandKind::Hotkey, hotkey->kind);
   TEST_ASSERT_EQUAL_UINT8(40, hotkey->keycode);
 
+  const auto delay = parseHelperCommand("DELAY 10 1 4 60000\n");
+  TEST_ASSERT_TRUE(delay.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::Delay, delay->kind);
+  TEST_ASSERT_EQUAL_UINT32(60000, delay->durationMs);
+
+  const auto media = parseHelperCommand("MEDIA 10 2 4 205\n");
+  TEST_ASSERT_TRUE(media.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::Media, media->kind);
+  TEST_ASSERT_EQUAL_UINT16(205, media->consumerUsage);
+
+  const auto host = parseHelperCommand("HOST 10 3 4\n");
+  TEST_ASSERT_TRUE(host.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::Host, host->kind);
+
   const auto skip = parseHelperCommand("SKIP 9\n");
   TEST_ASSERT_TRUE(skip.has_value());
   TEST_ASSERT_EQUAL(HelperCommandKind::Skip, skip->kind);
@@ -330,6 +316,10 @@ void test_rejects_malformed_runtime_commands() {
       parseHelperCommand("CONFIG_OLED 3 4 5 trailing\n").has_value());
   TEST_ASSERT_FALSE(parseHelperCommand("PASTE 9 0 2\n").has_value());
   TEST_ASSERT_FALSE(parseHelperCommand("HOTKEY 9 2 1 0 40\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("DELAY 9 1 1 0\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("DELAY 9 1 1 60001\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("MEDIA 9 1 1 1\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("HOST 9 1 1 trailing\n").has_value());
   TEST_ASSERT_FALSE(parseHelperCommand(std::string(256, 'x')).has_value());
 }
 
@@ -348,6 +338,42 @@ void test_action_steps_are_strictly_ordered() {
   TEST_ASSERT_TRUE(controller.hasPendingEvent());
   TEST_ASSERT_EQUAL(ResponseAction::Execute,
                     controller.acceptStep(event->id, 2, 2, true, 2039));
+  TEST_ASSERT_FALSE(controller.hasPendingEvent());
+}
+
+void test_long_delay_can_keep_a_pending_action_sequence_alive() {
+  auto controller = directController(0);
+  controller.updatePin(6, false, 0);
+  const auto event = controller.updatePin(6, false, 30);
+  TEST_ASSERT_TRUE(event.has_value());
+  TEST_ASSERT_EQUAL(ResponseAction::Execute,
+                    controller.acceptStep(event->id, 1, 2, true, 40));
+
+  TEST_ASSERT_TRUE(controller.keepPendingEventAlive(event->id, 2000));
+  controller.expire(3999);
+  TEST_ASSERT_TRUE(controller.hasPendingEvent());
+  controller.expire(4000);
+  TEST_ASSERT_FALSE(controller.hasPendingEvent());
+}
+
+void test_repeated_same_input_keeps_both_pending_event_ids() {
+  auto controller = directController(0);
+  controller.updatePin(6, false, 0);
+  const auto first = controller.updatePin(6, false, 30);
+  TEST_ASSERT_TRUE(first.has_value());
+
+  controller.updatePin(6, true, 40);
+  controller.updatePin(6, true, 70);
+  controller.updatePin(6, false, 80);
+  const auto second = controller.updatePin(6, false, 110);
+  TEST_ASSERT_TRUE(second.has_value());
+  TEST_ASSERT_NOT_EQUAL(first->id, second->id);
+
+  TEST_ASSERT_EQUAL(ResponseAction::Execute,
+                    controller.acceptStep(first->id, 1, 1, true, 120));
+  TEST_ASSERT_TRUE(controller.hasPendingEvent());
+  TEST_ASSERT_EQUAL(ResponseAction::Execute,
+                    controller.acceptStep(second->id, 1, 1, true, 121));
   TEST_ASSERT_FALSE(controller.hasPendingEvent());
 }
 
@@ -423,7 +449,7 @@ void test_display_status_frames_have_two_sixteen_character_status_lines() {
 
 void test_standalone_debug_display_does_not_depend_on_usb_state() {
   DisplayStatusModel status;
-  status.setStandaloneDebug();
+  status.setStandaloneDebug(true);
   status.setReady(18);
 
   TEST_ASSERT_EQUAL_STRING("KIVO GPIO DEBUG ",
@@ -433,6 +459,18 @@ void test_standalone_debug_display_does_not_depend_on_usb_state() {
                            status.frame().lines[0].c_str());
   TEST_ASSERT_EQUAL_STRING("READY    18 KEYS",
                            status.frame().lines[1].c_str());
+}
+
+void test_standalone_debug_display_returns_to_managed_usb_status() {
+  DisplayStatusModel status;
+  status.setStandaloneDebug(true);
+  status.setUsbConnected(true);
+  status.setReady(18);
+
+  status.setStandaloneDebug(false);
+
+  TEST_ASSERT_EQUAL_STRING("KIVO      USB ON",
+                           status.frame().lines[0].c_str());
 }
 
 void test_display_status_formats_last_direct_and_contact_edges() {
@@ -733,6 +771,28 @@ void test_hid_hotkey_waits_for_press_and_release_report_slots() {
   TEST_ASSERT_EQUAL_UINT8(0, reports[1].second);
 }
 
+void test_hid_consumer_control_waits_for_press_and_release_report_slots() {
+  const bool readiness[] = {false, true, false, true};
+  std::size_t readinessIndex = 0;
+  std::vector<std::uint16_t> reports;
+  std::size_t pauses = 0;
+
+  const bool sent = platform::transmitConsumerReports(
+      0x00CD, 3, [&]() { return readiness[readinessIndex++]; },
+      [&](std::uint16_t usage) {
+        reports.push_back(usage);
+        return true;
+      },
+      [&]() { ++pauses; });
+
+  TEST_ASSERT_TRUE(sent);
+  TEST_ASSERT_EQUAL_UINT32(4, readinessIndex);
+  TEST_ASSERT_EQUAL_UINT32(2, pauses);
+  TEST_ASSERT_EQUAL_UINT32(2, reports.size());
+  TEST_ASSERT_EQUAL_UINT16(0x00CD, reports[0]);
+  TEST_ASSERT_EQUAL_UINT16(0, reports[1]);
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_commits_complete_matrix_topology_atomically);
@@ -740,10 +800,9 @@ int main(int, char **) {
   RUN_TEST(test_board_profiles_enforce_exact_safe_pins);
   RUN_TEST(test_board_profiles_report_oled_capability);
   RUN_TEST(test_rp2040_standalone_debug_topology_matches_keyboard_wiring);
-  RUN_TEST(test_rp2040_standalone_debug_accepts_only_matching_host_topology);
   RUN_TEST(test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match);
   RUN_TEST(test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins);
-  RUN_TEST(test_formats_protocol_v4_hello_with_board_and_build);
+  RUN_TEST(test_formats_protocol_v5_hello_with_board_and_build);
   RUN_TEST(test_rejects_empty_firmware_build_id);
   RUN_TEST(test_rejects_whitespace_in_firmware_build_id);
   RUN_TEST(test_contact_edge_reports_unordered_pair_once_after_debounce);
@@ -756,11 +815,14 @@ int main(int, char **) {
   RUN_TEST(test_parses_learning_and_ordered_action_commands);
   RUN_TEST(test_rejects_malformed_runtime_commands);
   RUN_TEST(test_action_steps_are_strictly_ordered);
+  RUN_TEST(test_long_delay_can_keep_a_pending_action_sequence_alive);
+  RUN_TEST(test_repeated_same_input_keeps_both_pending_event_ids);
   RUN_TEST(test_learning_reports_contact_and_restores_runtime_topology);
   RUN_TEST(test_rp2040_learning_accepts_gpio29_and_rejects_gpio23);
   RUN_TEST(test_learning_rejects_active_oled_pins);
   RUN_TEST(test_display_status_frames_have_two_sixteen_character_status_lines);
   RUN_TEST(test_standalone_debug_display_does_not_depend_on_usb_state);
+  RUN_TEST(test_standalone_debug_display_returns_to_managed_usb_status);
   RUN_TEST(test_display_status_formats_last_direct_and_contact_edges);
   RUN_TEST(test_display_status_can_clear_stale_input_activity);
   RUN_TEST(test_suppresses_new_contact_that_closes_a_ghost_cycle);
@@ -782,5 +844,6 @@ int main(int, char **) {
   RUN_TEST(test_matching_hotkey_response_requests_execution);
   RUN_TEST(test_matching_skip_response_clears_without_keypress);
   RUN_TEST(test_hid_hotkey_waits_for_press_and_release_report_slots);
+  RUN_TEST(test_hid_consumer_control_waits_for_press_and_release_report_slots);
   return UNITY_END();
 }

@@ -1042,4 +1042,17 @@ fn four_concurrent_devices_keep_runtime_and_global_paste_isolated() {
                     && status.runtime == RuntimeDimension::Ready
             })
     );
+
+    // A release event must not cancel the timeout for an unacknowledged action.
+    // Once that action times out, a later paste from the same device can proceed.
+    endpoints["RP-B"].emit("STATE 260 DIRECT 12 DOWN\n");
+    wait_for_configured_hotkey_action_count(&mut coordinator, &transports, 11);
+    endpoints["RP-B"].emit("STATE 261 DIRECT 12 UP\n");
+    wait_for_input_event(&mut coordinator, "RP-B");
+    endpoints["RP-B"].emit("STATE 262 DIRECT 13 DOWN\n");
+    wait_for_input_event(&mut coordinator, "RP-B");
+    clock.advance(Duration::from_secs(2));
+    wait_for_paste_action_count(&mut coordinator, &transports, 5);
+    assert_eq!(clipboard.writes().last().unwrap(), "paste-profile-rp-b");
+    endpoints["RP-B"].emit("DONE 262 1\n");
 }

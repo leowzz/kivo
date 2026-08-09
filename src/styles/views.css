@@ -90,12 +90,13 @@
 .icon-row { display: flex; align-items: center; gap: 2px; }
 .field-stack { display: grid; gap: 6px; padding: 11px; color: var(--gray-10); font-size: var(--text-11); }
 .field-stack textarea { width: 100%; resize: vertical; min-height: 80px; padding: 8px; color: var(--gray-12); font-size: var(--text-13); line-height: 1.5; }
+.field-stack input, .field-stack select { width: 100%; min-width: 0; height: 34px; padding: 0 8px; }
 .field-error { color: var(--red-text); }
 .hotkey-field { display: grid; grid-template-columns: 1fr auto; gap: 7px 10px; align-items: center; padding: 11px; }
 .hotkey-field > span { color: var(--gray-10); font-size: var(--text-11); }
 .hotkey-field output { grid-column: 1 / -1; min-height: 34px; display: flex; align-items: center; border: 1px solid var(--border-default); border-radius: var(--radius-6); padding: 0 9px; color: var(--gray-12); background: var(--gray-2); font-size: var(--text-12); font-variant-numeric: tabular-nums; }
 .hotkey-manual { grid-column: 1 / -1; display: grid; gap: 7px; }
-.hotkey-modifiers { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.hotkey-modifiers { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
 .hotkey-modifiers label { min-height: 30px; display: flex; align-items: center; justify-content: center; gap: 4px; border: 1px solid var(--border-default); border-radius: var(--radius-6); color: var(--gray-11); font-size: var(--text-11); }
 .hotkey-modifiers input { margin: 0; }
 .hotkey-manual select { width: 100%; min-width: 0; height: 32px; padding: 0 7px; }
@@ -106,6 +107,11 @@
 .add-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: var(--space-12); border-top: 1px solid var(--border-subtle); background: var(--bg-app); }
 .add-actions button { border-style: dashed; border-color: var(--border-strong); box-shadow: none; color: var(--gray-10); background: transparent; }
 .add-actions button:hover { border-color: var(--green-7); border-style: dashed; color: var(--green-11); background: var(--green-1); box-shadow: none; }
+
+@media (max-width: 980px) {
+  .add-actions { grid-auto-flow: column; grid-auto-columns: minmax(126px, 1fr); grid-template-columns: none; overflow-x: auto; }
+  .add-actions button { white-space: nowrap; }
+}
 
 @media (max-width: 680px) {
   .keypad-stage { padding: 20px 14px; }

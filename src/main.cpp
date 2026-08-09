@@ -1,6 +1,7 @@
 #include <Arduino.h>
 
 #include <string>
+#include <optional>
 #include <vector>
 
 #include "DisplayStatus.h"
@@ -22,9 +23,17 @@ ResponseLineBuffer responseLines(kMaxResponseLineLength);
 TopologyBuilder topologyBuilder(platform::boardProfile());
 DisplayStatusModel displayStatus;
 bool helperConnected = false;
-bool standaloneDebugMode = false;
 bool standaloneDisplayPending = false;
 std::uint32_t standaloneDisplayStartedMs = 0;
+
+struct PendingDelay {
+  std::uint32_t eventId;
+  std::uint16_t step;
+  std::uint32_t startedMs;
+  std::uint32_t durationMs;
+};
+
+std::optional<PendingDelay> pendingDelay;
 
 void writeLine(const std::string &line) {
   platform::write(line.c_str(), line.size());
@@ -81,6 +90,7 @@ void resetKeyIndicator() {
 
 void applyTopologyState(const RuntimeTopology &topology, std::uint32_t nowMs) {
   resetKeyIndicator();
+  pendingDelay.reset();
   controller.configure(topology, nowMs);
   applyRuntimePinModes();
   displayStatus.setReady(topology.keyCount());
@@ -89,15 +99,16 @@ void applyTopologyState(const RuntimeTopology &topology, std::uint32_t nowMs) {
 
 void activateTopology(const RuntimeTopology &topology, std::uint32_t nowMs) {
   standaloneDisplayPending = false;
-  applyTopologyState(topology, nowMs);
+  displayStatus.setStandaloneDebug(false);
+  // Release the old display before its I2C pins are reassigned by the topology.
   platform::configureDisplay(topology.oled);
+  applyTopologyState(topology, nowMs);
   renderStatus();
 }
 
 void activateStandaloneTopology(const RuntimeTopology &topology,
                                 std::uint32_t nowMs) {
-  standaloneDebugMode = true;
-  displayStatus.setStandaloneDebug();
+  displayStatus.setStandaloneDebug(true);
   applyTopologyState(topology, nowMs);
   standaloneDisplayPending = true;
   standaloneDisplayStartedMs = nowMs;
@@ -157,19 +168,13 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
         configError(command->revision, "invalid_commit");
         return;
       }
-      if (standaloneDebugMode) {
-        writeLine(acceptsRp2040StandaloneHostTopology(*topology)
-                      ? "CONFIG_OK " + std::to_string(command->revision) + "\n"
-                      : "CONFIG_ERROR " + std::to_string(command->revision) +
-                            " standalone_mismatch\n");
-        return;
-      }
       activateTopology(*topology, nowMs);
       writeLine("CONFIG_OK " + std::to_string(command->revision) + "\n");
       return;
     }
     case HelperCommandKind::LearnBegin:
       topologyBuilder.cancel();
+      pendingDelay.reset();
       if (!controller.beginLearning(command->revision, command->pins, nowMs)) {
         configError(command->revision, "invalid_learning");
         return;
@@ -193,23 +198,53 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
       writeLine("LEARN_OK " + std::to_string(command->revision) + "\n");
       return;
     case HelperCommandKind::Skip:
+      if (pendingDelay.has_value() &&
+          pendingDelay->eventId == command->eventId) {
+        pendingDelay.reset();
+      }
       controller.acceptStep(command->eventId, 0, 0, false, nowMs);
       return;
     case HelperCommandKind::Paste:
     case HelperCommandKind::Hotkey:
+    case HelperCommandKind::Media:
+    case HelperCommandKind::Host:
       break;
+    case HelperCommandKind::Delay:
+      if (pendingDelay.has_value() ||
+          controller.acceptStep(command->eventId, command->step, command->total,
+                                true, nowMs) != ResponseAction::Execute) {
+        return;
+      }
+      pendingDelay = PendingDelay{command->eventId, command->step, nowMs,
+                                  command->durationMs};
+      return;
   }
 
   if (controller.acceptStep(command->eventId, command->step, command->total,
                             true, nowMs) != ResponseAction::Execute) {
     return;
   }
-  const bool sent = command->kind == HelperCommandKind::Paste
-                        ? pasteClipboard()
-                        : platform::sendHotkey(command->modifierMask,
-                                               command->keycode);
+  bool sent = true;
+  if (command->kind == HelperCommandKind::Paste) {
+    sent = pasteClipboard();
+  } else if (command->kind == HelperCommandKind::Hotkey) {
+    sent = platform::sendHotkey(command->modifierMask, command->keycode);
+  } else if (command->kind == HelperCommandKind::Media) {
+    sent = platform::sendConsumerControl(command->consumerUsage);
+  }
   if (!sent) return;
   writeLine(formatDone(command->eventId, command->step));
+}
+
+void servicePendingDelay(std::uint32_t nowMs) {
+  if (!pendingDelay.has_value()) return;
+  const auto delay = *pendingDelay;
+  if (nowMs - delay.startedMs < delay.durationMs) {
+    controller.keepPendingEventAlive(delay.eventId, nowMs);
+    return;
+  }
+  pendingDelay.reset();
+  writeLine(formatDone(delay.eventId, delay.step));
 }
 
 void readHelperResponses(std::uint32_t nowMs) {
@@ -312,6 +347,7 @@ void loop() {
     if (connected) writeLine(helloLine);
   }
   helperConnected = connected;
+  servicePendingDelay(nowMs);
   controller.expire(nowMs);
   readHelperResponses(nowMs);
   if (controller.isLearning()) {

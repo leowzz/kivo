@@ -13,7 +13,18 @@ grep -Fq 'display->setFont(u8g2_font_6x13_tf);' "$RP2040_PLATFORM"
 grep -Fq 'makeRp2040StandaloneDebugTopology(platform::boardProfile())' \
   "$FIRMWARE_MAIN"
 grep -Fq 'initializeStandaloneDisplay(nowMs);' "$FIRMWARE_MAIN"
-grep -Fq 'acceptsRp2040StandaloneHostTopology(*topology)' "$FIRMWARE_MAIN"
+grep -Fq 'displayStatus.setStandaloneDebug(false);' "$FIRMWARE_MAIN"
+! grep -Fq 'standalone_mismatch' "$FIRMWARE_MAIN"
+activate_topology_body="$(awk '
+  /^void activateTopology\(/ { capture = 1 }
+  capture { print }
+  capture && /^}/ { exit }
+' "$FIRMWARE_MAIN")"
+configure_display_line="$(grep -n 'platform::configureDisplay(topology.oled);' \
+  <<<"$activate_topology_body" | cut -d: -f1)"
+apply_topology_line="$(grep -n 'applyTopologyState(topology, nowMs);' \
+  <<<"$activate_topology_body" | cut -d: -f1)"
+test "$configure_display_line" -lt "$apply_topology_line"
 
 target_body() {
   awk -v target="$1" '
@@ -29,7 +40,7 @@ done
 
 require_serial_body="$(target_body require-serial)"
 grep -Fq 'test -n "$(SERIAL)"' <<<"$require_serial_body"
-grep -Fq 'expected = ["HELLO", "4", family, board, build]' "$ROOT/scripts/verify_runtime_firmware.py"
+grep -Fq 'expected = ["HELLO", "5", family, board, build]' "$ROOT/scripts/verify_runtime_firmware.py"
 
 for target in upload-esp32s3 upload-rp2040; do
   ! grep -Eq "^${target}:[[:space:]].*require-serial([[:space:]]|$)" "$MAKEFILE"
@@ -69,9 +80,9 @@ grep -Fq 'exit 2' <<<"$upload_body"
 test_body="$(target_body test)"
 expected_test_commands=(
   'bash test/test_release.sh'
-  '$(UV) run pytest test/test_upload_targeting.py test/test_rp2040_upload.py'
-  '$(UV) run pytest test/test_firmware_target_selector.py test/test_make_upload_selection.py'
-  '$(UV) run pio test -e native'
+  '$(UV_CMD) run pytest test/test_upload_targeting.py test/test_rp2040_upload.py'
+  '$(UV_CMD) run pytest test/test_firmware_target_selector.py test/test_make_upload_selection.py'
+  '$(UV_CMD) run pio test -e native'
   'cargo test --manifest-path src-tauri/Cargo.toml'
   'cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings'
   'npm test'
