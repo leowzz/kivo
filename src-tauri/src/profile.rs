@@ -46,8 +46,8 @@ pub enum ActionTrigger {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TriggerSettings {
-    pub long_press_ms: u16,
-    pub double_press_ms: u16,
+    pub long_press_ms: u32,
+    pub double_press_ms: u32,
 }
 
 impl Default for TriggerSettings {
@@ -68,9 +68,9 @@ impl<'de> Deserialize<'de> for TriggerSettings {
         #[serde(deny_unknown_fields)]
         struct RawTriggerSettings {
             #[serde(default = "default_long_press_ms")]
-            long_press_ms: u16,
+            long_press_ms: u32,
             #[serde(default = "default_double_press_ms")]
-            double_press_ms: u16,
+            double_press_ms: u32,
         }
 
         let raw = RawTriggerSettings::deserialize(deserializer)?;
@@ -95,11 +95,11 @@ impl TriggerSettings {
     }
 }
 
-fn default_long_press_ms() -> u16 {
+fn default_long_press_ms() -> u32 {
     TriggerSettings::default().long_press_ms
 }
 
-fn default_double_press_ms() -> u16 {
+fn default_double_press_ms() -> u32 {
     TriggerSettings::default().double_press_ms
 }
 
