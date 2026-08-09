@@ -1626,7 +1626,6 @@ fn write_isolated_output<W: Write + ?Sized>(
         clock,
         stop,
     )?;
-    let completed_sequence = !output.completed_receive_sequences.is_empty();
     for receive_sequence in output.completed_receive_sequences.drain(..) {
         events
             .send(WorkerEvent::SequenceFinished {
@@ -1669,8 +1668,6 @@ fn write_isolated_output<W: Write + ?Sized>(
         .map_err(|error| format!("serial_write_failed: {error}"))?;
     if sent_action {
         *action_deadline = Some(clock.monotonic_now() + action_timeout);
-    } else if completed_sequence {
-        *action_deadline = None;
     }
     Ok(())
 }
@@ -2271,6 +2268,68 @@ mod tests {
         fn write(&self, _text: &str) -> Result<(), String> {
             Err("clipboard unavailable".into())
         }
+    }
+
+    #[test]
+    fn unrelated_receive_sequence_completion_preserves_active_action_deadline() {
+        let runtime = runtime_model();
+        let device_id = runtime.metric_attribution.device_id.clone();
+        let start = WorkerStart {
+            generation: 1,
+            device_id,
+            port: "/dev/action-deadline".into(),
+            board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+        };
+        let paste = PasteCoordinator::with_timeout(FailingClipboard, Duration::from_millis(100));
+        let (events, _received_events) = mpsc::channel();
+        let mut writer = Vec::new();
+        let mut pending_paste = None;
+        let mut action_deadline = None;
+        let context = RuntimeEventContext::from_snapshot(1, Some(&runtime));
+        let clock = SystemClock::default();
+        let stop = AtomicBool::new(false);
+        let barrier = RwLock::new(());
+        let mut action = SessionOutput::default();
+        action.lines.push("HOTKEY 10 1 1 0 40\n".into());
+
+        write_isolated_output(
+            &start,
+            &events,
+            &paste.handle(),
+            None,
+            &barrier,
+            &mut writer,
+            action,
+            &mut pending_paste,
+            &mut action_deadline,
+            &context,
+            &clock,
+            &stop,
+        )
+        .unwrap();
+        let active_deadline = action_deadline;
+        assert!(active_deadline.is_some());
+
+        let mut release = SessionOutput::default();
+        release.completed_receive_sequences.push(2);
+        write_isolated_output(
+            &start,
+            &events,
+            &paste.handle(),
+            None,
+            &barrier,
+            &mut writer,
+            release,
+            &mut pending_paste,
+            &mut action_deadline,
+            &context,
+            &clock,
+            &stop,
+        )
+        .unwrap();
+
+        assert_eq!(action_deadline, active_deadline);
+        paste.shutdown();
     }
 
     #[test]
