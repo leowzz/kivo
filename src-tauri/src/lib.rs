@@ -6,7 +6,6 @@ mod model;
 mod paste;
 mod profile;
 mod protocol;
-#[allow(dead_code)] // Runtime event producers are connected in subsequent work.
 mod runtime_log;
 mod storage;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -96,20 +95,42 @@ impl BackgroundDeviceScanner {
 fn poll_runtime_coordinator(
     scanner: &mut BackgroundDeviceScanner,
     coordinator: &Mutex<RuntimeCoordinator>,
-) -> (Option<Vec<DeviceStatus>>, Vec<RuntimeEvent>) {
+) -> RuntimePoll {
     let scan = scanner.poll();
     let mut coordinator = coordinator
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let devices = match scan {
+    let (scan, scan_error) = match scan {
         Some(Ok(scan)) => {
             coordinator.apply_scan(scan);
-            Some(coordinator.devices())
+            (
+                Some(RuntimeScanSnapshot {
+                    devices: coordinator.devices(),
+                    candidates: coordinator.candidates(),
+                }),
+                None,
+            )
         }
-        Some(Err(_)) | None => None,
+        Some(Err(error)) => (None, Some(error)),
+        None => (None, None),
     };
     let events = coordinator.drain_worker_events();
-    (devices, events)
+    RuntimePoll {
+        scan,
+        scan_error,
+        events,
+    }
+}
+
+struct RuntimeScanSnapshot {
+    devices: Vec<DeviceStatus>,
+    candidates: Vec<CandidateStatus>,
+}
+
+struct RuntimePoll {
+    scan: Option<RuntimeScanSnapshot>,
+    scan_error: Option<String>,
+    events: Vec<RuntimeEvent>,
 }
 
 #[doc(hidden)]
@@ -772,10 +793,37 @@ pub fn run() {
             let config_directory = app.path().app_config_dir()?;
             fs::create_dir_all(&config_directory)?;
             let bundled_profiles = app.path().resource_dir()?.join("models");
-            let workspace = Workspace::load(&config_directory, &bundled_profiles)?;
-            let metrics = MetricsStore::open(&config_directory.join("data/metrics.sqlite3"))
-                .ok()
-                .map(Arc::new);
+            let workspace = match Workspace::load(&config_directory, &bundled_profiles) {
+                Ok(workspace) => workspace,
+                Err(error) => {
+                    eprintln!("failed to load workspace: {error}");
+                    return Err(error.into());
+                }
+            };
+            if let Err(error) = runtime_log::install(app.handle(), &config_directory) {
+                eprintln!("failed to install runtime logger: {error}");
+            }
+            runtime_log::emit(runtime_log::RuntimeLogEntry::new(
+                now_ms(),
+                runtime_log::RuntimeLogLevel::Info,
+                "application_started",
+                serde_json::json!({"version": env!("CARGO_PKG_VERSION")}),
+            ));
+            let metrics = match MetricsStore::open(&config_directory.join("data/metrics.sqlite3")) {
+                Ok(metrics) => Some(Arc::new(metrics)),
+                Err(error) => {
+                    runtime_log::emit(
+                        runtime_log::RuntimeLogEntry::new(
+                            now_ms(),
+                            runtime_log::RuntimeLogLevel::Error,
+                            "metrics_initialization_failed",
+                            serde_json::json!({}),
+                        )
+                        .with_detail(error.to_string()),
+                    );
+                    None
+                }
+            };
             let operation_barrier = Arc::new(RwLock::new(()));
             let workspace = Arc::new(RwLock::new(workspace));
             #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -809,23 +857,41 @@ pub fn run() {
                 let app_handle = app.handle().clone();
                 thread::spawn(move || {
                     let mut scanner = BackgroundDeviceScanner::new(enumerator);
+                    let mut log_inventory = runtime_log::DeviceLogInventory::default();
                     while !stop.load(Ordering::Relaxed) {
                         if scan_requested.swap(false, Ordering::Relaxed) {
                             scanner.request_scan();
                         }
-                        let (devices, events) =
-                            poll_runtime_coordinator(&mut scanner, coordinator.as_ref());
-                        #[cfg(any(target_os = "macos", target_os = "windows"))]
-                        if let Some(devices) = devices.as_deref()
-                            && let Ok(workspace) = workspace.read()
-                        {
-                            tray::update(&app_handle, devices, &workspace);
+                        let RuntimePoll {
+                            scan,
+                            scan_error,
+                            events,
+                        } = poll_runtime_coordinator(&mut scanner, coordinator.as_ref());
+                        let timestamp_ms = now_ms();
+                        if let Some(error) = scan_error.as_deref() {
+                            for entry in log_inventory.observe_scan_error(timestamp_ms, Some(error))
+                            {
+                                runtime_log::emit(entry);
+                            }
                         }
-                        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-                        let _ = devices;
+                        if let Some(scan) = scan {
+                            for entry in log_inventory.observe_scan_error(timestamp_ms, None) {
+                                runtime_log::emit(entry);
+                            }
+                            for entry in
+                                log_inventory.observe(timestamp_ms, &scan.devices, &scan.candidates)
+                            {
+                                runtime_log::emit(entry);
+                            }
+                            #[cfg(any(target_os = "macos", target_os = "windows"))]
+                            if let Ok(workspace) = workspace.read() {
+                                tray::update(&app_handle, &scan.devices, &workspace);
+                            }
+                        }
                         for event in events {
                             let payload =
                                 enrich_runtime_event(&workspace, metrics.as_deref(), event);
+                            runtime_log::emit_runtime_event(&payload);
                             let _ = app_handle.emit("runtime-event", payload);
                         }
                         thread::sleep(RUNTIME_EVENT_POLL_INTERVAL);
@@ -846,6 +912,12 @@ pub fn run() {
                 scan_requested,
                 coordinator_thread: Mutex::new(Some(coordinator_thread)),
             });
+            runtime_log::emit(runtime_log::RuntimeLogEntry::new(
+                now_ms(),
+                runtime_log::RuntimeLogLevel::Info,
+                "application_ready",
+                serde_json::json!({}),
+            ));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -895,6 +967,12 @@ pub fn run() {
             }
         }
         tauri::RunEvent::ExitRequested { .. } => {
+            runtime_log::emit(runtime_log::RuntimeLogEntry::new(
+                now_ms(),
+                runtime_log::RuntimeLogLevel::Info,
+                "application_exit_requested",
+                serde_json::json!({}),
+            ));
             app_handle
                 .state::<AppState>()
                 .stop
@@ -914,6 +992,12 @@ pub fn run() {
             if let Some(paste) = &state.paste {
                 paste.shutdown();
             }
+            runtime_log::emit(runtime_log::RuntimeLogEntry::new(
+                now_ms(),
+                runtime_log::RuntimeLogLevel::Info,
+                "application_stopped",
+                serde_json::json!({}),
+            ));
         }
         _ => {}
     });
@@ -979,22 +1063,25 @@ mod tests {
         });
         let mut scanner = BackgroundDeviceScanner::new(enumerator);
 
-        let (devices, events) = poll_runtime_coordinator(&mut scanner, &coordinator);
-        assert!(devices.is_none());
-        assert!(events.is_empty());
+        let poll = poll_runtime_coordinator(&mut scanner, &coordinator);
+        assert!(poll.scan.is_none());
+        assert!(poll.scan_error.is_none());
+        assert!(poll.events.is_empty());
         started_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("device scan did not start");
 
         let started = Instant::now();
-        let (devices, events) = poll_runtime_coordinator(&mut scanner, &coordinator);
-        assert!(devices.is_none());
-        assert!(events.is_empty());
+        let poll = poll_runtime_coordinator(&mut scanner, &coordinator);
+        assert!(poll.scan.is_none());
+        assert!(poll.scan_error.is_none());
+        assert!(poll.events.is_empty());
         let elapsed = started.elapsed();
         for _ in 0..8 {
-            let (devices, events) = poll_runtime_coordinator(&mut scanner, &coordinator);
-            assert!(devices.is_none());
-            assert!(events.is_empty());
+            let poll = poll_runtime_coordinator(&mut scanner, &coordinator);
+            assert!(poll.scan.is_none());
+            assert!(poll.scan_error.is_none());
+            assert!(poll.events.is_empty());
         }
         assert_eq!(started_rx.try_recv(), Err(mpsc::TryRecvError::Empty));
 
@@ -1006,17 +1093,53 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
-            match poll_runtime_coordinator(&mut scanner, &coordinator) {
-                (Some(devices), events) => {
-                    assert!(devices.is_empty());
-                    assert!(events.is_empty());
-                    break;
-                }
-                (None, events) if Instant::now() < deadline => {
-                    assert!(events.is_empty());
-                    thread::yield_now();
-                }
-                (None, _) => panic!("device scan did not finish"),
+            let poll = poll_runtime_coordinator(&mut scanner, &coordinator);
+            if let Some(scan) = poll.scan {
+                assert!(scan.devices.is_empty());
+                assert!(scan.candidates.is_empty());
+                assert!(poll.scan_error.is_none());
+                assert!(poll.events.is_empty());
+                break;
+            }
+            assert!(poll.scan_error.is_none());
+            assert!(poll.events.is_empty());
+            if Instant::now() < deadline {
+                thread::yield_now();
+            } else {
+                panic!("device scan did not finish");
+            }
+        }
+    }
+
+    #[test]
+    fn device_scan_errors_are_preserved_in_runtime_poll() {
+        let directory = TestDirectory::new();
+        let workspace = Workspace::create(&directory.0, vec![product_profile()]).unwrap();
+        let coordinator = Mutex::new(RuntimeCoordinator::new(
+            Arc::new(EmptyEnumerator),
+            Arc::new(UnusedLauncher),
+            Arc::new(RwLock::new(workspace)),
+        ));
+        let mut scanner = BackgroundDeviceScanner::new(Arc::new(FailingEnumerator));
+
+        let first = poll_runtime_coordinator(&mut scanner, &coordinator);
+        assert!(first.scan.is_none());
+        assert!(first.scan_error.is_none());
+        assert!(first.events.is_empty());
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let poll = poll_runtime_coordinator(&mut scanner, &coordinator);
+            if let Some(error) = poll.scan_error {
+                assert_eq!(error, "serial discovery unavailable");
+                assert!(poll.scan.is_none());
+                assert!(poll.events.is_empty());
+                break;
+            }
+            if Instant::now() < deadline {
+                thread::yield_now();
+            } else {
+                panic!("device scan error was discarded");
             }
         }
     }
@@ -1127,6 +1250,18 @@ mod tests {
     impl UsbEnumerator for EmptyEnumerator {
         fn serial_ports(&self) -> Result<Vec<SerialObservation>, String> {
             Ok(Vec::new())
+        }
+
+        fn usb_devices(&self) -> Result<Vec<BootloaderObservation>, String> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct FailingEnumerator;
+
+    impl UsbEnumerator for FailingEnumerator {
+        fn serial_ports(&self) -> Result<Vec<SerialObservation>, String> {
+            Err("serial discovery unavailable".into())
         }
 
         fn usb_devices(&self) -> Result<Vec<BootloaderObservation>, String> {
