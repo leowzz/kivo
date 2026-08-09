@@ -3,13 +3,11 @@ import { listen } from "@tauri-apps/api/event";
 import { open, save as saveFile } from "@tauri-apps/plugin-dialog";
 import {
   ArchiveRestore,
-  Cable,
   DatabaseBackup,
   Download,
   FileInput,
   Home,
   Keyboard,
-  LayoutGrid,
   Plus,
   Trash2,
   Upload,
@@ -23,10 +21,9 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { CreateDeviceProfileForm } from "./CreateDeviceProfileForm";
 import { DeviceManagement } from "./DeviceManagement";
 import { DeviceSetupWizard } from "./DeviceSetupWizard";
-import { HardwareMapping, hardwareProfilesAreValid } from "./HardwareMapping";
+import { hardwareProfilesAreValid } from "./HardwareMapping";
 import { HomeDashboard } from "./HomeDashboard";
 import { Keypad } from "./Keypad";
-import { LayoutEditor } from "./LayoutEditor";
 import { deviceSummary } from "./deviceStatus";
 import { reconcileSetupSession, setupPresence } from "./deviceSetupSession";
 import { t } from "./i18n";
@@ -50,7 +47,7 @@ import type {
 } from "./types";
 import { SerializedSaveQueue, useAutosave } from "./useAutosave";
 
-type View = "home" | "devices" | "behavior" | "hardware" | "layout" | "data";
+type View = "home" | "devices" | "behavior" | "data";
 type Confirmation =
   | { kind: "import"; path: string; preview: ImportPreview }
   | { kind: "restore"; path: string; preview: BackupPreview }
@@ -227,6 +224,7 @@ export default function App() {
   const [homeMetrics, setHomeMetrics] = useState<AppSnapshot["homeMetrics"]>(null);
   const [deviceMetrics, setDeviceMetrics] = useState<{ deviceId: string; snapshot: HomeMetricsSnapshot } | null>(null);
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
+  const [selectedManagedDeviceId, setSelectedManagedDeviceId] = useState<string | null>(null);
   const [hardwareEditorTarget, setHardwareEditorTarget] = useState<HardwareEditorTarget | null>(null);
   const [capturedDraftProfileIds, setCapturedDraftProfileIds] = useState<Set<string>>(() => new Set());
   const [manualSaveProfileIds, setManualSaveProfileIds] = useState<Set<string>>(() => new Set());
@@ -235,10 +233,10 @@ export default function App() {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
-  const [layoutEditorOpen, setLayoutEditorOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [setupTargetId, setSetupTargetId] = useState<string | null>(null);
   const [profileCreatorOpen, setProfileCreatorOpen] = useState(false);
+  const [profileCreatorSourceId, setProfileCreatorSourceId] = useState<string | null>(null);
   const pressedOwnersRef = useRef<Map<string, PressedOwner>>(new Map());
   const mountedRef = useRef(true);
   const registryEpochRef = useRef(0);
@@ -513,7 +511,8 @@ export default function App() {
     hardwareProfileId: string | null,
     deviceId: string | null,
   ) => {
-    const deviceProfileId = editorProfileConfig?.profile.id;
+    const managedDevice = deviceId ? devices.find((device) => device.deviceId === deviceId) : undefined;
+    const deviceProfileId = managedDevice?.runtimeAssignment?.device_profile_id ?? editorProfileConfig?.profile.id;
     const next = hardwareProfileId && deviceProfileId
       ? { deviceProfileId, hardwareProfileId, deviceId }
       : null;
@@ -524,7 +523,7 @@ export default function App() {
         ? current
         : next
     );
-  }, [editorProfileConfig?.profile.id]);
+  }, [devices, editorProfileConfig?.profile.id]);
 
   const autosaveTarget = useMemo<ProfileAutosaveTarget>(() => editorProfileConfig
     ? { profileId: editorProfileConfig.profile.id, profile: editorProfileConfig }
@@ -580,10 +579,12 @@ export default function App() {
   );
 
   const profileRef = useRef(editorProfileConfig);
+  const profilesRef = useRef(deviceProfiles);
   const devicesRef = useRef(devices);
   const selectedRef = useRef(selectedButtonId);
   const viewRef = useRef(view);
   profileRef.current = editorProfileConfig;
+  profilesRef.current = deviceProfiles;
   devicesRef.current = devices;
   hardwareEditorTargetRef.current = hardwareEditorTarget;
   selectedRef.current = selectedButtonId;
@@ -609,13 +610,16 @@ export default function App() {
           }
           if (payload.deviceId === selectedManagedDeviceIdRef.current) void refreshManagedDeviceMetrics(payload.deviceId);
           if (payload.input && payload.pressed !== null) {
-            const currentProfile = profileRef.current;
+            const editorSnapshot = profileRef.current;
             const currentEditorTarget = hardwareEditorTargetRef.current;
             const activeLearningTarget = devicesRef.current.find(
               ({ deviceId }) => deviceId === currentEditorTarget?.deviceId,
             )?.learning;
+            const currentProfile = activeLearningTarget
+              ? profileDraftsRef.current.get(activeLearningTarget.deviceProfileId) ?? profilesRef.current.find((profile) => profile.profile.id === activeLearningTarget.deviceProfileId)
+              : editorSnapshot;
             if (payload.code === "learning_input" && payload.pressed && payload.learningTarget
-              && selectedRef.current && viewRef.current === "hardware" && currentProfile && currentEditorTarget?.deviceId
+              && selectedRef.current && viewRef.current === "devices" && currentProfile && currentEditorTarget?.deviceId
               && activeLearningTarget && learningTargetsMatch(payload.learningTarget, activeLearningTarget)
               && payload.deviceId === activeLearningTarget.deviceId
               && activeLearningTarget.deviceId === currentEditorTarget.deviceId
@@ -639,12 +643,12 @@ export default function App() {
             }
             const emittingDevice = devicesRef.current.find((device) => device.deviceId === payload.deviceId);
             const assignment = emittingDevice?.runtimeAssignment;
-            if (payload.code === "input_state" && currentProfile
-              && payload.deviceProfileId === currentProfile.profile.id
+            if (payload.code === "input_state" && editorSnapshot
+              && payload.deviceProfileId === editorSnapshot.profile.id
               && payload.hardwareProfileId
               && assignment?.device_profile_id === payload.deviceProfileId
               && assignment.hardware_profile_id === payload.hardwareProfileId) {
-              const eventHardware = currentProfile.hardware_profiles.find((hardware) =>
+              const eventHardware = editorSnapshot.hardware_profiles.find((hardware) =>
                 hardware.id === payload.hardwareProfileId
               );
               const buttonId = resolveButton(eventHardware, payload.input);
@@ -741,6 +745,48 @@ export default function App() {
     });
   }, []);
 
+  const changeManagedProfile = useCallback((profile: DeviceProfile) => {
+    updateProfile(profile.profile.id, () => profile);
+    const sharedDeviceCount = devices.filter(
+      (device) => device.runtimeAssignment?.device_profile_id === profile.profile.id,
+    ).length;
+    setProfileManualSave(profile.profile.id, sharedDeviceCount > 1);
+  }, [devices, setProfileManualSave, updateProfile]);
+
+  const saveManagedSharedProfile = useCallback(async (profile: DeviceProfile) => {
+    await autosave.flush();
+    await saveEditorProfile(profile);
+  }, [autosave.flush, saveEditorProfile]);
+
+  const duplicateManagedProfileForDevice = useCallback(async ({ deviceId, sourceProfile: profile, name }: { deviceId: string; sourceProfile: DeviceProfile; name: string }) => {
+    await autosave.flush();
+    if (PREVIEW_MODE) {
+      const { createPreviewDeviceProfile } = await import("./preview");
+      const preview = createPreviewDeviceProfile(
+        { ...registry, language, homeMetrics },
+        { kind: "clone", name, source_profile_id: profile.profile.id },
+      );
+      const cloned = preview.deviceProfiles.find((item) => item.profile.name === name) ?? preview.deviceProfiles[preview.deviceProfiles.length - 1];
+      const selectedDevice = preview.devices.find((device) => device.deviceId === deviceId);
+      const hardware = cloned?.hardware_profiles.find((item) => item.board_profile_id === selectedDevice?.boardProfileId);
+      const nextSnapshot = cloned && selectedDevice && hardware
+        ? { ...preview, editorProfile: registry.editorProfile, devices: preview.devices.map((device) => device.deviceId === deviceId ? { ...device, assignment: "valid" as const, runtimeAssignment: { device_profile_id: cloned.profile.id, hardware_profile_id: hardware.id } } : device) }
+        : { ...preview, editorProfile: registry.editorProfile };
+      if (mountedRef.current) applySnapshot(nextSnapshot, true);
+      return;
+    }
+    const snapshot = await invoke<AppSnapshot>("duplicate_profile_for_device", {
+      request: { device_id: deviceId, source_profile: profile, name },
+    });
+    profileDraftsRef.current.delete(profile.profile.id);
+    setManualSaveProfileIds((current) => {
+      const next = new Set(current);
+      next.delete(profile.profile.id);
+      return next;
+    });
+    if (mountedRef.current) applySnapshot(snapshot, true);
+  }, [applySnapshot, autosave.flush, homeMetrics, language, registry]);
+
   const saveSettings = async (nextEditorProfile: string | null, nextLanguage: Language) => {
     await autosave.flush();
     if (PREVIEW_MODE) {
@@ -780,13 +826,14 @@ export default function App() {
         );
       }
     }
+    setSelectedManagedDeviceId(deviceId);
     setHardwareEditorTarget({
       deviceId,
       deviceProfileId: assignment.device_profile_id,
       hardwareProfileId: assignment.hardware_profile_id,
     });
     setSetupOpen(false);
-    setView("hardware");
+    setView("devices");
   };
 
   const run = async (label: string, task: () => Promise<void>) => {
@@ -797,6 +844,54 @@ export default function App() {
       setError(`${label}: ${errorMessage(operationError)}`);
     }
   };
+
+  const beginManagedLearning = useCallback((hardwareProfileId: string, deviceId: string, pins: number[]) => {
+    const selectedDevice = devices.find((device) => device.deviceId === deviceId);
+    const profileId = selectedDevice?.runtimeAssignment?.device_profile_id ?? editorProfileConfig?.profile.id;
+    const profile = profileId ? profileById(profileId) : undefined;
+    const hardware = profile?.hardware_profiles.find(({ id }) => id === hardwareProfileId);
+    if (!profile || !hardware || !selectedDevice || selectedDevice.connection !== "online" || selectedDevice.mode !== "runtime" || selectedDevice.identity !== "valid" || selectedDevice.boardProfileId !== hardware.board_profile_id) return;
+    const editingRevision = ++learningEditingRevisionRef.current;
+    setHardwareEditorTarget({ deviceId, deviceProfileId: profile.profile.id, hardwareProfileId });
+    setTentativeLearningCounts((current) => {
+      const next = new Map(current);
+      next.set(profile.profile.id, (next.get(profile.profile.id) ?? 0) + 1);
+      return next;
+    });
+    void (async () => {
+      try {
+        const snapshot = await invoke<AppSnapshot>("begin_learning", {
+          deviceId,
+          deviceProfileId: profile.profile.id,
+          hardwareProfileId,
+          editingRevision,
+          pins,
+        });
+        if (mountedRef.current) replaceRegistrySnapshot(snapshot);
+      } catch (operationError) {
+        if (mountedRef.current) setError(`${t(language, "error.learning")}: ${errorMessage(operationError)}`);
+      } finally {
+        setTentativeLearningCounts((current) => {
+          const next = new Map(current);
+          const remaining = (next.get(profile.profile.id) ?? 1) - 1;
+          if (remaining > 0) next.set(profile.profile.id, remaining);
+          else next.delete(profile.profile.id);
+          return next;
+        });
+      }
+    })();
+  }, [devices, editorProfileConfig?.profile.id, language, profileById, replaceRegistrySnapshot]);
+
+  const endManagedLearning = useCallback((deviceId: string) => {
+    void (async () => {
+      try {
+        const snapshot = await invoke<AppSnapshot>("end_learning", { deviceId });
+        if (mountedRef.current) replaceRegistrySnapshot(snapshot);
+      } catch (operationError) {
+        if (mountedRef.current) setError(`${t(language, "error.learning")}: ${errorMessage(operationError)}`);
+      }
+    })();
+  }, [language, replaceRegistrySnapshot]);
 
   const chooseImport = () => run(t(language, "error.import"), async () => {
     await autosave.flush();
@@ -813,6 +908,20 @@ export default function App() {
     const preview = await invoke<BackupPreview>("preview_backup", { path });
     setConfirmation({ kind: "restore", path, preview });
   });
+
+  const exportProfile = useCallback((profile: DeviceProfile) => run(t(language, "error.export"), async () => {
+    await autosave.flush();
+    const path = await saveFile({
+      defaultPath: `${profile.profile.id}.yaml`,
+      filters: [{ name: "Kivo", extensions: ["yaml"] }],
+    });
+    if (path) await invoke("export_device_profile", { id: profile.profile.id, path });
+  }), [autosave.flush, language]);
+
+  const openProfileCreator = useCallback((sourceProfileId: string | null = null) => {
+    setProfileCreatorSourceId(sourceProfileId);
+    setProfileCreatorOpen(true);
+  }, []);
 
   const confirmOperation = () => {
     const current = confirmation;
@@ -858,7 +967,7 @@ export default function App() {
       {error && (
         <div className="error-toast" role="alert">
           <span className="error-banner">{error}</span>
-          <button className="icon-button" type="button" aria-label={t(language, "common.close")} onClick={() => {
+          <button className="icon-button" type="button" aria-label={t(language, "common.close")} title={t(language, "common.close")} onClick={() => {
             setError(null);
           }}><X size={15} /></button>
         </div>
@@ -879,12 +988,6 @@ export default function App() {
             <button className={view === "behavior" ? "is-active" : ""} type="button" onClick={() => void navigate("behavior")}>
               <Keyboard size={17} />{t(language, "nav.behavior")}
             </button>
-            <button className={view === "hardware" ? "is-active" : ""} type="button" disabled={!editorProfileConfig} onClick={() => void navigate("hardware")}>
-              <Cable size={17} />{t(language, "nav.hardware")}
-            </button>
-            <button className={view === "layout" ? "is-active" : ""} type="button" disabled={!editorProfileConfig} onClick={() => void navigate("layout")}>
-              <LayoutGrid size={17} />{t(language, "nav.layout")}
-            </button>
           </nav>
 
           <button className={`data-nav-button ${view === "data" ? "is-active" : ""}`} type="button" onClick={() => void navigate("data")}>
@@ -897,47 +1000,54 @@ export default function App() {
           {view === "data" ? (
             <div className="data-page">
               <div className="content-heading">
-                <div><h2>{t(language, "nav.data")}</h2></div>
-                <button className="primary-button" type="button" onClick={() => setProfileCreatorOpen(true)}>
+                <div>
+                  <h2>{t(language, "nav.data")}</h2>
+                  <p className="content-subtitle">{t(language, "data.subtitle")}</p>
+                </div>
+                <button className="primary-button" type="button" onClick={() => openProfileCreator()}>
                   <Plus size={16} />{t(language, "profile.create")}
                 </button>
               </div>
               <div className="data-page-body">
-                <section className="data-card">
-                  <h3>{t(language, "data.groupModel")}</h3>
-                  <label className="model-picker"><span>{t(language, "model.select")}</span><select
-                    aria-label={t(language, "model.select")}
-                    value={editorProfile ?? ""}
-                    disabled={!loaded || deviceProfiles.length === 0}
-                    onChange={(event) => void run(t(language, "error.save"), () => saveSettings(event.target.value, language))}
-                  >
-                    {deviceProfiles.length === 0 && <option value="">{t(language, "model.empty")}</option>}
-                    {deviceProfiles.map((profile) => <option value={profile.profile.id} key={profile.profile.id}>{profile.profile.name}</option>)}
-                  </select></label>
+                <section className="profile-list" aria-label={t(language, "data.profileList")}>
+                  {deviceProfiles.length === 0 && <p className="empty-workspace-copy">{t(language, "model.empty")}</p>}
+                  {deviceProfiles.map((profile) => {
+                    const usage = devices.filter((device) => device.runtimeAssignment?.device_profile_id === profile.profile.id).length;
+                    return (
+                      <article className="profile-row" key={profile.profile.id}>
+                        <div className="profile-row-main">
+                          <div className="profile-row-title">
+                            <h3>{profile.profile.name}</h3>
+                            {profile.profile.id === editorProfile && <span className="profile-badge">{t(language, "data.editorBadge")}</span>}
+                          </div>
+                          <p>{t(language, "data.usedBy", { count: usage })}</p>
+                          <code>{profile.profile.id}</code>
+                        </div>
+                        <div className="profile-row-actions">
+                          <button type="button" aria-label={`${t(language, "data.exportProfile")} ${profile.profile.name}`} title={t(language, "data.exportProfile")} onClick={() => void exportProfile(profile)}>
+                            <Upload size={15} />{t(language, "data.exportProfile")}
+                          </button>
+                          <button type="button" aria-label={`${t(language, "data.duplicateProfile")} ${profile.profile.name}`} title={t(language, "data.duplicateProfile")} onClick={() => openProfileCreator(profile.profile.id)}>
+                            <Plus size={15} />{t(language, "data.duplicateProfile")}
+                          </button>
+                          <button className="is-danger" type="button" aria-label={`${t(language, "data.deleteProfile")} ${profile.profile.name}`} title={t(language, "data.deleteProfile")} onClick={() => setConfirmation({ kind: "delete", profile })}>
+                            <Trash2 size={15} />{t(language, "data.deleteProfile")}
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
                 </section>
                 <section className="data-card">
                   <h3>{t(language, "data.groupTransfer")}</h3>
                   <div className="data-menu">
                     <button type="button" onClick={() => void chooseImport()}><FileInput size={16} />{t(language, "nav.import")}</button>
-                    <button type="button" disabled={!editorProfileConfig} onClick={() => void run(t(language, "error.export"), async () => {
-                      await autosave.flush();
-                      const path = await saveFile({ defaultPath: `${editorProfileConfig?.profile.id ?? "device-profile"}.yaml`, filters: [{ name: "Kivo", extensions: ["yaml"] }] });
-                      if (path && editorProfileConfig) await invoke("export_device_profile", { id: editorProfileConfig.profile.id, path });
-                    })}><Upload size={16} />{t(language, "nav.export")}</button>
                     <button type="button" disabled={deviceProfiles.length === 0} onClick={() => void run(t(language, "error.export"), async () => {
                       await autosave.flush();
                       const path = await saveFile({ defaultPath: "kivo-backup.yaml", filters: [{ name: "Kivo", extensions: ["yaml"] }] });
                       if (path) await invoke("export_backup", { path });
                     })}><DatabaseBackup size={16} />{t(language, "nav.backup")}</button>
                     <button type="button" onClick={() => void chooseRestore()}><ArchiveRestore size={16} />{t(language, "nav.restore")}</button>
-                  </div>
-                </section>
-                <section className="data-card is-danger">
-                  <h3>{t(language, "data.groupDanger")}</h3>
-                  <div className="data-menu">
-                    <button className="is-danger" type="button" disabled={!editorProfileConfig} onClick={() => editorProfileConfig && setConfirmation({ kind: "delete", profile: editorProfileConfig })}>
-                      <Trash2 size={16} />{t(language, "nav.delete")}
-                    </button>
                   </div>
                 </section>
               </div>
@@ -957,6 +1067,15 @@ export default function App() {
               onMetricsChange={handleManagedMetricsChange}
               onOpenSetup={openSetup}
               onRetryCandidate={retrySetupCandidate}
+              selectedDeviceId={selectedManagedDeviceId}
+              onSelectedDeviceChange={setSelectedManagedDeviceId}
+              onChangeProfile={changeManagedProfile}
+              onSaveSharedProfile={saveManagedSharedProfile}
+              onDuplicateProfileForDevice={duplicateManagedProfileForDevice}
+              onSetManualSaveProfile={setProfileManualSave}
+              onHardwareSelectionChange={handleHardwareEditorSelection}
+              onBeginLearning={beginManagedLearning}
+              onEndLearning={endManagedLearning}
             />
           ) : view === "home" ? (
             <HomeDashboard
@@ -971,75 +1090,6 @@ export default function App() {
               <h2>{t(language, "model.empty")}</h2>
               <div><button className="primary-button" type="button" onClick={() => void chooseImport()}>{t(language, "model.import")}</button><button type="button" onClick={() => void chooseRestore()}>{t(language, "model.restore")}</button></div>
             </div>
-          ) : view === "hardware" ? (
-            <HardwareMapping
-              key={editorProfileConfig.profile.id}
-              language={language}
-              layout={editorProfileConfig.profile}
-              hardwareProfiles={editorProfileConfig.hardware_profiles}
-              boardProfiles={boardProfiles}
-              devices={devices}
-              learning={selectedLearningDevice?.learning ?? null}
-              initialHardwareProfileId={
-                hardwareEditorTarget?.deviceProfileId === editorProfile
-                  ? hardwareEditorTarget.hardwareProfileId
-                  : undefined
-              }
-              initialDeviceId={
-                hardwareEditorTarget?.deviceProfileId === editorProfile
-                  ? hardwareEditorTarget.deviceId
-                  : undefined
-              }
-              selectedButtonId={selectedButtonId}
-              onSelectButton={setSelectedButtonId}
-              onChange={(hardwareProfiles) => updateEditorProfile((profile) => ({
-                ...profile,
-                hardware_profiles: hardwareProfiles,
-              }))}
-              onSelectionChange={handleHardwareEditorSelection}
-              onBeginLearning={(hardwareProfileId, deviceId, pins) => {
-                const hardware = editorProfileConfig.hardware_profiles.find(({ id }) => id === hardwareProfileId);
-                const selectedDevice = devices.find((device) =>
-                  device.deviceId === deviceId &&
-                  device.connection === "online" &&
-                  device.mode === "runtime" &&
-                  device.identity === "valid" &&
-                  device.boardProfileId === hardware?.board_profile_id
-                );
-                if (!hardware || !selectedDevice) return;
-                const learningProfileId = editorProfileConfig.profile.id;
-                const editingRevision = ++learningEditingRevisionRef.current;
-                setTentativeLearningCounts((current) => {
-                  const next = new Map(current);
-                  next.set(learningProfileId, (next.get(learningProfileId) ?? 0) + 1);
-                  return next;
-                });
-                void run(t(language, "error.learning"), async () => {
-                  try {
-                    replaceRegistrySnapshot(await invoke("begin_learning", {
-                      deviceId: selectedDevice.deviceId,
-                      deviceProfileId: learningProfileId,
-                      hardwareProfileId: hardware.id,
-                      editingRevision,
-                      pins,
-                    }));
-                  } finally {
-                    setTentativeLearningCounts((current) => {
-                      const next = new Map(current);
-                      const remaining = (next.get(learningProfileId) ?? 1) - 1;
-                      if (remaining > 0) next.set(learningProfileId, remaining);
-                      else next.delete(learningProfileId);
-                      return next;
-                    });
-                  }
-                });
-              }}
-              onEndLearning={(deviceId) => {
-                void run(t(language, "error.learning"), async () => replaceRegistrySnapshot(await invoke("end_learning", {
-                  deviceId,
-                })));
-              }}
-            />
           ) : (
             <>
               <div className="content-heading">
@@ -1058,10 +1108,9 @@ export default function App() {
                     </select>
                   </label>}
                   <span>{editorProfileConfig.profile.name}</span>
-                  <h2>{t(language, view === "layout" ? "layout.title" : "behavior.title")}</h2>
+                  <h2>{t(language, "behavior.title")}</h2>
                 </div>
                 {view === "behavior" && selectedButton && <span className="selected-crumb">{t(language, "behavior.selected", { label: selectedButton.label })}</span>}
-                {view === "layout" && <button className="primary-button" type="button" onClick={() => setLayoutEditorOpen(true)}><LayoutGrid size={16} />{t(language, "layout.edit")}</button>}
               </div>
               <div className="keypad-stage">
                 <Keypad
@@ -1077,7 +1126,7 @@ export default function App() {
           )}
         </section>
 
-        {view !== "home" && view !== "devices" && view !== "data" && <ActionEditor
+        {view === "behavior" && <ActionEditor
           language={language}
           button={selectedButton}
           actions={selectedActions}
@@ -1090,28 +1139,6 @@ export default function App() {
           }))}
         />}
       </div>
-
-      <LayoutEditor
-        layout={editorProfileConfig?.profile ?? null}
-        language={language}
-        open={layoutEditorOpen}
-        onCancel={() => setLayoutEditorOpen(false)}
-        onApply={(layout) => {
-          updateEditorProfile((profile) => {
-            const buttonIds = new Set(layout.groups.flatMap((group) => group.buttons.map((button) => button.id)));
-            const actions = Object.fromEntries(Object.entries(profile.actions).filter(([id]) => buttonIds.has(id)));
-            const hardwareProfiles = profile.hardware_profiles.map((hardware) => ({
-              ...hardware,
-              inputs: hardware.inputs.map((source) => ({
-                ...source,
-                keys: Object.fromEntries(Object.entries(source.keys).filter(([id]) => buttonIds.has(id))),
-              })) as InputSource[],
-            }));
-            return { ...profile, profile: layout, actions, hardware_profiles: hardwareProfiles };
-          });
-          setLayoutEditorOpen(false);
-        }}
-      />
 
       {profileCreatorOpen && (
         <div className="modal-backdrop" role="presentation">
@@ -1127,7 +1154,11 @@ export default function App() {
                 className="icon-button"
                 type="button"
                 aria-label={t(language, "common.close")}
-                onClick={() => setProfileCreatorOpen(false)}
+                title={t(language, "common.close")}
+                onClick={() => {
+                  setProfileCreatorOpen(false);
+                  setProfileCreatorSourceId(null);
+                }}
               >
                 <X size={17} />
               </button>
@@ -1137,12 +1168,17 @@ export default function App() {
                 language={language}
                 boardProfiles={boardProfiles}
                 deviceProfiles={deviceProfiles}
+                initialSourceProfileId={profileCreatorSourceId ?? undefined}
                 onCreate={async (request) => {
                   await createDeviceProfile(request);
                   setProfileCreatorOpen(false);
-                  setView("layout");
+                  setProfileCreatorSourceId(null);
+                  setView("data");
                 }}
-                onCancel={() => setProfileCreatorOpen(false)}
+                onCancel={() => {
+                  setProfileCreatorOpen(false);
+                  setProfileCreatorSourceId(null);
+                }}
               />
             </div>
           </section>

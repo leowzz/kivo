@@ -12,6 +12,7 @@ interface CreateDeviceProfileFormProps {
   boardProfiles: BoardProfileSummary[];
   deviceProfiles: DeviceProfile[];
   fixedBoardProfileId?: string;
+  initialSourceProfileId?: string;
   onCreate(request: CreateDeviceProfileRequest): Promise<void>;
   onCancel(): void;
 }
@@ -29,6 +30,7 @@ export function CreateDeviceProfileForm({
   boardProfiles,
   deviceProfiles,
   fixedBoardProfileId,
+  initialSourceProfileId,
   onCreate,
   onCancel,
 }: CreateDeviceProfileFormProps) {
@@ -48,7 +50,9 @@ export function CreateDeviceProfileForm({
   );
   const [name, setName] = useState("");
   const [sourceProfileId, setSourceProfileId] = useState(
-    cloneSources[0]?.profile.id ?? "",
+    cloneSources.some((profile) => profile.profile.id === initialSourceProfileId)
+      ? initialSourceProfileId!
+      : cloneSources[0]?.profile.id ?? "",
   );
   const [boardProfileId, setBoardProfileId] = useState(fixedBoardProfileId ?? "");
   const [pending, setPending] = useState(false);

@@ -518,6 +518,7 @@ impl DeviceSession {
         output
     }
 
+    #[cfg(test)]
     pub(crate) fn capture_input(
         &self,
         current_context: &RuntimeEventContext,

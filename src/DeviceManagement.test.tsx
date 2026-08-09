@@ -593,3 +593,31 @@ test("submits a pending clear assignment exactly once", async () => {
   expect(onClearRuntimeAssignment).toHaveBeenCalledTimes(1);
   resolveClear();
 });
+
+test("embeds I/O Mapping and Key Layout as device workspace tabs", async () => {
+  const user = userEvent.setup();
+  const onSelectedDeviceChange = vi.fn();
+  renderManagement({
+    selectedDeviceId: "rp-a",
+    onSelectedDeviceChange,
+  });
+
+  await user.click(screen.getByRole("tab", { name: "I/O 映射" }));
+  expect(screen.getByRole("tabpanel", { name: "I/O 映射" })).toHaveTextContent("硬件配置");
+  expect(screen.queryByRole("dialog", { name: "I/O 映射" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("tab", { name: "按键布局" }));
+  expect(screen.getByRole("tabpanel", { name: "按键布局" })).toContainElement(
+    screen.getByRole("button", { name: "添加按键组" }),
+  );
+  expect(screen.queryByRole("dialog", { name: "按键布局" })).not.toBeInTheDocument();
+});
+
+test("shows a persistent shared configuration warning with save action", async () => {
+  renderManagement({
+    devices: [device(), device({ deviceId: "rp-b", name: "RP2040 B" })],
+    selectedDeviceId: "rp-a",
+  });
+  expect(screen.getByText(/2 个设备/)).toBeInTheDocument();
+  await userEvent.setup().click(screen.getByRole("tab", { name: "I/O 映射" }));
+  expect(screen.getByRole("button", { name: "保存共享配置" })).toBeInTheDocument();
+});
