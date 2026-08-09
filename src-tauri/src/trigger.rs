@@ -119,9 +119,7 @@ impl TriggerTracker {
             }
 
             let is_double_press = state.previous_short_press.is_some_and(|previous| {
-                edge.monotonic_ms
-                    .wrapping_sub(previous.released_monotonic_ms)
-                    <= u64::from(edge.snapshot.profile.trigger_settings.double_press_ms)
+                !deadline_expired(edge.monotonic_ms, previous.deadline_monotonic_ms)
             });
             state.previous_short_press = None;
 
@@ -645,6 +643,39 @@ mod tests {
         );
         assert_eq!(tracker.inputs.len(), MAX_TRACKED_INPUTS);
         assert!(!tracker.inputs.contains_key(&rejected));
+    }
+
+    #[test]
+    fn expired_first_double_window_prevents_second_snapshot_extension() {
+        let mut tracker = TriggerTracker::default();
+        let first_snapshot = snapshot(500, 100);
+        let second_snapshot = snapshot(500, 300);
+
+        tracker.edge(edge(direct(6), InputState::Down, 0, first_snapshot.clone()));
+        tracker.edge(edge(direct(6), InputState::Up, 10, first_snapshot));
+
+        assert_eq!(
+            occurrences(&tracker.edge(edge(direct(6), InputState::Down, 150, second_snapshot))),
+            vec![occurrence(ActionTrigger::Press, 150)]
+        );
+    }
+
+    #[test]
+    fn first_double_window_allows_second_snapshot_reduction() {
+        let mut tracker = TriggerTracker::default();
+        let first_snapshot = snapshot(500, 300);
+        let second_snapshot = snapshot(500, 100);
+
+        tracker.edge(edge(direct(6), InputState::Down, 0, first_snapshot.clone()));
+        tracker.edge(edge(direct(6), InputState::Up, 10, first_snapshot));
+
+        assert_eq!(
+            occurrences(&tracker.edge(edge(direct(6), InputState::Down, 150, second_snapshot))),
+            vec![
+                occurrence(ActionTrigger::Press, 150),
+                occurrence(ActionTrigger::DoublePress, 150),
+            ]
+        );
     }
 
     #[test]
