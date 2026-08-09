@@ -323,6 +323,38 @@ fn mutate_workspace(
     snapshot(state)
 }
 
+fn mutate_workspace_with_operation_barrier(
+    state: &AppState,
+    mutation: impl FnOnce(&mut Workspace, Option<&RuntimeCoordinator>) -> Result<(), AppError>,
+) -> Result<AppSnapshot, AppError> {
+    let mut coordinator = state
+        .coordinator
+        .as_ref()
+        .map(|coordinator| {
+            coordinator
+                .lock()
+                .map_err(|_| state_error("coordinator_unavailable"))
+        })
+        .transpose()?;
+    let operation = state
+        .operation_barrier
+        .write()
+        .map_err(|_| state_error("operation_barrier_unavailable"))?;
+    let mut workspace = state
+        .workspace
+        .write()
+        .map_err(|_| state_error("workspace_unavailable"))?;
+    mutation(&mut workspace, coordinator.as_deref())?;
+    let revision = WorkspaceRevision::capture(&workspace);
+    drop(workspace);
+    if let Some(coordinator) = coordinator.as_deref_mut() {
+        coordinator.apply_workspace_revision(revision);
+    }
+    drop(operation);
+    drop(coordinator);
+    snapshot(state)
+}
+
 fn require_addressable_identity(
     coordinator: Option<&RuntimeCoordinator>,
     device_id: &hardware::DeviceId,
@@ -510,14 +542,19 @@ fn duplicate_profile_for_device_inner(
     state: &AppState,
     request: DuplicateProfileForDeviceRequest,
 ) -> Result<AppSnapshot, AppError> {
-    mutate_workspace(state, move |workspace, coordinator| {
+    let metrics = state.metrics.as_deref();
+    mutate_workspace_with_operation_barrier(state, move |workspace, coordinator| {
         require_addressable_identity(coordinator, &request.device_id)?;
         validate_online_firmware_protocol(
             coordinator,
             &request.device_id,
             request.source_profile.minimum_protocol_version(),
         )?;
-        workspace.duplicate_profile_for_device(request)?;
+        if let Some(metrics) = metrics {
+            workspace.duplicate_profile_for_device_with_metrics(request, metrics)?;
+        } else {
+            workspace.duplicate_profile_for_device(request)?;
+        }
         Ok(())
     })
 }

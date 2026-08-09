@@ -254,6 +254,44 @@ impl RestoreOperations for SystemRestoreOperations {
     }
 }
 
+trait DataGenerationOperations {
+    fn rename(&mut self, from: &Path, to: &Path) -> std::io::Result<()>;
+
+    fn remove_dir_all(&mut self, path: &Path) -> std::io::Result<()>;
+
+    fn close_metrics(&mut self, metrics: &MetricsStore);
+
+    fn reopen_metrics(
+        &mut self,
+        metrics: &MetricsStore,
+        path: &Path,
+    ) -> Result<(), rusqlite::Error>;
+}
+
+struct SystemDataGenerationOperations;
+
+impl DataGenerationOperations for SystemDataGenerationOperations {
+    fn rename(&mut self, from: &Path, to: &Path) -> std::io::Result<()> {
+        fs::rename(from, to)
+    }
+
+    fn remove_dir_all(&mut self, path: &Path) -> std::io::Result<()> {
+        fs::remove_dir_all(path)
+    }
+
+    fn close_metrics(&mut self, metrics: &MetricsStore) {
+        metrics.close();
+    }
+
+    fn reopen_metrics(
+        &mut self,
+        metrics: &MetricsStore,
+        path: &Path,
+    ) -> Result<(), rusqlite::Error> {
+        metrics.reopen(path)
+    }
+}
+
 impl Workspace {
     pub fn load(config_directory: &Path, bundled_profiles: &Path) -> Result<Self, AppError> {
         Self::recover_interrupted_schema_v1_migration(config_directory)?;
@@ -611,6 +649,22 @@ impl Workspace {
         &mut self,
         request: DuplicateProfileForDeviceRequest,
     ) -> Result<DeviceProfile, AppError> {
+        self.duplicate_profile_for_device_internal(request, None)
+    }
+
+    pub fn duplicate_profile_for_device_with_metrics(
+        &mut self,
+        request: DuplicateProfileForDeviceRequest,
+        metrics: &MetricsStore,
+    ) -> Result<DeviceProfile, AppError> {
+        self.duplicate_profile_for_device_internal(request, Some(metrics))
+    }
+
+    fn duplicate_profile_for_device_internal(
+        &mut self,
+        request: DuplicateProfileForDeviceRequest,
+        metrics: Option<&MetricsStore>,
+    ) -> Result<DeviceProfile, AppError> {
         let name = request.name.trim().to_owned();
         if name.is_empty() {
             return Err(AppError::new("invalid_profile_name"));
@@ -682,7 +736,7 @@ impl Workspace {
         staged_profiles.insert(profile_id.clone(), profile.clone());
         validate_settings(&settings, &staged_profiles)?;
         let next_directory = self.stage_data_generation(&settings, &staged_profiles)?;
-        self.activate_staged_data_generation(&next_directory)?;
+        self.activate_staged_data_generation(&next_directory, metrics)?;
         self.profiles.insert(profile_id, profile.clone());
         self.settings = settings;
         Ok(profile)
@@ -950,26 +1004,92 @@ impl Workspace {
         Ok(next_directory)
     }
 
-    fn activate_staged_data_generation(&self, next_directory: &Path) -> Result<(), AppError> {
+    fn activate_staged_data_generation(
+        &self,
+        next_directory: &Path,
+        metrics: Option<&MetricsStore>,
+    ) -> Result<(), AppError> {
+        let mut operations = SystemDataGenerationOperations;
+        self.activate_staged_data_generation_with_operations(
+            next_directory,
+            metrics,
+            &mut operations,
+        )
+    }
+
+    fn activate_staged_data_generation_with_operations(
+        &self,
+        next_directory: &Path,
+        metrics: Option<&MetricsStore>,
+        operations: &mut impl DataGenerationOperations,
+    ) -> Result<(), AppError> {
         let data_directory = self.data_directory();
         let previous_directory = self.config_directory.join("data.previous");
-        remove_directory_if_exists(&previous_directory)?;
-        if let Err(error) = fs::rename(&data_directory, &previous_directory) {
-            let _ = fs::remove_dir_all(next_directory);
-            return Err(io_error("stage_duplicate_data", &data_directory, error));
+        match operations.remove_dir_all(&previous_directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(io_error(
+                    "remove_staging_directory",
+                    &previous_directory,
+                    error,
+                ));
+            }
         }
-        if let Err(error) = fs::rename(next_directory, &data_directory) {
-            let rollback = fs::rename(&previous_directory, &data_directory);
-            let _ = fs::remove_dir_all(next_directory);
-            return match rollback {
-                Ok(()) => Err(io_error("activate_duplicate_data", next_directory, error)),
-                Err(rollback) => Err(AppError::new("duplicate_profile_rollback_failed")
+        if let Some(metrics) = metrics {
+            operations.close_metrics(metrics);
+        }
+        if let Err(error) = operations.rename(&data_directory, &previous_directory) {
+            let reopen = metrics.and_then(|metrics| {
+                operations
+                    .reopen_metrics(metrics, &data_directory.join("metrics.sqlite3"))
+                    .err()
+            });
+            let _ = operations.remove_dir_all(next_directory);
+            return match reopen {
+                Some(reopen) => Err(AppError::new("duplicate_profile_rollback_failed")
                     .with_detail(format!(
-                        "activate duplicate data: {error}; restore previous data: {rollback}"
+                        "stage duplicate data: {error}; reopen original metrics: {reopen}"
+                    ))),
+                None => Err(io_error("stage_duplicate_data", &data_directory, error)),
+            };
+        }
+        if let Err(error) = operations.rename(next_directory, &data_directory) {
+            let rollback = operations.rename(&previous_directory, &data_directory);
+            let reopen = metrics.and_then(|metrics| {
+                operations
+                    .reopen_metrics(metrics, &data_directory.join("metrics.sqlite3"))
+                    .err()
+            });
+            let _ = operations.remove_dir_all(next_directory);
+            return match (rollback, reopen) {
+                (Ok(()), None) => Err(io_error("activate_duplicate_data", next_directory, error)),
+                (rollback, reopen) => Err(AppError::new("duplicate_profile_rollback_failed")
+                    .with_detail(format!(
+                        "activate duplicate data: {error}; restore previous data: {rollback:?}; reopen original metrics: {reopen:?}"
                     ))),
             };
         }
-        let _ = fs::remove_dir_all(&previous_directory);
+        if let Some(metrics) = metrics
+            && let Err(error) =
+                operations.reopen_metrics(metrics, &data_directory.join("metrics.sqlite3"))
+        {
+            let rollback_new = operations.rename(&data_directory, next_directory);
+            let rollback_old = operations.rename(&previous_directory, &data_directory);
+            let reopen = operations
+                .reopen_metrics(metrics, &data_directory.join("metrics.sqlite3"))
+                .err();
+            let _ = operations.remove_dir_all(next_directory);
+            if rollback_new.is_err() || rollback_old.is_err() || reopen.is_some() {
+                return Err(AppError::new("duplicate_profile_rollback_failed").with_detail(
+                    format!(
+                        "reopen active metrics: {error}; restore new data: {rollback_new:?}; restore original data: {rollback_old:?}; reopen original metrics: {reopen:?}"
+                    ),
+                ));
+            }
+            return Err(metrics_error("reopen_metrics", error));
+        }
+        let _ = operations.remove_dir_all(&previous_directory);
         Ok(())
     }
 
@@ -1681,6 +1801,97 @@ mod tests {
         Workspace::create(&directory.0, vec![device_profile()]).unwrap()
     }
 
+    struct MetricsAwareGenerationOperations {
+        metrics_closed: bool,
+        reopened_paths: Vec<PathBuf>,
+    }
+
+    impl MetricsAwareGenerationOperations {
+        fn new() -> Self {
+            Self {
+                metrics_closed: false,
+                reopened_paths: Vec::new(),
+            }
+        }
+    }
+
+    impl DataGenerationOperations for MetricsAwareGenerationOperations {
+        fn rename(&mut self, from: &Path, to: &Path) -> std::io::Result<()> {
+            if from.file_name().and_then(|name| name.to_str()) == Some("data")
+                && !self.metrics_closed
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "open metrics blocks data generation rename",
+                ));
+            }
+            fs::rename(from, to)
+        }
+
+        fn remove_dir_all(&mut self, path: &Path) -> std::io::Result<()> {
+            fs::remove_dir_all(path)
+        }
+
+        fn close_metrics(&mut self, metrics: &MetricsStore) {
+            metrics.close();
+            self.metrics_closed = true;
+        }
+
+        fn reopen_metrics(
+            &mut self,
+            metrics: &MetricsStore,
+            path: &Path,
+        ) -> Result<(), rusqlite::Error> {
+            let result = metrics.reopen(path);
+            if result.is_ok() {
+                self.reopened_paths.push(path.to_owned());
+            }
+            result
+        }
+    }
+
+    #[test]
+    fn duplicate_generation_closes_metrics_before_swapping_and_reopens_active_path() {
+        let directory = TestDirectory::new();
+        let workspace = workspace(&directory);
+        let metrics_path = directory.path("data/metrics.sqlite3");
+        let metrics = MetricsStore::open(&metrics_path).unwrap();
+        let next_directory = workspace
+            .stage_data_generation(&workspace.settings, &workspace.profiles)
+            .unwrap();
+        let mut operations = MetricsAwareGenerationOperations::new();
+
+        workspace
+            .activate_staged_data_generation_with_operations(
+                &next_directory,
+                Some(&metrics),
+                &mut operations,
+            )
+            .unwrap();
+
+        assert!(operations.metrics_closed);
+        assert_eq!(
+            operations.reopened_paths,
+            vec![directory.path("data/metrics.sqlite3")]
+        );
+        metrics
+            .record_button_press(
+                &MetricAttribution {
+                    device_id: DeviceId::new(
+                        crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+                        "GENERATION",
+                    )
+                    .unwrap(),
+                    device_name: "Generation test".into(),
+                    device_profile_id: "red-phone-v1".into(),
+                    hardware_profile_id: "esp-primary".into(),
+                },
+                "A",
+                1_720_086_400_000,
+            )
+            .unwrap();
+    }
+
     #[test]
     fn creates_a_deep_cloned_profile_with_a_unique_stable_id() {
         let directory = TestDirectory::new();
@@ -1910,11 +2121,14 @@ mod tests {
             .unwrap();
 
         workspace
-            .duplicate_profile_for_device(DuplicateProfileForDeviceRequest {
-                device_id: device,
-                source_profile: workspace.profiles["red-phone-v1"].clone(),
-                name: "Metrics copy".into(),
-            })
+            .duplicate_profile_for_device_with_metrics(
+                DuplicateProfileForDeviceRequest {
+                    device_id: device,
+                    source_profile: workspace.profiles["red-phone-v1"].clone(),
+                    name: "Metrics copy".into(),
+                },
+                &metrics,
+            )
             .unwrap();
         metrics
             .record_button_press(&attribution, "A", 1_720_086_400_001)
