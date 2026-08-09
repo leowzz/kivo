@@ -30,10 +30,7 @@ enum class HelperCommandKind {
 struct HelperCommand {
   HelperCommandKind kind;
   std::uint32_t revision = 0;
-  union {
-    std::uint32_t runId = 0;
-    std::uint32_t eventId;
-  };
+  std::uint32_t runId = 0;
   std::uint16_t debounceMs = 0;
   std::uint16_t step = 0;
   std::uint16_t total = 0;

@@ -143,7 +143,7 @@ def run_smoke(
         write_line(device, f"PASTE {run_id} 1 2\n")
         expect_tokens(device, ["DONE", str(run_id), "1"])
         if protocol_version >= 6:
-            write_line(device, f"CHORD {run_id} 2 2 1 1 25\n")
+            write_line(device, f"HOST {run_id} 2 2\n")
         else:
             write_line(device, f"HOTKEY {run_id} 2 2 1 25\n")
         expect_tokens(device, ["DONE", str(run_id), "2"])

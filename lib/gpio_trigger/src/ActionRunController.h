@@ -3,7 +3,11 @@
 #include <cstdint>
 #include <optional>
 
-#include "GpioTriggerController.h"
+enum class ResponseAction {
+  Ignored,
+  Cleared,
+  Execute,
+};
 
 class ActionRunController {
  public:
@@ -14,6 +18,7 @@ class ActionRunController {
   ResponseAction cancel(std::uint32_t runId);
   bool keepAlive(std::uint32_t runId, std::uint32_t nowMs);
   void expire(std::uint32_t nowMs);
+  void reset();
   bool hasActiveRun() const;
 
  private:

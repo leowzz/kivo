@@ -324,58 +324,24 @@ void test_rejects_malformed_runtime_commands() {
   TEST_ASSERT_FALSE(parseHelperCommand(std::string(256, 'x')).has_value());
 }
 
-void test_action_steps_are_strictly_ordered() {
+void test_debounced_input_edges_do_not_create_action_state() {
   auto controller = directController(0);
-  controller.updatePin(6, false, 0);
-  const auto event = controller.updatePin(6, false, 30);
-  TEST_ASSERT_TRUE(event.has_value());
-
-  TEST_ASSERT_EQUAL(ResponseAction::Ignored,
-                    controller.acceptStep(event->id, 2, 2, true, 40));
-  TEST_ASSERT_EQUAL(ResponseAction::Execute,
-                    controller.acceptStep(event->id, 1, 2, true, 40));
-  TEST_ASSERT_TRUE(controller.hasPendingEvent());
-  controller.expire(2039);
-  TEST_ASSERT_TRUE(controller.hasPendingEvent());
-  TEST_ASSERT_EQUAL(ResponseAction::Execute,
-                    controller.acceptStep(event->id, 2, 2, true, 2039));
-  TEST_ASSERT_FALSE(controller.hasPendingEvent());
-}
-
-void test_long_delay_can_keep_a_pending_action_sequence_alive() {
-  auto controller = directController(0);
-  controller.updatePin(6, false, 0);
-  const auto event = controller.updatePin(6, false, 30);
-  TEST_ASSERT_TRUE(event.has_value());
-  TEST_ASSERT_EQUAL(ResponseAction::Execute,
-                    controller.acceptStep(event->id, 1, 2, true, 40));
-
-  TEST_ASSERT_TRUE(controller.keepPendingEventAlive(event->id, 2000));
-  controller.expire(3999);
-  TEST_ASSERT_TRUE(controller.hasPendingEvent());
-  controller.expire(4000);
-  TEST_ASSERT_FALSE(controller.hasPendingEvent());
-}
-
-void test_repeated_same_input_keeps_both_pending_event_ids() {
-  auto controller = directController(0);
+  ActionRunController runs;
   controller.updatePin(6, false, 0);
   const auto first = controller.updatePin(6, false, 30);
   TEST_ASSERT_TRUE(first.has_value());
+  TEST_ASSERT_EQUAL_UINT32(1, first->id);
+  TEST_ASSERT_FALSE(runs.hasActiveRun());
 
   controller.updatePin(6, true, 40);
-  controller.updatePin(6, true, 70);
+  const auto released = controller.updatePin(6, true, 70);
+  TEST_ASSERT_TRUE(released.has_value());
+  TEST_ASSERT_EQUAL_UINT32(2, released->id);
   controller.updatePin(6, false, 80);
   const auto second = controller.updatePin(6, false, 110);
   TEST_ASSERT_TRUE(second.has_value());
-  TEST_ASSERT_NOT_EQUAL(first->id, second->id);
-
-  TEST_ASSERT_EQUAL(ResponseAction::Execute,
-                    controller.acceptStep(first->id, 1, 1, true, 120));
-  TEST_ASSERT_TRUE(controller.hasPendingEvent());
-  TEST_ASSERT_EQUAL(ResponseAction::Execute,
-                    controller.acceptStep(second->id, 1, 1, true, 121));
-  TEST_ASSERT_FALSE(controller.hasPendingEvent());
+  TEST_ASSERT_EQUAL_UINT32(3, second->id);
+  TEST_ASSERT_FALSE(runs.hasActiveRun());
 }
 
 void test_learning_reports_contact_and_restores_runtime_topology() {
@@ -543,7 +509,6 @@ void test_stable_edges_emit_once_after_debounce() {
   TEST_ASSERT_EQUAL_UINT32(1, down->id);
   TEST_ASSERT_EQUAL_UINT8(6, down->gpio);
   TEST_ASSERT_EQUAL(InputState::Down, down->state);
-  TEST_ASSERT_TRUE(controller.hasPendingEvent());
   TEST_ASSERT_FALSE(controller.updatePin(6, false, 1100).has_value());
 
   TEST_ASSERT_FALSE(controller.updatePin(6, true, 1200).has_value());
@@ -592,8 +557,6 @@ void test_release_rearms_pin_for_a_later_press() {
   controller.updatePin(6, false, 0);
   const auto first = controller.updatePin(6, false, 30);
   TEST_ASSERT_TRUE(first.has_value());
-  TEST_ASSERT_EQUAL(ResponseAction::Cleared,
-                    controller.acceptStep(first->id, 0, 0, false, 31));
 
   controller.updatePin(6, true, 40);
   controller.updatePin(6, true, 70);
@@ -602,37 +565,6 @@ void test_release_rearms_pin_for_a_later_press() {
 
   TEST_ASSERT_TRUE(second.has_value());
   TEST_ASSERT_EQUAL_UINT32(3, second->id);
-}
-
-void test_tracks_pending_responses_per_gpio() {
-  auto controller = directController(0);
-
-  controller.updatePin(6, false, 0);
-  const auto first = controller.updatePin(6, false, 30);
-  controller.updatePin(7, false, 40);
-  const auto second = controller.updatePin(7, false, 70);
-
-  TEST_ASSERT_TRUE(first.has_value());
-  TEST_ASSERT_TRUE(second.has_value());
-  TEST_ASSERT_EQUAL_UINT32(1, first->id);
-  TEST_ASSERT_EQUAL_UINT32(2, second->id);
-  TEST_ASSERT_EQUAL(ResponseAction::Execute,
-                    controller.acceptStep(second->id, 1, 1, true, 71));
-  TEST_ASSERT_TRUE(controller.hasPendingEvent());
-  TEST_ASSERT_EQUAL(ResponseAction::Cleared,
-                    controller.acceptStep(first->id, 0, 0, false, 72));
-  TEST_ASSERT_FALSE(controller.hasPendingEvent());
-}
-
-void test_pending_responses_expire() {
-  auto controller = directController(0);
-
-  controller.updatePin(6, false, 0);
-  TEST_ASSERT_TRUE(controller.updatePin(6, false, 30).has_value());
-  controller.expire(2029);
-  TEST_ASSERT_TRUE(controller.hasPendingEvent());
-  controller.expire(2030);
-  TEST_ASSERT_FALSE(controller.hasPendingEvent());
 }
 
 void test_debounce_survives_millisecond_clock_rollover() {
@@ -666,12 +598,12 @@ void test_parses_paste_and_skip_responses() {
   const auto paste = parseHelperCommand("PASTE 42 1 1\n");
   TEST_ASSERT_TRUE(paste.has_value());
   TEST_ASSERT_EQUAL(HelperCommandKind::Paste, paste->kind);
-  TEST_ASSERT_EQUAL_UINT32(42, paste->eventId);
+  TEST_ASSERT_EQUAL_UINT32(42, paste->runId);
 
   const auto skip = parseHelperCommand("SKIP 7\r\n");
   TEST_ASSERT_TRUE(skip.has_value());
   TEST_ASSERT_EQUAL(HelperCommandKind::Skip, skip->kind);
-  TEST_ASSERT_EQUAL_UINT32(7, skip->eventId);
+  TEST_ASSERT_EQUAL_UINT32(7, skip->runId);
 }
 
 void test_rejects_malformed_responses() {
@@ -685,7 +617,7 @@ void test_parses_hotkey_response() {
   const auto response = parseHelperCommand("HOTKEY 42 1 1 10 14\n");
   TEST_ASSERT_TRUE(response.has_value());
   TEST_ASSERT_EQUAL(HelperCommandKind::Hotkey, response->kind);
-  TEST_ASSERT_EQUAL_UINT32(42, response->eventId);
+  TEST_ASSERT_EQUAL_UINT32(42, response->runId);
   TEST_ASSERT_EQUAL_UINT8(10, response->modifierMask);
   TEST_ASSERT_EQUAL_UINT8(14, response->keycode);
 }
@@ -746,6 +678,25 @@ void test_v6_run_cancel_keepalive_and_expiry() {
   TEST_ASSERT_EQUAL(ResponseAction::Ignored, runs.cancel(43));
 }
 
+void test_v6_run_reset_clears_active_run() {
+  ActionRunController runs;
+  TEST_ASSERT_EQUAL(ResponseAction::Execute, runs.acceptStep(42, 1, 2, 1));
+
+  runs.reset();
+
+  TEST_ASSERT_FALSE(runs.hasActiveRun());
+  TEST_ASSERT_EQUAL(ResponseAction::Ignored, runs.acceptStep(42, 2, 2, 2));
+}
+
+void test_v6_run_keepalive_rejects_an_expired_intermediate_step() {
+  ActionRunController runs;
+  TEST_ASSERT_EQUAL(ResponseAction::Execute, runs.acceptStep(42, 1, 2, 1));
+
+  TEST_ASSERT_FALSE(
+      runs.keepAlive(42, 1 + ActionRunController::kResponseTimeoutMs));
+  TEST_ASSERT_FALSE(runs.hasActiveRun());
+}
+
 void test_discards_the_rest_of_an_overlong_physical_line() {
   ResponseLineBuffer lines(16);
 
@@ -759,41 +710,6 @@ void test_discards_the_rest_of_an_overlong_physical_line() {
   }
   TEST_ASSERT_TRUE(response.has_value());
   TEST_ASSERT_EQUAL_STRING("PASTE 7 1 1\n", response->c_str());
-}
-
-void test_only_matching_paste_response_requests_keypress() {
-  auto controller = directController(0);
-  controller.updatePin(6, false, 0);
-  const auto event = controller.updatePin(6, false, 30);
-  TEST_ASSERT_TRUE(event.has_value());
-
-  TEST_ASSERT_EQUAL(ResponseAction::Ignored,
-                    controller.acceptStep(event->id + 1, 1, 1, true, 31));
-  TEST_ASSERT_TRUE(controller.hasPendingEvent());
-  TEST_ASSERT_EQUAL(ResponseAction::Execute,
-                    controller.acceptStep(event->id, 1, 1, true, 31));
-  TEST_ASSERT_FALSE(controller.hasPendingEvent());
-}
-
-void test_matching_hotkey_response_requests_execution() {
-  auto controller = directController(0);
-  controller.updatePin(6, false, 0);
-  const auto event = controller.updatePin(6, false, 30);
-  TEST_ASSERT_TRUE(event.has_value());
-  TEST_ASSERT_EQUAL(ResponseAction::Execute,
-                    controller.acceptStep(event->id, 1, 1, true, 31));
-  TEST_ASSERT_FALSE(controller.hasPendingEvent());
-}
-
-void test_matching_skip_response_clears_without_keypress() {
-  auto controller = directController(0);
-  controller.updatePin(6, false, 0);
-  const auto event = controller.updatePin(6, false, 30);
-  TEST_ASSERT_TRUE(event.has_value());
-
-  TEST_ASSERT_EQUAL(ResponseAction::Cleared,
-                    controller.acceptStep(event->id, 0, 0, false, 31));
-  TEST_ASSERT_FALSE(controller.hasPendingEvent());
 }
 
 void test_hid_hotkey_waits_for_press_and_release_report_slots() {
@@ -864,9 +780,7 @@ int main(int, char **) {
   RUN_TEST(test_parser_defers_unsupported_pins_to_board_validation);
   RUN_TEST(test_parses_learning_and_ordered_action_commands);
   RUN_TEST(test_rejects_malformed_runtime_commands);
-  RUN_TEST(test_action_steps_are_strictly_ordered);
-  RUN_TEST(test_long_delay_can_keep_a_pending_action_sequence_alive);
-  RUN_TEST(test_repeated_same_input_keeps_both_pending_event_ids);
+  RUN_TEST(test_debounced_input_edges_do_not_create_action_state);
   RUN_TEST(test_learning_reports_contact_and_restores_runtime_topology);
   RUN_TEST(test_rp2040_learning_accepts_gpio29_and_rejects_gpio23);
   RUN_TEST(test_learning_rejects_active_oled_pins);
@@ -881,8 +795,6 @@ int main(int, char **) {
   RUN_TEST(test_key_activity_indicator_recolors_each_press_and_clears_on_final_release);
   RUN_TEST(test_key_activity_indicator_reset_discards_held_state);
   RUN_TEST(test_release_rearms_pin_for_a_later_press);
-  RUN_TEST(test_tracks_pending_responses_per_gpio);
-  RUN_TEST(test_pending_responses_expire);
   RUN_TEST(test_debounce_survives_millisecond_clock_rollover);
   RUN_TEST(test_serializes_input_state_events);
   RUN_TEST(test_parses_paste_and_skip_responses);
@@ -893,10 +805,9 @@ int main(int, char **) {
   RUN_TEST(test_parses_v6_chord_and_rejects_malformed_chords);
   RUN_TEST(test_v6_run_starts_on_step_one_and_is_independent_of_input_ids);
   RUN_TEST(test_v6_run_cancel_keepalive_and_expiry);
+  RUN_TEST(test_v6_run_reset_clears_active_run);
+  RUN_TEST(test_v6_run_keepalive_rejects_an_expired_intermediate_step);
   RUN_TEST(test_discards_the_rest_of_an_overlong_physical_line);
-  RUN_TEST(test_only_matching_paste_response_requests_keypress);
-  RUN_TEST(test_matching_hotkey_response_requests_execution);
-  RUN_TEST(test_matching_skip_response_clears_without_keypress);
   RUN_TEST(test_hid_hotkey_waits_for_press_and_release_report_slots);
   RUN_TEST(test_hid_consumer_control_waits_for_press_and_release_report_slots);
   return UNITY_END();

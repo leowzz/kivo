@@ -4,6 +4,7 @@
 #include <optional>
 #include <vector>
 
+#include "ActionRunController.h"
 #include "DisplayStatus.h"
 #include "GpioTriggerController.h"
 #include "Handshake.h"
@@ -18,6 +19,7 @@ constexpr std::uint32_t kStandaloneDisplayStartupDelayMs = 500;
 std::string helloLine;
 
 GpioTriggerController controller(platform::boardProfile());
+ActionRunController actionRuns;
 KeyActivityIndicator keyIndicator;
 ResponseLineBuffer responseLines(kMaxResponseLineLength);
 TopologyBuilder topologyBuilder(platform::boardProfile());
@@ -27,8 +29,9 @@ bool standaloneDisplayPending = false;
 std::uint32_t standaloneDisplayStartedMs = 0;
 
 struct PendingDelay {
-  std::uint32_t eventId;
+  std::uint32_t runId;
   std::uint16_t step;
+  std::uint16_t total;
   std::uint32_t startedMs;
   std::uint32_t durationMs;
 };
@@ -91,6 +94,7 @@ void resetKeyIndicator() {
 void applyTopologyState(const RuntimeTopology &topology, std::uint32_t nowMs) {
   resetKeyIndicator();
   pendingDelay.reset();
+  actionRuns.reset();
   controller.configure(topology, nowMs);
   applyRuntimePinModes();
   displayStatus.setReady(topology.keyCount());
@@ -136,6 +140,8 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
       writeLine(helloLine);
       return;
     case HelperCommandKind::ConfigBegin:
+      pendingDelay.reset();
+      actionRuns.reset();
       if (controller.isLearning() ||
           !topologyBuilder.begin(command->revision, command->debounceMs)) {
         configError(command->revision, "invalid_begin");
@@ -175,6 +181,7 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
     case HelperCommandKind::LearnBegin:
       topologyBuilder.cancel();
       pendingDelay.reset();
+      actionRuns.reset();
       if (!controller.beginLearning(command->revision, command->pins, nowMs)) {
         configError(command->revision, "invalid_learning");
         return;
@@ -190,6 +197,8 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
         configError(command->revision, "invalid_learning_revision");
         return;
       }
+      pendingDelay.reset();
+      actionRuns.reset();
       resetKeyIndicator();
       applyRuntimePinModes();
       displayStatus.setReady(controller.topology().keyCount());
@@ -199,29 +208,38 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
       return;
     case HelperCommandKind::Skip:
       if (pendingDelay.has_value() &&
-          pendingDelay->eventId == command->eventId) {
+          pendingDelay->runId == command->runId) {
         pendingDelay.reset();
       }
-      controller.acceptStep(command->eventId, 0, 0, false, nowMs);
+      actionRuns.cancel(command->runId);
       return;
     case HelperCommandKind::Paste:
     case HelperCommandKind::Hotkey:
     case HelperCommandKind::Media:
     case HelperCommandKind::Host:
       break;
-    case HelperCommandKind::Delay:
-      if (pendingDelay.has_value() ||
-          controller.acceptStep(command->eventId, command->step, command->total,
-                                true, nowMs) != ResponseAction::Execute) {
+    case HelperCommandKind::Chord:
+      if (actionRuns.acceptStep(command->runId, command->step, command->total,
+                                nowMs) != ResponseAction::Execute) {
         return;
       }
-      pendingDelay = PendingDelay{command->eventId, command->step, nowMs,
-                                  command->durationMs};
+      actionRuns.cancel(command->runId);
+      writeLine("ACTION_ERROR " + std::to_string(command->runId) + " " +
+                std::to_string(command->step) + " unsupported_chord\n");
+      return;
+    case HelperCommandKind::Delay:
+      if (pendingDelay.has_value() ||
+          actionRuns.acceptStep(command->runId, command->step, command->total,
+                                nowMs) != ResponseAction::Execute) {
+        return;
+      }
+      pendingDelay = PendingDelay{command->runId, command->step, command->total,
+                                  nowMs, command->durationMs};
       return;
   }
 
-  if (controller.acceptStep(command->eventId, command->step, command->total,
-                            true, nowMs) != ResponseAction::Execute) {
+  if (actionRuns.acceptStep(command->runId, command->step, command->total,
+                            nowMs) != ResponseAction::Execute) {
     return;
   }
   bool sent = true;
@@ -233,18 +251,21 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
     sent = platform::sendConsumerControl(command->consumerUsage);
   }
   if (!sent) return;
-  writeLine(formatDone(command->eventId, command->step));
+  writeLine(formatDone(command->runId, command->step));
 }
 
 void servicePendingDelay(std::uint32_t nowMs) {
   if (!pendingDelay.has_value()) return;
   const auto delay = *pendingDelay;
+  if (delay.step < delay.total && !actionRuns.keepAlive(delay.runId, nowMs)) {
+    pendingDelay.reset();
+    return;
+  }
   if (nowMs - delay.startedMs < delay.durationMs) {
-    controller.keepPendingEventAlive(delay.eventId, nowMs);
     return;
   }
   pendingDelay.reset();
-  writeLine(formatDone(delay.eventId, delay.step));
+  writeLine(formatDone(delay.runId, delay.step));
 }
 
 void readHelperResponses(std::uint32_t nowMs) {
@@ -342,13 +363,15 @@ void loop() {
   initializeStandaloneDisplay(nowMs);
   const bool connected = platform::connected();
   if (connected != helperConnected) {
+    pendingDelay.reset();
+    actionRuns.reset();
     displayStatus.setUsbConnected(connected);
     renderStatus();
     if (connected) writeLine(helloLine);
   }
   helperConnected = connected;
   servicePendingDelay(nowMs);
-  controller.expire(nowMs);
+  actionRuns.expire(nowMs);
   readHelperResponses(nowMs);
   if (controller.isLearning()) {
     scanLearningInputs(nowMs);

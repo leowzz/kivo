@@ -23,16 +23,8 @@ struct InputEvent {
       : id(id), input(input), state(state), gpio(input.pinA) {}
 };
 
-enum class ResponseAction {
-  Ignored,
-  Cleared,
-  Execute,
-};
-
 class GpioTriggerController {
  public:
-  static constexpr std::uint32_t kResponseTimeoutMs = 2000;
-
   explicit GpioTriggerController(const BoardProfile &profile,
                                  std::uint32_t startMs = 0);
 
@@ -59,12 +51,6 @@ class GpioTriggerController {
   const std::vector<std::uint8_t> &learningPins() const {
     return learningPins_;
   }
-  ResponseAction acceptStep(std::uint32_t eventId, std::uint16_t step,
-                            std::uint16_t total, bool execute,
-                            std::uint32_t nowMs);
-  void expire(std::uint32_t nowMs);
-  bool keepPendingEventAlive(std::uint32_t eventId, std::uint32_t nowMs);
-  bool hasPendingEvent() const;
   const RuntimeTopology &topology() const { return topology_; }
 
  private:
@@ -74,13 +60,6 @@ class GpioTriggerController {
     bool stableActive = false;
     bool reportedActive = false;
     std::uint32_t rawChangedMs = 0;
-  };
-
-  struct PendingEvent {
-    std::uint32_t id;
-    std::uint16_t nextStep = 1;
-    std::uint16_t total = 0;
-    std::uint32_t updatedMs;
   };
 
   std::optional<std::size_t> inputIndex(const PhysicalInput &input) const;
@@ -94,5 +73,4 @@ class GpioTriggerController {
   std::optional<std::uint32_t> learningRevision_;
   std::vector<std::uint8_t> learningPins_;
   std::uint32_t nextEventId_ = 1;
-  std::vector<PendingEvent> pendingEvents_;
 };

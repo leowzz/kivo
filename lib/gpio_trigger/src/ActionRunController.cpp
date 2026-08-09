@@ -46,4 +46,6 @@ void ActionRunController::expire(std::uint32_t nowMs) {
   }
 }
 
+void ActionRunController::reset() { activeRun_.reset(); }
+
 bool ActionRunController::hasActiveRun() const { return activeRun_.has_value(); }

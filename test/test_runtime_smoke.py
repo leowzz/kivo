@@ -220,7 +220,7 @@ def test_smoke_actions_use_host_created_run_and_sequential_done_steps() -> None:
         exercise_actions=True,
     )
 
-    assert device.writes[-2:] == [b"PASTE 1 1 2\n", b"CHORD 1 2 2 1 1 25\n"]
+    assert device.writes[-2:] == [b"PASTE 1 1 2\n", b"HOST 1 2 2\n"]
 
 
 @pytest.mark.parametrize("done", [b"DONE 8 1\n", b"DONE 1 2\n"])
