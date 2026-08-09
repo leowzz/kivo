@@ -125,6 +125,7 @@ pub struct DeviceSession {
     triggers: TriggerTracker,
     next_run_id: u64,
     pending_receive_sequences: BTreeMap<u64, usize>,
+    gesture_placeholders: BTreeMap<u64, usize>,
     trigger_metadata: BTreeMap<(PhysicalInput, u64), TriggerMetadata>,
     active_receive_sequence: Option<u64>,
     pending_paste: Option<PendingPaste>,
@@ -211,6 +212,7 @@ impl DeviceSession {
             triggers: TriggerTracker::default(),
             next_run_id: 1,
             pending_receive_sequences: BTreeMap::new(),
+            gesture_placeholders: BTreeMap::new(),
             trigger_metadata: BTreeMap::new(),
             active_receive_sequence: None,
             pending_paste: None,
@@ -237,6 +239,7 @@ impl DeviceSession {
             triggers: TriggerTracker::default(),
             next_run_id: 1,
             pending_receive_sequences: BTreeMap::new(),
+            gesture_placeholders: BTreeMap::new(),
             trigger_metadata: BTreeMap::new(),
             active_receive_sequence: None,
             pending_paste: None,
@@ -268,6 +271,7 @@ impl DeviceSession {
         self.pending_learning = None;
         self.settle_queued(&mut output);
         self.reset_gestures();
+        self.settle_placeholders(&mut output);
         self.ready = false;
         self.configuring = None;
         self.profile = snapshot.clone();
@@ -312,6 +316,7 @@ impl DeviceSession {
         self.ready = false;
         self.settle_queued(&mut output);
         self.reset_gestures();
+        self.settle_placeholders(&mut output);
         self.pending_learning = Some(target);
         self.start_pending_control(&mut output);
         output
@@ -644,6 +649,10 @@ impl DeviceSession {
                     .pending_receive_sequences
                     .entry(receive_sequence)
                     .or_default() += 1;
+                *self
+                    .gesture_placeholders
+                    .entry(receive_sequence)
+                    .or_default() += 1;
                 self.trigger_metadata.insert(
                     (input, occurrences[0].origin_monotonic_ms),
                     metadata.clone(),
@@ -763,7 +772,32 @@ impl DeviceSession {
     ) {
         self.finish_receive_sequence(receive_sequence, output);
         if let Some(placeholder) = release_placeholder {
-            self.finish_receive_sequence(placeholder, output);
+            self.finish_placeholder(placeholder, output);
+        }
+    }
+
+    fn finish_placeholder(&mut self, receive_sequence: u64, output: &mut SessionOutput) {
+        let present = if let Some(count) = self.gesture_placeholders.get_mut(&receive_sequence) {
+            if *count > 1 {
+                *count -= 1;
+            } else {
+                self.gesture_placeholders.remove(&receive_sequence);
+            }
+            true
+        } else {
+            false
+        };
+        if present {
+            self.finish_receive_sequence(receive_sequence, output);
+        }
+    }
+
+    fn settle_placeholders(&mut self, output: &mut SessionOutput) {
+        let placeholders = std::mem::take(&mut self.gesture_placeholders);
+        for (receive_sequence, count) in placeholders {
+            for _ in 0..count {
+                self.finish_receive_sequence(receive_sequence, output);
+            }
         }
     }
 
@@ -967,6 +1001,7 @@ impl DeviceSession {
         self.pending_learning = None;
         self.learning = None;
         self.reset_gestures();
+        self.gesture_placeholders.clear();
         self.pending_receive_sequences.clear();
     }
 
@@ -3064,7 +3099,8 @@ mod tests {
         session.on_message_deferred(protocol6_hello(), 0, 100);
         session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
         session.on_line_deferred("STATE 1 DIRECT 6 DOWN\n", 1, 0);
-        session.reconfigure(Some(Arc::new(runtime)), 2);
+        let reset = session.reconfigure(Some(Arc::new(runtime)), 2);
+        assert_eq!(reset.completed_receive_sequences, [1]);
         assert!(session.poll_triggers(500).lines.is_empty());
         assert!(
             session
