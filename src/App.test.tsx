@@ -204,6 +204,23 @@ function deferred<Value>() {
   return { promise, resolve };
 }
 
+async function openActionDialog(user: ReturnType<typeof userEvent.setup>, type: "paste" | "hotkey" = "hotkey") {
+  await user.click(screen.getByRole("button", { name: "添加行为" }));
+  await user.selectOptions(screen.getByLabelText("行为类型"), type);
+}
+
+async function addPasteAction(user: ReturnType<typeof userEvent.setup>, text: string) {
+  await openActionDialog(user, "paste");
+  await user.type(screen.getByRole("textbox", { name: "文本" }), text);
+  await user.click(screen.getByRole("button", { name: "保存" }));
+}
+
+async function addHotkeyAction(user: ReturnType<typeof userEvent.setup>) {
+  await openActionDialog(user, "hotkey");
+  await user.click(screen.getByRole("checkbox", { name: "回车" }));
+  await user.click(screen.getByRole("button", { name: "保存" }));
+}
+
 function runtimeEvent(overrides: Partial<RuntimeEvent> = {}): RuntimeEvent {
   return {
     timestampMs: 1785396000000,
@@ -379,8 +396,7 @@ test("fills default trigger settings when a stale profile omits them", async () 
 
   expect(await screen.findByRole("heading", { name: "按键概览" })).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "按键行为" }));
-  await user.click(screen.getByRole("button", { name: "粘贴文本" }));
-  await user.type(screen.getByRole("textbox", { name: "文本" }), "默认计时");
+  await addPasteAction(user, "默认计时");
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_device_profile", expect.anything()));
   const saved = vi.mocked(invoke).mock.calls.find(([command]) => command === "save_device_profile")?.[1] as {
     profile: DeviceProfile;
@@ -408,8 +424,7 @@ test("keeps the editor configuration independent from the device assignment", as
     settings: expect.objectContaining({ editor_profile: "profile-b" }),
   }));
   await user.click(screen.getByRole("button", { name: "2，0 项行为" }));
-  await user.click(screen.getByRole("button", { name: "粘贴文本" }));
-  await user.type(screen.getByRole("textbox", { name: "文本" }), "配置 B");
+  await addPasteAction(user, "配置 B");
   await user.click(screen.getByRole("button", { name: "设备管理" }));
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_device_profile", {
     profile: expect.objectContaining({
@@ -438,8 +453,7 @@ test("waits for an autosave before changing pages", async () => {
   const user = userEvent.setup();
   render(<App />);
   await user.click(await screen.findByRole("button", { name: "按键行为" }));
-  await user.click(screen.getByRole("button", { name: "粘贴文本" }));
-  await user.type(screen.getByRole("textbox", { name: "文本" }), "未保存");
+  await addPasteAction(user, "未保存");
 
   await user.click(screen.getByRole("button", { name: "设备管理" }));
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_device_profile", expect.anything()));
@@ -517,7 +531,7 @@ test("uses the authoritative profile-save snapshot for the device status transit
     "0 就绪 · 0 需处理 · 0 离线",
   );
   await user.click(screen.getByRole("button", { name: "按键行为" }));
-  await user.click(screen.getByRole("button", { name: "按下按键" }));
+  await addHotkeyAction(user);
 
   await waitFor(
     () =>
@@ -838,7 +852,7 @@ test("preserves a dirty Device Profile draft across a registry refresh", async (
   const user = userEvent.setup();
   render(<App />);
   await user.click(await screen.findByRole("button", { name: "按键行为" }));
-  await user.click(screen.getByRole("button", { name: "按下按键" }));
+  await addHotkeyAction(user);
   expect(
     screen.getByRole("button", { name: "2，1 项行为" }),
   ).toBeInTheDocument();
@@ -1612,9 +1626,8 @@ test("builds an ordered action list and autosaves it", async () => {
   await screen.findByRole("button", { name: "2，0 项行为" });
   await screen.findByRole("complementary", { name: "2" });
 
-  await user.click(screen.getByRole("button", { name: "粘贴文本" }));
-  await user.type(screen.getByRole("textbox", { name: "文本" }), "你好");
-  await user.click(screen.getByRole("button", { name: "按下按键" }));
+  await addPasteAction(user, "你好");
+  await addHotkeyAction(user);
 
   await waitFor(
     () =>
@@ -1644,8 +1657,8 @@ test("records a shortcut from the application window", async () => {
   await user.click(await screen.findByRole("button", { name: "按键行为" }));
   const editor = await screen.findByRole("complementary", { name: "2" });
 
-  await user.click(screen.getByRole("button", { name: "按下按键" }));
-  await user.click(within(editor).getByRole("button", { name: "录入按键" }));
+  await openActionDialog(user, "hotkey");
+  await user.click(screen.getByRole("button", { name: "录入快捷键" }));
   fireEvent.keyDown(window, {
     code: "KeyK",
     key: "k",
@@ -1653,7 +1666,9 @@ test("records a shortcut from the application window", async () => {
     shiftKey: true,
   });
 
-  expect(within(editor).getByText("Command + Shift + K")).toBeInTheDocument();
+  fireEvent.keyUp(window, { code: "KeyK", key: "k", metaKey: true, shiftKey: true });
+  expect(screen.getByRole("button", { name: "移除 K" })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "保存" }));
 });
 
 test("manually selects a multi-modifier shortcut", async () => {
@@ -1662,18 +1677,16 @@ test("manually selects a multi-modifier shortcut", async () => {
   await user.click(await screen.findByRole("button", { name: "按键行为" }));
   const editor = await screen.findByRole("complementary", { name: "2" });
 
-  await user.click(screen.getByRole("button", { name: "按下按键" }));
-  await user.click(within(editor).getByRole("checkbox", { name: "Cmd" }));
-  await user.click(within(editor).getByRole("checkbox", { name: "Ctrl" }));
-  await user.click(within(editor).getByRole("checkbox", { name: "Shift" }));
-  await user.selectOptions(
-    within(editor).getByRole("combobox", { name: "按键" }),
-    "k",
-  );
+  await openActionDialog(user, "hotkey");
+  await user.click(screen.getByRole("checkbox", { name: "命令" }));
+  await user.click(screen.getByRole("checkbox", { name: "控制" }));
+  await user.click(screen.getByRole("checkbox", { name: "上档" }));
+  await user.click(screen.getByRole("checkbox", { name: "K" }));
 
   expect(
-    within(editor).getByText("Command + Control + Shift + K"),
+    screen.getByRole("button", { name: "移除 K" }),
   ).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "保存" }));
   await waitFor(
     () =>
       expect(invoke).toHaveBeenCalledWith("save_device_profile", {
@@ -1696,13 +1709,11 @@ test("manually selects the backtick key", async () => {
   await user.click(await screen.findByRole("button", { name: "按键行为" }));
   const editor = await screen.findByRole("complementary", { name: "2" });
 
-  await user.click(screen.getByRole("button", { name: "按下按键" }));
-  await user.selectOptions(
-    within(editor).getByRole("combobox", { name: "按键" }),
-    "backtick",
-  );
+  await openActionDialog(user, "hotkey");
+  await user.click(screen.getByRole("checkbox", { name: "`" }));
 
-  expect(within(editor).getByText("`", { selector: "output" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "移除 `" })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "保存" }));
   await waitFor(
     () =>
       expect(invoke).toHaveBeenCalledWith("save_device_profile", {
@@ -1766,7 +1777,7 @@ test("keeps a failed autosave and exposes retry", async () => {
   const key = await screen.findByRole("button", { name: "2，0 项行为" });
 
   await user.click(key);
-  await user.click(screen.getByRole("button", { name: "按下按键" }));
+  await addHotkeyAction(user);
   expect(
     await screen.findByText("保存失败", {}, { timeout: 1600 }),
   ).toBeInTheDocument();

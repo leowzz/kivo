@@ -833,8 +833,8 @@ export default function App() {
 
   const selectedButton = allButtons(editorProfileConfig).find((button) => button.id === selectedButtonId) ?? null;
   const selectedActions = editorProfileConfig && selectedButtonId
-    ? editorProfileConfig.actions[selectedButtonId]?.press ?? []
-    : [];
+    ? editorProfileConfig.actions[selectedButtonId] ?? emptyTriggerActions()
+    : emptyTriggerActions();
 
   return (
     <main className="product-shell">
@@ -1081,14 +1081,11 @@ export default function App() {
           language={language}
           button={selectedButton}
           actions={selectedActions}
-          onChange={(actions: ButtonAction[]) => selectedButtonId && updateEditorProfile((profile) => ({
+          onChange={(actions: TriggerActions) => selectedButtonId && updateEditorProfile((profile) => ({
             ...profile,
             actions: {
               ...profile.actions,
-              [selectedButtonId]: {
-                ...(profile.actions[selectedButtonId] ?? emptyTriggerActions()),
-                press: actions,
-              },
+              [selectedButtonId]: actions,
             },
           }))}
         />}
