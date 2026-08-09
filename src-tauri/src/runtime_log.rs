@@ -82,7 +82,7 @@ impl RuntimeLogEntry {
 }
 
 pub(crate) fn log_directory(config_directory: &Path) -> PathBuf {
-    config_directory.join("data/log")
+    config_directory.join("log")
 }
 
 pub(crate) fn serialize_entry(entry: &RuntimeLogEntry) -> serde_json::Result<String> {
@@ -967,10 +967,10 @@ mod tests {
     }
 
     #[test]
-    fn places_runtime_logs_under_the_application_data_directory() {
+    fn places_runtime_logs_outside_the_transactional_data_directory() {
         assert_eq!(
             log_directory(Path::new("/tmp/kivo")),
-            Path::new("/tmp/kivo/data/log")
+            Path::new("/tmp/kivo/log")
         );
     }
 
