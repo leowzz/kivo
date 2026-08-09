@@ -1026,9 +1026,7 @@ fn action_activity(code: &str, step: &crate::protocol::ActionStep) -> RuntimeAct
                 crate::profile::MediaCommand::VolumeDown => "volume_down",
                 crate::profile::MediaCommand::Mute => "mute",
             };
-            activity
-                .params
-                .insert("mediaCommand".into(), command.into());
+            activity.params.insert("command".into(), command.into());
         }
         crate::profile::ButtonAction::Open { target } => {
             activity.params.insert("actionKind".into(), "open".into());
@@ -2646,6 +2644,10 @@ mod tests {
             127,
         );
         assert_eq!(third.lines, ["MEDIA 43 3 3 205\n"]);
+        assert_eq!(third.activities[1].code, "action_step_started");
+        assert_eq!(third.activities[1].params["actionKind"], "media");
+        assert_eq!(third.activities[1].params["command"], "play_pause");
+        assert!(!third.activities[1].params.contains_key("mediaCommand"));
     }
 
     #[test]
