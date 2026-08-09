@@ -8,6 +8,15 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 MAKEFILE="$ROOT/Makefile"
 FIRMWARE_MAIN="$ROOT/src/main.cpp"
 RP2040_PLATFORM="$ROOT/src/platform/rp2040.cpp"
+PLATFORMIO_CONFIG="$ROOT/platformio.ini"
+ESP32S3_MERGE_SCRIPT="$ROOT/scripts/merge_esp32s3_firmware.py"
+
+grep -Fq 'post:scripts/merge_esp32s3_firmware.py' "$PLATFORMIO_CONFIG"
+test -f "$ESP32S3_MERGE_SCRIPT"
+grep -Fq 'env.get("FLASH_EXTRA_IMAGES", [])' "$ESP32S3_MERGE_SCRIPT"
+grep -Fq 'env.subst("$ESP32_APP_OFFSET")' "$ESP32S3_MERGE_SCRIPT"
+grep -Fq '"merge_bin"' "$ESP32S3_MERGE_SCRIPT"
+grep -Fq '.factory.bin' "$ESP32S3_MERGE_SCRIPT"
 
 grep -Fq 'display->setFont(u8g2_font_6x13_tf);' "$RP2040_PLATFORM"
 grep -Fq 'makeRp2040StandaloneDebugTopology(platform::boardProfile())' \
