@@ -120,6 +120,7 @@ pub struct DeviceSession {
     active: Option<ActionSequence>,
     active_snapshot: Option<Arc<RuntimeProfileSnapshot>>,
     active_context: Option<RuntimeEventContext>,
+    active_release_placeholder: Option<u64>,
     queue: VecDeque<QueuedOccurrence>,
     triggers: TriggerTracker,
     next_run_id: u64,
@@ -156,6 +157,7 @@ pub struct RuntimeProfileSnapshot {
 struct TriggerMetadata {
     receive_sequence: u64,
     event_id: u64,
+    placeholder_receive_sequence: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -163,6 +165,7 @@ struct QueuedOccurrence {
     occurrence: TriggerOccurrence,
     receive_sequence: u64,
     event_id: u64,
+    release_placeholder: Option<u64>,
 }
 
 struct PendingReconfiguration {
@@ -203,6 +206,7 @@ impl DeviceSession {
             active: None,
             active_snapshot: None,
             active_context: None,
+            active_release_placeholder: None,
             queue: VecDeque::new(),
             triggers: TriggerTracker::default(),
             next_run_id: 1,
@@ -228,6 +232,7 @@ impl DeviceSession {
             active: None,
             active_snapshot: None,
             active_context: None,
+            active_release_placeholder: None,
             queue: VecDeque::new(),
             triggers: TriggerTracker::default(),
             next_run_id: 1,
@@ -246,7 +251,6 @@ impl DeviceSession {
         &mut self,
         snapshot: Option<Arc<RuntimeProfileSnapshot>>,
     ) -> SessionOutput {
-        self.reset_gestures();
         self.profile = snapshot.clone();
         if let Some(pending) = self.pending_reconfiguration.as_mut() {
             pending.snapshot = snapshot;
@@ -359,7 +363,8 @@ impl DeviceSession {
             self.active_snapshot = None;
             self.active_context = None;
             if let Some(receive_sequence) = self.active_receive_sequence.take() {
-                self.finish_receive_sequence(receive_sequence, &mut output);
+                let release_placeholder = self.active_release_placeholder.take();
+                self.finish_queued_occurrence(receive_sequence, release_placeholder, &mut output);
             }
             self.start_next(&mut output);
         }
@@ -620,9 +625,10 @@ impl DeviceSession {
         };
 
         if self.is_v6() {
-            let metadata = TriggerMetadata {
+            let mut metadata = TriggerMetadata {
                 receive_sequence,
                 event_id,
+                placeholder_receive_sequence: None,
             };
             let edge = TriggerEdge {
                 input,
@@ -633,6 +639,11 @@ impl DeviceSession {
             };
             let occurrences = self.triggers.edge(edge);
             if state == InputState::Down && !occurrences.is_empty() {
+                metadata.placeholder_receive_sequence = Some(receive_sequence);
+                *self
+                    .pending_receive_sequences
+                    .entry(receive_sequence)
+                    .or_default() += 1;
                 self.trigger_metadata.insert(
                     (input, occurrences[0].origin_monotonic_ms),
                     metadata.clone(),
@@ -661,6 +672,7 @@ impl DeviceSession {
                 occurrence,
                 receive_sequence,
                 event_id,
+                release_placeholder: None,
             });
             self.start_next(output);
         } else {
@@ -689,14 +701,17 @@ impl DeviceSession {
         }
         for occurrence in occurrences {
             let key = (occurrence.input, occurrence.origin_monotonic_ms);
+            let origin_metadata = self.trigger_metadata.get(&key).cloned();
             let metadata = if prefer_fallback {
                 fallback_metadata.clone()
             } else {
-                self.trigger_metadata
-                    .get(&key)
-                    .cloned()
+                origin_metadata
+                    .clone()
                     .unwrap_or_else(|| fallback_metadata.clone())
             };
+            let release_placeholder = (occurrence.trigger == ActionTrigger::Release)
+                .then(|| origin_metadata.and_then(|metadata| metadata.placeholder_receive_sequence))
+                .flatten();
             *self
                 .pending_receive_sequences
                 .entry(metadata.receive_sequence)
@@ -722,6 +737,7 @@ impl DeviceSession {
                 occurrence,
                 receive_sequence: metadata.receive_sequence,
                 event_id: metadata.event_id,
+                release_placeholder,
             });
         }
     }
@@ -736,6 +752,18 @@ impl DeviceSession {
             }
         } else {
             output.completed_receive_sequences.push(receive_sequence);
+        }
+    }
+
+    fn finish_queued_occurrence(
+        &mut self,
+        receive_sequence: u64,
+        release_placeholder: Option<u64>,
+        output: &mut SessionOutput,
+    ) {
+        self.finish_receive_sequence(receive_sequence, output);
+        if let Some(placeholder) = release_placeholder {
+            self.finish_receive_sequence(placeholder, output);
         }
     }
 
@@ -756,6 +784,7 @@ impl DeviceSession {
             TriggerMetadata {
                 receive_sequence: 0,
                 event_id: 0,
+                placeholder_receive_sequence: None,
             },
             false,
             &mut output,
@@ -808,6 +837,9 @@ impl DeviceSession {
 
     fn configure_for_hello(&mut self, hello: HelloCapabilities, output: &mut SessionOutput) {
         let snapshot = self.profile.clone();
+        if self.hello.is_some() {
+            self.settle_for_handshake(output);
+        }
         self.clear_handshake();
         if let Err(error) = validate_hello(self.candidate_board, &hello) {
             output.activities.push(activity_from_error(error));
@@ -886,7 +918,7 @@ impl DeviceSession {
                     revision: self.revision,
                     kind: ConfigurationKind::Activate,
                 });
-                output.lines = lines;
+                output.lines.extend(lines);
             }
             Err(error) => output.activities.push(activity_from_error(error)),
         }
@@ -901,13 +933,13 @@ impl DeviceSession {
             revision: self.revision,
             kind: ConfigurationKind::Clear,
         });
-        output.lines = vec![
+        output.lines.extend([
             format!(
                 "CONFIG_BEGIN {} {EMPTY_TOPOLOGY_DEBOUNCE_MS}\n",
                 self.revision
             ),
             format!("CONFIG_COMMIT {}\n", self.revision),
-        ];
+        ]);
     }
 
     #[cfg(test)]
@@ -927,6 +959,7 @@ impl DeviceSession {
         self.active = None;
         self.active_snapshot = None;
         self.active_context = None;
+        self.active_release_placeholder = None;
         self.active_receive_sequence = None;
         self.pending_paste = None;
         self.queue.clear();
@@ -935,6 +968,49 @@ impl DeviceSession {
         self.learning = None;
         self.reset_gestures();
         self.pending_receive_sequences.clear();
+    }
+
+    fn settle_for_handshake(&mut self, output: &mut SessionOutput) {
+        if let Some(mut sequence) = self.active.take() {
+            let run_id = sequence.run_id();
+            sequence.abort();
+            output.lines.push(format!("SKIP {run_id}\n"));
+            self.active_snapshot = None;
+            self.active_context = None;
+            self.pending_paste = None;
+            if let Some(receive_sequence) = self.active_receive_sequence.take() {
+                let release_placeholder = self.active_release_placeholder.take();
+                self.finish_queued_occurrence(receive_sequence, release_placeholder, output);
+            }
+        }
+        let queued_items = std::mem::take(&mut self.queue);
+        let is_v6 = self.is_v6();
+        for queued in queued_items {
+            if !is_v6 {
+                output.lines.push(format!("SKIP {}\n", queued.event_id));
+            }
+            self.finish_queued_occurrence(
+                queued.receive_sequence,
+                queued.release_placeholder,
+                output,
+            );
+        }
+        for receive_sequence in self
+            .pending_receive_sequences
+            .keys()
+            .copied()
+            .collect::<Vec<_>>()
+        {
+            if receive_sequence != 0 {
+                output.completed_receive_sequences.push(receive_sequence);
+            }
+        }
+        self.pending_receive_sequences.clear();
+        self.active_receive_sequence = None;
+        self.active_release_placeholder = None;
+        self.active_snapshot = None;
+        self.active_context = None;
+        self.pending_paste = None;
     }
 
     fn reset_gestures(&mut self) {
@@ -949,7 +1025,11 @@ impl DeviceSession {
             if !is_v6 {
                 output.lines.push(format!("SKIP {}\n", queued.event_id));
             }
-            self.finish_receive_sequence(queued.receive_sequence, output);
+            self.finish_queued_occurrence(
+                queued.receive_sequence,
+                queued.release_placeholder,
+                output,
+            );
         }
     }
 
@@ -1012,7 +1092,8 @@ impl DeviceSession {
                 self.active_context = None;
                 self.pending_paste = None;
                 if let Some(receive_sequence) = self.active_receive_sequence.take() {
-                    self.finish_receive_sequence(receive_sequence, output);
+                    let release_placeholder = self.active_release_placeholder.take();
+                    self.finish_queued_occurrence(receive_sequence, release_placeholder, output);
                 }
                 self.start_next(output);
                 return;
@@ -1028,7 +1109,8 @@ impl DeviceSession {
             self.active_context = None;
             self.pending_paste = None;
             if let Some(receive_sequence) = self.active_receive_sequence.take() {
-                self.finish_receive_sequence(receive_sequence, output);
+                let release_placeholder = self.active_release_placeholder.take();
+                self.finish_queued_occurrence(receive_sequence, release_placeholder, output);
             }
             self.start_next(output);
         } else {
@@ -1059,7 +1141,11 @@ impl DeviceSession {
                 if !self.is_v6() {
                     output.lines.push(format!("SKIP {}\n", queued.event_id));
                 }
-                self.finish_receive_sequence(queued.receive_sequence, output);
+                self.finish_queued_occurrence(
+                    queued.receive_sequence,
+                    queued.release_placeholder,
+                    output,
+                );
                 output
                     .activities
                     .push(RuntimeActivity::new("unmapped_input").with_context(occurrence.context));
@@ -1075,7 +1161,11 @@ impl DeviceSession {
                 if !self.is_v6() {
                     output.lines.push(format!("SKIP {}\n", queued.event_id));
                 }
-                self.finish_receive_sequence(queued.receive_sequence, output);
+                self.finish_queued_occurrence(
+                    queued.receive_sequence,
+                    queued.release_placeholder,
+                    output,
+                );
                 output.activities.push(
                     RuntimeActivity::new("empty_action_list")
                         .with_param("button", button)
@@ -1098,6 +1188,7 @@ impl DeviceSession {
             self.active_snapshot = Some(Arc::clone(&occurrence.snapshot));
             self.active_context = occurrence.context;
             self.active_receive_sequence = Some(queued.receive_sequence);
+            self.active_release_placeholder = queued.release_placeholder;
             self.emit_active_step(output);
         }
     }
@@ -1177,7 +1268,8 @@ impl DeviceSession {
         self.active_context = None;
         self.pending_paste = None;
         if let Some(receive_sequence) = self.active_receive_sequence.take() {
-            self.finish_receive_sequence(receive_sequence, output);
+            let release_placeholder = self.active_release_placeholder.take();
+            self.finish_queued_occurrence(receive_sequence, release_placeholder, output);
         }
         self.start_next(output);
     }
@@ -1909,6 +2001,12 @@ fn run_isolated_worker_inner(
                         )?;
                     }
                     DeviceMessage::Hello(ref capability) => {
+                        if session.hello.is_some() {
+                            pending_paste = None;
+                            active_paste_ack = None;
+                            action_deadline = None;
+                            let _ = paste.cancel_device(&start.device_id);
+                        }
                         validate_hello(board, capability).map_err(|error| error.code.clone())?;
                         let output = session.on_message_deferred(message, 0, received_at_ms);
                         write_isolated_output(
@@ -2759,6 +2857,43 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_hello_aborts_active_and_queued_runs_once() {
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            TriggerActions {
+                press: vec![ButtonAction::Hotkey {
+                    keys: vec!["a".into()],
+                }],
+                double_press: vec![ButtonAction::Hotkey {
+                    keys: vec!["b".into()],
+                }],
+                ..TriggerActions::default()
+            },
+        );
+        let mut session = DeviceSession::new(runtime);
+        session.on_message_deferred(protocol6_hello(), 0, 100);
+        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
+        session.on_line_deferred("STATE 1 DIRECT 6 DOWN\n", 1, 0);
+        session.on_line_deferred("STATE 2 DIRECT 6 UP\n", 2, 10);
+        session.on_line_deferred("STATE 3 DIRECT 6 DOWN\n", 3, 20);
+
+        let restarted = session.on_message_deferred(protocol6_hello(), 4, 21);
+        assert!(restarted.lines.iter().any(|line| line == "SKIP 1\n"));
+        let completed = restarted
+            .completed_receive_sequences
+            .iter()
+            .copied()
+            .filter(|sequence| *sequence != 0)
+            .collect::<Vec<_>>();
+        let unique = completed.iter().copied().collect::<BTreeSet<_>>();
+        assert_eq!(completed.len(), unique.len());
+        assert_eq!(unique, BTreeSet::from([1, 2, 3]));
+        assert!(session.active.is_none());
+        assert!(session.queue.is_empty());
+    }
+
+    #[test]
     fn timer_poll_fires_long_press_without_serial_input() {
         let mut runtime = runtime_model();
         runtime.profile.actions.insert(
@@ -2787,6 +2922,42 @@ mod tests {
                 && activity.params.get("trigger").map(String::as_str) == Some("long_press")
         }));
         assert!(long.lines[0].starts_with("HOST 1 1 1"));
+    }
+
+    #[test]
+    fn long_press_only_paste_keeps_down_sequence_until_release() {
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            TriggerActions {
+                long_press: vec![ButtonAction::Paste {
+                    text: "hold".into(),
+                }],
+                ..TriggerActions::default()
+            },
+        );
+        let mut session = DeviceSession::new(runtime);
+        session.on_message_deferred(protocol6_hello(), 0, 100);
+        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
+
+        let down = session.on_line_deferred("STATE 1 DIRECT 6 DOWN\n", 1, 0);
+        assert!(down.completed_receive_sequences.is_empty());
+        let long = session.poll_triggers(500);
+        assert_eq!(long.paste_requests[0].receive_sequence, 1);
+        assert!(long.completed_receive_sequences.is_empty());
+        session.grant_paste(1, 1);
+        let completed_action = session.on_line_deferred("DONE 1 1\n", 2, 501);
+        assert!(completed_action.completed_receive_sequences.is_empty());
+
+        let release = session.on_line_deferred("STATE 2 DIRECT 6 UP\n", 3, 600);
+        assert_eq!(
+            release
+                .completed_receive_sequences
+                .iter()
+                .filter(|sequence| **sequence == 1)
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -2946,7 +3117,16 @@ mod tests {
         );
         assert!(double.completed_receive_sequences.is_empty());
         let completed = session.on_line_deferred("DONE 3 1\n", 6, 22);
-        assert_eq!(completed.completed_receive_sequences, [4]);
+        assert!(completed.completed_receive_sequences.is_empty());
+        let release = session.on_line_deferred("STATE 4 DIRECT 6 UP\n", 7, 23);
+        assert_eq!(
+            release
+                .completed_receive_sequences
+                .iter()
+                .filter(|sequence| **sequence == 4)
+                .count(),
+            1
+        );
     }
 
     #[test]
