@@ -444,14 +444,21 @@ impl ActionSequence {
         })
     }
 
-    pub fn acknowledge(&mut self, event_id: u64, step: u16) -> Result<(), String> {
+    pub fn acknowledge(&mut self, event_id: u64, step: u16) -> Result<ActionStep, String> {
         if event_id != self.event_id || self.awaiting != Some(step) {
             self.failed = true;
             return Err("invalid_action_acknowledgement".into());
         }
+        let completed = ActionStep {
+            event_id: self.event_id,
+            button: self.button.clone(),
+            step,
+            total: u16::try_from(self.actions.len()).map_err(|_| "invalid_action_count")?,
+            action: self.actions[self.next].clone(),
+        };
         self.awaiting = None;
         self.next += 1;
-        Ok(())
+        Ok(completed)
     }
 
     pub fn abort(&mut self) {
@@ -819,11 +826,17 @@ mod tests {
     fn waits_for_done_before_returning_the_next_action() {
         let model = device_profile();
         let actions = model.actions["A"].clone();
+        let first_action = actions[0].clone();
         let mut sequence = ActionSequence::new(9, "A".into(), actions);
 
         assert_eq!(sequence.next_step().unwrap().step, 1);
         assert!(sequence.next_step().is_none());
-        sequence.acknowledge(9, 1).unwrap();
+        let completed = sequence.acknowledge(9, 1).unwrap();
+        assert_eq!(completed.event_id, 9);
+        assert_eq!(completed.button, "A");
+        assert_eq!(completed.step, 1);
+        assert_eq!(completed.total, 2);
+        assert_eq!(completed.action, first_action);
         assert_eq!(sequence.next_step().unwrap().step, 2);
     }
 

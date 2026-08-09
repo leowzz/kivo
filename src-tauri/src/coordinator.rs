@@ -1367,8 +1367,13 @@ impl RuntimeCoordinator {
 
 fn activity_level(code: &str) -> EventLevel {
     match code {
-        "topology_active" | "topology_cleared" | "input_state" | "learning_ready"
-        | "learning_input" => EventLevel::Info,
+        "topology_active"
+        | "topology_cleared"
+        | "input_state"
+        | "learning_ready"
+        | "learning_input"
+        | "action_step_started"
+        | "action_step_completed" => EventLevel::Info,
         "input_before_configuration"
         | "unexpected_action_acknowledgement"
         | "unmapped_input"

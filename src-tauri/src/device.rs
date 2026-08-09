@@ -531,26 +531,31 @@ impl DeviceSession {
         context: Option<RuntimeEventContext>,
         output: &mut SessionOutput,
     ) {
+        let button = metric_snapshot.as_ref().and_then(|runtime| {
+            runtime
+                .profile
+                .button_for(&runtime.hardware_profile_id, &input)
+                .map(str::to_owned)
+        });
         let metric_press = (state == InputState::Down)
-            .then_some(metric_snapshot.as_ref())
+            .then(|| metric_snapshot.as_ref().zip(button.as_deref()))
             .flatten()
-            .and_then(|runtime| {
-                runtime
-                    .profile
-                    .button_for(&runtime.hardware_profile_id, &input)
-                    .map(|button_id| MetricPress {
-                        attribution: runtime.metric_attribution.clone(),
-                        button_id: button_id.into(),
-                        occurred_at_ms,
-                    })
+            .map(|(runtime, button_id)| MetricPress {
+                attribution: runtime.metric_attribution.clone(),
+                button_id: button_id.into(),
+                occurred_at_ms,
             });
-        output.activities.push(RuntimeActivity {
+        let mut activity = RuntimeActivity {
             input: Some(input),
             pressed: Some(state == InputState::Down),
             context: context.clone(),
             metric_press,
             ..RuntimeActivity::new("input_state")
-        });
+        };
+        if let Some(button) = button {
+            activity.params.insert("button".into(), button);
+        }
+        output.activities.push(activity);
         if state == InputState::Down {
             if let Some(snapshot) = action_snapshot {
                 self.queue.push_back(QueuedInput {
@@ -779,24 +784,31 @@ impl DeviceSession {
                 .push(RuntimeActivity::new("unexpected_action_acknowledgement"));
             return;
         };
-        if let Err(error) = sequence.acknowledge(event_id, step) {
-            let active_event = sequence.event_id();
-            output.lines.push(format!("SKIP {active_event}\n"));
-            output.activities.push(
-                RuntimeActivity::new("invalid_action_acknowledgement")
-                    .with_detail(error)
-                    .with_context(self.active_context.clone()),
-            );
-            self.active = None;
-            self.active_snapshot = None;
-            self.active_context = None;
-            self.pending_paste = None;
-            if let Some(receive_sequence) = self.active_receive_sequence.take() {
-                output.completed_receive_sequences.push(receive_sequence);
+        let completed = match sequence.acknowledge(event_id, step) {
+            Ok(completed) => completed,
+            Err(error) => {
+                let active_event = sequence.event_id();
+                output.lines.push(format!("SKIP {active_event}\n"));
+                output.activities.push(
+                    RuntimeActivity::new("invalid_action_acknowledgement")
+                        .with_detail(error)
+                        .with_context(self.active_context.clone()),
+                );
+                self.active = None;
+                self.active_snapshot = None;
+                self.active_context = None;
+                self.pending_paste = None;
+                if let Some(receive_sequence) = self.active_receive_sequence.take() {
+                    output.completed_receive_sequences.push(receive_sequence);
+                }
+                self.start_next(output);
+                return;
             }
-            self.start_next(output);
-            return;
-        }
+        };
+        output.activities.push(
+            action_activity("action_step_completed", &completed)
+                .with_context(self.active_context.clone()),
+        );
         if sequence.is_complete() {
             self.active = None;
             self.active_snapshot = None;
@@ -870,6 +882,9 @@ impl DeviceSession {
         let Some(step) = self.active.as_mut().and_then(ActionSequence::next_step) else {
             return;
         };
+        output.activities.push(
+            action_activity("action_step_started", &step).with_context(self.active_context.clone()),
+        );
         let result = match &step.action {
             crate::profile::ButtonAction::Paste { text } => {
                 let request = PendingPaste {
@@ -975,6 +990,63 @@ impl DeviceSession {
         }
         output
     }
+}
+
+fn action_activity(code: &str, step: &crate::protocol::ActionStep) -> RuntimeActivity {
+    let mut activity = RuntimeActivity::new(code)
+        .with_param("eventId", step.event_id.to_string())
+        .with_param("button", &step.button)
+        .with_param("step", step.step.to_string())
+        .with_param("total", step.total.to_string());
+    match &step.action {
+        crate::profile::ButtonAction::Paste { text } => {
+            activity.params.insert("actionKind".into(), "paste".into());
+            activity
+                .params
+                .insert("characterCount".into(), text.chars().count().to_string());
+        }
+        crate::profile::ButtonAction::Hotkey { keys } => {
+            activity.params.insert("actionKind".into(), "hotkey".into());
+            activity.params.insert("keys".into(), keys.join("+"));
+        }
+        crate::profile::ButtonAction::Delay { duration_ms } => {
+            activity.params.insert("actionKind".into(), "delay".into());
+            activity
+                .params
+                .insert("durationMs".into(), duration_ms.to_string());
+        }
+        crate::profile::ButtonAction::Media { command } => {
+            activity.params.insert("actionKind".into(), "media".into());
+            let command = match command {
+                crate::profile::MediaCommand::PlayPause => "play_pause",
+                crate::profile::MediaCommand::PreviousTrack => "previous_track",
+                crate::profile::MediaCommand::NextTrack => "next_track",
+                crate::profile::MediaCommand::Stop => "stop",
+                crate::profile::MediaCommand::VolumeUp => "volume_up",
+                crate::profile::MediaCommand::VolumeDown => "volume_down",
+                crate::profile::MediaCommand::Mute => "mute",
+            };
+            activity
+                .params
+                .insert("mediaCommand".into(), command.into());
+        }
+        crate::profile::ButtonAction::Open { target } => {
+            activity.params.insert("actionKind".into(), "open".into());
+            activity.params.insert(
+                "targetKind".into(),
+                if target.contains("://") {
+                    "url"
+                } else {
+                    "path"
+                }
+                .into(),
+            );
+            activity
+                .params
+                .insert("characterCount".into(), target.chars().count().to_string());
+        }
+    }
+    activity
 }
 
 #[cfg(test)]
@@ -1902,6 +1974,14 @@ mod tests {
             },
             &mut |_| Ok(()),
         );
+        let release = session.on_message(
+            DeviceMessage::State {
+                event_id: 1,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Up,
+            },
+            &mut |_| Ok(()),
+        );
 
         let update = persist_metrics(&store, &output.activities[0], timestamp)
             .unwrap()
@@ -1909,6 +1989,8 @@ mod tests {
 
         assert_eq!(update.today_presses, 1);
         assert_eq!(update.logs[0].message, "A pressed");
+        assert_eq!(output.activities[0].params["button"], "A");
+        assert_eq!(release.activities[0].params["button"], "A");
         drop(store);
         std::fs::remove_file(path).unwrap();
     }
@@ -2209,16 +2291,16 @@ mod tests {
     }
 
     #[test]
-    fn deferred_paste_waits_for_global_grant_before_emitting_device_command() {
+    fn deferred_paste_action_activity_is_sanitized_and_advances_in_order() {
         let mut runtime = runtime_model();
         runtime.profile.actions.insert(
             "A".into(),
             vec![
                 ButtonAction::Paste {
-                    text: "global".into(),
+                    text: "甲乙丙".into(),
                 },
                 ButtonAction::Hotkey {
-                    keys: vec!["enter".into()],
+                    keys: vec!["primary".into(), "enter".into()],
                 },
             ],
         );
@@ -2236,6 +2318,23 @@ mod tests {
         );
 
         assert!(pending.lines.is_empty());
+        let started = &pending.activities[1];
+        assert_eq!(started.code, "action_step_started");
+        assert_eq!(
+            started.params,
+            BTreeMap::from([
+                ("eventId".into(), "41".into()),
+                ("button".into(), "A".into()),
+                ("step".into(), "1".into()),
+                ("total".into(), "2".into()),
+                ("actionKind".into(), "paste".into()),
+                ("characterCount".into(), "3".into()),
+            ])
+        );
+        let activity_debug = format!("{started:?}");
+        let activity_json = serde_json::to_string(started).unwrap();
+        assert!(!activity_debug.contains("甲乙丙"));
+        assert!(!activity_json.contains("甲乙丙"));
         assert_eq!(
             pending.paste_requests,
             vec![PendingPaste {
@@ -2243,7 +2342,7 @@ mod tests {
                 event_id: 41,
                 step: 1,
                 total: 2,
-                text: "global".into(),
+                text: "甲乙丙".into(),
                 context: None,
             }]
         );
@@ -2258,8 +2357,19 @@ mod tests {
             0,
             124,
         );
-        assert_eq!(next.lines, ["HOTKEY 41 2 2 0 40\n"]);
+        let primary_modifier = if cfg!(target_os = "macos") { 8 } else { 1 };
+        assert_eq!(
+            next.lines,
+            [format!("HOTKEY 41 2 2 {primary_modifier} 40\n")]
+        );
         assert!(next.paste_requests.is_empty());
+        assert_eq!(next.activities.len(), 2);
+        assert_eq!(next.activities[0].code, "action_step_completed");
+        assert_eq!(next.activities[0].params["actionKind"], "paste");
+        assert_eq!(next.activities[0].params["step"], "1");
+        assert_eq!(next.activities[1].code, "action_step_started");
+        assert_eq!(next.activities[1].params["actionKind"], "hotkey");
+        assert_eq!(next.activities[1].params["keys"], "primary+enter");
     }
 
     struct FailingClipboard;
@@ -2539,6 +2649,49 @@ mod tests {
     }
 
     #[test]
+    fn open_action_activity_redacts_target() {
+        let target = "https://example.test/private?token=secret";
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            vec![ButtonAction::Open {
+                target: target.into(),
+            }],
+        );
+        let mut session = DeviceSession::new(runtime);
+        session.target_opener = Arc::new(RecordingTargetOpener {
+            targets: Arc::new(Mutex::new(Vec::new())),
+            error: None,
+        });
+        session.ready = true;
+
+        let output = session.on_message_deferred(
+            DeviceMessage::State {
+                event_id: 45,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            11,
+            129,
+        );
+
+        let started = &output.activities[1];
+        assert_eq!(started.code, "action_step_started");
+        assert_eq!(started.params["actionKind"], "open");
+        assert_eq!(started.params["targetKind"], "url");
+        assert_eq!(
+            started.params["characterCount"],
+            target.chars().count().to_string()
+        );
+        let activity_debug = format!("{started:?}");
+        let activity_json = serde_json::to_string(started).unwrap();
+        for private_value in ["private", "secret", target] {
+            assert!(!activity_debug.contains(private_value));
+            assert!(!activity_json.contains(private_value));
+        }
+    }
+
+    #[test]
     fn failed_open_aborts_only_the_current_action_sequence() {
         let mut runtime = runtime_model();
         runtime.profile.actions.insert(
@@ -2565,7 +2718,8 @@ mod tests {
         );
 
         assert_eq!(output.lines, ["SKIP 44\n"]);
-        assert_eq!(output.activities[1].code, "action_step_failed");
+        assert_eq!(output.activities[1].code, "action_step_started");
+        assert_eq!(output.activities[2].code, "action_step_failed");
         assert_eq!(output.completed_receive_sequences, [10]);
         assert!(session.active.is_none());
     }
