@@ -2053,6 +2053,99 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_profile_for_device_waits_for_an_in_flight_metric_commit() {
+        let directory = TestDirectory::new();
+        let state = Arc::new(product_state(&directory.0, vec![product_profile()]));
+        let device =
+            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "DUPLICATE-A")
+                .unwrap();
+        {
+            let mut workspace = state.workspace.write().unwrap();
+            workspace.enroll_device(device.clone()).unwrap();
+            workspace
+                .set_assignment(
+                    &device,
+                    RuntimeAssignment {
+                        device_profile_id: "red-phone-v1".into(),
+                        hardware_profile_id: "esp-primary".into(),
+                    },
+                )
+                .unwrap();
+        }
+        let attribution = MetricAttribution {
+            device_id: device.clone(),
+            device_name: "Duplicate desk".into(),
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        let (press_started_tx, press_started_rx) = mpsc::channel();
+        let (release_press_tx, release_press_rx) = mpsc::channel();
+        let (press_committed_tx, press_committed_rx) = mpsc::channel();
+        let press_state = Arc::clone(&state);
+        let press = thread::spawn(move || {
+            let _operation = press_state.operation_barrier.read().unwrap();
+            press_started_tx.send(()).unwrap();
+            release_press_rx.recv().unwrap();
+            press_state
+                .metrics
+                .as_deref()
+                .unwrap()
+                .record_button_press(&attribution, "UP", 1_720_086_400_000)
+                .unwrap();
+            press_committed_tx.send(()).unwrap();
+        });
+        press_started_rx.recv().unwrap();
+
+        let draft = state.workspace.read().unwrap().profiles["red-phone-v1"].clone();
+        let duplicate_state = Arc::clone(&state);
+        let (duplicate_done_tx, duplicate_done_rx) = mpsc::channel();
+        let duplicate = thread::spawn(move || {
+            let result = duplicate_profile_for_device_inner(
+                &duplicate_state,
+                DuplicateProfileForDeviceRequest {
+                    device_id: device,
+                    source_profile: draft,
+                    name: "Metric copy".into(),
+                },
+            );
+            duplicate_done_tx.send(result.map(|_| ())).unwrap();
+        });
+
+        assert!(matches!(
+            duplicate_done_rx.recv_timeout(Duration::from_secs(1)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        release_press_tx.send(()).unwrap();
+        press_committed_rx.recv().unwrap();
+        press.join().unwrap();
+        duplicate_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        duplicate.join().unwrap();
+
+        state
+            .metrics
+            .as_deref()
+            .unwrap()
+            .record_button_press(
+                &MetricAttribution {
+                    device_id: hardware::DeviceId::new(
+                        crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+                        "DUPLICATE-A",
+                    )
+                    .unwrap(),
+                    device_name: "Duplicate desk".into(),
+                    device_profile_id: "red-phone-v1".into(),
+                    hardware_profile_id: "esp-primary".into(),
+                },
+                "UP",
+                1_720_086_400_001,
+            )
+            .unwrap();
+    }
+
+    #[test]
     fn command_boundary_mutations_and_metrics_target_exactly_one_device() {
         let directory = TestDirectory::new();
         let mut state = product_state(&directory.0, vec![product_profile()]);
@@ -2448,6 +2541,59 @@ mod tests {
                 text: "online paste".into(),
             }])
         );
+    }
+
+    #[test]
+    fn live_update_reconfigures_when_an_action_requires_newer_firmware() {
+        let directory = TestDirectory::new();
+        let mut state = product_state(&directory.0, vec![product_profile()]);
+        let launcher = Arc::new(SaveLauncher::default());
+        let mut coordinator = RuntimeCoordinator::new(
+            Arc::new(SaveEnumerator),
+            launcher.clone(),
+            Arc::clone(&state.workspace),
+        );
+        coordinator.scan_once().unwrap();
+        coordinator.drain_worker_events();
+        let device_id =
+            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
+                .unwrap();
+        {
+            let mut workspace = state.workspace.write().unwrap();
+            workspace
+                .set_assignment(
+                    &device_id,
+                    RuntimeAssignment {
+                        device_profile_id: "red-phone-v1".into(),
+                        hardware_profile_id: "esp-primary".into(),
+                    },
+                )
+                .unwrap();
+        }
+        coordinator.sync_profiles();
+        launcher.commands.lock().unwrap().clear();
+        state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
+        let mut updated = product_profile();
+        updated.actions.insert(
+            "UP".into(),
+            TriggerActions {
+                release: vec![ButtonAction::Paste {
+                    text: "requires protocol 6".into(),
+                }],
+                ..TriggerActions::default()
+            },
+        );
+
+        save_profile_inner(&state, updated).unwrap();
+
+        let commands = launcher.commands.lock().unwrap();
+        assert!(matches!(
+            commands.get(&device_id).unwrap().as_slice(),
+            [WorkerCommand::Reconfigure {
+                snapshot: Some(snapshot),
+                revision: _,
+            }] if snapshot.profile.minimum_protocol_version() == crate::protocol::HOST_PROTOCOL_VERSION
+        ));
     }
 
     #[test]

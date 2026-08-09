@@ -1551,6 +1551,11 @@ fn workspace_worker_update(
     if old_profile == new_profile {
         return None;
     }
+    if old_profile.map(DeviceProfile::minimum_protocol_version)
+        != new_profile.map(DeviceProfile::minimum_protocol_version)
+    {
+        return Some(WorkspaceWorkerUpdate::Reconfigure);
+    }
     let change = match (old_profile, new_profile) {
         (None, None) => return None,
         (old_profile, new_profile) => ProfileChange::between(old_profile, new_profile),
