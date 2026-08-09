@@ -1,7 +1,12 @@
 #include <unity.h>
 
+#include <array>
+#include <cstdint>
+#include <vector>
+
 #include "BoardProfile.h"
 #include "DisplayStatus.h"
+#include "ActionRunDispatcher.h"
 #include "ActionRunController.h"
 #include "GpioTriggerController.h"
 #include "Handshake.h"
@@ -23,6 +28,21 @@ GpioTriggerController directController(std::uint32_t startMs) {
   GpioTriggerController controller(kLuatOsEsp32S3Aio, startMs);
   controller.configure(*builder.commit(1), startMs);
   return controller;
+}
+
+std::vector<platform::KeyboardReport> captureKeyboardReports(
+    std::uint8_t modifiers,
+    const std::array<std::uint8_t, 6> &keys) {
+  std::vector<platform::KeyboardReport> reports;
+  const bool sent = platform::transmitKeyboardReports(
+      modifiers, keys, 0, []() { return true; },
+      [&reports](const platform::KeyboardReport &report) {
+        reports.push_back(report);
+        return true;
+      },
+      []() {});
+  TEST_ASSERT_TRUE(sent);
+  return reports;
 }
 
 void test_commits_complete_matrix_topology_atomically() {
@@ -697,6 +717,86 @@ void test_v6_run_keepalive_rejects_an_expired_intermediate_step() {
   TEST_ASSERT_FALSE(runs.hasActiveRun());
 }
 
+void test_keyboard_chord_dispatches_six_keys_then_emits_done() {
+  const auto chord = parseHelperCommand("CHORD 61 1 1 255 6 4 5 6 7 8 9\n");
+  TEST_ASSERT_TRUE(chord.has_value());
+  ActionRunController runs;
+  std::uint8_t sentModifiers = 0;
+  std::array<std::uint8_t, 6> sentKeys{};
+  std::vector<std::pair<std::uint32_t, std::uint16_t>> completions;
+
+  const bool executed = executeKeyboardChord(
+      runs, *chord, 100,
+      [&](std::uint8_t modifiers, const std::array<std::uint8_t, 6> &keys) {
+        sentModifiers = modifiers;
+        sentKeys = keys;
+        return true;
+      },
+      [&](std::uint32_t runId, std::uint16_t step) {
+        completions.emplace_back(runId, step);
+      });
+
+  TEST_ASSERT_TRUE(executed);
+  TEST_ASSERT_EQUAL_UINT8(0xFF, sentModifiers);
+  TEST_ASSERT_EQUAL_UINT8(4, sentKeys[0]);
+  TEST_ASSERT_EQUAL_UINT8(9, sentKeys[5]);
+  TEST_ASSERT_EQUAL_UINT32(1, completions.size());
+  TEST_ASSERT_EQUAL_UINT32(61, completions[0].first);
+  TEST_ASSERT_EQUAL_UINT16(1, completions[0].second);
+}
+
+void test_keyboard_chord_failure_prevents_done() {
+  const auto chord = parseHelperCommand("CHORD 62 1 1 128 0\n");
+  TEST_ASSERT_TRUE(chord.has_value());
+  ActionRunController runs;
+  std::size_t completionCount = 0;
+
+  const bool executed = executeKeyboardChord(
+      runs, *chord, 100,
+      [](std::uint8_t, const std::array<std::uint8_t, 6> &) { return false; },
+      [&](std::uint32_t, std::uint16_t) { ++completionCount; });
+
+  TEST_ASSERT_FALSE(executed);
+  TEST_ASSERT_EQUAL_UINT32(0, completionCount);
+}
+
+void test_keyboard_chord_uses_action_run_ordering() {
+  const auto first = parseHelperCommand("CHORD 63 1 2 0 1 4\n");
+  const auto second = parseHelperCommand("CHORD 63 2 2 0 1 5\n");
+  TEST_ASSERT_TRUE(first.has_value());
+  TEST_ASSERT_TRUE(second.has_value());
+  ActionRunController runs;
+  std::size_t sendCount = 0;
+  std::size_t completionCount = 0;
+  const auto send = [&](std::uint8_t,
+                        const std::array<std::uint8_t, 6> &) {
+    ++sendCount;
+    return true;
+  };
+  const auto complete = [&](std::uint32_t, std::uint16_t) {
+    ++completionCount;
+  };
+
+  TEST_ASSERT_FALSE(executeKeyboardChord(runs, *second, 100, send, complete));
+  TEST_ASSERT_TRUE(executeKeyboardChord(runs, *first, 101, send, complete));
+  TEST_ASSERT_TRUE(executeKeyboardChord(runs, *second, 102, send, complete));
+  TEST_ASSERT_EQUAL_UINT32(2, sendCount);
+  TEST_ASSERT_EQUAL_UINT32(2, completionCount);
+}
+
+void test_active_delay_run_keeps_scanning_inputs_and_accepts_next_step() {
+  ActionRunController runs;
+  auto inputs = directController(0);
+  TEST_ASSERT_EQUAL(ResponseAction::Execute, runs.acceptStep(64, 1, 2, 1));
+  TEST_ASSERT_TRUE(runs.keepAlive(64, 2000));
+
+  inputs.updatePin(6, false, 2001);
+  const auto input = inputs.updatePin(6, false, 2031);
+
+  TEST_ASSERT_TRUE(input.has_value());
+  TEST_ASSERT_EQUAL(ResponseAction::Execute, runs.acceptStep(64, 2, 2, 3999));
+}
+
 void test_discards_the_rest_of_an_overlong_physical_line() {
   ResponseLineBuffer lines(16);
 
@@ -735,6 +835,51 @@ void test_hid_hotkey_waits_for_press_and_release_report_slots() {
   TEST_ASSERT_EQUAL_UINT8(0x28, reports[0].second);
   TEST_ASSERT_EQUAL_UINT8(0, reports[1].first);
   TEST_ASSERT_EQUAL_UINT8(0, reports[1].second);
+}
+
+void test_keyboard_chord_sends_pressed_then_empty_release_report() {
+  const auto reports = captureKeyboardReports(0xFF, {4, 5, 6, 7, 8, 9});
+
+  TEST_ASSERT_EQUAL_UINT32(2, reports.size());
+  TEST_ASSERT_EQUAL_UINT8(0xFF, reports[0].modifiers);
+  TEST_ASSERT_EQUAL_UINT8(4, reports[0].keys[0]);
+  TEST_ASSERT_EQUAL_UINT8(9, reports[0].keys[5]);
+  TEST_ASSERT_EQUAL_UINT8(0, reports[1].modifiers);
+  TEST_ASSERT_EQUAL_UINT8(0, reports[1].keys[0]);
+  TEST_ASSERT_EQUAL_UINT8(0, reports[1].keys[5]);
+}
+
+void test_modifier_only_chord_is_not_dropped() {
+  const auto reports = captureKeyboardReports(0x80, {});
+
+  TEST_ASSERT_EQUAL_UINT32(2, reports.size());
+  TEST_ASSERT_EQUAL_UINT8(0x80, reports[0].modifiers);
+  TEST_ASSERT_EQUAL_UINT8(0, reports[0].keys[0]);
+  TEST_ASSERT_EQUAL_UINT8(0, reports[1].modifiers);
+}
+
+void test_keyboard_chord_preserves_every_modifier_bit() {
+  constexpr std::array<std::uint8_t, 8> modifierBits = {
+      0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80};
+
+  for (const auto modifier : modifierBits) {
+    const auto reports = captureKeyboardReports(modifier, {4, 5, 6, 7, 8, 9});
+    TEST_ASSERT_EQUAL_UINT8(modifier, reports[0].modifiers);
+  }
+}
+
+void test_keyboard_chord_send_failure_returns_false_without_release() {
+  std::size_t sentReports = 0;
+  const bool sent = platform::transmitKeyboardReports(
+      0x08, {4, 5, 6, 7, 8, 9}, 0, []() { return true; },
+      [&sentReports](const platform::KeyboardReport &) {
+        ++sentReports;
+        return false;
+      },
+      []() {});
+
+  TEST_ASSERT_FALSE(sent);
+  TEST_ASSERT_EQUAL_UINT32(1, sentReports);
 }
 
 void test_hid_consumer_control_waits_for_press_and_release_report_slots() {
@@ -807,8 +952,16 @@ int main(int, char **) {
   RUN_TEST(test_v6_run_cancel_keepalive_and_expiry);
   RUN_TEST(test_v6_run_reset_clears_active_run);
   RUN_TEST(test_v6_run_keepalive_rejects_an_expired_intermediate_step);
+  RUN_TEST(test_keyboard_chord_dispatches_six_keys_then_emits_done);
+  RUN_TEST(test_keyboard_chord_failure_prevents_done);
+  RUN_TEST(test_keyboard_chord_uses_action_run_ordering);
+  RUN_TEST(test_active_delay_run_keeps_scanning_inputs_and_accepts_next_step);
   RUN_TEST(test_discards_the_rest_of_an_overlong_physical_line);
   RUN_TEST(test_hid_hotkey_waits_for_press_and_release_report_slots);
+  RUN_TEST(test_keyboard_chord_sends_pressed_then_empty_release_report);
+  RUN_TEST(test_modifier_only_chord_is_not_dropped);
+  RUN_TEST(test_keyboard_chord_preserves_every_modifier_bit);
+  RUN_TEST(test_keyboard_chord_send_failure_returns_false_without_release);
   RUN_TEST(test_hid_consumer_control_waits_for_press_and_release_report_slots);
   return UNITY_END();
 }

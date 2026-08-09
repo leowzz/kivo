@@ -87,18 +87,27 @@ void write(const char *data, std::size_t size) {
 
 void flush() { Serial.flush(); }
 
-bool sendHotkey(std::uint8_t modifiers, std::uint8_t keycode) {
+bool sendKeyboardChord(std::uint8_t modifiers, const KeyboardKeycodes &keys) {
   if (TinyUSBDevice.suspended()) TinyUSBDevice.remoteWakeup();
-  return transmitHotkeyReports(
-      modifiers, keycode, kHidReadyPollLimit,
+  return transmitKeyboardReports(
+      modifiers, keys, kHidReadyPollLimit,
       []() { return keyboard.ready(); },
-      [](std::uint8_t reportModifiers, std::uint8_t reportKeycode) {
+      [](const KeyboardReport &keyboardReport) {
         hid_keyboard_report_t report{};
-        report.modifier = reportModifiers;
-        report.keycode[0] = reportKeycode;
+        report.modifier = keyboardReport.modifiers;
+        for (std::size_t index = 0; index < keyboardReport.keys.size();
+             ++index) {
+          report.keycode[index] = keyboardReport.keys[index];
+        }
         return keyboard.sendReport(kKeyboardReportId, &report, sizeof(report));
       },
       []() { delay(1); });
+}
+
+bool sendHotkey(std::uint8_t modifiers, std::uint8_t keycode) {
+  KeyboardKeycodes keys{};
+  keys[0] = keycode;
+  return sendKeyboardChord(modifiers, keys);
 }
 
 bool sendConsumerControl(std::uint16_t usage) {

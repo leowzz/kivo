@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "ActionRunController.h"
+#include "ActionRunDispatcher.h"
 #include "DisplayStatus.h"
 #include "GpioTriggerController.h"
 #include "Handshake.h"
@@ -219,13 +220,14 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
     case HelperCommandKind::Host:
       break;
     case HelperCommandKind::Chord:
-      if (actionRuns.acceptStep(command->runId, command->step, command->total,
-                                nowMs) != ResponseAction::Execute) {
-        return;
-      }
-      actionRuns.cancel(command->runId);
-      writeLine("ACTION_ERROR " + std::to_string(command->runId) + " " +
-                std::to_string(command->step) + " unsupported_chord\n");
+      executeKeyboardChord(
+          actionRuns, *command, nowMs,
+          [](std::uint8_t modifiers, const platform::KeyboardKeycodes &keys) {
+            return platform::sendKeyboardChord(modifiers, keys);
+          },
+          [](std::uint32_t runId, std::uint16_t step) {
+            writeLine(formatDone(runId, step));
+          });
       return;
     case HelperCommandKind::Delay:
       if (pendingDelay.has_value() ||
