@@ -106,12 +106,16 @@ pub(crate) fn emit(entry: RuntimeLogEntry) {
     }
 }
 
-pub(crate) fn emit_lifecycle(entry: RuntimeLogEntry) {
+pub(crate) fn emit_priority(entry: RuntimeLogEntry) {
     if let Some(entry) = queued_entry(entry)
         && let Some(dispatcher) = DISPATCHER.get()
     {
-        let _ = dispatcher.enqueue_lifecycle(entry);
+        let _ = dispatcher.enqueue_priority(entry);
     }
+}
+
+pub(crate) fn emit_lifecycle(entry: RuntimeLogEntry) {
+    emit_priority(entry);
 }
 
 pub(crate) fn operation<T>(
@@ -121,7 +125,7 @@ pub(crate) fn operation<T>(
     action: impl FnOnce() -> Result<T, crate::workspace::AppError>,
 ) -> Result<T, crate::workspace::AppError> {
     let result = action();
-    emit(operation_entry(timestamp_ms, event, context, &result));
+    emit_priority(operation_entry(timestamp_ms, event, context, &result));
     result
 }
 
@@ -269,7 +273,7 @@ impl LogDispatcher {
         }
     }
 
-    fn enqueue_lifecycle(&self, entry: QueuedLogEntry) -> DispatchOutcome {
+    fn enqueue_priority(&self, entry: QueuedLogEntry) -> DispatchOutcome {
         let sender = self
             .sender
             .lock()
@@ -804,7 +808,7 @@ mod tests {
     use super::{
         DeviceLogInventory, DispatchOutcome, LogDispatcher, LogSink, QueuedLogEntry,
         RuntimeLogEntry, RuntimeLogLevel, log_directory, metrics_initialization_failure_detail,
-        operation, operation_entry, runtime_event_entry, serialize_entry,
+        operation, operation_entry, queued_entry, runtime_event_entry, serialize_entry,
     };
     use crate::{
         coordinator::{
@@ -818,6 +822,7 @@ mod tests {
     };
     use serde_json::json;
     use std::{
+        cell::Cell,
         collections::BTreeSet,
         path::Path,
         sync::{Arc, Mutex, mpsc},
@@ -983,15 +988,23 @@ mod tests {
 
     #[test]
     fn operation_returns_action_result_unchanged() {
-        let success = operation(100, "test_succeeded", json!({}), || Ok("original value"));
+        let success_calls = Cell::new(0);
+        let success = operation(100, "test_succeeded", json!({}), || {
+            success_calls.set(success_calls.get() + 1);
+            Ok("original value")
+        });
         let expected_error = AppError::new("invalid_assignment")
             .with_param("profileName", "Private Profile")
             .with_detail("/Users/alice/private/secret");
+        let failed_calls = Cell::new(0);
         let failed = operation(200, "test_failed", json!({}), || {
+            failed_calls.set(failed_calls.get() + 1);
             Err::<(), _>(expected_error.clone())
         });
 
+        assert_eq!(success_calls.get(), 1);
         assert_eq!(success, Ok("original value"));
+        assert_eq!(failed_calls.get(), 1);
         assert_eq!(failed, Err(expected_error));
     }
 
@@ -1033,7 +1046,7 @@ mod tests {
     }
 
     #[test]
-    fn log_dispatcher_drops_newest_entry_when_bounded_queue_is_full() {
+    fn log_dispatcher_accepts_priority_operation_when_normal_queue_is_full() {
         let entries = Arc::new(Mutex::new(Vec::new()));
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -1060,8 +1073,17 @@ mod tests {
             dispatcher.try_enqueue(queued("newest")),
             DispatchOutcome::Dropped
         );
+        let operation_result: Result<(), AppError> = Ok(());
+        let operation_entry = queued_entry(operation_entry(
+            100,
+            "runtime_assignment_saved",
+            json!({"deviceId": "device-1"}),
+            &operation_result,
+        ))
+        .unwrap();
+        let operation_line = operation_entry.line.clone();
         assert_eq!(
-            dispatcher.enqueue_lifecycle(queued("application_ready")),
+            dispatcher.enqueue_priority(operation_entry),
             DispatchOutcome::Accepted
         );
         assert_eq!(dispatcher.dropped_count(), 1);
@@ -1079,8 +1101,12 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("runtime_log_entries_dropped"))
         );
-        assert!(!lines.iter().any(|line| line == "newest"));
-        assert!(lines.iter().any(|line| line == "application_ready"));
+        let accepted_lines = lines
+            .iter()
+            .filter(|line| !line.contains("runtime_log_entries_dropped"))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(accepted_lines, ["first", "second", &operation_line]);
     }
 
     #[test]
