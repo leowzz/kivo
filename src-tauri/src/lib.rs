@@ -382,6 +382,15 @@ fn import_profile_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, Ap
     mutate_workspace(state, |workspace, _| workspace.import_profile(path))
 }
 
+fn export_profile_inner(state: &AppState, id: &str, path: &Path) -> Result<AppSnapshot, AppError> {
+    state
+        .workspace
+        .read()
+        .map_err(|_| state_error("workspace_unavailable"))?
+        .export_profile(id, path)?;
+    snapshot(state)
+}
+
 fn delete_profile_inner(state: &AppState, id: &str) -> Result<AppSnapshot, AppError> {
     mutate_workspace(state, |workspace, _| workspace.delete_profile(id))
 }
@@ -602,6 +611,60 @@ fn export_backup_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, App
     snapshot(state)
 }
 
+fn device_operation_context(device_id: &hardware::DeviceId) -> serde_json::Value {
+    serde_json::json!({"deviceId": device_id})
+}
+
+fn profile_operation_context(device_profile_id: &str) -> serde_json::Value {
+    serde_json::json!({"deviceProfileId": device_profile_id})
+}
+
+fn assignment_operation_context(
+    device_id: &hardware::DeviceId,
+    assignment: &RuntimeAssignment,
+) -> serde_json::Value {
+    serde_json::json!({
+        "deviceId": device_id,
+        "deviceProfileId": assignment.device_profile_id,
+        "hardwareProfileId": assignment.hardware_profile_id,
+    })
+}
+
+fn create_profile_operation_context(request: &CreateDeviceProfileRequest) -> serde_json::Value {
+    match request {
+        CreateDeviceProfileRequest::Clone {
+            source_profile_id, ..
+        } => serde_json::json!({"kind": "clone", "sourceProfileId": source_profile_id}),
+        CreateDeviceProfileRequest::Blank {
+            board_profile_id, ..
+        } => serde_json::json!({"kind": "blank", "boardProfileId": board_profile_id}),
+    }
+}
+
+fn settings_operation_context(settings: &EditorSettingsPatch) -> serde_json::Value {
+    serde_json::json!({
+        "schemaVersion": settings.schema_version,
+        "editorProfile": settings.editor_profile,
+        "language": settings.language,
+    })
+}
+
+fn learning_operation_context(
+    device_id: &hardware::DeviceId,
+    device_profile_id: &str,
+    hardware_profile_id: &str,
+    editing_revision: u64,
+    pin_count: usize,
+) -> serde_json::Value {
+    serde_json::json!({
+        "deviceId": device_id,
+        "deviceProfileId": device_profile_id,
+        "hardwareProfileId": hardware_profile_id,
+        "editingRevision": editing_revision,
+        "pinCount": pin_count,
+    })
+}
+
 #[tauri::command]
 fn get_snapshot(state: tauri::State<'_, AppState>) -> Result<AppSnapshot, AppError> {
     snapshot(&state)
@@ -612,7 +675,10 @@ fn retry_candidate(
     state: tauri::State<'_, AppState>,
     device_id: hardware::DeviceId,
 ) -> Result<AppSnapshot, AppError> {
-    retry_candidate_inner(&state, &device_id)
+    let context = device_operation_context(&device_id);
+    runtime_log::operation(now_ms(), "device_candidate_retry", context, || {
+        retry_candidate_inner(&state, &device_id)
+    })
 }
 
 #[tauri::command]
@@ -620,7 +686,10 @@ fn save_device_profile(
     state: tauri::State<'_, AppState>,
     profile: DeviceProfile,
 ) -> Result<AppSnapshot, AppError> {
-    save_profile_inner(&state, profile)
+    let context = profile_operation_context(&profile.profile.id);
+    runtime_log::operation(now_ms(), "device_profile_saved", context, || {
+        save_profile_inner(&state, profile)
+    })
 }
 
 #[tauri::command]
@@ -628,7 +697,10 @@ fn create_device_profile(
     state: tauri::State<'_, AppState>,
     request: CreateDeviceProfileRequest,
 ) -> Result<AppSnapshot, AppError> {
-    create_device_profile_inner(&state, request)
+    let context = create_profile_operation_context(&request);
+    runtime_log::operation(now_ms(), "device_profile_created", context, || {
+        create_device_profile_inner(&state, request)
+    })
 }
 
 #[tauri::command]
@@ -636,7 +708,10 @@ fn save_settings(
     state: tauri::State<'_, AppState>,
     settings: EditorSettingsPatch,
 ) -> Result<AppSnapshot, AppError> {
-    save_settings_inner(&state, settings)
+    let context = settings_operation_context(&settings);
+    runtime_log::operation(now_ms(), "settings_saved", context, || {
+        save_settings_inner(&state, settings)
+    })
 }
 
 #[tauri::command]
@@ -645,7 +720,10 @@ fn rename_device(
     device_id: hardware::DeviceId,
     name: String,
 ) -> Result<AppSnapshot, AppError> {
-    rename_device_inner(&state, &device_id, name)
+    let context = device_operation_context(&device_id);
+    runtime_log::operation(now_ms(), "device_renamed", context, || {
+        rename_device_inner(&state, &device_id, name)
+    })
 }
 
 #[tauri::command]
@@ -654,7 +732,10 @@ fn save_runtime_assignment(
     device_id: hardware::DeviceId,
     assignment: RuntimeAssignment,
 ) -> Result<AppSnapshot, AppError> {
-    save_runtime_assignment_inner(&state, &device_id, assignment)
+    let context = assignment_operation_context(&device_id, &assignment);
+    runtime_log::operation(now_ms(), "runtime_assignment_saved", context, || {
+        save_runtime_assignment_inner(&state, &device_id, assignment)
+    })
 }
 
 #[tauri::command]
@@ -664,7 +745,10 @@ fn complete_device_setup(
     name: String,
     assignment: RuntimeAssignment,
 ) -> Result<AppSnapshot, AppError> {
-    complete_device_setup_inner(&state, &device_id, name, assignment)
+    let context = assignment_operation_context(&device_id, &assignment);
+    runtime_log::operation(now_ms(), "device_setup_completed", context, || {
+        complete_device_setup_inner(&state, &device_id, name, assignment)
+    })
 }
 
 #[tauri::command]
@@ -672,7 +756,10 @@ fn clear_runtime_assignment(
     state: tauri::State<'_, AppState>,
     device_id: hardware::DeviceId,
 ) -> Result<AppSnapshot, AppError> {
-    clear_runtime_assignment_inner(&state, &device_id)
+    let context = device_operation_context(&device_id);
+    runtime_log::operation(now_ms(), "runtime_assignment_cleared", context, || {
+        clear_runtime_assignment_inner(&state, &device_id)
+    })
 }
 
 #[tauri::command]
@@ -680,7 +767,10 @@ fn forget_device(
     state: tauri::State<'_, AppState>,
     device_id: hardware::DeviceId,
 ) -> Result<AppSnapshot, AppError> {
-    forget_device_inner(&state, &device_id)
+    let context = device_operation_context(&device_id);
+    runtime_log::operation(now_ms(), "device_forgotten", context, || {
+        forget_device_inner(&state, &device_id)
+    })
 }
 
 #[tauri::command]
@@ -700,14 +790,23 @@ fn begin_learning(
     editing_revision: u64,
     pins: Vec<u8>,
 ) -> Result<AppSnapshot, AppError> {
-    begin_learning_inner(
-        &state,
+    let context = learning_operation_context(
         &device_id,
         &device_profile_id,
         &hardware_profile_id,
         editing_revision,
-        pins,
-    )
+        pins.len(),
+    );
+    runtime_log::operation(now_ms(), "learning_started", context, || {
+        begin_learning_inner(
+            &state,
+            &device_id,
+            &device_profile_id,
+            &hardware_profile_id,
+            editing_revision,
+            pins,
+        )
+    })
 }
 
 #[tauri::command]
@@ -715,7 +814,10 @@ fn end_learning(
     state: tauri::State<'_, AppState>,
     device_id: hardware::DeviceId,
 ) -> Result<AppSnapshot, AppError> {
-    end_learning_inner(&state, &device_id)
+    let context = device_operation_context(&device_id);
+    runtime_log::operation(now_ms(), "learning_ended", context, || {
+        end_learning_inner(&state, &device_id)
+    })
 }
 
 #[tauri::command]
@@ -735,7 +837,12 @@ fn import_device_profile(
     state: tauri::State<'_, AppState>,
     path: String,
 ) -> Result<AppSnapshot, AppError> {
-    import_profile_inner(&state, Path::new(&path))
+    runtime_log::operation(
+        now_ms(),
+        "device_profile_imported",
+        serde_json::json!({}),
+        || import_profile_inner(&state, Path::new(&path)),
+    )
 }
 
 #[tauri::command]
@@ -744,12 +851,10 @@ fn export_device_profile(
     id: String,
     path: String,
 ) -> Result<AppSnapshot, AppError> {
-    state
-        .workspace
-        .read()
-        .map_err(|_| state_error("workspace_unavailable"))?
-        .export_profile(&id, Path::new(&path))?;
-    snapshot(&state)
+    let context = profile_operation_context(&id);
+    runtime_log::operation(now_ms(), "device_profile_exported", context, || {
+        export_profile_inner(&state, &id, Path::new(&path))
+    })
 }
 
 #[tauri::command]
@@ -757,7 +862,10 @@ fn delete_device_profile(
     state: tauri::State<'_, AppState>,
     id: String,
 ) -> Result<AppSnapshot, AppError> {
-    delete_profile_inner(&state, &id)
+    let context = profile_operation_context(&id);
+    runtime_log::operation(now_ms(), "device_profile_deleted", context, || {
+        delete_profile_inner(&state, &id)
+    })
 }
 
 #[tauri::command]
@@ -774,7 +882,9 @@ fn preview_backup(
 
 #[tauri::command]
 fn export_backup(state: tauri::State<'_, AppState>, path: String) -> Result<AppSnapshot, AppError> {
-    export_backup_inner(&state, Path::new(&path))
+    runtime_log::operation(now_ms(), "backup_exported", serde_json::json!({}), || {
+        export_backup_inner(&state, Path::new(&path))
+    })
 }
 
 #[tauri::command]
@@ -782,7 +892,9 @@ fn restore_backup(
     state: tauri::State<'_, AppState>,
     path: String,
 ) -> Result<AppSnapshot, AppError> {
-    restore_backup_inner(&state, Path::new(&path))
+    runtime_log::operation(now_ms(), "backup_restored", serde_json::json!({}), || {
+        restore_backup_inner(&state, Path::new(&path))
+    })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1025,6 +1137,110 @@ mod tests {
     };
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn repeated_operation_contexts_use_camel_case_identifiers() {
+        let device_id = hardware::DeviceId::new(
+            crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+            "PRIVATE-SERIAL",
+        )
+        .unwrap();
+        let assignment = RuntimeAssignment {
+            device_profile_id: "profile-1".into(),
+            hardware_profile_id: "hardware-1".into(),
+        };
+
+        assert_eq!(
+            device_operation_context(&device_id),
+            serde_json::json!({"deviceId": device_id})
+        );
+        assert_eq!(
+            profile_operation_context("profile-1"),
+            serde_json::json!({"deviceProfileId": "profile-1"})
+        );
+        assert_eq!(
+            assignment_operation_context(&device_id, &assignment),
+            serde_json::json!({
+                "deviceId": device_id,
+                "deviceProfileId": "profile-1",
+                "hardwareProfileId": "hardware-1",
+            })
+        );
+    }
+
+    #[test]
+    fn create_and_settings_operation_contexts_exclude_requested_names() {
+        let clone = CreateDeviceProfileRequest::Clone {
+            name: "Private Clone Name".into(),
+            source_profile_id: "source-profile".into(),
+        };
+        let blank = CreateDeviceProfileRequest::Blank {
+            name: "Private Blank Name".into(),
+            board_profile_id: "board-profile".into(),
+        };
+        let settings = EditorSettingsPatch {
+            schema_version: workspace::SETTINGS_SCHEMA_VERSION,
+            editor_profile: None,
+            language: Language::EnUs,
+        };
+
+        let clone_context = create_profile_operation_context(&clone);
+        let blank_context = create_profile_operation_context(&blank);
+        assert_eq!(
+            clone_context,
+            serde_json::json!({"kind": "clone", "sourceProfileId": "source-profile"})
+        );
+        assert_eq!(
+            blank_context,
+            serde_json::json!({"kind": "blank", "boardProfileId": "board-profile"})
+        );
+        assert_eq!(
+            settings_operation_context(&settings),
+            serde_json::json!({
+                "schemaVersion": workspace::SETTINGS_SCHEMA_VERSION,
+                "editorProfile": null,
+                "language": "en-US",
+            })
+        );
+        assert_eq!(
+            settings_operation_context(&EditorSettingsPatch {
+                schema_version: workspace::SETTINGS_SCHEMA_VERSION,
+                editor_profile: Some("source-profile".into()),
+                language: Language::ZhCn,
+            }),
+            serde_json::json!({
+                "schemaVersion": workspace::SETTINGS_SCHEMA_VERSION,
+                "editorProfile": "source-profile",
+                "language": "zh-CN",
+            })
+        );
+        let serialized = format!("{clone_context}{blank_context}");
+        assert!(!serialized.contains("Private Clone Name"));
+        assert!(!serialized.contains("Private Blank Name"));
+    }
+
+    #[test]
+    fn learning_operation_context_counts_without_serializing_pins() {
+        let device_id =
+            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "LEARNING")
+                .unwrap();
+        let pins = [6, 7, 8];
+
+        let context =
+            learning_operation_context(&device_id, "profile-1", "hardware-1", 42, pins.len());
+
+        assert_eq!(
+            context,
+            serde_json::json!({
+                "deviceId": device_id,
+                "deviceProfileId": "profile-1",
+                "hardwareProfileId": "hardware-1",
+                "editingRevision": 42,
+                "pinCount": 3,
+            })
+        );
+        assert!(context.get("pins").is_none());
+    }
 
     #[test]
     fn board_summaries_report_ssd1306_support() {

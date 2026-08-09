@@ -69,7 +69,6 @@ impl RuntimeLogEntry {
         }
     }
 
-    #[allow(dead_code)] // Used when mutating command result logs are connected in Task 4.
     pub(crate) fn with_result(mut self, result: impl Into<String>) -> Self {
         self.result = Some(result.into());
         self
@@ -112,6 +111,32 @@ pub(crate) fn emit_lifecycle(entry: RuntimeLogEntry) {
         && let Some(dispatcher) = DISPATCHER.get()
     {
         let _ = dispatcher.enqueue_lifecycle(entry);
+    }
+}
+
+pub(crate) fn operation<T>(
+    timestamp_ms: u64,
+    event: &str,
+    context: Value,
+    action: impl FnOnce() -> Result<T, crate::workspace::AppError>,
+) -> Result<T, crate::workspace::AppError> {
+    let result = action();
+    emit(operation_entry(timestamp_ms, event, context, &result));
+    result
+}
+
+fn operation_entry<T>(
+    timestamp_ms: u64,
+    event: &str,
+    context: Value,
+    result: &Result<T, crate::workspace::AppError>,
+) -> RuntimeLogEntry {
+    match result {
+        Ok(_) => RuntimeLogEntry::new(timestamp_ms, RuntimeLogLevel::Info, event, context)
+            .with_result("succeeded"),
+        Err(error) => RuntimeLogEntry::new(timestamp_ms, RuntimeLogLevel::Error, event, context)
+            .with_result("failed")
+            .with_detail(error.code.clone()),
     }
 }
 
@@ -779,7 +804,7 @@ mod tests {
     use super::{
         DeviceLogInventory, DispatchOutcome, LogDispatcher, LogSink, QueuedLogEntry,
         RuntimeLogEntry, RuntimeLogLevel, log_directory, metrics_initialization_failure_detail,
-        runtime_event_entry, serialize_entry,
+        operation, operation_entry, runtime_event_entry, serialize_entry,
     };
     use crate::{
         coordinator::{
@@ -789,7 +814,7 @@ mod tests {
         device::{LearningTarget, RuntimeActivity},
         hardware::{DeviceId, ESP32S3_FAMILY_ID, LUATOS_ESP32S3_AIO_BOARD_ID},
         metrics::HomeMetricsSnapshot,
-        workspace::RuntimeAssignment,
+        workspace::{AppError, RuntimeAssignment},
     };
     use serde_json::json;
     use std::{
@@ -932,6 +957,42 @@ mod tests {
         assert!(!detail.contains("alice"));
         assert!(!detail.contains("private"));
         assert!(!detail.contains(private_path));
+    }
+
+    #[test]
+    fn operation_entries_capture_result_without_payloads() {
+        let success: Result<(), AppError> = Ok(());
+        let failed: Result<(), AppError> = Err(AppError::new("invalid_assignment")
+            .with_param("profileName", "Private Profile")
+            .with_detail("/Users/alice/private/secret"));
+        let context = json!({"deviceId": "device-1"});
+
+        let succeeded = operation_entry(100, "runtime_assignment_saved", context.clone(), &success);
+        let rejected = operation_entry(200, "runtime_assignment_saved", context, &failed);
+
+        assert_eq!(succeeded.result.as_deref(), Some("succeeded"));
+        assert_eq!(succeeded.level, RuntimeLogLevel::Info);
+        assert_eq!(rejected.result.as_deref(), Some("failed"));
+        assert_eq!(rejected.level, RuntimeLogLevel::Error);
+        assert_eq!(rejected.detail.as_deref(), Some("invalid_assignment"));
+        let line = serialize_entry(&rejected).expect("entry serializes");
+        assert!(!line.contains("/Users/alice/private/secret"));
+        assert!(!line.contains("Private Profile"));
+        assert!(!line.contains("profileName"));
+    }
+
+    #[test]
+    fn operation_returns_action_result_unchanged() {
+        let success = operation(100, "test_succeeded", json!({}), || Ok("original value"));
+        let expected_error = AppError::new("invalid_assignment")
+            .with_param("profileName", "Private Profile")
+            .with_detail("/Users/alice/private/secret");
+        let failed = operation(200, "test_failed", json!({}), || {
+            Err::<(), _>(expected_error.clone())
+        });
+
+        assert_eq!(success, Ok("original value"));
+        assert_eq!(failed, Err(expected_error));
     }
 
     #[test]
