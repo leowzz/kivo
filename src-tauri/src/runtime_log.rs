@@ -720,6 +720,7 @@ impl DeviceLogInventory {
             self.last_scan_error = None;
             return Vec::new();
         };
+        let error = stable_scan_error_code(error);
         if self.last_scan_error.as_deref() == Some(error) {
             return Vec::new();
         }
@@ -733,6 +734,15 @@ impl DeviceLogInventory {
             )
             .with_detail(error),
         ]
+    }
+}
+
+fn stable_scan_error_code(error: &str) -> &str {
+    match error {
+        "serial_enumeration_failed" | "usb_enumeration_failed" | "device_scan_thread_panicked" => {
+            error
+        }
+        _ => "device_scan_failed",
     }
 }
 
@@ -1374,26 +1384,64 @@ mod tests {
     }
 
     #[test]
-    fn device_log_inventory_deduplicates_consecutive_scan_errors() {
+    fn device_log_inventory_preserves_stable_scan_errors_and_resets_deduplication() {
         let mut inventory = DeviceLogInventory::default();
 
-        let first = inventory.observe_scan_error(100, Some("usb unavailable"));
-        assert_eq!(first.len(), 1);
-        assert_eq!(first[0].event, "device_scan_failed");
-        assert_eq!(first[0].level, RuntimeLogLevel::Error);
-        assert_eq!(first[0].detail.as_deref(), Some("usb unavailable"));
+        let serial = inventory.observe_scan_error(100, Some("serial_enumeration_failed"));
+        assert_eq!(serial.len(), 1);
+        assert_eq!(serial[0].event, "device_scan_failed");
+        assert_eq!(serial[0].level, RuntimeLogLevel::Error);
+        assert_eq!(
+            serial[0].detail.as_deref(),
+            Some("serial_enumeration_failed")
+        );
         assert!(
             inventory
-                .observe_scan_error(200, Some("usb unavailable"))
+                .observe_scan_error(200, Some("serial_enumeration_failed"))
                 .is_empty()
         );
-        assert!(inventory.observe_scan_error(300, None).is_empty());
+        let usb = inventory.observe_scan_error(300, Some("usb_enumeration_failed"));
+        assert_eq!(usb[0].detail.as_deref(), Some("usb_enumeration_failed"));
+        let panic = inventory.observe_scan_error(400, Some("device_scan_thread_panicked"));
+        assert_eq!(
+            panic[0].detail.as_deref(),
+            Some("device_scan_thread_panicked")
+        );
+        assert!(inventory.observe_scan_error(500, None).is_empty());
         assert_eq!(
             inventory
-                .observe_scan_error(400, Some("usb unavailable"))
+                .observe_scan_error(600, Some("device_scan_thread_panicked"))
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn device_log_inventory_normalizes_unknown_scan_errors_before_logging_and_deduplication() {
+        let first_raw = "/Users/alice/private/scan.log?token=secret-scan-123";
+        let second_raw = "driver diagnostic secret-scan-456 at /dev/cu.private";
+        let mut inventory = DeviceLogInventory::default();
+
+        let entries = inventory.observe_scan_error(100, Some(first_raw));
+        let repeated = inventory.observe_scan_error(200, Some(second_raw));
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].event, "device_scan_failed");
+        assert_eq!(entries[0].detail.as_deref(), Some("device_scan_failed"));
+        assert!(repeated.is_empty());
+        let fields = format!("{:?}", entries[0]);
+        let serialized = serialize_entry(&entries[0]).unwrap();
+        for private_value in [
+            first_raw,
+            second_raw,
+            "/Users/alice",
+            "/dev/cu.private",
+            "secret-scan-123",
+            "secret-scan-456",
+        ] {
+            assert!(!fields.contains(private_value));
+            assert!(!serialized.contains(private_value));
+        }
     }
 
     struct SerialEnumerationFailure(&'static str);

@@ -381,10 +381,10 @@ let mut inventory = DeviceLogInventory::default();
 assert_eq!(inventory.observe(100, &[device_status(ConnectionDimension::Online)], &[])[0].event, "device_connected");
 assert!(inventory.observe(200, &[device_status(ConnectionDimension::Online)], &[]).is_empty());
 assert_eq!(inventory.observe(300, &[device_status(ConnectionDimension::Offline)], &[])[0].event, "device_disconnected");
-assert_eq!(inventory.observe_scan_error(400, Some("usb unavailable")).len(), 1);
-assert!(inventory.observe_scan_error(500, Some("usb unavailable")).is_empty());
+assert_eq!(inventory.observe_scan_error(400, Some("usb_enumeration_failed")).len(), 1);
+assert!(inventory.observe_scan_error(500, Some("usb_enumeration_failed")).is_empty());
 assert!(inventory.observe_scan_error(600, None).is_empty());
-assert_eq!(inventory.observe_scan_error(700, Some("usb unavailable")).len(), 1);
+assert_eq!(inventory.observe_scan_error(700, Some("usb_enumeration_failed")).len(), 1);
 ```
 
 - [ ] **Step 2: Run RED**
