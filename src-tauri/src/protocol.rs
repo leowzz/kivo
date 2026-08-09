@@ -477,6 +477,14 @@ impl ActionSequence {
     pub fn is_waiting(&self) -> bool {
         self.awaiting.is_some() && !self.failed
     }
+
+    pub fn is_awaiting_paste(&self) -> bool {
+        self.is_waiting()
+            && matches!(
+                self.actions.get(self.next),
+                Some(ButtonAction::Paste { .. })
+            )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

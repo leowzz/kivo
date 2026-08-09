@@ -322,6 +322,11 @@ impl DeviceSession {
         let mut output = SessionOutput::default();
         if let Some(mut sequence) = self.active.take() {
             let event_id = sequence.event_id();
+            let detail = if code == "action_step_failed" && sequence.is_awaiting_paste() {
+                Some("clipboard_write_failed".into())
+            } else {
+                detail
+            };
             sequence.abort();
             output.lines.push(format!("SKIP {event_id}\n"));
             let mut activity = RuntimeActivity::new(code);
@@ -908,6 +913,7 @@ impl DeviceSession {
             }
             crate::profile::ButtonAction::Open { target } => target_opener
                 .open(target)
+                .map_err(|_| "open_target_failed".to_owned())
                 .and_then(|()| step.command(|_| Ok(()))),
         };
         match result {
@@ -926,11 +932,16 @@ impl DeviceSession {
             sequence.abort();
         }
         output.lines.push(format!("SKIP {}\n", step.event_id));
+        let detail = if matches!(&step.action, crate::profile::ButtonAction::Open { .. }) {
+            "open_target_failed".into()
+        } else {
+            error
+        };
         output.activities.push(
             RuntimeActivity::new("action_step_failed")
                 .with_param("button", &step.button)
                 .with_param("step", step.step.to_string())
-                .with_detail(error)
+                .with_detail(detail)
                 .with_context(self.active_context.clone()),
         );
         self.active = None;
@@ -980,10 +991,13 @@ impl DeviceSession {
                     &mut output,
                     self.grant_paste(request.event_id, request.step),
                 ),
-                Err(error) => {
+                Err(_error) => {
                     merge_output(
                         &mut output,
-                        self.fail_active_deferred("action_step_failed", Some(error)),
+                        self.fail_active_deferred(
+                            "action_step_failed",
+                            Some("clipboard_write_failed".into()),
+                        ),
                     );
                 }
             }
@@ -1482,10 +1496,13 @@ fn run_isolated_worker_inner(
                         stop,
                     )?;
                 }
-                Ok(PasteReply::ClipboardError(error)) => {
+                Ok(PasteReply::ClipboardError(_error)) => {
                     pending_paste = None;
                     active_paste_ack = None;
-                    let output = session.fail_active_deferred("action_step_failed", Some(error));
+                    let output = session.fail_active_deferred(
+                        "action_step_failed",
+                        Some("clipboard_write_failed".into()),
+                    );
                     write_isolated_output(
                         start,
                         events,
@@ -2378,6 +2395,48 @@ mod tests {
         }
     }
 
+    struct EchoClipboard;
+
+    impl ClipboardWriter for EchoClipboard {
+        fn write(&self, text: &str) -> Result<(), String> {
+            Err(text.into())
+        }
+    }
+
+    #[test]
+    fn immediate_paste_failure_redacts_clipboard_error() {
+        let secret = "甲乙丙";
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            vec![ButtonAction::Paste {
+                text: secret.into(),
+            }],
+        );
+        let mut session = DeviceSession::new(runtime);
+        session.ready = true;
+
+        let output = session.on_message(
+            DeviceMessage::State {
+                event_id: 46,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            &mut |text| Err(text.into()),
+        );
+
+        let failed = output
+            .activities
+            .iter()
+            .find(|activity| activity.code == "action_step_failed")
+            .unwrap();
+        assert_eq!(failed.detail.as_deref(), Some("clipboard_write_failed"));
+        let activity_debug = format!("{:?}", output.activities);
+        let activity_json = serde_json::to_string(&output.activities).unwrap();
+        assert!(!activity_debug.contains(secret));
+        assert!(!activity_json.contains(secret));
+    }
+
     #[test]
     fn unrelated_receive_sequence_completion_preserves_active_action_deadline() {
         let runtime = runtime_model();
@@ -2442,7 +2501,15 @@ mod tests {
 
     #[test]
     fn deferred_paste_failure_keeps_captured_context_after_overtaking_reconfigure() {
-        let old = Arc::new(runtime_model());
+        let secret = "甲乙丙";
+        let mut old = runtime_model();
+        old.profile.actions.insert(
+            "A".into(),
+            vec![ButtonAction::Paste {
+                text: secret.into(),
+            }],
+        );
+        let old = Arc::new(old);
         let device_id = old.metric_attribution.device_id.clone();
         let old_context = RuntimeEventContext::from_snapshot(10, Some(old.as_ref()))
             .with_port("/dev/old-captured");
@@ -2475,9 +2542,9 @@ mod tests {
         assert!(queued.paste_requests.is_empty());
         let configured =
             session.on_message_deferred(DeviceMessage::ConfigOk { revision: 2 }, 0, 21);
-        assert_eq!(configured.paste_requests[0].text, "第一步");
+        assert_eq!(configured.paste_requests[0].text, secret);
 
-        let paste = PasteCoordinator::with_timeout(FailingClipboard, Duration::from_millis(100));
+        let paste = PasteCoordinator::with_timeout(EchoClipboard, Duration::from_millis(100));
         paste.handle().register_sequence(77).unwrap();
         let start = WorkerStart {
             generation: 9,
@@ -2512,13 +2579,9 @@ mod tests {
             .replies
             .recv_timeout(Duration::from_secs(1))
             .unwrap();
-        assert_eq!(
-            reply,
-            PasteReply::ClipboardError("clipboard unavailable".into())
-        );
+        assert_eq!(reply, PasteReply::ClipboardError(secret.into()));
         pending_paste = None;
-        let failed = session
-            .fail_active_deferred("action_step_failed", Some("clipboard unavailable".into()));
+        let failed = session.fail_active_deferred("action_step_failed", Some(secret.into()));
         write_isolated_output(
             &start,
             &events,
@@ -2534,29 +2597,34 @@ mod tests {
             &stop,
         )
         .unwrap();
-        let event = received_events
+        let activities = received_events
             .try_iter()
-            .find(|event| {
-                matches!(
-                    event,
-                    WorkerEvent::Activity { activity, .. }
-                        if activity.code == "action_step_failed"
-                )
+            .filter_map(|event| match event {
+                WorkerEvent::Activity {
+                    device_id,
+                    context,
+                    activity,
+                    ..
+                } => Some((device_id, context, activity)),
+                _ => None,
             })
+            .collect::<Vec<_>>();
+        let (actual_device, context, failed) = activities
+            .iter()
+            .find(|(_, _, activity)| activity.code == "action_step_failed")
             .unwrap();
-        let WorkerEvent::Activity {
-            device_id: actual_device,
-            context,
-            ..
-        } = event
-        else {
-            unreachable!();
-        };
 
-        assert_eq!(actual_device, device_id);
+        assert_eq!(*actual_device, device_id);
         assert_eq!(context.device_profile_id.as_deref(), Some("phone"));
         assert_eq!(context.hardware_profile_id.as_deref(), Some("esp-primary"));
         assert_eq!(context.port.as_deref(), Some("/dev/old-captured"));
+        assert_eq!(failed.detail.as_deref(), Some("clipboard_write_failed"));
+        for (_, _, activity) in &activities {
+            let activity_debug = format!("{activity:?}");
+            let activity_json = serde_json::to_string(activity).unwrap();
+            assert!(!activity_debug.contains(secret));
+            assert!(!activity_json.contains(secret));
+        }
         paste.shutdown();
     }
 
@@ -2695,17 +2763,18 @@ mod tests {
 
     #[test]
     fn failed_open_aborts_only_the_current_action_sequence() {
+        let target = "https://example.test/private?token=secret";
         let mut runtime = runtime_model();
         runtime.profile.actions.insert(
             "A".into(),
             vec![ButtonAction::Open {
-                target: "bad-target".into(),
+                target: target.into(),
             }],
         );
         let mut session = DeviceSession::new(runtime);
         session.target_opener = Arc::new(RecordingTargetOpener {
             targets: Arc::new(Mutex::new(Vec::new())),
-            error: Some("cannot open".into()),
+            error: Some(target.into()),
         });
         session.ready = true;
 
@@ -2721,7 +2790,15 @@ mod tests {
 
         assert_eq!(output.lines, ["SKIP 44\n"]);
         assert_eq!(output.activities[1].code, "action_step_started");
-        assert_eq!(output.activities[2].code, "action_step_failed");
+        let failed = &output.activities[2];
+        assert_eq!(failed.code, "action_step_failed");
+        assert_eq!(failed.detail.as_deref(), Some("open_target_failed"));
+        let activity_debug = format!("{:?}", output.activities);
+        let activity_json = serde_json::to_string(&output.activities).unwrap();
+        for private_value in [target, "private", "secret"] {
+            assert!(!activity_debug.contains(private_value));
+            assert!(!activity_json.contains(private_value));
+        }
         assert_eq!(output.completed_receive_sequences, [10]);
         assert!(session.active.is_none());
     }
