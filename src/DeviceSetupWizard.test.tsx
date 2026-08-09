@@ -29,7 +29,7 @@ const boards = [
 
 const profiles: DeviceProfile[] = [
   {
-    schema_version: 2,
+    schema_version: 3,
     profile: { id: "rp-profile", name: "RP Profile", groups: [] },
     hardware_profiles: [
       {
@@ -40,10 +40,11 @@ const profiles: DeviceProfile[] = [
         inputs: [],
       },
     ],
+    trigger_settings: { long_press_ms: 500, double_press_ms: 300 },
     actions: {},
   },
   {
-    schema_version: 2,
+    schema_version: 3,
     profile: { id: "esp-profile", name: "ESP Profile", groups: [] },
     hardware_profiles: [
       {
@@ -54,6 +55,7 @@ const profiles: DeviceProfile[] = [
         inputs: [],
       },
     ],
+    trigger_settings: { long_press_ms: 500, double_press_ms: 300 },
     actions: {},
   },
 ];

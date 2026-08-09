@@ -257,18 +257,19 @@ export function DeviceManagement({
     }
     previous.current = rows;
   }, [rows, selection]);
+  const activeSelection = selection ?? rows[0]?.selection ?? null;
   const selectedDevice =
-    selection?.kind === "device"
-      ? (devices.find((device) => device.deviceId === selection.id) ?? null)
+    activeSelection?.kind === "device"
+      ? (devices.find((device) => device.deviceId === activeSelection.id) ?? null)
       : null;
   const selectedCandidate =
-    selection?.kind === "candidate"
-      ? (candidates.find((candidate) => candidate.key === selection.id) ?? null)
+    activeSelection?.kind === "candidate"
+      ? (candidates.find((candidate) => candidate.key === activeSelection.id) ?? null)
       : null;
   const selectedError =
     error &&
-    selection?.kind === error.owner.kind &&
-    selection.id === error.owner.id
+    activeSelection?.kind === error.owner.kind &&
+    activeSelection.id === error.owner.id
       ? error.message
       : null;
   const selectedMetrics =
@@ -513,11 +514,11 @@ export function DeviceManagement({
             {visibleDevices.map((device) => (
               <li key={device.deviceId}>
                 <button
-                  className={`device-row ${selection?.kind === "device" && selection.id === device.deviceId ? "is-selected" : ""}`}
+                  className={`device-row ${activeSelection?.kind === "device" && activeSelection.id === device.deviceId ? "is-selected" : ""}`}
                   type="button"
                   aria-pressed={
-                    selection?.kind === "device" &&
-                    selection.id === device.deviceId
+                    activeSelection?.kind === "device" &&
+                    activeSelection.id === device.deviceId
                   }
                   onClick={() =>
                     setSelection({ kind: "device", id: device.deviceId })
@@ -545,11 +546,11 @@ export function DeviceManagement({
               {visibleCandidates.map((candidate) => (
                 <li key={candidate.key}>
                   <button
-                    className={`device-row candidate-row ${selection?.kind === "candidate" && selection.id === candidate.key ? "is-selected" : ""}`}
+                  className={`device-row candidate-row ${activeSelection?.kind === "candidate" && activeSelection.id === candidate.key ? "is-selected" : ""}`}
                     type="button"
                     aria-pressed={
-                      selection?.kind === "candidate" &&
-                      selection.id === candidate.key
+                    activeSelection?.kind === "candidate" &&
+                    activeSelection.id === candidate.key
                     }
                     onClick={() =>
                       setSelection({ kind: "candidate", id: candidate.key })

@@ -1,8 +1,8 @@
-import type { ButtonAction, ModelLayout } from "./types";
+import type { ModelLayout, TriggerActions } from "./types";
 
 interface KeypadProps {
   layout: ModelLayout;
-  actions: Record<string, ButtonAction[]>;
+  actions: Record<string, TriggerActions>;
   selectedButtonId: string | null;
   pressedButtonIds: Set<string>;
   actionCountLabel(count: number): string;
@@ -31,7 +31,13 @@ export function Keypad({
           }}
         >
           {group.buttons.map((button) => {
-            const count = actions[button.id]?.length ?? 0;
+            const triggerActions = actions[button.id];
+            const count = triggerActions
+              ? (triggerActions.press?.length ?? 0) +
+                (triggerActions.release?.length ?? 0) +
+                (triggerActions.long_press?.length ?? 0) +
+                (triggerActions.double_press?.length ?? 0)
+              : 0;
             return (
               <button
                 className={[

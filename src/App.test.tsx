@@ -26,7 +26,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 
 const deviceProfile: DeviceProfile = {
-  schema_version: 2,
+  schema_version: 3,
   profile: {
     id: "tel-carbon-v1",
     name: "碳膜电话键盘",
@@ -41,6 +41,7 @@ const deviceProfile: DeviceProfile = {
       },
     ],
   },
+  trigger_settings: { long_press_ms: 500, double_press_ms: 300 },
   hardware_profiles: [
     {
       id: "front-desk",
@@ -96,8 +97,9 @@ const rpBoard: AppSnapshot["boardProfiles"][number] = {
 };
 
 const rpProfile: DeviceProfile = {
-  schema_version: 2,
+  schema_version: 3,
   profile: { id: "rp-profile", name: "RP Profile", groups: [] },
+  trigger_settings: { long_press_ms: 500, double_press_ms: 300 },
   hardware_profiles: [
     {
       id: "rp-other",
@@ -289,8 +291,9 @@ beforeEach(() => {
               },
             }
           : {
-              schema_version: 2 as const,
+              schema_version: 3 as const,
               profile: { id, name: request.name, groups: [] },
+              trigger_settings: { long_press_ms: 500, double_press_ms: 300 },
               hardware_profiles: [
                 {
                   id: "hardware",
@@ -362,6 +365,88 @@ test("does not override the WebView viewport height", async () => {
   expect(document.documentElement.style.getPropertyValue("--app-height")).toBe(
     "",
   );
+});
+
+test("fills default trigger settings when a stale profile omits them", async () => {
+  const staleProfile = structuredClone(currentSnapshot.deviceProfiles[0]) as Omit<DeviceProfile, "trigger_settings"> & {
+    trigger_settings?: DeviceProfile["trigger_settings"];
+  };
+  delete staleProfile.trigger_settings;
+  currentSnapshot.deviceProfiles = [staleProfile as DeviceProfile];
+
+  const user = userEvent.setup();
+  render(<App />);
+
+  expect(await screen.findByRole("heading", { name: "按键概览" })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "按键行为" }));
+  await user.click(screen.getByRole("button", { name: "粘贴文本" }));
+  await user.type(screen.getByRole("textbox", { name: "文本" }), "默认计时");
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_device_profile", expect.anything()));
+  const saved = vi.mocked(invoke).mock.calls.find(([command]) => command === "save_device_profile")?.[1] as {
+    profile: DeviceProfile;
+  } | undefined;
+  expect(saved?.profile.trigger_settings).toEqual({ long_press_ms: 500, double_press_ms: 300 });
+});
+
+test("keeps the editor configuration independent from the device assignment", async () => {
+  const secondProfile: DeviceProfile = {
+    ...structuredClone(deviceProfile),
+    profile: {
+      ...deviceProfile.profile,
+      id: "profile-b",
+      name: "备用配置",
+    },
+  };
+  currentSnapshot.deviceProfiles.push(secondProfile);
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(await screen.findByRole("button", { name: "按键行为" }));
+  await user.selectOptions(screen.getByLabelText("当前编辑配置"), "profile-b");
+
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_settings", {
+    settings: expect.objectContaining({ editor_profile: "profile-b" }),
+  }));
+  await user.click(screen.getByRole("button", { name: "2，0 项行为" }));
+  await user.click(screen.getByRole("button", { name: "粘贴文本" }));
+  await user.type(screen.getByRole("textbox", { name: "文本" }), "配置 B");
+  await user.click(screen.getByRole("button", { name: "设备管理" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_device_profile", {
+    profile: expect.objectContaining({
+      profile: expect.objectContaining({ id: "profile-b" }),
+      actions: expect.objectContaining({
+        DIGIT_2: expect.objectContaining({ press: [{ type: "paste", text: "配置 B" }] }),
+      }),
+    }),
+  }));
+  await waitFor(() => expect(screen.getByLabelText("设备配置")).toHaveValue(deviceProfile.profile.id));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_runtime_assignment")).toBe(false);
+});
+
+test("waits for an autosave before changing pages", async () => {
+  const pendingSave = deferred<AppSnapshot>();
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "save_device_profile") {
+      const saved = (args as { profile: DeviceProfile }).profile;
+      currentSnapshot.deviceProfiles = currentSnapshot.deviceProfiles.map((profile) =>
+        profile.profile.id === saved.profile.id ? saved : profile,
+      );
+      return pendingSave.promise;
+    }
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "按键行为" }));
+  await user.click(screen.getByRole("button", { name: "粘贴文本" }));
+  await user.type(screen.getByRole("textbox", { name: "文本" }), "未保存");
+
+  await user.click(screen.getByRole("button", { name: "设备管理" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_device_profile", expect.anything()));
+  expect(screen.getByRole("heading", { name: "按键行为" })).toBeInTheDocument();
+
+  pendingSave.resolve(structuredClone(currentSnapshot));
+  expect(await screen.findByRole("heading", { name: "设备管理" })).toBeInTheDocument();
 });
 
 test("home connection status names the keyboard without exposing its system port", async () => {
@@ -1536,10 +1621,13 @@ test("builds an ordered action list and autosaves it", async () => {
       expect(invoke).toHaveBeenCalledWith("save_device_profile", {
         profile: expect.objectContaining({
           actions: {
-            DIGIT_2: [
-              { type: "paste", text: "你好" },
-              { type: "hotkey", keys: ["enter"] },
-            ],
+            DIGIT_2: {
+              press: [
+                { type: "paste", text: "你好" },
+                { type: "hotkey", keys: ["enter"] },
+              ],
+              release: [], long_press: [], double_press: [],
+            },
           },
         }),
       }),
@@ -1591,7 +1679,10 @@ test("manually selects a multi-modifier shortcut", async () => {
       expect(invoke).toHaveBeenCalledWith("save_device_profile", {
         profile: expect.objectContaining({
           actions: {
-            DIGIT_2: [{ type: "hotkey", keys: ["cmd", "ctrl", "shift", "k"] }],
+            DIGIT_2: {
+              press: [{ type: "hotkey", keys: ["cmd", "ctrl", "shift", "k"] }],
+              release: [], long_press: [], double_press: [],
+            },
           },
         }),
       }),
@@ -1617,7 +1708,10 @@ test("manually selects the backtick key", async () => {
       expect(invoke).toHaveBeenCalledWith("save_device_profile", {
         profile: expect.objectContaining({
           actions: {
-            DIGIT_2: [{ type: "hotkey", keys: ["backtick"] }],
+            DIGIT_2: {
+              press: [{ type: "hotkey", keys: ["backtick"] }],
+              release: [], long_press: [], double_press: [],
+            },
           },
         }),
       }),
@@ -1627,10 +1721,13 @@ test("manually selects the backtick key", async () => {
 
 test("reorders actions from the right editor", async () => {
   const user = userEvent.setup();
-  currentSnapshot.deviceProfiles[0].actions.DIGIT_2 = [
-    { type: "paste", text: "先粘贴" },
-    { type: "hotkey", keys: ["enter"] },
-  ];
+  currentSnapshot.deviceProfiles[0].actions.DIGIT_2 = {
+    press: [
+      { type: "paste", text: "先粘贴" },
+      { type: "hotkey", keys: ["enter"] },
+    ],
+    release: [], long_press: [], double_press: [],
+  };
   render(<App />);
   await user.click(await screen.findByRole("button", { name: "按键行为" }));
   const editor = await screen.findByRole("complementary", { name: "2" });
@@ -1642,10 +1739,13 @@ test("reorders actions from the right editor", async () => {
       expect(invoke).toHaveBeenCalledWith("save_device_profile", {
         profile: expect.objectContaining({
           actions: {
-            DIGIT_2: [
-              { type: "hotkey", keys: ["enter"] },
-              { type: "paste", text: "先粘贴" },
-            ],
+            DIGIT_2: {
+              press: [
+                { type: "hotkey", keys: ["enter"] },
+                { type: "paste", text: "先粘贴" },
+              ],
+              release: [], long_press: [], double_press: [],
+            },
           },
         }),
       }),

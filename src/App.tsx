@@ -30,6 +30,7 @@ import { LayoutEditor } from "./LayoutEditor";
 import { deviceSummary } from "./deviceStatus";
 import { reconcileSetupSession, setupPresence } from "./deviceSetupSession";
 import { t } from "./i18n";
+import { DEFAULT_DOUBLE_PRESS_MS, DEFAULT_LONG_PRESS_MS } from "./types";
 import type {
   AppSnapshot,
   BackupPreview,
@@ -45,6 +46,7 @@ import type {
   PhysicalInput,
   RuntimeAssignment,
   RuntimeEvent,
+  TriggerActions,
 } from "./types";
 import { SerializedSaveQueue, useAutosave } from "./useAutosave";
 
@@ -68,6 +70,10 @@ type HardwareEditorTarget = {
   hardwareProfileId: string;
   deviceId: string | null;
 };
+type ProfileAutosaveTarget = {
+  profileId: string;
+  profile: DeviceProfile;
+} | null;
 
 const PREVIEW_MODE = import.meta.env.DEV && new URLSearchParams(window.location.search).has("preview");
 const REGISTRY_REFRESH_MS = 1_500;
@@ -86,15 +92,47 @@ function isValidDraft(
   profile: DeviceProfile | undefined,
   boardProfiles: AppSnapshot["boardProfiles"],
 ) {
-  return Boolean(profile && Object.values(profile.actions).every((actions) => actions.every((action) => {
-    switch (action.type) {
-      case "paste": return action.text.length > 0;
-      case "hotkey": return action.keys.length > 0;
-      case "delay": return Number.isInteger(action.duration_ms) && action.duration_ms >= 1 && action.duration_ms <= 60_000;
-      case "media": return action.command.length > 0;
-      case "open": return action.target.trim().length > 0 && action.target.length <= 2_048 && !action.target.includes("\0");
-    }
-  })) && hardwareProfilesAreValid(profile.hardware_profiles, boardProfiles));
+  return Boolean(profile &&
+    Number.isInteger(profile.trigger_settings.long_press_ms) &&
+    profile.trigger_settings.long_press_ms >= 100 &&
+    profile.trigger_settings.long_press_ms <= 5_000 &&
+    Number.isInteger(profile.trigger_settings.double_press_ms) &&
+    profile.trigger_settings.double_press_ms >= 100 &&
+    profile.trigger_settings.double_press_ms <= 1_000 &&
+    Object.values(profile.actions).every((groups) =>
+    [groups.press, groups.release, groups.long_press, groups.double_press].every((actions) => actions.every((action: ButtonAction) => {
+      switch (action.type) {
+        case "paste": return action.text.length > 0;
+        case "hotkey": return action.keys.length > 0;
+        case "delay": return Number.isInteger(action.duration_ms) && action.duration_ms >= 1 && action.duration_ms <= 60_000;
+        case "media": return action.command.length > 0;
+        case "open": return action.target.trim().length > 0 && action.target.length <= 2_048 && !action.target.includes("\0");
+      }
+    }))) && hardwareProfilesAreValid(profile.hardware_profiles, boardProfiles));
+}
+
+function emptyTriggerActions(): TriggerActions {
+  return { press: [], release: [], long_press: [], double_press: [] };
+}
+
+function normalizeDeviceProfile(profile: DeviceProfile): DeviceProfile {
+  const actions = Object.fromEntries(
+    Object.entries(profile.actions ?? {}).map(([buttonId, groups]) => [
+      buttonId,
+      {
+        ...emptyTriggerActions(),
+        ...(Array.isArray(groups) ? { press: groups } : groups ?? {}),
+      },
+    ]),
+  );
+  return {
+    ...profile,
+    trigger_settings: {
+      long_press_ms: profile.trigger_settings?.long_press_ms ?? DEFAULT_LONG_PRESS_MS,
+      double_press_ms: profile.trigger_settings?.double_press_ms ?? DEFAULT_DOUBLE_PRESS_MS,
+    },
+    actions,
+  };
 }
 
 function resolveButton(hardware: HardwareProfile | undefined, input: PhysicalInput) {
@@ -191,6 +229,7 @@ export default function App() {
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
   const [hardwareEditorTarget, setHardwareEditorTarget] = useState<HardwareEditorTarget | null>(null);
   const [capturedDraftProfileIds, setCapturedDraftProfileIds] = useState<Set<string>>(() => new Set());
+  const [manualSaveProfileIds, setManualSaveProfileIds] = useState<Set<string>>(() => new Set());
   const [tentativeLearningCounts, setTentativeLearningCounts] = useState<Map<string, number>>(() => new Map());
   const [pressedButtonIds, setPressedButtonIds] = useState<Set<string>>(() => new Set());
   const [loaded, setLoaded] = useState(false);
@@ -217,9 +256,14 @@ export default function App() {
   const setupSeenRef = useRef<Set<string>>(new Set());
 
   const { deviceProfiles, editorProfile, boardProfiles, devices, candidates } = registry;
+  const profileById = useCallback((profileId: string | null) => {
+    if (!profileId) return undefined;
+    return profileDraftsRef.current.get(profileId) ??
+      registry.deviceProfiles.find((profile) => profile.profile.id === profileId);
+  }, [registry.deviceProfiles]);
   const editorProfileConfig = useMemo(
-    () => deviceProfiles.find((profile) => profile.profile.id === editorProfile),
-    [deviceProfiles, editorProfile],
+    () => profileById(editorProfile),
+    [editorProfile, profileById],
   );
   const selectedLearningDevice = hardwareEditorTarget?.deviceProfileId === editorProfile
     ? devices.find((device) => device.deviceId === hardwareEditorTarget.deviceId)
@@ -279,7 +323,8 @@ export default function App() {
 
   const applySnapshot = useCallback((snapshot: AppSnapshot, preserveDrafts = false) => {
     registryEpochRef.current += 1;
-    const snapshotProfileIds = new Set(snapshot.deviceProfiles.map((profile) => profile.profile.id));
+    const serverProfiles = snapshot.deviceProfiles.map(normalizeDeviceProfile);
+    const snapshotProfileIds = new Set(serverProfiles.map((profile) => profile.profile.id));
     if (preserveDrafts) {
       for (const profileId of profileDraftsRef.current.keys()) {
         if (!snapshotProfileIds.has(profileId)) profileDraftsRef.current.delete(profileId);
@@ -288,12 +333,17 @@ export default function App() {
         const next = new Set([...current].filter((profileId) => snapshotProfileIds.has(profileId)));
         return next.size === current.size ? current : next;
       });
+      setManualSaveProfileIds((current) => {
+        const next = new Set([...current].filter((profileId) => snapshotProfileIds.has(profileId)));
+        return next.size === current.size ? current : next;
+      });
     } else {
       profileDraftsRef.current.clear();
       setCapturedDraftProfileIds(new Set());
+      setManualSaveProfileIds(new Set());
     }
     setRegistry({
-      deviceProfiles: snapshot.deviceProfiles.map((profile) =>
+      deviceProfiles: serverProfiles.map((profile) =>
         preserveDrafts ? profileDraftsRef.current.get(profile.profile.id) ?? profile : profile
       ),
       editorProfile: snapshot.editorProfile,
@@ -301,10 +351,10 @@ export default function App() {
       devices: snapshot.devices,
       candidates: snapshot.candidates,
     });
-    setSavedDeviceProfiles(Object.fromEntries(snapshot.deviceProfiles.map((profile) =>
+    setSavedDeviceProfiles(Object.fromEntries(serverProfiles.map((profile) =>
       [profile.profile.id, JSON.stringify(profile)]
     )));
-    setLanguage("zh-CN");
+    setLanguage(snapshot.language);
     setHomeMetrics(snapshot.homeMetrics);
     pressedOwnersRef.current = new Map();
     setPressedButtonIds(new Set());
@@ -369,6 +419,12 @@ export default function App() {
       if (mountedRef.current) replaceRegistrySnapshot(snapshot);
     }
     profileDraftsRef.current.delete(profile.profile.id);
+    setManualSaveProfileIds((current) => {
+      if (!current.has(profile.profile.id)) return current;
+      const next = new Set(current);
+      next.delete(profile.profile.id);
+      return next;
+    });
     setCapturedDraftProfileIds((current) => {
       if (!current.has(profile.profile.id)) return current;
       const next = new Set(current);
@@ -380,6 +436,8 @@ export default function App() {
       [profile.profile.id]: JSON.stringify(profile),
     }));
   }, [replaceRegistrySnapshot]);
+
+  const saveProfile = saveEditorProfile;
 
   const renameManagedDevice = useCallback(async (deviceId: string, name: string) => {
     try {
@@ -468,15 +526,29 @@ export default function App() {
     );
   }, [editorProfileConfig?.profile.id]);
 
-  const autosave = useAutosave({
-    value: editorProfileConfig,
+  const autosaveTarget = useMemo<ProfileAutosaveTarget>(() => editorProfileConfig
+    ? { profileId: editorProfileConfig.profile.id, profile: editorProfileConfig }
+    : null, [editorProfileConfig]);
+  const autosave = useAutosave<ProfileAutosaveTarget>({
+    value: autosaveTarget,
     valid: dirty && !capturedDraftProfileIds.has(editorProfileConfig?.profile.id ?? "") &&
+      !manualSaveProfileIds.has(editorProfileConfig?.profile.id ?? "") &&
       !tentativeLearningCounts.has(editorProfileConfig?.profile.id ?? "") &&
       !editorLearningActive &&
       isValidDraft(editorProfileConfig, boardProfiles),
-    save: saveEditorProfile,
+    save: (target) => saveProfile(target?.profile),
     queue,
   });
+
+  const navigate = useCallback((nextView: View) => {
+    void autosave.flush()
+      .then(() => {
+        if (mountedRef.current) setView(nextView);
+      })
+      .catch((navigationError) => {
+        if (mountedRef.current) setError(`${t(language, "error.save")}: ${errorMessage(navigationError)}`);
+      });
+  }, [autosave.flush, language]);
 
   const retrySetupCandidate = useCallback(
     async (deviceId: string) => {
@@ -632,10 +704,8 @@ export default function App() {
     }
   }, [editorProfileConfig, selectedButtonId]);
 
-  const updateEditorProfile = (update: (profile: DeviceProfile) => DeviceProfile) => {
-    if (!editorProfileConfig) return;
-    const profileId = editorProfileConfig.profile.id;
-    if (!editorLearningActive) {
+  const updateProfile = useCallback((profileId: string, update: (profile: DeviceProfile) => DeviceProfile) => {
+    if (!editorLearningActive || profileId !== editorProfileConfig?.profile.id) {
       setCapturedDraftProfileIds((current) => {
         if (!current.has(profileId)) return current;
         const next = new Set(current);
@@ -655,7 +725,21 @@ export default function App() {
         ),
       };
     });
-  };
+  }, [editorLearningActive, editorProfileConfig?.profile.id]);
+
+  const updateEditorProfile = useCallback((update: (profile: DeviceProfile) => DeviceProfile) => {
+    const profileId = editorProfileConfig?.profile.id;
+    if (profileId) updateProfile(profileId, update);
+  }, [editorProfileConfig?.profile.id, updateProfile]);
+
+  const setProfileManualSave = useCallback((profileId: string, enabled: boolean) => {
+    setManualSaveProfileIds((current) => {
+      const next = new Set(current);
+      if (enabled) next.add(profileId);
+      else next.delete(profileId);
+      return next;
+    });
+  }, []);
 
   const saveSettings = async (nextEditorProfile: string | null, nextLanguage: Language) => {
     await autosave.flush();
@@ -749,7 +833,7 @@ export default function App() {
 
   const selectedButton = allButtons(editorProfileConfig).find((button) => button.id === selectedButtonId) ?? null;
   const selectedActions = editorProfileConfig && selectedButtonId
-    ? editorProfileConfig.actions[selectedButtonId] ?? []
+    ? editorProfileConfig.actions[selectedButtonId]?.press ?? []
     : [];
 
   return (
@@ -782,28 +866,28 @@ export default function App() {
 
       <div className={view === "home" || view === "devices" || view === "data" ? "product-workspace is-home" : "product-workspace"}>
         <aside className="sidebar">
-          <button className={`home-nav-button ${view === "home" ? "is-active" : ""}`} type="button" onClick={() => setView("home")}>
+          <button className={`home-nav-button ${view === "home" ? "is-active" : ""}`} type="button" onClick={() => void navigate("home")}>
             <Home size={17} />{t(language, "nav.home")}
           </button>
 
-          <button className={`devices-nav-button ${view === "devices" ? "is-active" : ""}`} type="button" onClick={() => setView("devices")}>
+          <button className={`devices-nav-button ${view === "devices" ? "is-active" : ""}`} type="button" onClick={() => void navigate("devices")}>
             <Usb size={17} />{t(language, "nav.devices")}
           </button>
 
           <nav aria-label={t(language, "nav.configuration")}>
             <span>{t(language, "nav.configuration")}</span>
-            <button className={view === "behavior" ? "is-active" : ""} type="button" onClick={() => setView("behavior")}>
+            <button className={view === "behavior" ? "is-active" : ""} type="button" onClick={() => void navigate("behavior")}>
               <Keyboard size={17} />{t(language, "nav.behavior")}
             </button>
-            <button className={view === "hardware" ? "is-active" : ""} type="button" disabled={!editorProfileConfig} onClick={() => setView("hardware")}>
+            <button className={view === "hardware" ? "is-active" : ""} type="button" disabled={!editorProfileConfig} onClick={() => void navigate("hardware")}>
               <Cable size={17} />{t(language, "nav.hardware")}
             </button>
-            <button className={view === "layout" ? "is-active" : ""} type="button" disabled={!editorProfileConfig} onClick={() => setView("layout")}>
+            <button className={view === "layout" ? "is-active" : ""} type="button" disabled={!editorProfileConfig} onClick={() => void navigate("layout")}>
               <LayoutGrid size={17} />{t(language, "nav.layout")}
             </button>
           </nav>
 
-          <button className={`data-nav-button ${view === "data" ? "is-active" : ""}`} type="button" onClick={() => setView("data")}>
+          <button className={`data-nav-button ${view === "data" ? "is-active" : ""}`} type="button" onClick={() => void navigate("data")}>
             <FileInput size={17} />{t(language, "nav.data")}
           </button>
 
@@ -959,7 +1043,23 @@ export default function App() {
           ) : (
             <>
               <div className="content-heading">
-                <div><span>{editorProfileConfig.profile.name}</span><h2>{t(language, view === "layout" ? "layout.title" : "behavior.title")}</h2></div>
+                <div>
+                  {view === "behavior" && <label className="model-picker">
+                    <span>{t(language, "model.select")}</span>
+                    <select
+                      aria-label={t(language, "model.select")}
+                      value={editorProfile ?? ""}
+                      disabled={!loaded || deviceProfiles.length === 0}
+                      onChange={(event) => void run(t(language, "error.save"), () => saveSettings(event.target.value, language))}
+                    >
+                      {deviceProfiles.map((profile) => (
+                        <option value={profile.profile.id} key={profile.profile.id}>{profile.profile.name}</option>
+                      ))}
+                    </select>
+                  </label>}
+                  <span>{editorProfileConfig.profile.name}</span>
+                  <h2>{t(language, view === "layout" ? "layout.title" : "behavior.title")}</h2>
+                </div>
                 {view === "behavior" && selectedButton && <span className="selected-crumb">{t(language, "behavior.selected", { label: selectedButton.label })}</span>}
                 {view === "layout" && <button className="primary-button" type="button" onClick={() => setLayoutEditorOpen(true)}><LayoutGrid size={16} />{t(language, "layout.edit")}</button>}
               </div>
@@ -983,7 +1083,13 @@ export default function App() {
           actions={selectedActions}
           onChange={(actions: ButtonAction[]) => selectedButtonId && updateEditorProfile((profile) => ({
             ...profile,
-            actions: { ...profile.actions, [selectedButtonId]: actions },
+            actions: {
+              ...profile.actions,
+              [selectedButtonId]: {
+                ...(profile.actions[selectedButtonId] ?? emptyTriggerActions()),
+                press: actions,
+              },
+            },
           }))}
         />}
       </div>
