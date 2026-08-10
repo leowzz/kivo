@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from scripts.repo_version import (
+    TRACKED_VERSION_FILES,
     VersionError,
     bump_patch,
     check_repo_version,
@@ -26,6 +27,23 @@ def test_set_repo_version_updates_kivo_fields_only(tmp_path: Path) -> None:
     assert 'name = "dependency"\nversion = "0.1.0"' in (
         tmp_path / "src-tauri" / "Cargo.lock"
     ).read_text()
+
+
+def test_set_repo_version_does_not_partially_update_invalid_repository(
+    tmp_path: Path,
+) -> None:
+    seed_version_repo(tmp_path)
+    tauri_config = tmp_path / "src-tauri" / "tauri.conf.json"
+    tauri_config.write_text('{"version": 123}\n')
+    files = (".env", *TRACKED_VERSION_FILES)
+    original_contents = {path: (tmp_path / path).read_text() for path in files}
+
+    with pytest.raises(VersionError, match="root version must be a string"):
+        set_repo_version(tmp_path, "v1.2.3")
+
+    assert {
+        path: (tmp_path / path).read_text() for path in files
+    } == original_contents
 
 
 @pytest.mark.parametrize(
@@ -55,6 +73,13 @@ def test_check_repo_version_names_inconsistent_file(tmp_path: Path) -> None:
     )
     with pytest.raises(VersionError, match="src-tauri/Cargo.toml"):
         check_repo_version(tmp_path, "v0.1.0")
+
+
+def test_check_repo_version_rejects_empty_expected_tag(tmp_path: Path) -> None:
+    seed_version_repo(tmp_path)
+
+    with pytest.raises(VersionError, match="expected vX.Y.Z"):
+        check_repo_version(tmp_path, "")
 
 
 def test_bump_patch_preserves_tag_form() -> None:

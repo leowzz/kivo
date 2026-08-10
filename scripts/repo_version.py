@@ -106,8 +106,8 @@ def _read_json(path: Path) -> object:
         raise VersionError(f"{path}: invalid or missing JSON") from error
 
 
-def _write_json(path: Path, document: object) -> None:
-    path.write_text(json.dumps(document, indent=2) + "\n")
+def _json_content(document: object) -> str:
+    return json.dumps(document, indent=2) + "\n"
 
 
 def _read_section_version(path: Path, header: str) -> str:
@@ -117,12 +117,12 @@ def _read_section_version(path: Path, header: str) -> str:
     return lines[line].split('"')[1]
 
 
-def _set_section_version(path: Path, header: str, version: str) -> None:
+def _updated_section_content(path: Path, header: str, version: str) -> str:
     lines = path.read_text().splitlines(keepends=True)
     start, end = _section_bounds(lines, header, path)
     line = _version_line(lines, start, end, path)
     lines[line] = f'version = "{version}"\n'
-    path.write_text("".join(lines))
+    return "".join(lines)
 
 
 def _read_package_version(path: Path, *, require_virtual_source: bool) -> str:
@@ -134,16 +134,16 @@ def _read_package_version(path: Path, *, require_virtual_source: bool) -> str:
     return lines[line].split('"')[1]
 
 
-def _set_package_version(
+def _updated_package_content(
     path: Path, version: str, *, require_virtual_source: bool
-) -> None:
+) -> str:
     lines = path.read_text().splitlines(keepends=True)
     start, end = _package_bounds(
         lines, path, require_virtual_source=require_virtual_source
     )
     line = _version_line(lines, start, end, path)
     lines[line] = f'version = "{version}"\n'
-    path.write_text("".join(lines))
+    return "".join(lines)
 
 
 def _read_tauri_version(path: Path) -> str:
@@ -153,7 +153,7 @@ def _read_tauri_version(path: Path) -> str:
     return document["version"]
 
 
-def _set_tauri_version(path: Path, version: str) -> None:
+def _updated_tauri_content(path: Path, version: str) -> str:
     _read_tauri_version(path)
     lines = path.read_text().splitlines(keepends=True)
     matches = [
@@ -169,7 +169,7 @@ def _set_tauri_version(path: Path, version: str) -> None:
         rf'\g<1>{version}\g<2>',
         lines[index],
     )
-    path.write_text("".join(lines))
+    return "".join(lines)
 
 
 def _read_versions(root: Path) -> dict[str, str]:
@@ -211,15 +211,11 @@ def _read_versions(root: Path) -> dict[str, str]:
 def set_repo_version(root: Path, tag: str) -> None:
     tag = validate_tag_version(tag)
     version = numeric_version(tag)
-    (root / ".env").write_text(f"version={tag}\n")
-    (root / ".env.example").write_text(f"version={tag}\n")
-
     package_json_path = root / "package.json"
     package_json = _read_json(package_json_path)
     if not isinstance(package_json, dict):
         raise VersionError("package.json: root must be an object")
     package_json["version"] = version
-    _write_json(package_json_path, package_json)
 
     package_lock_path = root / "package-lock.json"
     package_lock = _read_json(package_lock_path)
@@ -229,20 +225,36 @@ def set_repo_version(root: Path, tag: str) -> None:
         raise VersionError("package-lock.json: packages root entry is required")
     package_lock["version"] = version
     package_lock["packages"][""]["version"] = version
-    _write_json(package_lock_path, package_lock)
-
-    _set_section_version(root / "pyproject.toml", "[project]", version)
-    _set_package_version(root / "uv.lock", version, require_virtual_source=True)
-    _set_section_version(root / "src-tauri" / "Cargo.toml", "[package]", version)
-    _set_package_version(
-        root / "src-tauri" / "Cargo.lock", version, require_virtual_source=False
-    )
-    _set_tauri_version(root / "src-tauri" / "tauri.conf.json", version)
+    contents = {
+        root / ".env": f"version={tag}\n",
+        root / ".env.example": f"version={tag}\n",
+        package_json_path: _json_content(package_json),
+        package_lock_path: _json_content(package_lock),
+        root / "pyproject.toml": _updated_section_content(
+            root / "pyproject.toml", "[project]", version
+        ),
+        root / "uv.lock": _updated_package_content(
+            root / "uv.lock", version, require_virtual_source=True
+        ),
+        root / "src-tauri" / "Cargo.toml": _updated_section_content(
+            root / "src-tauri" / "Cargo.toml", "[package]", version
+        ),
+        root / "src-tauri" / "Cargo.lock": _updated_package_content(
+            root / "src-tauri" / "Cargo.lock", version, require_virtual_source=False
+        ),
+        root / "src-tauri" / "tauri.conf.json": _updated_tauri_content(
+            root / "src-tauri" / "tauri.conf.json", version
+        ),
+    }
+    for path, content in contents.items():
+        path.write_text(content)
 
 
 def check_repo_version(root: Path, expected_tag: str | None = None) -> str:
     env_tag = read_env_version(root / ".env")
-    expected_tag = validate_tag_version(expected_tag) if expected_tag else env_tag
+    expected_tag = (
+        validate_tag_version(expected_tag) if expected_tag is not None else env_tag
+    )
     expected_version = numeric_version(expected_tag)
     values = _read_versions(root)
     inconsistent = [
