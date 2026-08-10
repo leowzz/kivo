@@ -519,6 +519,55 @@ def test_validator_rejects_inscribed_diamond_rear_wire_hole() -> None:
         base.validate_base(diamond_hole, source)
 
 
+def test_validator_rejects_partial_lower_floor_outside_legacy_probes() -> None:
+    source = base.load_canonical_source(SOURCE_ROOT)
+    mesh = base.generate_base(source)
+    partial_floor = base.box_from_bounds(
+        np.array([base.WALL, base.WALL, 0.0]),
+        np.array([base.OUTER_WIDTH - base.WALL, 24.9, 0.5]),
+    )
+    obstructed = macro.union_meshes([mesh, partial_floor])
+
+    with pytest.raises(ValueError, match="unexpected lower material"):
+        base.validate_base(obstructed, source)
+
+
+def test_validator_rejects_partial_outer_front_wall_notch() -> None:
+    source = base.load_canonical_source(SOURCE_ROOT)
+    mesh = base.generate_base(source)
+    notch = base.box_from_bounds(
+        np.array([20.0, -0.1, 1.0]), np.array([30.0, 2.5, 9.0])
+    )
+    missing_front_wall = base.subtract_meshes(mesh, [notch])
+
+    with pytest.raises(ValueError, match="outer wall is missing"):
+        base.validate_base(missing_front_wall, source)
+
+
+def test_validator_rejects_internal_rear_hole_annulus() -> None:
+    source = base.load_canonical_source(SOURCE_ROOT)
+    mesh = base.generate_base(source)
+    outer = trimesh.creation.cylinder(
+        radius=base.WIRE_HOLE_DIAMETER / 2.0,
+        height=1.2,
+        sections=base.WIRE_HOLE_SEGMENTS,
+    )
+    inner = trimesh.creation.cylinder(
+        radius=1.2,
+        height=1.4,
+        sections=base.WIRE_HOLE_SEGMENTS,
+    )
+    rotation = trimesh.transformations.rotation_matrix(np.pi / 2.0, [1.0, 0.0, 0.0])
+    for cylinder in (outer, inner):
+        cylinder.apply_transform(rotation)
+        cylinder.apply_translation([base.CENTER_X, 72.9, 5.0])
+    annulus = base.subtract_meshes(outer, [inner])
+    restricted_hole = macro.union_meshes([mesh, annulus])
+
+    with pytest.raises(ValueError, match="rear wire hole clearance"):
+        base.validate_base(restricted_hole, source)
+
+
 def test_export_is_deterministic_and_reload_validates(tmp_path: Path) -> None:
     source = base.load_canonical_source(SOURCE_ROOT)
     first = tmp_path / "first.stl"

@@ -636,6 +636,92 @@ def measured_pocket_floor_top(mesh: trimesh.Trimesh) -> float:
     return float(interior.bounds[1, 2])
 
 
+def validation_rounded_rectangle_section(
+    width: float, length: float, radius: float
+) -> manifold3d.CrossSection:
+    x0 = CENTER_X - width / 2.0
+    x1 = CENTER_X + width / 2.0
+    y0 = CENTER_Y - length / 2.0
+    y1 = CENTER_Y + length / 2.0
+    quarter_segments = ROUNDED_SECTION_SEGMENTS // 4
+    corners = (
+        ((x1 - radius, y0 + radius), -np.pi / 2.0, 0.0),
+        ((x1 - radius, y1 - radius), 0.0, np.pi / 2.0),
+        ((x0 + radius, y1 - radius), np.pi / 2.0, np.pi),
+        ((x0 + radius, y0 + radius), np.pi, 3.0 * np.pi / 2.0),
+    )
+    points: list[tuple[float, float]] = []
+    for center, start, end in corners:
+        for angle in np.linspace(start, end, quarter_segments + 1):
+            points.append(
+                (
+                    center[0] + radius * float(np.cos(angle)),
+                    center[1] + radius * float(np.sin(angle)),
+                )
+            )
+    return manifold3d.CrossSection([points])
+
+
+def validation_rear_hole_clearance() -> trimesh.Trimesh:
+    clearance = trimesh.creation.cylinder(
+        radius=WIRE_HOLE_DIAMETER / 2.0,
+        height=WALL + 2.0 * BOOLEAN_TOLERANCE,
+        sections=WIRE_HOLE_SEGMENTS,
+    )
+    clearance.apply_transform(
+        trimesh.transformations.rotation_matrix(np.pi / 2.0, [1.0, 0.0, 0.0])
+    )
+    clearance.apply_translation([CENTER_X, OUTER_LENGTH - WALL / 2.0, 5.0])
+    return clearance
+
+
+def required_outer_ring_reference(
+    rear_clearance: trimesh.Trimesh,
+) -> trimesh.Trimesh:
+    outer_section = validation_rounded_rectangle_section(
+        OUTER_WIDTH, OUTER_LENGTH, OUTER_RADIUS
+    )
+    inner_section = validation_rounded_rectangle_section(
+        INNER_WIDTH, INNER_LENGTH, INNER_RADIUS
+    )
+    chamfer_section = validation_rounded_rectangle_section(
+        INNER_WIDTH + 2.0 * CHAMFER,
+        INNER_LENGTH + 2.0 * CHAMFER,
+        INNER_RADIUS + CHAMFER,
+    )
+    outer = manifold_to_mesh(outer_section.extrude(OUTER_HEIGHT))
+    inner = manifold_to_mesh(
+        inner_section.extrude(OUTER_HEIGHT + 2.0).translate((0.0, 0.0, -1.0))
+    )
+    chamfer_points = [
+        [float(x), float(y), z]
+        for section, z in (
+            (inner_section, OUTER_HEIGHT - CHAMFER),
+            (chamfer_section, OUTER_HEIGHT),
+        )
+        for polygon in section.to_polygons()
+        for x, y in polygon
+    ]
+    chamfer = manifold_to_mesh(manifold3d.Manifold.hull_points(chamfer_points))
+    return subtract_meshes(outer, [inner, chamfer, rear_clearance])
+
+
+def intersection_volume(meshes: Iterable[trimesh.Trimesh]) -> float:
+    intersection = macro.boolean_meshes(meshes, "intersection")
+    if intersection.is_empty:
+        return 0.0
+    triangles = intersection.triangles
+    signed_volume = (
+        np.einsum(
+            "ij,ij->i",
+            triangles[:, 0],
+            np.cross(triangles[:, 1], triangles[:, 2]),
+        ).sum()
+        / 6.0
+    )
+    return abs(float(signed_volume))
+
+
 def required_feature_references() -> list[tuple[str, trimesh.Trimesh]]:
     x0 = CENTER_X - PLATFORM_SIZE / 2.0
     x1 = CENTER_X + PLATFORM_SIZE / 2.0
@@ -752,6 +838,38 @@ def required_feature_references() -> list[tuple[str, trimesh.Trimesh]]:
     return references
 
 
+def validate_outer_ring_coverage(
+    mesh: trimesh.Trimesh, reference: trimesh.Trimesh
+) -> None:
+    shared_volume = intersection_volume([mesh, reference])
+    missing_volume = max(0.0, float(reference.volume - shared_volume))
+    if missing_volume > REQUIRED_SOLID_VOLUME_TOLERANCE:
+        raise ValueError(f"outer wall is missing: volume={missing_volume}")
+
+
+def validate_lower_access_region(
+    mesh: trimesh.Trimesh,
+    outer_ring: trimesh.Trimesh,
+    feature_references: list[tuple[str, trimesh.Trimesh]],
+) -> None:
+    lower_bounds = box_from_bounds(
+        np.array([0.0, 0.0, -BOOLEAN_TOLERANCE]),
+        np.array([OUTER_WIDTH, OUTER_LENGTH, PLATFORM_BOTTOM - BOOLEAN_TOLERANCE]),
+    )
+    actual_lower = macro.boolean_meshes([mesh, lower_bounds], "intersection")
+    allowed = macro.union_meshes(
+        [outer_ring, *(reference for _, reference in feature_references)]
+    )
+    allowed_lower = macro.boolean_meshes([allowed, lower_bounds], "intersection")
+    shared_volume = intersection_volume([actual_lower, allowed_lower])
+    unexpected_volume = max(0.0, float(actual_lower.volume - shared_volume))
+    if unexpected_volume > REQUIRED_SOLID_VOLUME_TOLERANCE:
+        raise ValueError(
+            "unexpected lower material obstructs open underside: "
+            f"volume={unexpected_volume}"
+        )
+
+
 def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationReport:
     if not mesh.is_watertight:
         mesh = mesh.copy()
@@ -828,7 +946,19 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
     for probe in OUTER_CORNER_PROBES:
         if probe_volume(mesh, probe) >= 1e-6:
             raise ValueError(f"R4 outer corner is filled: {probe}")
-    for label, reference in required_feature_references():
+
+    rear_clearance = validation_rear_hole_clearance()
+    obstructed_hole_volume = intersection_volume([mesh, rear_clearance])
+    if obstructed_hole_volume > REQUIRED_SOLID_VOLUME_TOLERANCE:
+        raise ValueError(
+            f"rear wire hole clearance is obstructed: volume={obstructed_hole_volume}"
+        )
+
+    outer_ring_reference = required_outer_ring_reference(rear_clearance)
+    validate_outer_ring_coverage(mesh, outer_ring_reference)
+    feature_references = required_feature_references()
+    validate_lower_access_region(mesh, outer_ring_reference, feature_references)
+    for label, reference in feature_references:
         shared = macro.boolean_meshes([mesh, reference], "intersection")
         missing_volume = max(0.0, float(reference.volume - shared.volume))
         if missing_volume > REQUIRED_SOLID_VOLUME_TOLERANCE:
