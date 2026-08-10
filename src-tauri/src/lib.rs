@@ -1,5 +1,7 @@
 mod coordinator;
 mod device;
+#[allow(dead_code)]
+mod display;
 pub mod hardware;
 mod metrics;
 mod model;
