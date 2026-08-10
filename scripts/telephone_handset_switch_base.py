@@ -847,19 +847,38 @@ def validate_outer_ring_coverage(
         raise ValueError(f"outer wall is missing: volume={missing_volume}")
 
 
-def validate_lower_access_region(
+def validation_source_cell_reference(source: trimesh.Trimesh) -> trimesh.Trimesh:
+    cell = macro.clip_slab(source, 0, CELL_START, CELL_END)
+    cell = macro.clip_slab(cell, 1, CELL_START, CELL_END)
+    target_lower = np.array(
+        [
+            CENTER_X - CELL_SIZE / 2.0,
+            CENTER_Y - CELL_SIZE / 2.0,
+            PLATFORM_BOTTOM,
+        ]
+    )
+    cell.apply_translation(target_lower - cell.bounds[0])
+    return cell
+
+
+def validate_unexpected_material(
     mesh: trimesh.Trimesh,
+    source: trimesh.Trimesh,
     outer_ring: trimesh.Trimesh,
     feature_references: list[tuple[str, trimesh.Trimesh]],
 ) -> None:
+    allowed = macro.union_meshes(
+        [
+            outer_ring,
+            validation_source_cell_reference(source),
+            *(reference for _, reference in feature_references),
+        ]
+    )
     lower_bounds = box_from_bounds(
         np.array([0.0, 0.0, -BOOLEAN_TOLERANCE]),
         np.array([OUTER_WIDTH, OUTER_LENGTH, PLATFORM_BOTTOM - BOOLEAN_TOLERANCE]),
     )
     actual_lower = macro.boolean_meshes([mesh, lower_bounds], "intersection")
-    allowed = macro.union_meshes(
-        [outer_ring, *(reference for _, reference in feature_references)]
-    )
     allowed_lower = macro.boolean_meshes([allowed, lower_bounds], "intersection")
     shared_volume = intersection_volume([actual_lower, allowed_lower])
     unexpected_volume = max(0.0, float(actual_lower.volume - shared_volume))
@@ -868,6 +887,11 @@ def validate_lower_access_region(
             "unexpected lower material obstructs open underside: "
             f"volume={unexpected_volume}"
         )
+
+    shared_volume = intersection_volume([mesh, allowed])
+    unexpected_volume = max(0.0, float(mesh.volume - shared_volume))
+    if unexpected_volume > REQUIRED_SOLID_VOLUME_TOLERANCE:
+        raise ValueError(f"unexpected model material: volume={unexpected_volume}")
 
 
 def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationReport:
@@ -957,7 +981,7 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
     outer_ring_reference = required_outer_ring_reference(rear_clearance)
     validate_outer_ring_coverage(mesh, outer_ring_reference)
     feature_references = required_feature_references()
-    validate_lower_access_region(mesh, outer_ring_reference, feature_references)
+    validate_unexpected_material(mesh, source, outer_ring_reference, feature_references)
     for label, reference in feature_references:
         shared = macro.boolean_meshes([mesh, reference], "intersection")
         missing_volume = max(0.0, float(reference.volume - shared.volume))

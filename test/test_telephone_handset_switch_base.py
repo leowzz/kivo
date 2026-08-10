@@ -395,7 +395,7 @@ def test_validation_report_uses_measured_pocket_loop() -> None:
     source = base.load_canonical_source(SOURCE_ROOT)
     mesh = base.generate_base(source)
     sub_tolerance_inner_strip = base.box_from_bounds(
-        np.array([2.399, 2.4, 19.5]), np.array([2.4025, 72.4, 20.5])
+        np.array([2.399, 2.4, 19.98]), np.array([2.4025, 72.4, 20.02])
     )
     measured_variant = macro.union_meshes([mesh, sub_tolerance_inner_strip])
 
@@ -529,6 +529,19 @@ def test_validator_rejects_partial_lower_floor_outside_legacy_probes() -> None:
     obstructed = macro.union_meshes([mesh, partial_floor])
 
     with pytest.raises(ValueError, match="unexpected lower material"):
+        base.validate_base(obstructed, source)
+
+
+def test_validator_rejects_broad_roof_above_lower_access_region() -> None:
+    source = base.load_canonical_source(SOURCE_ROOT)
+    mesh = base.generate_base(source)
+    roof = base.box_from_bounds(
+        np.array([base.WALL, base.WALL, 10.1]),
+        np.array([base.OUTER_WIDTH - base.WALL, 24.9, 10.6]),
+    )
+    obstructed = macro.union_meshes([mesh, roof])
+
+    with pytest.raises(ValueError, match="unexpected .* material"):
         base.validate_base(obstructed, source)
 
 
