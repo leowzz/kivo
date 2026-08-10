@@ -6,6 +6,7 @@
 
 #include <array>
 #include <memory>
+#include <new>
 #include <optional>
 
 #include "HidReportTransport.h"
@@ -37,13 +38,16 @@ TwoWire *displayWire = nullptr;
 std::optional<DisplayFrame> lastDisplayFrame;
 enum class DisplayBufferSource { None, Local, Remote };
 DisplayBufferSource displayBufferSource = DisplayBufferSource::None;
+bool displayRequested = false;
+bool displayHealthy = false;
 
 void stopDisplay() {
-  if (display) {
+  if (display && displayHealthy) {
     display->clearBuffer();
     display->sendBuffer();
     display->setPowerSave(1);
   }
+  displayHealthy = false;
   display = nullptr;
   i2c0Display.reset();
   i2c1Display.reset();
@@ -60,6 +64,23 @@ void startHardwareI2c(TwoWire &wire, std::uint8_t sda, std::uint8_t scl) {
   wire.begin();
   wire.setClock(kOledI2cClockHz);
   displayWire = &wire;
+}
+
+bool supportsRemoteScene(const RemoteDisplayCommit &scene) {
+  if (scene.regionCount > kMaxDisplayRegions ||
+      scene.operationCount > kMaxDisplayOps ||
+      scene.dirtyCount > kMaxDisplayRegions) {
+    return false;
+  }
+  for (std::size_t index = 0; index < scene.operationCount; ++index) {
+    const auto &operation = scene.operations[index];
+    if (operation.kind == DisplayOperationKind::Clear) continue;
+    if (operation.kind != DisplayOperationKind::Text ||
+        operation.fontId != kRemoteDisplayFontId) {
+      return false;
+    }
+  }
+  return true;
 }
 }  // namespace
 
@@ -125,45 +146,56 @@ bool sendConsumerControl(std::uint16_t usage) {
       []() { delay(1); });
 }
 
-void configureDisplay(const std::optional<OledConfig> &config) {
+bool configureDisplay(const std::optional<OledConfig> &config) {
   stopDisplay();
-  if (!config.has_value()) return;
+  displayRequested = config.has_value();
+  if (!displayRequested) return true;
 
   switch (selectRp2040OledBus(config->sda, config->scl)) {
     case Rp2040OledBus::I2c0:
       startHardwareI2c(Wire, config->sda, config->scl);
-      i2c0Display =
-          std::make_unique<U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C>(
-              U8G2_R0, U8X8_PIN_NONE);
+      i2c0Display.reset(
+          new (std::nothrow) U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C(
+              U8G2_R0, U8X8_PIN_NONE));
       display = i2c0Display.get();
       break;
     case Rp2040OledBus::I2c1:
       startHardwareI2c(Wire1, config->sda, config->scl);
-      i2c1Display =
-          std::make_unique<U8G2_SSD1306_128X32_UNIVISION_F_2ND_HW_I2C>(
-              U8G2_R0, U8X8_PIN_NONE);
+      i2c1Display.reset(
+          new (std::nothrow) U8G2_SSD1306_128X32_UNIVISION_F_2ND_HW_I2C(
+              U8G2_R0, U8X8_PIN_NONE));
       display = i2c1Display.get();
       break;
     case Rp2040OledBus::Software:
-      softwareDisplay =
-          std::make_unique<U8G2_SSD1306_128X32_UNIVISION_F_SW_I2C>(
-              U8G2_R0, config->scl, config->sda, U8X8_PIN_NONE);
+      softwareDisplay.reset(
+          new (std::nothrow) U8G2_SSD1306_128X32_UNIVISION_F_SW_I2C(
+              U8G2_R0, config->scl, config->sda, U8X8_PIN_NONE));
       display = softwareDisplay.get();
       break;
   }
+  if (!display) {
+    stopDisplay();
+    return false;
+  }
   display->setI2CAddress(kOledI2cAddress << 1U);
   display->setBusClock(kOledI2cClockHz);
-  display->begin();
+  // U8g2 exposes no post-begin I2C transfer status to validate later writes.
+  if (!display->begin()) {
+    stopDisplay();
+    return false;
+  }
+  displayHealthy = true;
   display->setFont(u8g2_font_6x13_tf);
   display->clearBuffer();
   display->sendBuffer();
+  return true;
 }
 
-void renderLocalDisplay(const DisplayFrame &frame) {
-  if (!display || (displayBufferSource == DisplayBufferSource::Local &&
-                   lastDisplayFrame.has_value() &&
-                   *lastDisplayFrame == frame)) {
-    return;
+bool renderLocalDisplay(const DisplayFrame &frame) {
+  if (!display || !displayHealthy) return !displayRequested;
+  if (displayBufferSource == DisplayBufferSource::Local &&
+      lastDisplayFrame.has_value() && *lastDisplayFrame == frame) {
+    return true;
   }
   display->setFont(u8g2_font_6x13_tf);
   display->clearBuffer();
@@ -180,11 +212,13 @@ void renderLocalDisplay(const DisplayFrame &frame) {
   display->sendBuffer();
   lastDisplayFrame = frame;
   displayBufferSource = DisplayBufferSource::Local;
+  return true;
 }
 
-void renderRemoteDisplay(const RemoteDisplayCommit &scene,
+bool renderRemoteDisplay(const RemoteDisplayCommit &scene,
                          bool fullRedraw) {
-  if (!display) return;
+  if (!display || !displayHealthy) return !displayRequested;
+  if (!supportsRemoteScene(scene)) return false;
   lastDisplayFrame.reset();
   if (fullRedraw || displayBufferSource != DisplayBufferSource::Remote) {
     display->clearBuffer();
@@ -209,6 +243,7 @@ void renderRemoteDisplay(const RemoteDisplayCommit &scene,
   }
   display->sendBuffer();
   displayBufferSource = DisplayBufferSource::Remote;
+  return true;
 }
 
 void resetRemoteDisplay() {

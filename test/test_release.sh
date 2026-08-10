@@ -65,18 +65,27 @@ grep -Fq 'https://espressif.github.io/esptool-js/' "$README"
 grep -Fq '地址填写 `0x0`' "$README"
 grep -Fq '点击 **Program**' "$README"
 
-grep -Fq 'void renderLocalDisplay(const DisplayFrame &frame);' "$PLATFORM_HEADER"
-grep -Fq 'void renderRemoteDisplay(const RemoteDisplayCommit &scene,' "$PLATFORM_HEADER"
+grep -Fq 'bool configureDisplay(const std::optional<OledConfig> &config);' \
+  "$PLATFORM_HEADER"
+grep -Fq 'bool renderLocalDisplay(const DisplayFrame &frame);' "$PLATFORM_HEADER"
+grep -Fq 'bool renderRemoteDisplay(const RemoteDisplayCommit &scene,' "$PLATFORM_HEADER"
 grep -Fq 'void resetRemoteDisplay();' "$PLATFORM_HEADER"
 grep -Fq 'void serviceDisplay();' "$PLATFORM_HEADER"
-grep -Fq 'void renderLocalDisplay(const DisplayFrame &frame)' "$RP2040_PLATFORM"
-grep -Fq 'void renderRemoteDisplay(const RemoteDisplayCommit &scene,' "$RP2040_PLATFORM"
+grep -Fq 'bool configureDisplay(const std::optional<OledConfig> &config)' \
+  "$RP2040_PLATFORM"
+grep -Fq 'new (std::nothrow)' "$RP2040_PLATFORM"
+grep -Fq 'if (!display->begin())' "$RP2040_PLATFORM"
+grep -Fq 'bool renderLocalDisplay(const DisplayFrame &frame)' "$RP2040_PLATFORM"
+grep -Fq 'bool renderRemoteDisplay(const RemoteDisplayCommit &scene,' "$RP2040_PLATFORM"
 grep -Fq 'operation.fontId != kRemoteDisplayFontId' "$RP2040_PLATFORM"
 grep -Fq 'display->setFont(u8g2_font_6x13_tf);' "$RP2040_PLATFORM"
 grep -Fq 'display->drawBox(bounds.x, bounds.y, bounds.width, bounds.height);' \
   "$RP2040_PLATFORM"
 grep -Fq 'display->sendBuffer();' "$RP2040_PLATFORM"
-grep -Fq 'void renderRemoteDisplay(const RemoteDisplayCommit &, bool) {}' \
+grep -Fq 'bool configureDisplay(const std::optional<OledConfig> &config)' \
+  "$ESP32S3_PLATFORM"
+grep -Fq 'return !config.has_value();' "$ESP32S3_PLATFORM"
+grep -Fq 'bool renderRemoteDisplay(const RemoteDisplayCommit &, bool)' \
   "$ESP32S3_PLATFORM"
 grep -Fq 'DisplayUpdate commitRemote(const RemoteDisplayCommit &scene);' \
   "$DISPLAY_CONTROLLER"
@@ -85,6 +94,12 @@ grep -Fq 'platform::renderLocalDisplay(*update.local);' "$FIRMWARE_MAIN"
 grep -Fq 'platform::renderRemoteDisplay(*update.remote, update.fullRedraw);' \
   "$FIRMWARE_MAIN"
 grep -Fq 'platform::resetRemoteDisplay();' "$FIRMWARE_MAIN"
+grep -Fq 'displayController.displayReconfigured()' "$FIRMWARE_MAIN"
+grep -Fq 'displayController.displayFailed(displayFailureFrame())' \
+  "$FIRMWARE_MAIN"
+grep -Fq 'responseLines = ResponseLineBuffer(kMaxResponseLineLength);' \
+  "$FIRMWARE_MAIN"
+grep -Fq 'if (helperConnected) readHelperResponses(nowMs);' "$FIRMWARE_MAIN"
 grep -Fq 'remoteDisplay.emplace();' "$FIRMWARE_MAIN"
 ! grep -Fq 'remoteDisplay = RemoteDisplay{};' "$FIRMWARE_MAIN"
 grep -Fq 'platform::serviceDisplay();' "$FIRMWARE_MAIN"

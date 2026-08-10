@@ -137,6 +137,26 @@ void test_startup_refresh_does_not_demote_remote_or_critical_content() {
   TEST_ASSERT_EQUAL(DisplayUpdateKind::None, hiddenDelta.kind);
 }
 
+void test_display_reconfiguration_redraws_the_current_visible_source() {
+  DisplayController controller;
+  controller.showLocal(localFrame("READY 9 KEYS"),
+                       LocalDisplayPriority::Startup);
+  controller.commitRemote(remoteScene(11, "CODEX", "RUNNING"));
+
+  const auto remoteRedraw = controller.displayReconfigured();
+
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::Remote, remoteRedraw.kind);
+  TEST_ASSERT_TRUE(remoteRedraw.fullRedraw);
+  TEST_ASSERT_NOT_NULL(remoteRedraw.remote);
+  TEST_ASSERT_EQUAL_UINT32(11, remoteRedraw.remote->revision);
+  TEST_ASSERT_EQUAL(DisplaySource::Remote, controller.source());
+
+  controller.displayFailed(localFrame("DISPLAY ERROR"));
+  const auto criticalRedraw = controller.displayReconfigured();
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::Local, criticalRedraw.kind);
+  TEST_ASSERT_EQUAL(DisplaySource::Local, controller.source());
+}
+
 void test_local_critical_overrides_and_then_restores_latest_remote_scene() {
   DisplayController controller;
   const auto remote1 = remoteScene(1, "CODEX", "1 RUN");
@@ -235,6 +255,31 @@ void test_reconnect_preserves_the_critical_override_from_before_disconnect() {
   const auto restored = controller.clearLocalOverride();
   TEST_ASSERT_EQUAL(DisplayUpdateKind::Remote, restored.kind);
   TEST_ASSERT_EQUAL_UINT32(2, restored.remote->revision);
+}
+
+void test_disconnected_remote_commit_is_discarded_before_reconnect_full() {
+  DisplayController controller;
+  controller.commitRemote(remoteScene(4, "CODEX", "RUNNING"));
+  controller.helperDisconnected(localFrame("HELPER OFFLINE"));
+
+  const auto disconnectedCommit =
+      controller.commitRemote(remoteScene(5, "CODEX", "STALE"));
+
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::None, disconnectedCommit.kind);
+  TEST_ASSERT_FALSE(controller.hasRemote());
+  TEST_ASSERT_EQUAL_UINT32(0, controller.remoteRevision());
+
+  controller.showLocal(localFrame("READY 9 KEYS"),
+                       LocalDisplayPriority::Startup);
+  const auto reconnectDelta =
+      controller.commitRemote(remoteScene(6, "CODEX", "DELTA", false));
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::None, reconnectDelta.kind);
+  TEST_ASSERT_FALSE(controller.hasRemote());
+
+  const auto reconnectFull =
+      controller.commitRemote(remoteScene(7, "CODEX", "FRESH"));
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::Remote, reconnectFull.kind);
+  TEST_ASSERT_EQUAL_UINT32(7, controller.remoteRevision());
 }
 
 void commitFullScene(RemoteDisplay &display, std::uint32_t revision) {
@@ -1502,11 +1547,13 @@ int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_startup_stays_local_until_first_full_remote_scene);
   RUN_TEST(test_startup_refresh_does_not_demote_remote_or_critical_content);
+  RUN_TEST(test_display_reconfiguration_redraws_the_current_visible_source);
   RUN_TEST(test_local_critical_overrides_and_then_restores_latest_remote_scene);
   RUN_TEST(test_learning_override_retains_remote_and_restores_on_runtime_return);
   RUN_TEST(test_normal_input_debug_does_not_overwrite_active_remote_scene);
   RUN_TEST(test_disconnect_discards_remote_and_reconnect_requires_new_full_scene);
   RUN_TEST(test_reconnect_preserves_the_critical_override_from_before_disconnect);
+  RUN_TEST(test_disconnected_remote_commit_is_discarded_before_reconnect_full);
   RUN_TEST(test_display_transaction_commits_atomically);
   RUN_TEST(test_display_revision_rules_request_resync_without_mutation);
   RUN_TEST(test_new_begin_discards_uncommitted_transaction);

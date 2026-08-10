@@ -52,13 +52,32 @@ bool pasteClipboard() {
   return platform::sendHotkey(0x08, 0x19);
 }
 
-void applyDisplayUpdate(const DisplayUpdate &update) {
+DisplayFrame displayFailureFrame() {
+  auto frame = displayStatus.frame();
+  frame.lines[1] = "DISPLAY ERROR   ";
+  frame.lines[2].clear();
+  return frame;
+}
+
+bool applyDisplayUpdate(const DisplayUpdate &update) {
+  bool rendered = true;
   if (update.kind == DisplayUpdateKind::Local && update.local != nullptr) {
-    platform::renderLocalDisplay(*update.local);
+    rendered = platform::renderLocalDisplay(*update.local);
   } else if (update.kind == DisplayUpdateKind::Remote &&
              update.remote != nullptr) {
-    platform::renderRemoteDisplay(*update.remote, update.fullRedraw);
+    rendered =
+        platform::renderRemoteDisplay(*update.remote, update.fullRedraw);
+  } else if (update.kind != DisplayUpdateKind::None) {
+    rendered = false;
   }
+  if (!rendered) {
+    const auto failure =
+        displayController.displayFailed(displayFailureFrame());
+    if (failure.local != nullptr) {
+      (void)platform::renderLocalDisplay(*failure.local);
+    }
+  }
+  return rendered;
 }
 
 void showStatus(LocalDisplayPriority priority) {
@@ -129,11 +148,17 @@ void activateTopology(const RuntimeTopology &topology, std::uint32_t nowMs) {
   standaloneDisplayPending = false;
   displayStatus.setStandaloneDebug(false);
   // Release the old display before its I2C pins are reassigned by the topology.
-  platform::configureDisplay(topology.oled);
+  const bool displayReady = platform::configureDisplay(topology.oled);
   applyTopologyState(topology, nowMs);
-  applyDisplayUpdate(displayController.showLocal(
-      displayStatus.frame(), LocalDisplayPriority::Normal));
-  applyDisplayUpdate(displayController.clearLocalOverride());
+  displayController.showLocal(displayStatus.frame(),
+                              LocalDisplayPriority::Normal);
+  if (!displayReady) {
+    applyDisplayUpdate(
+        displayController.displayFailed(displayFailureFrame()));
+    return;
+  }
+  displayController.clearLocalOverride();
+  applyDisplayUpdate(displayController.displayReconfigured());
 }
 
 void activateStandaloneTopology(const RuntimeTopology &topology,
@@ -151,8 +176,16 @@ void initializeStandaloneDisplay(std::uint32_t nowMs) {
   }
   standaloneDisplayPending = false;
   // Let TinyUSB service its first cycles and the OLED power stabilize first.
-  platform::configureDisplay(controller.topology().oled);
-  showStatus(LocalDisplayPriority::Startup);
+  const bool displayReady =
+      platform::configureDisplay(controller.topology().oled);
+  displayController.showLocal(displayStatus.frame(),
+                              LocalDisplayPriority::Startup);
+  if (!displayReady) {
+    applyDisplayUpdate(
+        displayController.displayFailed(displayFailureFrame()));
+    return;
+  }
+  applyDisplayUpdate(displayController.displayReconfigured());
 }
 
 void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
@@ -335,6 +368,13 @@ void readHelperResponses(std::uint32_t nowMs) {
   }
 }
 
+void resetHelperInput() {
+  responseLines = ResponseLineBuffer(kMaxResponseLineLength);
+  while (platform::available() > 0) {
+    if (platform::read() < 0) return;
+  }
+}
+
 void emitInput(const std::optional<InputEvent> &event, bool learning) {
   if (event.has_value()) {
     displayStatus.recordInput(*event);
@@ -421,6 +461,7 @@ void loop() {
   if (connected != helperConnected) {
     pendingDelay.reset();
     actionRuns.reset();
+    resetHelperInput();
     remoteDisplay.emplace();
     platform::resetRemoteDisplay();
     displayStatus.setUsbConnected(connected);
@@ -435,7 +476,7 @@ void loop() {
   helperConnected = connected;
   servicePendingDelay(nowMs);
   actionRuns.expire(nowMs);
-  readHelperResponses(nowMs);
+  if (helperConnected) readHelperResponses(nowMs);
   if (controller.isLearning()) {
     scanLearningInputs(nowMs);
   } else {

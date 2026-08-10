@@ -7,6 +7,7 @@ DisplayUpdate DisplayController::showLocal(const DisplayFrame &frame,
     if (disconnected_) {
       localOverride_ = resumeLocalOverride_;
       disconnected_ = false;
+      connected_ = true;
     }
     if (localOverride_) {
       source_ = DisplaySource::Local;
@@ -41,7 +42,7 @@ DisplayUpdate DisplayController::clearLocalOverride() {
 
 DisplayUpdate DisplayController::commitRemote(
     const RemoteDisplayCommit &scene) {
-  if (!remote_.has_value() && !scene.full) return {};
+  if (!connected_ || (!remote_.has_value() && !scene.full)) return {};
   remote_ = scene;
   if (localOverride_) return {};
   source_ = DisplaySource::Remote;
@@ -54,9 +55,18 @@ DisplayUpdate DisplayController::helperDisconnected(
   remote_.reset();
   local_ = offline;
   localOverride_ = true;
+  connected_ = false;
   disconnected_ = true;
   source_ = DisplaySource::Local;
   return localUpdate();
+}
+
+DisplayUpdate DisplayController::displayReconfigured() const {
+  return source_ == DisplaySource::Remote ? remoteUpdate(true) : localUpdate();
+}
+
+DisplayUpdate DisplayController::displayFailed(const DisplayFrame &failure) {
+  return showLocal(failure, LocalDisplayPriority::Critical);
 }
 
 std::uint32_t DisplayController::remoteRevision() const {

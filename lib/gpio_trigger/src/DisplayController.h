@@ -24,6 +24,8 @@ class DisplayController {
   DisplayUpdate clearLocalOverride();
   DisplayUpdate commitRemote(const RemoteDisplayCommit &scene);
   DisplayUpdate helperDisconnected(const DisplayFrame &offline);
+  DisplayUpdate displayReconfigured() const;
+  DisplayUpdate displayFailed(const DisplayFrame &failure);
 
   DisplaySource source() const { return source_; }
   bool hasRemote() const { return remote_.has_value(); }
@@ -35,6 +37,7 @@ class DisplayController {
 
   DisplaySource source_ = DisplaySource::Local;
   bool localOverride_ = false;
+  bool connected_ = true;
   bool disconnected_ = false;
   bool resumeLocalOverride_ = false;
   std::optional<DisplayFrame> local_;

@@ -76,11 +76,13 @@ bool sendConsumerControl(std::uint16_t usage) {
   return pressed && released;
 }
 
-void configureDisplay(const std::optional<OledConfig> &) {}
+bool configureDisplay(const std::optional<OledConfig> &config) {
+  return !config.has_value();
+}
 
-void renderLocalDisplay(const DisplayFrame &) {}
+bool renderLocalDisplay(const DisplayFrame &) { return true; }
 
-void renderRemoteDisplay(const RemoteDisplayCommit &, bool) {}
+bool renderRemoteDisplay(const RemoteDisplayCommit &, bool) { return true; }
 
 void resetRemoteDisplay() {}
 
