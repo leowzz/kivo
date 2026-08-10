@@ -65,8 +65,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Set up Python and uv
-        uses: astral-sh/setup-uv@v7
+      - name: Set up Python
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -91,7 +91,9 @@ jobs:
 
       - name: Verify repository version
         shell: bash
-        run: python scripts/repo_version.py check "${GITHUB_REF_NAME}"
+        run: |
+          cp .env.example .env
+          python scripts/repo_version.py check "${GITHUB_REF_NAME}"
 
       - name: Build and publish release
         uses: tauri-apps/tauri-action@v1

@@ -2,6 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
+
 MAKEFILE="$ROOT/Makefile"
 FIRMWARE_MAIN="$ROOT/src/main.cpp"
 RP2040_PLATFORM="$ROOT/src/platform/rp2040.cpp"
@@ -30,6 +33,18 @@ grep -Fq 'ESP32-S3 and RP2040 firmware' "$RELEASE_WORKFLOW"
 grep -Fq 'python scripts/repo_version.py check "${GITHUB_REF_NAME}"' \
   "$RELEASE_WORKFLOW"
 ! grep -Fq 'config.version = tag.slice(1)' "$RELEASE_WORKFLOW"
+release_job_body="$(awk '
+  /^  release:$/ { capture = 1; next }
+  /^  firmware-publish:$/ { exit }
+  capture { print }
+' "$RELEASE_WORKFLOW")"
+grep -Fq 'uses: actions/setup-python@v6' <<<"$release_job_body"
+copy_env_line="$(grep -n -F 'cp .env.example .env' <<<"$release_job_body" | cut -d: -f1)"
+check_version_line="$(grep -n -F 'python scripts/repo_version.py check "${GITHUB_REF_NAME}"' \
+  <<<"$release_job_body" | cut -d: -f1)"
+test -n "$copy_env_line"
+test -n "$check_version_line"
+test "$copy_env_line" -lt "$check_version_line"
 grep -Fq 'Copy-Item .env.example .env' "$WINDOWS_WORKFLOW"
 grep -Fq 'cp .env.example .env' "$README"
 grep -Fq 'Copy-Item .env.example .env' "$README"
@@ -135,3 +150,27 @@ for command in "${expected_test_commands[@]}"; do
   previous_line="$line"
 done
 ! grep -Eq -- '(^|[[:space:]])(upload|picotool|enter_download_mode)([[:space:]]|$)' <<<"$test_body"
+
+FRESH_REPO="$TMP_DIR/fresh-checkout"
+mkdir -p "$FRESH_REPO/scripts" "$FRESH_REPO/src-tauri"
+for version_file in \
+  .env.example \
+  package.json \
+  package-lock.json \
+  pyproject.toml \
+  uv.lock \
+  src-tauri/Cargo.toml \
+  src-tauri/Cargo.lock \
+  src-tauri/tauri.conf.json; do
+  cp "$ROOT/$version_file" "$FRESH_REPO/$version_file"
+done
+cp "$ROOT/scripts/repo_version.py" "$FRESH_REPO/scripts/repo_version.py"
+
+if missing_env_output="$(cd "$FRESH_REPO" && python scripts/repo_version.py check v0.1.0 2>&1)"; then
+  echo "fresh checkout unexpectedly passed without .env" >&2
+  exit 1
+fi
+grep -Fq 'missing ' <<<"$missing_env_output"
+grep -Fq 'fresh-checkout/.env' <<<"$missing_env_output"
+cp "$FRESH_REPO/.env.example" "$FRESH_REPO/.env"
+(cd "$FRESH_REPO" && python scripts/repo_version.py check v0.1.0)
