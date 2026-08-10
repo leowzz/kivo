@@ -5,16 +5,20 @@ use crate::profile::{TriggerActions, TriggerSettings};
 use crate::{
     coordinator::{
         CapturedInput, DeviceWorker, RuntimeEventContext, WorkerCommand, WorkerEvent,
-        WorkerLauncher, WorkerStart,
+        WorkerLauncher, WorkerRendererRegistry, WorkerStart,
+    },
+    display::{
+        DisplayRenderer, DisplaySnapshot, RendererRegistry, SceneTracker, SceneUpdate,
+        built_in_renderer_registry,
     },
     hardware::{BoardProfile, DeviceId},
     metrics::{HomeMetricsSnapshot, MetricAttribution, MetricsStore},
     paste::{Clock, PasteHandle, PasteReply, PasteRequest, SystemClock},
     profile::{ActionTrigger, DeviceProfile},
     protocol::{
-        ActionSequence, DeviceMessage, HelloCapabilities, InputState, OLED_PROTOCOL_VERSION,
-        PhysicalInput, format_paste_command, is_hello_line, parse_device, topology_commands,
-        validate_hello,
+        ACTION_RUN_PROTOCOL_VERSION, ActionSequence, DISPLAY_PROTOCOL_VERSION, DeviceMessage,
+        HelloCapabilities, InputState, OLED_PROTOCOL_VERSION, PhysicalInput, display_commands,
+        format_paste_command, is_hello_line, parse_device, topology_commands, validate_hello,
     },
     trigger::{TriggerEdge, TriggerOccurrence, TriggerTracker},
 };
@@ -37,6 +41,8 @@ use std::{
 use std::process::Command;
 
 const ACTION_ACK_TIMEOUT: Duration = Duration::from_millis(1800);
+const DISPLAY_ACK_TIMEOUT: Duration = Duration::from_secs(2);
+const SSD1306_PANEL_ID: &str = "ssd1306_128x32_mono";
 const EMPTY_TOPOLOGY_DEBOUNCE_MS: u16 = 30;
 pub(crate) const SERIAL_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(10);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -513,7 +519,10 @@ impl DeviceSession {
             }
             DeviceMessage::ConfigOk { .. }
             | DeviceMessage::ConfigError { .. }
-            | DeviceMessage::LearnOk { .. } => {}
+            | DeviceMessage::LearnOk { .. }
+            | DeviceMessage::DisplayOk { .. }
+            | DeviceMessage::DisplayResync { .. }
+            | DeviceMessage::DisplayError { .. } => {}
         }
         output
     }
@@ -693,7 +702,7 @@ impl DeviceSession {
     fn is_v6(&self) -> bool {
         self.hello
             .as_ref()
-            .is_some_and(|hello| hello.protocol >= crate::protocol::HOST_PROTOCOL_VERSION)
+            .is_some_and(|hello| hello.protocol >= ACTION_RUN_PROTOCOL_VERSION)
     }
 
     fn enqueue_occurrences(
@@ -1614,12 +1623,141 @@ struct PendingPasteReply {
     replies: mpsc::Receiver<PasteReply>,
 }
 
+#[derive(Default)]
+pub struct DeviceDisplayLink {
+    tracker: SceneTracker,
+    enabled: bool,
+    renderer: Option<Arc<dyn DisplayRenderer>>,
+    pending_since: Option<Instant>,
+    queued_update: Option<SceneUpdate>,
+    latest_snapshot: Option<Arc<DisplaySnapshot>>,
+}
+
+impl DeviceDisplayLink {
+    pub(crate) fn configure(
+        &mut self,
+        protocol: u16,
+        profile: Option<&RuntimeProfileSnapshot>,
+        registry: &RendererRegistry,
+    ) {
+        let panel_id = profile
+            .and_then(|runtime| {
+                runtime
+                    .profile
+                    .hardware_profile(&runtime.hardware_profile_id)
+            })
+            .and_then(|hardware| hardware.ssd1306.as_ref().map(|_| SSD1306_PANEL_ID));
+        self.configure_panel(protocol, panel_id, registry);
+    }
+
+    fn configure_panel(
+        &mut self,
+        protocol: u16,
+        panel_id: Option<&str>,
+        registry: &RendererRegistry,
+    ) {
+        let renderer = (protocol >= DISPLAY_PROTOCOL_VERSION)
+            .then(|| panel_id.and_then(|id| registry.renderer(id).ok()))
+            .flatten();
+        let selected_panel = renderer.as_ref().map(|renderer| renderer.panel_id());
+        let current_panel = self.renderer.as_ref().map(|renderer| renderer.panel_id());
+        if self.enabled == renderer.is_some() && current_panel == selected_panel {
+            return;
+        }
+
+        self.tracker = SceneTracker::default();
+        self.pending_since = None;
+        self.queued_update = None;
+        self.enabled = renderer.is_some();
+        self.renderer = renderer;
+        let _ = self.render_latest();
+    }
+
+    fn reset_connection(
+        &mut self,
+        protocol: u16,
+        profile: Option<&RuntimeProfileSnapshot>,
+        registry: &RendererRegistry,
+    ) {
+        self.tracker = SceneTracker::default();
+        self.enabled = false;
+        self.renderer = None;
+        self.pending_since = None;
+        self.queued_update = None;
+        self.configure(protocol, profile, registry);
+    }
+
+    pub(crate) fn update_desired(&mut self, snapshot: Arc<DisplaySnapshot>) -> Result<(), String> {
+        self.latest_snapshot = Some(snapshot);
+        self.render_latest()
+    }
+
+    fn render_latest(&mut self) -> Result<(), String> {
+        let (Some(renderer), Some(snapshot)) =
+            (self.renderer.as_ref(), self.latest_snapshot.as_ref())
+        else {
+            return Ok(());
+        };
+        let scene = renderer.render(snapshot).map_err(str::to_owned)?;
+        if let Some(update) = self.tracker.prepare(scene) {
+            self.queued_update = Some(update);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn next_lines(&mut self, now: Instant) -> Result<Vec<String>, String> {
+        if !self.enabled {
+            return Ok(Vec::new());
+        }
+        if self
+            .pending_since
+            .is_some_and(|sent_at| now.saturating_duration_since(sent_at) >= DISPLAY_ACK_TIMEOUT)
+        {
+            eprintln!("display acknowledgement timeout; retrying latest full scene");
+            self.pending_since = None;
+            self.queued_update = self.tracker.resync();
+        }
+        if self.pending_since.is_some() {
+            return Ok(Vec::new());
+        }
+        let Some(update) = self.queued_update.take() else {
+            return Ok(Vec::new());
+        };
+        let lines = display_commands(&update)?;
+        self.pending_since = Some(now);
+        Ok(lines)
+    }
+
+    pub(crate) fn on_message(&mut self, message: &DeviceMessage) -> bool {
+        match message {
+            DeviceMessage::DisplayOk { revision } => {
+                if self.pending_since.is_none() {
+                    return true;
+                }
+                self.pending_since = None;
+                self.queued_update = match self.tracker.ack(*revision) {
+                    Ok(update) => update,
+                    Err(_) => self.tracker.resync(),
+                };
+                true
+            }
+            DeviceMessage::DisplayResync { .. } | DeviceMessage::DisplayError { .. } => {
+                self.pending_since = None;
+                self.queued_update = self.tracker.resync();
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
 struct WorkerRuntime {
     paste: PasteHandle,
     metrics: Option<Arc<MetricsStore>>,
     operation_barrier: Arc<RwLock<()>>,
     transport_factory: Arc<dyn SerialTransportFactory>,
     clock: Arc<dyn Clock>,
+    renderers: Arc<RendererRegistry>,
 }
 
 pub(crate) fn apply_worker_context_update(
@@ -1660,6 +1798,19 @@ impl WorkerLauncher for SystemWorkerLauncher {
         start: WorkerStart,
         events: mpsc::Sender<WorkerEvent>,
     ) -> Result<Box<dyn DeviceWorker>, String> {
+        self.start_with_renderers(
+            start,
+            events,
+            WorkerRendererRegistry::new(Arc::new(built_in_renderer_registry())),
+        )
+    }
+
+    fn start_with_renderers(
+        &self,
+        start: WorkerStart,
+        events: mpsc::Sender<WorkerEvent>,
+        renderers: WorkerRendererRegistry,
+    ) -> Result<Box<dyn DeviceWorker>, String> {
         let (commands, command_receiver) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
@@ -1669,6 +1820,7 @@ impl WorkerLauncher for SystemWorkerLauncher {
             operation_barrier: Arc::clone(&self.operation_barrier),
             transport_factory: Arc::clone(&self.transport_factory),
             clock: Arc::clone(&self.clock),
+            renderers: renderers.into_inner(),
         };
         let join = thread::Builder::new()
             .name(format!("kivo-device-{}", start.device_id.as_str()))
@@ -1714,6 +1866,7 @@ fn run_isolated_worker_inner(
     let operation_barrier = runtime.operation_barrier.as_ref();
     let transport_factory = runtime.transport_factory.as_ref();
     let clock = runtime.clock.as_ref();
+    let renderers = runtime.renderers.as_ref();
     let board = crate::hardware::board_by_id(&start.board_profile_id)
         .ok_or_else(|| "unknown_board_profile".to_owned())?;
     let mut port = transport_factory.open(&start.port)?;
@@ -1731,6 +1884,9 @@ fn run_isolated_worker_inner(
         })
         .map_err(|_| "coordinator_stopped".to_owned())?;
     let mut session = DeviceSession::without_model(board);
+    let mut display_protocol = hello.protocol;
+    let mut display_link = DeviceDisplayLink::default();
+    display_link.reset_connection(display_protocol, None, renderers);
     let monotonic_origin = clock.monotonic_now();
     let mut pending_paste: Option<PendingPasteReply> = None;
     let mut active_paste_ack = None;
@@ -1763,6 +1919,7 @@ fn run_isolated_worker_inner(
             let (output, context) = match command {
                 WorkerCommand::UpdatePort(_) => unreachable!("port updates are handled above"),
                 WorkerCommand::UpdateSnapshot(snapshot) => {
+                    display_link.configure(display_protocol, snapshot.as_deref(), renderers);
                     current_context = RuntimeEventContext::from_snapshot(
                         clock.unix_time_ms(),
                         snapshot.as_deref(),
@@ -1771,6 +1928,7 @@ fn run_isolated_worker_inner(
                     (session.update_snapshot(snapshot), current_context.clone())
                 }
                 WorkerCommand::Reconfigure { snapshot, revision } => {
+                    display_link.configure(display_protocol, snapshot.as_deref(), renderers);
                     current_context = RuntimeEventContext::from_snapshot(
                         clock.unix_time_ms(),
                         snapshot.as_deref(),
@@ -1788,6 +1946,7 @@ fn run_isolated_worker_inner(
                     (session.begin_learning(target), current_context.clone())
                 }
                 WorkerCommand::EndLearning { snapshot, revision } => {
+                    display_link.configure(display_protocol, snapshot.as_deref(), renderers);
                     current_context = RuntimeEventContext::from_snapshot(
                         clock.unix_time_ms(),
                         snapshot.as_deref(),
@@ -1805,6 +1964,10 @@ fn run_isolated_worker_inner(
                     session.on_captured_input(&captured, receive_sequence),
                     captured.context,
                 ),
+                WorkerCommand::UpdateDisplay(snapshot) => {
+                    display_link.update_desired(snapshot)?;
+                    (SessionOutput::default(), current_context.clone())
+                }
                 WorkerCommand::Shutdown => return Ok(()),
             };
             write_isolated_output(
@@ -1822,6 +1985,11 @@ fn run_isolated_worker_inner(
                 stop,
             )?;
         }
+
+        write_display_lines(
+            device.get_mut(),
+            display_link.next_lines(clock.monotonic_now())?,
+        )?;
 
         let monotonic_now_ms = monotonic_ms_since(monotonic_origin, clock.monotonic_now());
         let trigger_output = session
@@ -1986,6 +2154,11 @@ fn run_isolated_worker_inner(
                     continue;
                 };
                 match message {
+                    message @ (DeviceMessage::DisplayOk { .. }
+                    | DeviceMessage::DisplayResync { .. }
+                    | DeviceMessage::DisplayError { .. }) => {
+                        display_link.on_message(&message);
+                    }
                     DeviceMessage::State {
                         event_id,
                         input,
@@ -2043,6 +2216,12 @@ fn run_isolated_worker_inner(
                             let _ = paste.cancel_device(&start.device_id);
                         }
                         validate_hello(board, capability).map_err(|error| error.code.clone())?;
+                        display_protocol = capability.protocol;
+                        display_link.reset_connection(
+                            display_protocol,
+                            session.profile.as_deref(),
+                            renderers,
+                        );
                         let output = session.on_message_deferred(message, 0, received_at_ms);
                         write_isolated_output(
                             start,
@@ -2188,6 +2367,23 @@ fn write_isolated_output<W: Write + ?Sized>(
     Ok(())
 }
 
+fn write_display_lines<W: Write + ?Sized>(
+    writer: &mut W,
+    lines: Vec<String>,
+) -> Result<(), String> {
+    if lines.is_empty() {
+        return Ok(());
+    }
+    for line in lines {
+        writer
+            .write_all(line.as_bytes())
+            .map_err(|error| format!("serial_write_failed: {error}"))?;
+    }
+    writer
+        .flush()
+        .map_err(|error| format!("serial_write_failed: {error}"))
+}
+
 #[cfg(target_os = "macos")]
 fn open_target(target: &str) -> Result<(), String> {
     let status = Command::new("/usr/bin/open")
@@ -2301,6 +2497,11 @@ mod tests {
     use super::*;
     use crate::{
         coordinator::{EventLevel, RuntimeEvent},
+        display::{
+            DisplayCapabilities, DisplayItem, DisplayPriority, DisplayRegion, DisplayRenderer,
+            DisplaySnapshot, DisplayState, DrawOperation, Rect, RenderedScene, RendererRegistry,
+            SourceHealth, built_in_renderer_registry,
+        },
         hardware::DeviceId,
         metrics::{MetricAttribution, MetricsStore},
         model::{ButtonDefinition, ButtonGroup, ModelLayout},
@@ -2309,14 +2510,14 @@ mod tests {
             ButtonAction, DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION,
             Ssd1306Config,
         },
-        protocol::{DeviceMessage, PhysicalInput},
+        protocol::{DISPLAY_PROTOCOL_VERSION, DeviceMessage, PhysicalInput},
     };
     use serialport::{SerialPortInfo, SerialPortType, UsbPortInfo};
     use std::{
         cell::RefCell,
         collections::BTreeMap,
         sync::Mutex,
-        time::{SystemTime, UNIX_EPOCH},
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
 
     struct RecordingTargetOpener {
@@ -2393,6 +2594,276 @@ mod tests {
         runtime.metric_attribution.device_id =
             DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "ABCDEF123456").unwrap();
         runtime
+    }
+
+    fn display_snapshot(running: u32) -> Arc<DisplaySnapshot> {
+        Arc::new(DisplaySnapshot {
+            items: vec![
+                DisplayItem::new(
+                    "codex.summary",
+                    "codex",
+                    DisplayPriority::Ambient,
+                    DisplayState::Running,
+                    "Codex",
+                )
+                .unwrap()
+                .with_metric("running", running),
+            ],
+            health: BTreeMap::from([("codex".into(), SourceHealth::Healthy)]),
+        })
+    }
+
+    struct TestDisplayRenderer {
+        panel_id: &'static str,
+        text: &'static str,
+    }
+
+    impl DisplayRenderer for TestDisplayRenderer {
+        fn panel_id(&self) -> &'static str {
+            self.panel_id
+        }
+
+        fn capabilities(&self) -> &DisplayCapabilities {
+            static CAPABILITIES: DisplayCapabilities = DisplayCapabilities::ssd1306_128x32_mono();
+            &CAPABILITIES
+        }
+
+        fn render(&self, _snapshot: &DisplaySnapshot) -> Result<RenderedScene, &'static str> {
+            Ok(RenderedScene {
+                regions: vec![DisplayRegion::new(
+                    0,
+                    "test",
+                    Rect::new(0, 0, 64, 16),
+                    vec![
+                        DrawOperation::ClearRegion,
+                        DrawOperation::Text {
+                            x: 0,
+                            baseline_y: 12,
+                            font_id: 0,
+                            text: self.text.into(),
+                        },
+                    ],
+                )],
+            })
+        }
+    }
+
+    #[test]
+    fn display_link_is_silent_for_protocol_six_or_a_profile_without_oled() {
+        let registry = built_in_renderer_registry();
+        let now = Instant::now();
+        let mut legacy = DeviceDisplayLink::default();
+        legacy.configure(6, Some(&oled_runtime_model()), &registry);
+        legacy.update_desired(display_snapshot(3)).unwrap();
+        assert!(legacy.next_lines(now).unwrap().is_empty());
+
+        let mut no_panel = DeviceDisplayLink::default();
+        no_panel.configure(DISPLAY_PROTOCOL_VERSION, Some(&runtime_model()), &registry);
+        no_panel.update_desired(display_snapshot(3)).unwrap();
+        assert!(no_panel.next_lines(now).unwrap().is_empty());
+    }
+
+    #[test]
+    fn protocol_seven_oled_starts_with_a_full_scene_at_base_zero() {
+        let registry = built_in_renderer_registry();
+        let mut link = DeviceDisplayLink::default();
+        link.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+
+        link.update_desired(display_snapshot(3)).unwrap();
+        let lines = link.next_lines(Instant::now()).unwrap();
+
+        assert_eq!(lines.first().unwrap(), "DISPLAY_BEGIN 1 0 full\n");
+        assert_eq!(lines.last().unwrap(), "DISPLAY_COMMIT 1\n");
+    }
+
+    #[test]
+    fn each_display_link_uses_its_selected_renderer_for_the_same_snapshot() {
+        let mut registry = RendererRegistry::default();
+        registry
+            .register(Arc::new(TestDisplayRenderer {
+                panel_id: "test_alpha",
+                text: "ALPHA",
+            }))
+            .unwrap();
+        registry
+            .register(Arc::new(TestDisplayRenderer {
+                panel_id: "test_beta",
+                text: "BETA",
+            }))
+            .unwrap();
+        let snapshot = display_snapshot(3);
+        let now = Instant::now();
+        let mut alpha = DeviceDisplayLink::default();
+        alpha.configure_panel(DISPLAY_PROTOCOL_VERSION, Some("test_alpha"), &registry);
+        alpha.update_desired(Arc::clone(&snapshot)).unwrap();
+        let mut beta = DeviceDisplayLink::default();
+        beta.configure_panel(DISPLAY_PROTOCOL_VERSION, Some("test_beta"), &registry);
+        beta.update_desired(snapshot).unwrap();
+
+        let alpha_lines = alpha.next_lines(now).unwrap();
+        let beta_lines = beta.next_lines(now).unwrap();
+
+        assert_ne!(alpha_lines, beta_lines);
+        assert!(alpha_lines.iter().any(|line| line.contains("QUxQSEE=")));
+        assert!(beta_lines.iter().any(|line| line.contains("QkVUQQ==")));
+    }
+
+    #[test]
+    fn pending_display_update_coalesces_until_the_exact_ack() {
+        let registry = built_in_renderer_registry();
+        let now = Instant::now();
+        let mut link = DeviceDisplayLink::default();
+        link.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+        link.update_desired(display_snapshot(3)).unwrap();
+        assert_eq!(
+            link.next_lines(now).unwrap().first().unwrap(),
+            "DISPLAY_BEGIN 1 0 full\n"
+        );
+
+        link.update_desired(display_snapshot(4)).unwrap();
+        assert!(link.next_lines(now).unwrap().is_empty());
+        assert!(link.on_message(&DeviceMessage::DisplayOk { revision: 1 }));
+        let delta = link.next_lines(now).unwrap();
+
+        assert_eq!(delta.first().unwrap(), "DISPLAY_BEGIN 2 1 delta\n");
+        assert!(delta.iter().any(|line| line.contains("NCBSVU4=")));
+    }
+
+    #[test]
+    fn mismatched_display_ack_recovers_with_the_latest_full_scene() {
+        let registry = built_in_renderer_registry();
+        let now = Instant::now();
+        let mut link = DeviceDisplayLink::default();
+        link.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+        link.update_desired(display_snapshot(3)).unwrap();
+        link.next_lines(now).unwrap();
+        link.update_desired(display_snapshot(4)).unwrap();
+
+        assert!(link.on_message(&DeviceMessage::DisplayOk { revision: 9 }));
+        let recovered = link.next_lines(now).unwrap();
+
+        assert_eq!(recovered.first().unwrap(), "DISPLAY_BEGIN 2 0 full\n");
+        assert!(recovered.iter().any(|line| line.contains("NCBSVU4=")));
+    }
+
+    #[test]
+    fn display_ack_before_the_transaction_is_written_is_ignored() {
+        let registry = built_in_renderer_registry();
+        let now = Instant::now();
+        let mut link = DeviceDisplayLink::default();
+        link.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+        link.update_desired(display_snapshot(3)).unwrap();
+
+        assert!(link.on_message(&DeviceMessage::DisplayOk { revision: 1 }));
+
+        assert_eq!(
+            link.next_lines(now).unwrap().first().unwrap(),
+            "DISPLAY_BEGIN 1 0 full\n"
+        );
+    }
+
+    #[test]
+    fn display_ack_timeout_retries_the_latest_scene_full_once_per_deadline() {
+        let registry = built_in_renderer_registry();
+        let now = Instant::now();
+        let mut link = DeviceDisplayLink::default();
+        link.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+        link.update_desired(display_snapshot(3)).unwrap();
+        link.next_lines(now).unwrap();
+        link.update_desired(display_snapshot(4)).unwrap();
+
+        assert!(
+            link.next_lines(now + Duration::from_millis(1_999))
+                .unwrap()
+                .is_empty()
+        );
+        let retried = link.next_lines(now + Duration::from_secs(2)).unwrap();
+        assert_eq!(retried.first().unwrap(), "DISPLAY_BEGIN 2 0 full\n");
+        assert!(retried.iter().any(|line| line.contains("NCBSVU4=")));
+        assert!(
+            link.next_lines(now + Duration::from_secs(2))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn display_resync_and_error_keep_the_link_alive_and_force_full() {
+        for reply in [
+            DeviceMessage::DisplayResync {
+                current_revision: 0,
+            },
+            DeviceMessage::DisplayError {
+                revision: 1,
+                code: "invalid_text".into(),
+            },
+        ] {
+            let registry = built_in_renderer_registry();
+            let now = Instant::now();
+            let mut link = DeviceDisplayLink::default();
+            link.configure(
+                DISPLAY_PROTOCOL_VERSION,
+                Some(&oled_runtime_model()),
+                &registry,
+            );
+            link.update_desired(display_snapshot(3)).unwrap();
+            link.next_lines(now).unwrap();
+
+            assert!(link.on_message(&reply));
+            assert_eq!(
+                link.next_lines(now).unwrap().first().unwrap(),
+                "DISPLAY_BEGIN 2 0 full\n"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fresh_display_link_reconnects_with_a_full_scene() {
+        let registry = built_in_renderer_registry();
+        let snapshot = display_snapshot(3);
+        let now = Instant::now();
+        let mut original = DeviceDisplayLink::default();
+        original.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+        original.update_desired(Arc::clone(&snapshot)).unwrap();
+        original.next_lines(now).unwrap();
+        original.on_message(&DeviceMessage::DisplayOk { revision: 1 });
+
+        let mut reconnected = DeviceDisplayLink::default();
+        reconnected.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+        reconnected.update_desired(snapshot).unwrap();
+
+        assert_eq!(
+            reconnected.next_lines(now).unwrap().first().unwrap(),
+            "DISPLAY_BEGIN 1 0 full\n"
+        );
     }
 
     #[test]

@@ -2,7 +2,8 @@ use crate::{
     hardware::board_by_id,
     model::ModelLayout,
     protocol::{
-        ADVANCED_ACTION_PROTOCOL_VERSION, OLED_PROTOCOL_VERSION, PhysicalInput, encode_hotkey,
+        ACTION_RUN_PROTOCOL_VERSION, ADVANCED_ACTION_PROTOCOL_VERSION, OLED_PROTOCOL_VERSION,
+        PhysicalInput, encode_hotkey,
     },
     workspace::AppError,
 };
@@ -335,7 +336,7 @@ impl DeviceProfile {
                 || !actions.long_press.is_empty()
                 || !actions.double_press.is_empty()
             {
-                required = required.max(crate::protocol::HOST_PROTOCOL_VERSION);
+                required = required.max(ACTION_RUN_PROTOCOL_VERSION);
             }
             for action in actions.all() {
                 match action {
@@ -343,7 +344,7 @@ impl DeviceProfile {
                         if let Ok(chord) = encode_hotkey(keys)
                             && chord.keycodes.len() != 1
                         {
-                            required = required.max(crate::protocol::HOST_PROTOCOL_VERSION);
+                            required = required.max(ACTION_RUN_PROTOCOL_VERSION);
                         }
                     }
                     ButtonAction::Delay { .. }

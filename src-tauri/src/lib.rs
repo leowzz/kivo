@@ -2685,7 +2685,7 @@ mod tests {
             [WorkerCommand::Reconfigure {
                 snapshot: Some(snapshot),
                 revision: _,
-            }] if snapshot.profile.minimum_protocol_version() == crate::protocol::HOST_PROTOCOL_VERSION
+            }] if snapshot.profile.minimum_protocol_version() == crate::protocol::ACTION_RUN_PROTOCOL_VERSION
         ));
     }
 

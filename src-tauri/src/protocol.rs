@@ -1,17 +1,27 @@
 #[cfg(test)]
 use crate::profile::{TriggerActions, TriggerSettings};
 use crate::{
+    display::{DrawOperation, SceneMode, SceneUpdate},
     hardware::{BoardProfile, board_by_id},
     profile::{ActionTrigger, ButtonAction, HardwareProfile, InputSource, MediaCommand},
     workspace::AppError,
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-pub const HOST_PROTOCOL_VERSION: u16 = 6;
+pub const HOST_PROTOCOL_VERSION: u16 = 7;
+pub const DISPLAY_PROTOCOL_VERSION: u16 = 7;
+pub const ACTION_RUN_PROTOCOL_VERSION: u16 = 6;
 pub const OLED_PROTOCOL_VERSION: u16 = 4;
 pub const ADVANCED_ACTION_PROTOCOL_VERSION: u16 = 5;
 const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 3;
+const DISPLAY_WIDTH: u16 = 128;
+const DISPLAY_HEIGHT: u16 = 32;
+const DISPLAY_MAX_REGIONS: usize = 8;
+const DISPLAY_MAX_OPERATIONS: usize = 24;
+const DISPLAY_MAX_TEXT_BYTES: usize = 48;
+const DISPLAY_ASCII_FONT_ID: u8 = 0;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -50,6 +60,16 @@ pub enum DeviceMessage {
         pin_a: u8,
         pin_b: u8,
         state: InputState,
+    },
+    DisplayOk {
+        revision: u32,
+    },
+    DisplayResync {
+        current_revision: u32,
+    },
+    DisplayError {
+        revision: u32,
+        code: String,
     },
 }
 
@@ -154,8 +174,134 @@ pub fn parse_device(line: &str) -> Option<DeviceMessage> {
                 state: parse_state(state)?,
             })
         }
+        ["DISPLAY_OK", revision] => Some(DeviceMessage::DisplayOk {
+            revision: revision.parse().ok()?,
+        }),
+        ["DISPLAY_RESYNC", current_revision] => Some(DeviceMessage::DisplayResync {
+            current_revision: current_revision.parse().ok()?,
+        }),
+        ["DISPLAY_ERROR", revision, code] => Some(DeviceMessage::DisplayError {
+            revision: revision.parse().ok()?,
+            code: (*code).to_owned(),
+        }),
         _ => None,
     }
+}
+
+pub(crate) fn display_commands(update: &SceneUpdate) -> Result<Vec<String>, String> {
+    if update.new_revision == 0
+        || match update.mode {
+            SceneMode::Full => update.base_revision != 0,
+            SceneMode::Delta => {
+                update.base_revision == 0 || update.base_revision == update.new_revision
+            }
+        }
+    {
+        return Err("display_revision_invalid".into());
+    }
+    if update.regions.len() > DISPLAY_MAX_REGIONS {
+        return Err("display_region_limit".into());
+    }
+    let operation_count = update
+        .regions
+        .iter()
+        .try_fold(0usize, |count, region| {
+            count.checked_add(region.operations.len())
+        })
+        .ok_or_else(|| "display_operation_limit".to_owned())?;
+    if operation_count > DISPLAY_MAX_OPERATIONS {
+        return Err("display_operation_limit".into());
+    }
+
+    let mode = match update.mode {
+        SceneMode::Full => "full",
+        SceneMode::Delta => "delta",
+    };
+    let mut lines = Vec::new();
+    push_display_line(
+        &mut lines,
+        format!(
+            "DISPLAY_BEGIN {} {} {mode}\n",
+            update.new_revision, update.base_revision
+        ),
+    )?;
+    for region in &update.regions {
+        let right = region
+            .bounds
+            .x
+            .checked_add(region.bounds.width)
+            .filter(|right| region.bounds.width > 0 && *right <= DISPLAY_WIDTH);
+        let bottom = region
+            .bounds
+            .y
+            .checked_add(region.bounds.height)
+            .filter(|bottom| region.bounds.height > 0 && *bottom <= DISPLAY_HEIGHT);
+        let (Some(right), Some(bottom)) = (right, bottom) else {
+            return Err("display_region_bounds".into());
+        };
+        push_display_line(
+            &mut lines,
+            format!(
+                "DISPLAY_REGION {} {} {} {} {}\n",
+                region.slot,
+                region.bounds.x,
+                region.bounds.y,
+                region.bounds.width,
+                region.bounds.height
+            ),
+        )?;
+        for operation in &region.operations {
+            match operation {
+                DrawOperation::ClearRegion => {
+                    push_display_line(&mut lines, format!("DISPLAY_CLEAR {}\n", region.slot))?;
+                }
+                DrawOperation::Text {
+                    x,
+                    baseline_y,
+                    font_id,
+                    text,
+                } => {
+                    if *x < region.bounds.x
+                        || *x >= right
+                        || *baseline_y < region.bounds.y
+                        || *baseline_y >= bottom
+                    {
+                        return Err("display_text_bounds".into());
+                    }
+                    if *font_id != DISPLAY_ASCII_FONT_ID {
+                        return Err("display_font_unsupported".into());
+                    }
+                    if text.len() > DISPLAY_MAX_TEXT_BYTES {
+                        return Err("display_text_limit".into());
+                    }
+                    if !text.is_ascii() {
+                        return Err("display_text_charset".into());
+                    }
+                    push_display_line(
+                        &mut lines,
+                        format!(
+                            "DISPLAY_TEXT {} {x} {baseline_y} {font_id} {}\n",
+                            region.slot,
+                            STANDARD.encode(text.as_bytes())
+                        ),
+                    )?;
+                }
+            }
+        }
+    }
+    push_display_line(
+        &mut lines,
+        format!("DISPLAY_COMMIT {}\n", update.new_revision),
+    )?;
+    Ok(lines)
+}
+
+fn push_display_line(lines: &mut Vec<String>, line: String) -> Result<(), String> {
+    if line.len() >= 255 {
+        return Err("display_line_limit".into());
+    }
+    lines.push(line);
+    Ok(())
 }
 
 pub(crate) fn is_hello_line(line: &str) -> bool {
@@ -700,6 +846,7 @@ pub fn media_usage(command: MediaCommand) -> u16 {
 mod tests {
     use super::*;
     use crate::{
+        display::{DisplayRegion, DrawOperation, Rect, SceneMode, SceneUpdate},
         hardware::board_by_id,
         model::{ButtonDefinition, ButtonGroup, ModelLayout},
         profile::{DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION},
@@ -779,6 +926,166 @@ mod tests {
 
     fn ssd1306_hardware() -> HardwareProfile {
         ssd1306_hardware_for("vccgnd-yd-rp2040", 4, 5)
+    }
+
+    fn display_update(
+        new_revision: u32,
+        base_revision: u32,
+        mode: SceneMode,
+        text: &str,
+    ) -> SceneUpdate {
+        SceneUpdate {
+            new_revision,
+            base_revision,
+            mode,
+            regions: vec![DisplayRegion::new(
+                1,
+                "row0_right",
+                Rect::new(64, 0, 64, 16),
+                vec![
+                    DrawOperation::ClearRegion,
+                    DrawOperation::Text {
+                        x: 64,
+                        baseline_y: 12,
+                        font_id: 0,
+                        text: text.into(),
+                    },
+                ],
+            )],
+        }
+    }
+
+    #[test]
+    fn encodes_bounded_display_delta_with_base64_text() {
+        let update = display_update(2, 1, SceneMode::Delta, "4 RUN");
+
+        assert_eq!(
+            display_commands(&update).unwrap(),
+            vec![
+                "DISPLAY_BEGIN 2 1 delta\n",
+                "DISPLAY_REGION 1 64 0 64 16\n",
+                "DISPLAY_CLEAR 1\n",
+                "DISPLAY_TEXT 1 64 12 0 NCBSVU4=\n",
+                "DISPLAY_COMMIT 2\n",
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_display_ack_resync_and_error() {
+        assert_eq!(
+            parse_device("DISPLAY_OK 9\n"),
+            Some(DeviceMessage::DisplayOk { revision: 9 })
+        );
+        assert_eq!(
+            parse_device("DISPLAY_RESYNC 7\n"),
+            Some(DeviceMessage::DisplayResync {
+                current_revision: 7
+            })
+        );
+        assert_eq!(
+            parse_device("DISPLAY_ERROR 9 invalid_text\n"),
+            Some(DeviceMessage::DisplayError {
+                revision: 9,
+                code: "invalid_text".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_display_region_and_operation_count_overflow() {
+        let mut too_many_regions = display_update(2, 1, SceneMode::Delta, "4 RUN");
+        too_many_regions.regions = (0..9)
+            .map(|slot| {
+                DisplayRegion::new(
+                    slot,
+                    "test",
+                    Rect::new(0, 0, 8, 8),
+                    vec![DrawOperation::ClearRegion],
+                )
+            })
+            .collect();
+        assert_eq!(
+            display_commands(&too_many_regions).unwrap_err(),
+            "display_region_limit"
+        );
+
+        let mut too_many_operations = display_update(2, 1, SceneMode::Delta, "4 RUN");
+        too_many_operations.regions[0].operations = vec![DrawOperation::ClearRegion; 25];
+        assert_eq!(
+            display_commands(&too_many_operations).unwrap_err(),
+            "display_operation_limit"
+        );
+    }
+
+    #[test]
+    fn rejects_display_region_and_text_coordinates_outside_the_panel_or_slot() {
+        let mut invalid_region = display_update(2, 1, SceneMode::Delta, "4 RUN");
+        invalid_region.regions[0] = DisplayRegion::new(
+            1,
+            "row0_right",
+            Rect::new(120, 0, 16, 16),
+            vec![DrawOperation::ClearRegion],
+        );
+        assert_eq!(
+            display_commands(&invalid_region).unwrap_err(),
+            "display_region_bounds"
+        );
+
+        let mut invalid_text = display_update(2, 1, SceneMode::Delta, "4 RUN");
+        invalid_text.regions[0].operations[1] = DrawOperation::Text {
+            x: 63,
+            baseline_y: 12,
+            font_id: 0,
+            text: "4 RUN".into(),
+        };
+        assert_eq!(
+            display_commands(&invalid_text).unwrap_err(),
+            "display_text_bounds"
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_or_oversized_display_text() {
+        let oversized = display_update(2, 1, SceneMode::Delta, &"A".repeat(49));
+        assert_eq!(
+            display_commands(&oversized).unwrap_err(),
+            "display_text_limit"
+        );
+
+        let non_ascii = display_update(2, 1, SceneMode::Delta, "运行");
+        assert_eq!(
+            display_commands(&non_ascii).unwrap_err(),
+            "display_text_charset"
+        );
+
+        let mut unsupported_font = display_update(2, 1, SceneMode::Delta, "4 RUN");
+        let DrawOperation::Text { font_id, .. } = &mut unsupported_font.regions[0].operations[1]
+        else {
+            unreachable!();
+        };
+        *font_id = 1;
+        assert_eq!(
+            display_commands(&unsupported_font).unwrap_err(),
+            "display_font_unsupported"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_display_revisions_and_bounds_every_finished_line() {
+        let invalid_full = display_update(1, 1, SceneMode::Full, "4 RUN");
+        assert_eq!(
+            display_commands(&invalid_full).unwrap_err(),
+            "display_revision_invalid"
+        );
+        let invalid_delta = display_update(2, 0, SceneMode::Delta, "4 RUN");
+        assert_eq!(
+            display_commands(&invalid_delta).unwrap_err(),
+            "display_revision_invalid"
+        );
+
+        let lines = display_commands(&display_update(2, 1, SceneMode::Delta, "4 RUN")).unwrap();
+        assert!(lines.iter().all(|line| line.len() < 255));
     }
 
     #[test]
@@ -870,6 +1177,23 @@ mod tests {
             message,
             DeviceMessage::Hello(HelloCapabilities { protocol: 6, .. })
         ));
+    }
+
+    #[test]
+    fn parses_protocol_v5_and_v7_hello_compatibility_fixtures() {
+        for protocol in [5, 7] {
+            let message = parse_device(&format!(
+                "HELLO {protocol} rp2040 vccgnd-yd-rp2040 build 3 0 11 22"
+            ))
+            .unwrap();
+            assert!(matches!(
+                message,
+                DeviceMessage::Hello(HelloCapabilities {
+                    protocol: actual,
+                    ..
+                }) if actual == protocol
+            ));
+        }
     }
 
     #[test]

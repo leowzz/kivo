@@ -2,6 +2,7 @@
 use crate::profile::{TriggerActions, TriggerSettings};
 use crate::{
     device::{LearningTarget, RuntimeActivity, RuntimeProfileSnapshot},
+    display::{DisplaySnapshot, RendererRegistry, built_in_renderer_registry},
     hardware::{BoardProfile, DeviceId, HardwareRegistry, compiled_registry},
     metrics::{HomeMetricsSnapshot, MetricAttribution},
     paste::PasteHandle,
@@ -319,6 +320,7 @@ pub enum WorkerCommand {
         receive_sequence: u64,
         captured: CapturedInput,
     },
+    UpdateDisplay(Arc<DisplaySnapshot>),
     Shutdown,
 }
 
@@ -365,6 +367,28 @@ pub trait WorkerLauncher: Send + Sync {
         start: WorkerStart,
         events: mpsc::Sender<WorkerEvent>,
     ) -> Result<Box<dyn DeviceWorker>, String>;
+
+    fn start_with_renderers(
+        &self,
+        start: WorkerStart,
+        events: mpsc::Sender<WorkerEvent>,
+        _renderers: WorkerRendererRegistry,
+    ) -> Result<Box<dyn DeviceWorker>, String> {
+        self.start(start, events)
+    }
+}
+
+/// Opaque carrier that keeps the renderer registry internal across the public launcher boundary.
+pub struct WorkerRendererRegistry(Arc<RendererRegistry>);
+
+impl WorkerRendererRegistry {
+    pub(crate) fn new(registry: Arc<RendererRegistry>) -> Self {
+        Self(registry)
+    }
+
+    pub(crate) fn into_inner(self) -> Arc<RendererRegistry> {
+        self.0
+    }
 }
 
 struct WorkerSlot {
@@ -452,6 +476,7 @@ pub struct RuntimeCoordinator {
     workspace: Arc<RwLock<Workspace>>,
     workspace_revision: WorkspaceRevision,
     paste: Option<PasteHandle>,
+    renderers: Arc<RendererRegistry>,
     workers: BTreeMap<DeviceId, WorkerSlot>,
     devices: BTreeMap<DeviceId, DeviceStatus>,
     candidates: Vec<CandidateStatus>,
@@ -551,6 +576,7 @@ impl RuntimeCoordinator {
             workspace,
             workspace_revision,
             paste,
+            renderers: Arc::new(built_in_renderer_registry()),
             workers: BTreeMap::new(),
             devices: BTreeMap::new(),
             candidates: Vec::new(),
@@ -716,7 +742,11 @@ impl RuntimeCoordinator {
                         port: observation.port.clone(),
                         board_profile_id: board.id.into(),
                     };
-                    match self.launcher.start(start, self.event_sender.clone()) {
+                    match self.launcher.start_with_renderers(
+                        start,
+                        self.event_sender.clone(),
+                        WorkerRendererRegistry::new(Arc::clone(&self.renderers)),
+                    ) {
                         Ok(worker) => {
                             self.workers.insert(
                                 device_id.clone(),
@@ -1076,6 +1106,25 @@ impl RuntimeCoordinator {
         slot.worker
             .send(WorkerCommand::Reconfigure { snapshot, revision })?;
         Ok(revision)
+    }
+
+    pub fn update_display(&mut self, snapshot: Arc<DisplaySnapshot>) {
+        let failures = self
+            .workers
+            .iter()
+            .filter_map(|(id, slot)| {
+                slot.worker
+                    .send(WorkerCommand::UpdateDisplay(Arc::clone(&snapshot)))
+                    .err()
+                    .map(|error| (id.clone(), error))
+            })
+            .collect::<Vec<_>>();
+        for (id, error) in failures {
+            if let Some(status) = self.devices.get_mut(&id) {
+                status.runtime = RuntimeDimension::RuntimeError;
+                status.latest_error = Some(runtime_error(error));
+            }
+        }
     }
 
     pub fn apply_workspace_revision(&mut self, next: WorkspaceRevision) {
@@ -2357,6 +2406,47 @@ mod tests {
                 && status.identity == IdentityDimension::Valid
                 && status.assignment == AssignmentDimension::Unassigned
         }));
+    }
+
+    #[test]
+    fn display_snapshot_fans_out_without_mutating_worker_profile_revisions() {
+        let (_directory, enumerator, launcher, mut coordinator) = harness();
+        enumerator.set(
+            vec![
+                serial("/dev/esp-a", 0x303a, 0x4002, Some("ESP-A")),
+                serial("/dev/esp-b", 0x303a, 0x4002, Some("ESP-B")),
+            ],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+        launcher.clear_commands();
+        let revisions = coordinator
+            .workers
+            .iter()
+            .map(|(id, slot)| (id.clone(), slot.firmware_revision))
+            .collect::<BTreeMap<_, _>>();
+        let snapshot = Arc::new(DisplaySnapshot {
+            items: Vec::new(),
+            health: BTreeMap::new(),
+        });
+
+        coordinator.update_display(Arc::clone(&snapshot));
+
+        assert_eq!(coordinator.workers.len(), 2);
+        for id in coordinator.workers.keys() {
+            assert!(matches!(
+                launcher.commands_for(id).as_slice(),
+                [WorkerCommand::UpdateDisplay(actual)] if Arc::ptr_eq(actual, &snapshot)
+            ));
+        }
+        assert_eq!(
+            coordinator
+                .workers
+                .iter()
+                .map(|(id, slot)| (id.clone(), slot.firmware_revision))
+                .collect::<BTreeMap<_, _>>(),
+            revisions
+        );
     }
 
     #[test]
