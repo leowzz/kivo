@@ -88,6 +88,14 @@ def test_make_uses_env_version_as_default_build_id(tmp_path: Path) -> None:
             "version=v1.2.3\nversion=v1.2.4\n",
             "must contain exactly one version=vX.Y.Z line",
         ),
+        (
+            "version=v1.2.3\nBUILD_ID=bypass\n",
+            "must contain exactly one version=vX.Y.Z line",
+        ),
+        (
+            "version=v1.2.3\nPYTHON=/usr/bin/true\n",
+            "must contain exactly one version=vX.Y.Z line",
+        ),
     ],
 )
 def test_make_rejects_invalid_env_before_firmware_tools(
@@ -130,6 +138,21 @@ def test_make_ignores_ambient_version_when_env_file_is_missing(
     assert result.returncode != 0
     assert "cp .env.example .env" in result.stderr
     assert invocations == []
+
+
+def test_explicit_environment_build_id_does_not_require_env_file(
+    tmp_path: Path,
+) -> None:
+    result, invocations = run_make(
+        tmp_path,
+        "build-rp2040",
+        build_id=None,
+        env_file=tmp_path / "missing.env",
+        extra_environment={"BUILD_ID": "feature/custom+1"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert any(line.startswith("feature/custom+1|") for line in invocations)
 
 
 def test_explicit_serial_bypasses_selector_and_reaches_rp2040_tools(

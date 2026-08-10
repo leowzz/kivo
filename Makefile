@@ -1,12 +1,9 @@
 .PHONY: all build build-esp32s3 build-rp2040 download-mode upload upload-esp32s3 upload-rp2040 require-build-id validate-env-build-id require-serial test helper helper-kill helper-build release
 
 ENV_FILE ?= .env
--include $(ENV_FILE)
 ifeq ($(origin BUILD_ID),undefined)
-  ifeq ($(origin version),file)
-BUILD_ID := $(version)
+BUILD_ID = $(shell $(PYTHON) scripts/repo_version.py get --env-file "$(ENV_FILE)")
 require-build-id: validate-env-build-id
-  endif
 endif
 PYTHON ?= python3
 UV ?= uv
