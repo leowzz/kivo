@@ -52,14 +52,18 @@ CENTER_X = OUTER_WIDTH / 2.0
 CENTER_Y = OUTER_LENGTH / 2.0
 BOOLEAN_TOLERANCE = 5e-5
 PROTECTED_VOLUME_TOLERANCE = 0.02
+RING_SECTION_LEVEL = 20.0
+RING_SECTION_THICKNESS = 0.02
+RING_SECTION_VOLUME_TOLERANCE = 0.02
+REQUIRED_SOLID_VOLUME_TOLERANCE = 0.01
 
 OPEN_UNDERSIDE_PROBES = (
-    ((8.0, 25.0, 1.0), (15.0, 35.0, 9.0)),
-    ((44.8, 25.0, 1.0), (51.8, 35.0, 9.0)),
-    ((8.0, 48.0, 1.0), (15.0, 58.0, 9.0)),
-    ((44.8, 48.0, 1.0), (51.8, 58.0, 9.0)),
-    ((20.31, 28.0, 1.0), (39.49, 72.0, 9.0)),
+    ((8.0, 25.0, -0.1), (15.0, 35.0, 9.0)),
+    ((44.8, 25.0, -0.1), (51.8, 35.0, 9.0)),
+    ((8.0, 48.0, -0.1), (15.0, 58.0, 9.0)),
+    ((44.8, 48.0, -0.1), (51.8, 58.0, 9.0)),
 )
+SWITCH_CHANNEL_PROBE = ((20.3, 28.0, -0.1), (39.5, 72.0, 9.0))
 REAR_WIRE_PROBE = ((28.9, 49.4, 4.5), (30.9, 75.8, 5.5))
 OUTER_CORNER_PROBES = (
     ((0.0, 0.0, 11.2), (0.5, 0.5, 13.2)),
@@ -414,9 +418,11 @@ def measured_section_loop_sizes(
 
 def require_loop_size(
     sizes: np.ndarray, expected: tuple[float, float], label: str, tolerance: float
-) -> None:
-    if not any(np.allclose(size, expected, atol=tolerance) for size in sizes):
-        raise ValueError(f"{label} drifted: {sizes.tolist()}")
+) -> np.ndarray:
+    for size in sizes:
+        if np.allclose(size, expected, rtol=0.0, atol=tolerance):
+            return size
+    raise ValueError(f"{label} drifted: {sizes.tolist()}")
 
 
 def protected_cell_mismatch(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> float:
@@ -440,6 +446,39 @@ def protected_cell_mismatch(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> f
             ]
         ),
     )
+
+
+def ring_section_mismatch(mesh: trimesh.Trimesh) -> float:
+    section_min = RING_SECTION_LEVEL - RING_SECTION_THICKNESS / 2.0
+    section_max = RING_SECTION_LEVEL + RING_SECTION_THICKNESS / 2.0
+    section_probe = box_from_bounds(
+        np.array([-0.1, -0.1, section_min]),
+        np.array([OUTER_WIDTH + 0.1, OUTER_LENGTH + 0.1, section_max]),
+    )
+    measured = macro.boolean_meshes([mesh, section_probe], "intersection")
+    if measured.is_empty:
+        raise ValueError("R4 outer corner ring section is missing")
+
+    expected_outer = rounded_prism(
+        OUTER_WIDTH,
+        OUTER_LENGTH,
+        OUTER_RADIUS,
+        z_min=section_min,
+        height=RING_SECTION_THICKNESS,
+        center=(CENTER_X, CENTER_Y),
+    )
+    expected_inner = rounded_prism(
+        INNER_WIDTH,
+        INNER_LENGTH,
+        INNER_RADIUS,
+        z_min=section_min - 0.1,
+        height=RING_SECTION_THICKNESS + 0.2,
+        center=(CENTER_X, CENTER_Y),
+    )
+    expected = subtract_meshes(expected_outer, [expected_inner])
+    shared = macro.boolean_meshes([measured, expected], "intersection")
+    mismatch = measured.volume + expected.volume - 2.0 * shared.volume
+    return max(0.0, float(mismatch))
 
 
 def probe_volume(
@@ -490,9 +529,14 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
     if mismatch > PROTECTED_VOLUME_TOLERANCE:
         raise ValueError(f"source switch cell drifted: mismatch={mismatch}")
 
-    pocket_loops = measured_section_loop_sizes(mesh, axis=2, level=20.0)
+    pocket_loops = measured_section_loop_sizes(mesh, axis=2, level=RING_SECTION_LEVEL)
     require_loop_size(pocket_loops, (59.8, 74.8), "outer pocket section", 0.003)
-    require_loop_size(pocket_loops, (55.0, 70.0), "inner pocket section", 0.003)
+    measured_pocket_bounds = require_loop_size(
+        pocket_loops, (55.0, 70.0), "inner pocket section", 0.003
+    )
+    ring_mismatch = ring_section_mismatch(mesh)
+    if ring_mismatch > RING_SECTION_VOLUME_TOLERANCE:
+        raise ValueError(f"R4 outer corner ring profile drifted: {ring_mismatch}")
     platform_loops = measured_section_loop_sizes(mesh, axis=2, level=12.7)
     require_loop_size(platform_loops, (24.0, 24.0), "switch platform", 0.003)
 
@@ -525,13 +569,32 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
     for probe in OPEN_UNDERSIDE_PROBES:
         if probe_volume(mesh, probe) >= 1e-6:
             raise ValueError(f"open underside is obstructed: {probe}")
+    if probe_volume(mesh, SWITCH_CHANNEL_PROBE) >= 1e-6:
+        raise ValueError("open underside 19.2 channel is obstructed")
     if probe_volume(mesh, REAR_WIRE_PROBE) >= 1e-6:
         raise ValueError("rear wire path is obstructed")
     for probe in OUTER_CORNER_PROBES:
         if probe_volume(mesh, probe) >= 1e-6:
             raise ValueError(f"R4 outer corner is filled: {probe}")
     for probe in REQUIRED_SOLID_PROBES:
-        if probe_volume(mesh, probe) <= 0.5:
+        lower_bound, upper_bound = (np.array(bound) for bound in probe)
+        expected_bounds = np.array([lower_bound, upper_bound])
+        try:
+            measured_bounds = probe_bounds(mesh, probe)
+        except ValueError as error:
+            raise ValueError(
+                f"required platform, tower, rib, pad, or gusset is missing: {probe}"
+            ) from error
+        expected_volume = float(np.prod(upper_bound - lower_bound))
+        measured_volume = probe_volume(mesh, probe)
+        if not np.allclose(
+            measured_bounds, expected_bounds, rtol=0.0, atol=0.003
+        ) or not np.isclose(
+            measured_volume,
+            expected_volume,
+            rtol=0.0,
+            atol=REQUIRED_SOLID_VOLUME_TOLERANCE,
+        ):
             raise ValueError(
                 f"required platform, tower, rib, pad, or gusset is missing: {probe}"
             )
@@ -539,7 +602,7 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
     incidence = np.bincount(mesh.edges_unique_inverse)
     return ValidationReport(
         outer_extents=tuple(float(value) for value in mesh.extents),
-        pocket_bounds=(INNER_WIDTH, INNER_LENGTH),
+        pocket_bounds=tuple(float(value) for value in measured_pocket_bounds),
         pocket_depth=float(pocket_depth),
         protected_mismatch_volume=float(mismatch),
         connected_components=int(mesh.body_count),
