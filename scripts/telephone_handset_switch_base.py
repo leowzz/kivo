@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 import manifold3d
@@ -50,10 +51,62 @@ WIRE_HOLE_DIAMETER = 4.0
 CENTER_X = OUTER_WIDTH / 2.0
 CENTER_Y = OUTER_LENGTH / 2.0
 BOOLEAN_TOLERANCE = 5e-5
+PROTECTED_VOLUME_TOLERANCE = 0.02
+
+OPEN_UNDERSIDE_PROBES = (
+    ((8.0, 25.0, 1.0), (15.0, 35.0, 9.0)),
+    ((44.8, 25.0, 1.0), (51.8, 35.0, 9.0)),
+    ((8.0, 48.0, 1.0), (15.0, 58.0, 9.0)),
+    ((44.8, 48.0, 1.0), (51.8, 58.0, 9.0)),
+    ((20.31, 28.0, 1.0), (39.49, 72.0, 9.0)),
+)
+REAR_WIRE_PROBE = ((28.9, 49.4, 4.5), (30.9, 75.8, 5.5))
+OUTER_CORNER_PROBES = (
+    ((0.0, 0.0, 11.2), (0.5, 0.5, 13.2)),
+    ((59.3, 0.0, 11.2), (59.8, 0.5, 13.2)),
+    ((0.0, 74.3, 11.2), (0.5, 74.8, 13.2)),
+    ((59.3, 74.3, 11.2), (59.8, 74.8, 13.2)),
+)
+REQUIRED_SOLID_PROBES = (
+    ((18.0, 30.0, 1.0), (20.2, 45.0, 9.0)),
+    ((39.6, 30.0, 1.0), (41.8, 45.0, 9.0)),
+    ((21.0, 25.5, 1.0), (38.8, 27.7, 9.0)),
+    ((18.0, 52.0, 1.0), (20.2, 70.0, 9.0)),
+    ((39.6, 52.0, 1.0), (41.8, 70.0, 9.0)),
+    ((40.0, 36.0, 10.2), (41.5, 38.8, 13.2)),
+    ((3.0, 3.0, 11.2), (12.0, 12.0, 13.2)),
+    ((47.8, 3.0, 11.2), (56.8, 12.0, 13.2)),
+    ((3.0, 62.8, 11.2), (12.0, 71.8, 13.2)),
+    ((47.8, 62.8, 11.2), (56.8, 71.8, 13.2)),
+    ((5.5, 5.5, 6.5), (7.5, 7.5, 7.5)),
+    ((52.3, 5.5, 6.5), (54.3, 7.5, 7.5)),
+    ((5.5, 67.3, 6.5), (7.5, 69.3, 7.5)),
+    ((52.3, 67.3, 6.5), (54.3, 69.3, 7.5)),
+)
+SUPPORT_TOP_PROBES = (
+    ((40.0, 36.0, -0.1), (41.0, 38.0, 29.4)),
+    ((6.0, 6.0, -0.1), (8.0, 8.0, 29.4)),
+    ((51.8, 6.0, -0.1), (53.8, 8.0, 29.4)),
+    ((6.0, 66.8, -0.1), (8.0, 68.8, 29.4)),
+    ((51.8, 66.8, -0.1), (53.8, 68.8, 29.4)),
+)
 
 DEFAULT_SOURCE_ROOT = Path("models/3d-print/3x3keypad")
 DEFAULT_OUTPUT_ROOT = Path("models/3d-print/telephone-handset-switch-base")
 DEFAULT_PREVIEW_ROOT = Path("/tmp/kivo-handset-switch-base-previews")
+
+
+@dataclass(frozen=True)
+class ValidationReport:
+    outer_extents: tuple[float, float, float]
+    pocket_bounds: tuple[float, float]
+    pocket_depth: float
+    protected_mismatch_volume: float
+    connected_components: int
+    watertight: bool
+    two_manifold: bool
+    open_underside: bool
+    rear_wire_path: bool
 
 
 def mesh_to_manifold(mesh: trimesh.Trimesh) -> manifold3d.Manifold:
@@ -336,3 +389,162 @@ def generate_base(source: trimesh.Trimesh) -> trimesh.Trimesh:
     result.merge_vertices()
     result.remove_unreferenced_vertices()
     return result
+
+
+def measured_section_loop_sizes(
+    mesh: trimesh.Trimesh, axis: int, level: float
+) -> np.ndarray:
+    origin = np.zeros(3)
+    normal = np.zeros(3)
+    origin[axis] = level
+    normal[axis] = 1.0
+    section = mesh.section(plane_origin=origin, plane_normal=normal)
+    if section is None:
+        raise ValueError(f"missing section on axis {axis} at {level}")
+    dimensions = [index for index in range(3) if index != axis]
+    sizes: list[np.ndarray] = []
+    for entity in section.entities:
+        if not entity.closed:
+            continue
+        points = entity.discrete(section.vertices)
+        projected = points[:, dimensions]
+        sizes.append(projected.max(axis=0) - projected.min(axis=0))
+    return np.array(sizes)
+
+
+def require_loop_size(
+    sizes: np.ndarray, expected: tuple[float, float], label: str, tolerance: float
+) -> None:
+    if not any(np.allclose(size, expected, atol=tolerance) for size in sizes):
+        raise ValueError(f"{label} drifted: {sizes.tolist()}")
+
+
+def protected_cell_mismatch(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> float:
+    return macro.region_mismatch_volume(
+        source,
+        mesh,
+        np.array([CELL_START, CELL_START, -0.1]),
+        np.array([CELL_END, CELL_END, PLATE_THICKNESS + 0.1]),
+        np.array(
+            [
+                CENTER_X - CELL_SIZE / 2.0,
+                CENTER_Y - CELL_SIZE / 2.0,
+                PLATFORM_BOTTOM - 0.1,
+            ]
+        ),
+        np.array(
+            [
+                CENTER_X + CELL_SIZE / 2.0,
+                CENTER_Y + CELL_SIZE / 2.0,
+                PLATFORM_TOP + 0.1,
+            ]
+        ),
+    )
+
+
+def probe_volume(
+    mesh: trimesh.Trimesh,
+    probe: tuple[tuple[float, float, float], tuple[float, float, float]],
+) -> float:
+    lower, upper = probe
+    return region_volume(mesh, np.array(lower), np.array(upper))
+
+
+def probe_bounds(
+    mesh: trimesh.Trimesh,
+    probe: tuple[tuple[float, float, float], tuple[float, float, float]],
+) -> np.ndarray:
+    lower, upper = probe
+    region = macro.boolean_meshes(
+        [mesh, box_from_bounds(np.array(lower), np.array(upper))], "intersection"
+    )
+    if region.is_empty:
+        raise ValueError(f"required feature probe is empty: {probe}")
+    return region.bounds
+
+
+def measured_pocket_floor_top(mesh: trimesh.Trimesh) -> float:
+    cavity_probe = rounded_prism(
+        INNER_WIDTH - 0.02,
+        INNER_LENGTH - 0.02,
+        INNER_RADIUS - 0.01,
+        z_min=-1.0,
+        height=OUTER_HEIGHT + 2.0,
+        center=(CENTER_X, CENTER_Y),
+    )
+    interior = macro.boolean_meshes([mesh, cavity_probe], "intersection")
+    if interior.is_empty:
+        raise ValueError("pocket contains no floor or support datum")
+    return float(interior.bounds[1, 2])
+
+
+def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationReport:
+    macro.assert_closed_manifold(mesh, "telephone handset switch base")
+    if not np.allclose(mesh.bounds[0], (0.0, 0.0, 0.0), atol=0.003):
+        raise ValueError(f"outer origin drifted: {mesh.bounds[0].tolist()}")
+    expected_extents = np.array([OUTER_WIDTH, OUTER_LENGTH, OUTER_HEIGHT])
+    if not np.allclose(mesh.extents, expected_extents, atol=0.003):
+        raise ValueError(f"outer extents drifted: {mesh.extents.tolist()}")
+
+    mismatch = protected_cell_mismatch(mesh, source)
+    if mismatch > PROTECTED_VOLUME_TOLERANCE:
+        raise ValueError(f"source switch cell drifted: mismatch={mismatch}")
+
+    pocket_loops = measured_section_loop_sizes(mesh, axis=2, level=20.0)
+    require_loop_size(pocket_loops, (59.8, 74.8), "outer pocket section", 0.003)
+    require_loop_size(pocket_loops, (55.0, 70.0), "inner pocket section", 0.003)
+    platform_loops = measured_section_loop_sizes(mesh, axis=2, level=12.7)
+    require_loop_size(platform_loops, (24.0, 24.0), "switch platform", 0.003)
+
+    support_top = measured_pocket_floor_top(mesh)
+    if not np.isclose(support_top, PLATFORM_TOP, atol=0.003):
+        raise ValueError(f"pocket floor datum drifted: {support_top}")
+    for probe in SUPPORT_TOP_PROBES:
+        feature_top = float(probe_bounds(mesh, probe)[1, 2])
+        if not np.isclose(feature_top, PLATFORM_TOP, atol=0.003):
+            raise ValueError(f"platform or safety-pad top drifted: {probe}")
+    pocket_depth = float(mesh.bounds[1, 2] - support_top)
+    if not np.isclose(pocket_depth, 15.0, atol=0.003):
+        raise ValueError(f"pocket depth drifted: {pocket_depth}")
+
+    lower = macro.measure_switch_section(mesh, z=11.0, nominal_size=14.8)
+    upper = macro.measure_switch_section(mesh, z=12.7, nominal_size=14.0)
+    expected_center = np.array([[CENTER_X, CENTER_Y]])
+    if not np.allclose(lower.centers, expected_center, atol=0.003):
+        raise ValueError("lower switch relief center drifted")
+    if not np.allclose(upper.centers, expected_center, atol=0.003):
+        raise ValueError("upper switch aperture center drifted")
+    if not np.allclose(lower.sizes, [[14.798, 14.798]], atol=0.003):
+        raise ValueError("lower switch relief drifted")
+    if not np.allclose(upper.sizes, [[14.0, 14.0]], atol=0.003):
+        raise ValueError("upper switch aperture drifted")
+
+    rear_loops = measured_section_loop_sizes(mesh, axis=1, level=73.6)
+    require_loop_size(rear_loops, (4.0, 4.0), "rear wire hole", 0.01)
+
+    for probe in OPEN_UNDERSIDE_PROBES:
+        if probe_volume(mesh, probe) >= 1e-6:
+            raise ValueError(f"open underside is obstructed: {probe}")
+    if probe_volume(mesh, REAR_WIRE_PROBE) >= 1e-6:
+        raise ValueError("rear wire path is obstructed")
+    for probe in OUTER_CORNER_PROBES:
+        if probe_volume(mesh, probe) >= 1e-6:
+            raise ValueError(f"R4 outer corner is filled: {probe}")
+    for probe in REQUIRED_SOLID_PROBES:
+        if probe_volume(mesh, probe) <= 0.5:
+            raise ValueError(
+                f"required platform, tower, rib, pad, or gusset is missing: {probe}"
+            )
+
+    incidence = np.bincount(mesh.edges_unique_inverse)
+    return ValidationReport(
+        outer_extents=tuple(float(value) for value in mesh.extents),
+        pocket_bounds=(INNER_WIDTH, INNER_LENGTH),
+        pocket_depth=float(pocket_depth),
+        protected_mismatch_volume=float(mismatch),
+        connected_components=int(mesh.body_count),
+        watertight=bool(mesh.is_watertight),
+        two_manifold=bool(np.all(incidence == 2)),
+        open_underside=True,
+        rear_wire_path=True,
+    )

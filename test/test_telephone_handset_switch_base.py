@@ -167,3 +167,78 @@ def test_open_bottom_wire_path_and_required_supports() -> None:
     )
     for lower, upper in required_solids:
         assert base.region_volume(mesh, np.array(lower), np.array(upper)) > 0.5
+
+
+def test_validate_base_reports_every_mesh_contract() -> None:
+    source = base.load_canonical_source(SOURCE_ROOT)
+    mesh = base.generate_base(source)
+
+    report = base.validate_base(mesh, source)
+
+    assert report.outer_extents == pytest.approx((59.8, 74.8, 28.4), abs=0.003)
+    assert report.pocket_bounds == pytest.approx((55.0, 70.0), abs=0.003)
+    assert report.pocket_depth == pytest.approx(15.0, abs=0.003)
+    assert report.protected_mismatch_volume <= base.PROTECTED_VOLUME_TOLERANCE
+    assert report.connected_components == 1
+    assert report.watertight
+    assert report.two_manifold
+    assert report.open_underside
+    assert report.rear_wire_path
+
+
+def test_validator_rejects_blocked_access_paths() -> None:
+    source = base.load_canonical_source(SOURCE_ROOT)
+    mesh = base.generate_base(source)
+
+    underside_block = base.box_from_bounds(
+        np.array([28.9, 27.7, 1.0]), np.array([30.9, 30.0, 9.0])
+    )
+    blocked_underside = macro.union_meshes([mesh, underside_block])
+    with pytest.raises(ValueError, match="open underside"):
+        base.validate_base(blocked_underside, source)
+
+    wire_block = base.box_from_bounds(
+        np.array([27.8, 72.0, 3.8]), np.array([32.0, 74.8, 6.2])
+    )
+    blocked_wire = macro.union_meshes([mesh, wire_block])
+    with pytest.raises(ValueError, match="rear wire (hole|path)"):
+        base.validate_base(blocked_wire, source)
+
+
+def test_validator_rejects_protected_switch_cell_drift() -> None:
+    source = base.load_canonical_source(SOURCE_ROOT)
+    mesh = base.generate_base(source)
+    aperture_notch = base.box_from_bounds(
+        np.array([base.CENTER_X + 6.8, base.CENTER_Y - 1.0, 12.4]),
+        np.array([base.CENTER_X + 8.0, base.CENTER_Y + 1.0, 13.5]),
+    )
+    drifted = base.subtract_meshes(mesh, [aperture_notch])
+
+    with pytest.raises(ValueError, match="source switch cell"):
+        base.validate_base(drifted, source)
+
+
+def test_validator_measures_datum_corners_and_every_required_feature() -> None:
+    source = base.load_canonical_source(SOURCE_ROOT)
+    mesh = base.generate_base(source)
+
+    ledge = base.box_from_bounds(
+        np.array([2.3, 30.0, 14.0]), np.array([10.0, 40.0, 14.5])
+    )
+    with pytest.raises(ValueError, match="pocket floor datum"):
+        base.validate_base(macro.union_meshes([mesh, ledge]), source)
+
+    square_corner = base.box_from_bounds(
+        np.array([0.0, 0.0, 11.2]), np.array([3.0, 3.0, 13.2])
+    )
+    with pytest.raises(ValueError, match="R4 outer corner"):
+        base.validate_base(macro.union_meshes([mesh, square_corner]), source)
+
+    front_wall_cutter = base.box_from_bounds(
+        np.array([20.2, 25.3, -0.1]), np.array([39.6, 27.85, 10.1])
+    )
+    missing_front_wall = base.subtract_meshes(mesh, [front_wall_cutter])
+    with pytest.raises(
+        ValueError, match="required platform, tower, rib, pad, or gusset"
+    ):
+        base.validate_base(missing_front_wall, source)
