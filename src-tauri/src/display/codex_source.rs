@@ -1106,6 +1106,9 @@ impl CodexTaskSource {
             }
             Err(_) => return Err("codex_rollout_read_failed"),
         };
+        if !metadata.is_file() {
+            return Err("codex_rollout_read_failed");
+        }
         let identity = file_identity(&metadata);
         let observed_session = first_session_identity(path)?;
         let must_recover = self.files.get(path).is_none_or(|state| {
@@ -1688,6 +1691,25 @@ mod tests {
             temp.path().join("app-data/display/codex-cursors-v1.json"),
         )
         .unwrap()
+    }
+
+    #[cfg(unix)]
+    fn create_fifo(path: &Path) {
+        assert!(Command::new("mkfifo").arg(path).status().unwrap().success());
+    }
+
+    #[cfg(unix)]
+    fn spawn_fifo_writer(path: &Path, opened_marker: &Path) -> Child {
+        Command::new("sh")
+            .arg("-c")
+            .arg("exec 3>\"$1\"; : >\"$2\"; while :; do printf '\\n' >&3 || exit; done")
+            .arg("fifo-writer")
+            .arg(path)
+            .arg(opened_marker)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap()
     }
 
     fn assert_app_server_rollout_rejected(temp: &TempDir, path: PathBuf) {
@@ -2548,6 +2570,51 @@ mod tests {
     }
 
     #[test]
+    fn authoritative_discovery_drops_stale_external_persisted_cursor() {
+        let temp = TempDir::new().unwrap();
+        rollout_path(&temp);
+        let external = temp.path().join("external-rollout.jsonl");
+        let rollout = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-external\",\"cwd\":\"/private/external\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-external\"}}\n",
+        );
+        fs::write(&external, rollout).unwrap();
+        let external = external.canonicalize().unwrap();
+        let cursor_store_path = temp.path().join("app-data/display/codex-cursors-v1.json");
+        fs::create_dir_all(cursor_store_path.parent().unwrap()).unwrap();
+        let stale_store = CursorStore {
+            version: CURSOR_VERSION,
+            files: vec![PersistedCursor {
+                canonical_path: external.clone(),
+                identity: file_identity(&fs::metadata(&external).unwrap()),
+                byte_offset: rollout.len() as u64,
+                thread_id: "thread-external".into(),
+                cwd: PathBuf::from("/private/external"),
+                open_turn_ids: BTreeSet::from(["turn-external".into()]),
+                open_call_ids: BTreeSet::new(),
+            }],
+        };
+        fs::write(
+            &cursor_store_path,
+            serde_json::to_vec(&stale_store).unwrap(),
+        )
+        .unwrap();
+
+        let metadata = FakeMetadataClient::healthy(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        let snapshot = source.poll_tasks(Instant::now()).unwrap();
+
+        assert!(source.files.is_empty());
+        assert!(source.read_cursor_store().is_empty());
+        assert!(snapshot.task("thread-external").is_none());
+        assert!(
+            !fs::read_to_string(cursor_store_path)
+                .unwrap()
+                .contains(external.to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
     fn deleted_tracked_rollout_removes_its_cursor_without_failing_health() {
         let temp = TempDir::new().unwrap();
         let retained = rollout_path(&temp);
@@ -2774,6 +2841,115 @@ mod tests {
             Some(CodexInputNeed::UserInput)
         );
         assert_eq!(source.files.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pending_rollout_swapped_to_fifo_is_rejected_without_opening() {
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-a\",\"cwd\":\"/work/kivo\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-a\"}}\n",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"request_user_input\",\"call_id\":\"call-a\"}}\n",
+            ),
+        )
+        .unwrap();
+        let metadata = FakeMetadataClient::unavailable(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        source.watcher.take();
+        let (notify_tx, notify_rx) = mpsc::channel();
+        source.notify_rx = notify_rx;
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+        let persisted_before = fs::read(&source.cursor_store_path).unwrap();
+
+        fs::remove_file(&path).unwrap();
+        notify_tx
+            .send(Ok(notify::Event::new(notify::EventKind::Remove(
+                notify::event::RemoveKind::File,
+            ))
+            .add_path(path.clone())))
+            .unwrap();
+        source.poll_tasks(now + Duration::from_millis(250)).unwrap();
+        assert_eq!(source.pending_notify_paths.len(), 1);
+        create_fifo(&path);
+
+        let opened_marker = temp.path().join("fifo-opened");
+        let mut writer = spawn_fifo_writer(&path, &opened_marker);
+        let (result_tx, result_rx) = mpsc::channel();
+        let poll = thread::spawn(move || {
+            let result = source.poll_tasks(now + FILESYSTEM_POLL_INTERVAL);
+            result_tx.send((source, result)).unwrap();
+        });
+        let outcome = result_rx.recv_timeout(Duration::from_secs(1));
+        let fifo_was_opened = opened_marker.exists();
+        let _ = writer.kill();
+        let _ = writer.wait();
+        let (source, result) = outcome.expect("FIFO rollout poll blocked");
+        poll.join().unwrap();
+
+        assert_eq!(result.unwrap_err(), "codex_channels_unavailable");
+        assert!(!fifo_was_opened);
+        assert_eq!(source.pending_notify_paths.len(), 1);
+        assert_eq!(source.files.len(), 1);
+        assert_eq!(
+            fs::read(&source.cursor_store_path).unwrap(),
+            persisted_before
+        );
+        assert_eq!(source.rollout_health, ChannelHealth::Unavailable);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tracked_rollout_swapped_to_fifo_is_rejected_without_opening() {
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-a\",\"cwd\":\"/work/kivo\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-a\"}}\n",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"request_user_input\",\"call_id\":\"call-a\"}}\n",
+            ),
+        )
+        .unwrap();
+        let metadata = FakeMetadataClient::unavailable(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        source.watcher.take();
+        let (_, notify_rx) = mpsc::channel();
+        source.notify_rx = notify_rx;
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+        let persisted_before = fs::read(&source.cursor_store_path).unwrap();
+
+        fs::remove_file(&path).unwrap();
+        create_fifo(&path);
+        let opened_marker = temp.path().join("fifo-opened");
+        let mut writer = spawn_fifo_writer(&path, &opened_marker);
+        let (result_tx, result_rx) = mpsc::channel();
+        let poll = thread::spawn(move || {
+            let result = source.poll_tasks(now + FILESYSTEM_POLL_INTERVAL);
+            result_tx.send((source, result)).unwrap();
+        });
+        let outcome = result_rx.recv_timeout(Duration::from_secs(1));
+        let fifo_was_opened = opened_marker.exists();
+        let _ = writer.kill();
+        let _ = writer.wait();
+        let (source, result) = outcome.expect("FIFO rollout poll blocked");
+        poll.join().unwrap();
+
+        assert_eq!(result.unwrap_err(), "codex_channels_unavailable");
+        assert!(!fifo_was_opened);
+        assert!(source.pending_notify_paths.is_empty());
+        assert_eq!(source.files.len(), 1);
+        assert_eq!(
+            fs::read(&source.cursor_store_path).unwrap(),
+            persisted_before
+        );
+        assert_eq!(source.rollout_health, ChannelHealth::Unavailable);
     }
 
     #[cfg(unix)]

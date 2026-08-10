@@ -339,3 +339,38 @@ Fresh App Server rollout follow-up gate results:
 - ESP32-S3 build: PASS; 35,644/327,680 bytes RAM (10.9%),
   348,169/3,342,336 bytes flash (10.4%).
 - `git diff --check`: PASS.
+
+## Nonregular Rollout Follow-up
+
+The final nonregular-file containment fix was implemented on top of `8a20116`.
+
+- RED: retrying a pending rollout after replacing it with a FIFO blocked the
+  poll until the test's one-second deadline. Retrying an already tracked
+  rollout opened its replacement FIFO, which a separate writer proved by
+  creating a marker file.
+- GREEN: `sync_file` now rejects targets whose metadata is not a regular file
+  immediately after the metadata read, before file identity, session recovery,
+  or parser access. Both pending and tracked FIFO regressions complete within
+  the deadline without opening the FIFO, keep the pending/tracked rollout and
+  cursor state, and mark rollout health unavailable.
+- The stale external persisted-cursor regression started GREEN: authoritative
+  discovery does not restore or read a direct external canonical path, no
+  external task is produced, and the next cursor-store persistence excludes
+  the stale entry.
+- Existing containment, expected deletion, root and nested-parent outage,
+  pending retry, overflow, App Server, and no-recursive-runtime discovery
+  regressions remain GREEN. Focused `display::codex`: 72 passed. Rustfmt and
+  Clippy with all targets and features passed.
+
+Fresh nonregular-rollout follow-up gate results:
+
+- Exact pinned `make test`: PASS.
+- Python suites: 33 + 32 + 32 passed.
+- PlatformIO native: 89/89 passed.
+- Rust: 409 passed, 1 intentional ignore, plus 2 integration tests passed.
+- Frontend: 211/211 passed; production build passed.
+- RP2040 build: PASS; 22,912/262,144 bytes RAM (8.7%),
+  133,176/16,773,120 bytes flash (0.8%).
+- ESP32-S3 build: PASS; 35,644/327,680 bytes RAM (10.9%),
+  348,169/3,342,336 bytes flash (10.4%).
+- `git diff --check`: PASS.
