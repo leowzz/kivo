@@ -2,15 +2,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"' EXIT
-
 MAKEFILE="$ROOT/Makefile"
 FIRMWARE_MAIN="$ROOT/src/main.cpp"
 RP2040_PLATFORM="$ROOT/src/platform/rp2040.cpp"
 PLATFORMIO_CONFIG="$ROOT/platformio.ini"
 ESP32S3_MERGE_SCRIPT="$ROOT/scripts/merge_esp32s3_firmware.py"
 RELEASE_WORKFLOW="$ROOT/.github/workflows/release-windows.yml"
+WINDOWS_WORKFLOW="$ROOT/.github/workflows/windows-ci.yml"
 README="$ROOT/README.md"
 
 grep -Fq 'post:scripts/merge_esp32s3_firmware.py' "$PLATFORMIO_CONFIG"
@@ -29,6 +27,16 @@ grep -Fq 'firmware-publish:' "$RELEASE_WORKFLOW"
 grep -Fq 'needs: [release, firmware-build]' "$RELEASE_WORKFLOW"
 grep -Fq 'gh release upload "${GITHUB_REF_NAME}" release-firmware/* --clobber' "$RELEASE_WORKFLOW"
 grep -Fq 'ESP32-S3 and RP2040 firmware' "$RELEASE_WORKFLOW"
+grep -Fq 'python scripts/repo_version.py check "${GITHUB_REF_NAME}"' \
+  "$RELEASE_WORKFLOW"
+! grep -Fq 'config.version = tag.slice(1)' "$RELEASE_WORKFLOW"
+grep -Fq 'Copy-Item .env.example .env' "$WINDOWS_WORKFLOW"
+grep -Fq 'cp .env.example .env' "$README"
+grep -Fq 'Copy-Item .env.example .env' "$README"
+grep -Fq 'version=vX.Y.Z' "$README"
+grep -Fq 'test/test_repo_version.py' "$MAKEFILE"
+grep -Fq 'test/test_release_transaction.py' "$MAKEFILE"
+grep -Fq 'test/test_platformio_build_id.py' "$MAKEFILE"
 grep -Fq '## 刷入固件' "$README"
 grep -Fq 'kivo-vX.Y.Z-esp32s3.bin' "$README"
 grep -Fq 'kivo-vX.Y.Z-rp2040.uf2' "$README"
@@ -110,6 +118,7 @@ grep -Fq 'exit 2' <<<"$upload_body"
 test_body="$(target_body test)"
 expected_test_commands=(
   'bash test/test_release.sh'
+  '$(UV_CMD) run pytest test/test_repo_version.py test/test_release_transaction.py test/test_platformio_build_id.py'
   '$(UV_CMD) run pytest test/test_upload_targeting.py test/test_rp2040_upload.py'
   '$(UV_CMD) run pytest test/test_firmware_target_selector.py test/test_make_upload_selection.py'
   '$(UV_CMD) run pio test -e native'
@@ -126,18 +135,3 @@ for command in "${expected_test_commands[@]}"; do
   previous_line="$line"
 done
 ! grep -Eq -- '(^|[[:space:]])(upload|picotool|enter_download_mode)([[:space:]]|$)' <<<"$test_body"
-
-cp "$ROOT/scripts/release.sh" "$TMP_DIR/release.sh"
-cd "$TMP_DIR"
-git init -q
-git config user.name test
-git config user.email test@example.com
-printf 'version=v0.1.0\n' > .env
-git add -f .env release.sh
-git commit -qm initial
-
-ENV_FILE=.env bash release.sh >/dev/null
-
-test "$(cat .env)" = "version=v0.1.1"
-test "$(git tag --list v0.1.1)" = "v0.1.1"
-git rev-parse -q --verify 'v0.1.1^{tag}' >/dev/null

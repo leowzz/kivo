@@ -100,6 +100,7 @@ YD-RP2040 的 Hardware Profile 还可以启用固定为 `128x32`、地址为 `0x
 ```bash
 git clone https://github.com/leowzz/kivo.git
 cd kivo
+cp .env.example .env
 
 nvm install
 nvm use
@@ -107,6 +108,8 @@ uv sync
 npm ci
 make helper
 ```
+
+`.env` 会被有意忽略，且只包含 `version=vX.Y.Z`。它为本地固件构建和 `make release` 提供仓库版本。
 
 仓库的 `.envrc` 会加载 `.nvmrc` 中的精确 Node 版本。使用 direnv 时可以验证实际解析到的工具：
 
@@ -124,6 +127,7 @@ Windows PowerShell 不需要 direnv。安装 `.nvmrc` 中的版本后可以直�
 nvm install 24.18.0
 nvm use 24.18.0
 npm install --global npm@11.16.0
+Copy-Item .env.example .env
 uv sync
 npm ci
 uv run python scripts/kill_helper.py
@@ -131,6 +135,8 @@ make
 ```
 
 本地环境只要落在上述兼容范围内即可，不要求与 CI 的参考版本完全一致。
+
+`make release` 默认递增 patch；`make release V=vX.Y.Z` 可指定版本。脏工作树会被拒绝，跟踪的包版本会以 `chore: release vX.Y.Z` 提交，最后才创建带注释的 tag。
 
 ## 固件
 
