@@ -46,7 +46,7 @@ impl SceneTracker {
     pub(crate) fn ack(&mut self, revision: u32) -> Result<Option<SceneUpdate>, &'static str> {
         let pending = self.pending.take().ok_or("display_scene_ack_mismatch")?;
         if pending.revision != revision {
-            self.pending = Some(pending);
+            self.acked = None;
             return Err("display_scene_ack_mismatch");
         }
         self.acked = Some(AckedScene {
@@ -229,15 +229,21 @@ mod tests {
     }
 
     #[test]
-    fn ack_requires_the_exact_pending_revision() {
+    fn mismatched_ack_discards_protocol_state_and_recovers_with_full_scene() {
         let mut tracker = SceneTracker::default();
-        let update = tracker.prepare(scene("CODEX")).unwrap();
+        let first = tracker.prepare(scene("ONE")).unwrap();
+        tracker.ack(first.new_revision).unwrap();
+        let pending = tracker.prepare(scene("TWO")).unwrap();
+        assert!(tracker.prepare(scene("THREE")).is_none());
 
         assert_eq!(
-            tracker.ack(update.new_revision + 1).unwrap_err(),
+            tracker.ack(pending.new_revision + 1).unwrap_err(),
             "display_scene_ack_mismatch"
         );
-        assert!(tracker.ack(update.new_revision).is_ok());
+        let recovered = tracker.prepare(scene("THREE")).unwrap();
+        assert_eq!(recovered.mode, SceneMode::Full);
+        assert_eq!(recovered.base_revision, 0);
+        assert_eq!(recovered.regions, scene("THREE").regions);
     }
 
     #[test]

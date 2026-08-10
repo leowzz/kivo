@@ -1,4 +1,4 @@
-use std::{cmp::Reverse, collections::BTreeMap, sync::Arc, time::Instant};
+use std::{cmp::Reverse, collections::BTreeMap, sync::Arc};
 
 use super::{DisplayItem, DisplaySnapshot, DisplayState, SourceHealth};
 
@@ -100,6 +100,13 @@ pub(crate) struct DisplayCapabilities {
     pub max_text_bytes: u8,
     pub tile_width: u8,
     pub tile_height: u8,
+    pub pixel_format: PixelFormat,
+    pub rotation_degrees: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PixelFormat {
+    Mono1,
 }
 
 impl DisplayCapabilities {
@@ -113,6 +120,8 @@ impl DisplayCapabilities {
             max_text_bytes: 48,
             tile_width: 8,
             tile_height: 8,
+            pixel_format: PixelFormat::Mono1,
+            rotation_degrees: 0,
         }
     }
 }
@@ -187,11 +196,11 @@ impl DisplayRenderer for MonoText128x32Renderer {
                 needs_input,
             } => (
                 "CODEX".to_owned(),
-                format!("{running} RUN"),
+                format!("{} RUN", compact_count(running)),
                 if needs_input == 0 {
                     String::new()
                 } else {
-                    format!("{needs_input} NEEDS INPUT")
+                    format!("{} NEEDS INPUT", compact_count(needs_input))
                 },
             ),
             View::Offline => (
@@ -237,12 +246,7 @@ fn select_view(snapshot: &DisplaySnapshot) -> View {
     if let Some(item) = newest(snapshot, |item| item.state == DisplayState::Error) {
         return task_view(item, "CODEX ERROR");
     }
-    if let Some(item) = newest(snapshot, |item| {
-        item.state == DisplayState::Success
-            && item
-                .expires_at
-                .is_none_or(|expires_at| Instant::now() < expires_at)
-    }) {
+    if let Some(item) = newest(snapshot, |item| item.state == DisplayState::Success) {
         return task_view(item, "RESPONSE READY");
     }
     if let Some(item) = newest(snapshot, |item| item.state == DisplayState::Warning) {
@@ -289,6 +293,14 @@ fn summary_view(snapshot: &DisplaySnapshot) -> View {
     }
 }
 
+fn compact_count(count: u32) -> String {
+    if count > 999 {
+        "999+".to_owned()
+    } else {
+        count.to_string()
+    }
+}
+
 fn thread_id(item: &DisplayItem) -> &str {
     item.id
         .strip_prefix("codex.task.")
@@ -332,7 +344,7 @@ fn text_region(slot: u8, id: &'static str, bounds: Rect, text: String) -> Displa
     if !text.is_empty() {
         operations.push(DrawOperation::Text {
             x: bounds.x,
-            baseline_y: bounds.y + 12,
+            baseline_y: if bounds.y == 0 { 12 } else { 29 },
             font_id: 0,
             text,
         });
@@ -432,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn expired_success_falls_back_to_idle() {
+    fn renderer_trusts_the_snapshot_even_when_success_expiry_is_past() {
         let now = Instant::now();
         let item = DisplayItem::new(
             "codex.task.a3f2-rest",
@@ -447,7 +459,177 @@ mod tests {
 
         let scene = MonoText128x32Renderer.render(&snapshot(item)).unwrap();
 
-        assert_eq!(scene.text("row0_right"), "IDLE");
+        assert_eq!(scene.text("row1"), "RESPONSE READY");
+    }
+
+    #[test]
+    fn row_text_operations_use_the_exact_baselines() {
+        let summary = DisplayItem::new(
+            "codex.summary",
+            "codex",
+            DisplayPriority::Ambient,
+            DisplayState::Running,
+            "Codex",
+        )
+        .unwrap()
+        .with_metric("running", 1)
+        .with_metric("needs_input", 1);
+        let scene = MonoText128x32Renderer
+            .render(&DisplaySnapshot {
+                items: vec![summary],
+                health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
+            })
+            .unwrap();
+
+        assert_eq!(text_position(&scene, "row0_left"), Some((0, 12)));
+        assert_eq!(text_position(&scene, "row0_right"), Some((64, 12)));
+        assert_eq!(text_position(&scene, "row1"), Some((0, 29)));
+    }
+
+    #[test]
+    fn capabilities_declare_mono_one_bit_pixels_without_rotation() {
+        let capabilities = MonoText128x32Renderer.capabilities();
+
+        assert_eq!(capabilities.pixel_format, PixelFormat::Mono1);
+        assert_eq!(capabilities.rotation_degrees, 0);
+    }
+
+    #[test]
+    fn summary_counts_use_compact_width_bounded_text() {
+        let summary = DisplayItem::new(
+            "codex.summary",
+            "codex",
+            DisplayPriority::Ambient,
+            DisplayState::Running,
+            "Codex",
+        )
+        .unwrap()
+        .with_metric("running", u32::MAX)
+        .with_metric("needs_input", u32::MAX);
+        let scene = MonoText128x32Renderer
+            .render(&DisplaySnapshot {
+                items: vec![summary],
+                health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
+            })
+            .unwrap();
+
+        assert_eq!(scene.text("row0_right"), "999+ RUN");
+        assert_eq!(scene.text("row1"), "999+ NEEDS INPUT");
+        assert!(scene.text("row0_right").len() <= 8);
+        assert!(scene.text("row1").len() <= 16);
+    }
+
+    #[test]
+    fn raw_unicode_project_title_uses_thread_id_fallback_in_the_renderer() {
+        let item = DisplayItem::new(
+            "codex.task.a3f2-rest",
+            "codex",
+            DisplayPriority::Critical,
+            DisplayState::Error,
+            "中文项目",
+        )
+        .unwrap();
+
+        let scene = MonoText128x32Renderer.render(&snapshot(item)).unwrap();
+
+        assert_eq!(scene.text("row0_left"), "TASK A3F");
+        assert_eq!(scene.text("row0_right"), "2");
+        assert_eq!(scene.text("row1"), "CODEX ERROR");
+    }
+
+    #[test]
+    fn golden_views_cover_terminal_health_and_priority_selection() {
+        let now = Instant::now();
+        let task = |id: &str, state, title: &str| {
+            DisplayItem::new(id, "codex", DisplayPriority::Attention, state, title)
+                .unwrap()
+                .with_updated_at(now)
+        };
+        let cases = vec![
+            (
+                DisplaySnapshot {
+                    items: vec![task("codex.task.error", DisplayState::Error, "error")],
+                    health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
+                },
+                ["ERROR", "", "CODEX ERROR"],
+            ),
+            (
+                DisplaySnapshot {
+                    items: vec![task("codex.task.ready", DisplayState::Success, "ready")],
+                    health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
+                },
+                ["READY", "", "RESPONSE READY"],
+            ),
+            (
+                DisplaySnapshot {
+                    items: vec![task("codex.task.stopped", DisplayState::Warning, "stopped")],
+                    health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
+                },
+                ["STOPPED", "", "TASK STOPPED"],
+            ),
+            (
+                DisplaySnapshot {
+                    items: vec![],
+                    health: BTreeMap::from([("codex".to_owned(), SourceHealth::Offline)]),
+                },
+                ["CODEX", "OFFLINE", "KIVO READY"],
+            ),
+            (
+                DisplaySnapshot {
+                    items: vec![
+                        DisplayItem::new(
+                            "codex.summary",
+                            "codex",
+                            DisplayPriority::Ambient,
+                            DisplayState::Idle,
+                            "Codex",
+                        )
+                        .unwrap(),
+                    ],
+                    health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
+                },
+                ["CODEX", "IDLE", "KIVO READY"],
+            ),
+            (
+                DisplaySnapshot {
+                    items: vec![
+                        task("codex.task.error", DisplayState::Error, "error")
+                            .with_updated_at(now + Duration::from_secs(1)),
+                        task("codex.task.input", DisplayState::NeedsInput, "input"),
+                    ],
+                    health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
+                },
+                ["INPUT", "", "NEEDS INPUT"],
+            ),
+        ];
+
+        for (snapshot, expected) in cases {
+            let scene = MonoText128x32Renderer.render(&snapshot).unwrap();
+            assert_eq!(
+                [
+                    scene.text("row0_left"),
+                    scene.text("row0_right"),
+                    scene.text("row1"),
+                ],
+                expected
+            );
+        }
+    }
+
+    fn text_position(scene: &RenderedScene, id: &str) -> Option<(u16, u16)> {
+        scene
+            .regions
+            .iter()
+            .find(|region| region.id == id)
+            .and_then(|region| {
+                region
+                    .operations
+                    .iter()
+                    .find_map(|operation| match operation {
+                        DrawOperation::Text { x, baseline_y, .. } => Some((*x, *baseline_y)),
+                        DrawOperation::ClearRegion => None,
+                    })
+            })
     }
 
     #[test]

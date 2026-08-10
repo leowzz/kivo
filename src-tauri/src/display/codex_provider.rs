@@ -70,14 +70,12 @@ impl<R: CodexTaskReader> DisplayProvider for CodexDisplayProvider<R> {
 fn task_item(task: &MergedCodexTask) -> Result<DisplayItem, &'static str> {
     let (state, detail, priority, ttl) = task_semantics(task);
     let title = task
-        .name
-        .clone()
-        .or_else(|| {
-            task.cwd
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        })
-        .unwrap_or_else(|| "Codex task".to_owned());
+        .cwd
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .or_else(|| task.name.clone())
+        .unwrap_or_else(|| task.thread_id.clone());
     let mut item = DisplayItem::new(
         format!("codex.task.{}", task.thread_id),
         SOURCE_ID,
@@ -269,5 +267,31 @@ mod tests {
             .unwrap();
         assert_eq!(item.state, DisplayState::NeedsInput);
         assert_eq!(item.detail.as_deref(), Some("user input requested"));
+    }
+
+    #[test]
+    fn provider_uses_raw_unicode_cwd_basename_before_task_name() {
+        let now = Instant::now();
+        let mut source_task = task(now, "a3f2-rest", false, None);
+        source_task.name = Some("retained task name".into());
+        source_task.cwd = PathBuf::from("/work/中文项目");
+        source_task.system_error = true;
+        let source = FakeCodexTaskReader::once(CodexSourceSnapshot {
+            health: SourceHealth::Healthy,
+            tasks: vec![source_task],
+        });
+        let mut provider = CodexDisplayProvider::new(source);
+
+        let update = provider.poll(now).unwrap();
+
+        assert_eq!(
+            update
+                .items
+                .iter()
+                .find(|item| item.id == "codex.task.a3f2-rest")
+                .unwrap()
+                .title,
+            "中文项目"
+        );
     }
 }

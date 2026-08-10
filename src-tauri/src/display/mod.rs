@@ -21,7 +21,8 @@ pub(crate) use provider::{DisplayProvider, ProviderRegistry, ProviderUpdate};
 #[allow(unused_imports)]
 pub(crate) use render::{
     DisplayCapabilities, DisplayRegion, DisplayRenderer, DrawOperation, MonoText128x32Renderer,
-    Rect, RenderedScene, RendererRegistry, ascii_project_title, built_in_renderer_registry,
+    PixelFormat, Rect, RenderedScene, RendererRegistry, ascii_project_title,
+    built_in_renderer_registry,
 };
 #[allow(unused_imports)]
 pub(crate) use scene::{SceneMode, SceneTracker, SceneUpdate};
