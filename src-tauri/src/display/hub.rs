@@ -84,7 +84,9 @@ impl DisplayHub {
             if source_health == SourceHealth::Offline {
                 state.items.clear();
             } else if source_health == SourceHealth::Stale {
-                state.items.retain(|id, _| id == CODEX_SUMMARY_ID);
+                state.items.retain(|id, item| {
+                    id == CODEX_SUMMARY_ID || item.state == DisplayState::NeedsInput
+                });
                 if let Some(summary) = state.items.get_mut(CODEX_SUMMARY_ID) {
                     summary.state = DisplayState::Warning;
                 }
@@ -177,6 +179,12 @@ mod tests {
         .with_expiry(expires_at)
     }
 
+    fn item(now: Instant, id: &str, state: DisplayState) -> DisplayItem {
+        DisplayItem::new(id, "codex", DisplayPriority::Normal, state, id)
+            .unwrap()
+            .with_updated_at(now)
+    }
+
     #[test]
     fn expires_transient_items_but_keeps_summary() {
         let now = Instant::now();
@@ -218,6 +226,72 @@ mod tests {
         assert_eq!(
             hub.snapshot(now + Duration::from_secs(31)).health("codex"),
             SourceHealth::Offline
+        );
+    }
+
+    #[test]
+    fn stale_sources_keep_needs_input_but_remove_transient_terminal_items() {
+        let now = Instant::now();
+        let expires_at = now + Duration::from_secs(60);
+        let mut hub = DisplayHub::default();
+        hub.replace_source(
+            now,
+            "codex",
+            SourceHealth::Healthy,
+            vec![
+                summary(now),
+                item(now, "codex.review", DisplayState::NeedsInput),
+                item(now, "codex.success", DisplayState::Success).with_expiry(expires_at),
+                item(now, "codex.warning", DisplayState::Warning).with_expiry(expires_at),
+                item(now, "codex.error", DisplayState::Error).with_expiry(expires_at),
+            ],
+        );
+        hub.mark_unavailable(now, "codex");
+
+        let snapshot = hub.snapshot(now + Duration::from_secs(5));
+
+        assert_eq!(snapshot.health("codex"), SourceHealth::Stale);
+        assert_eq!(
+            snapshot
+                .items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["codex.review", "codex.summary"]
+        );
+        assert_eq!(snapshot.items[0].state, DisplayState::NeedsInput);
+        assert_eq!(snapshot.items[1].state, DisplayState::Warning);
+    }
+
+    #[test]
+    fn replacement_preserves_timestamp_when_item_semantics_are_unchanged() {
+        let now = Instant::now();
+        let mut hub = DisplayHub::default();
+        hub.replace_source(now, "codex", SourceHealth::Healthy, vec![summary(now)]);
+        hub.replace_source(
+            now + Duration::from_secs(1),
+            "codex",
+            SourceHealth::Healthy,
+            vec![summary(now + Duration::from_secs(1))],
+        );
+
+        assert_eq!(
+            hub.snapshot(now + Duration::from_secs(1)).items[0].updated_at,
+            now
+        );
+    }
+
+    #[test]
+    fn repeated_unavailable_marks_do_not_reset_the_stale_interval() {
+        let now = Instant::now();
+        let mut hub = DisplayHub::default();
+        hub.replace_source(now, "codex", SourceHealth::Healthy, vec![summary(now)]);
+        hub.mark_unavailable(now, "codex");
+        hub.mark_unavailable(now + Duration::from_secs(4), "codex");
+
+        assert_eq!(
+            hub.snapshot(now + Duration::from_secs(5)).health("codex"),
+            SourceHealth::Stale
         );
     }
 }
