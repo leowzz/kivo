@@ -10,6 +10,7 @@
 #include <optional>
 
 #include "HidReportTransport.h"
+#include "DirtyTiles.h"
 #include "Platform.h"
 #include "Rp2040OledBus.h"
 
@@ -28,6 +29,11 @@ constexpr std::uint8_t kKeyPixelBrightness = 64;
 constexpr std::uint8_t kOledI2cAddress = 0x3C;
 constexpr std::uint32_t kOledI2cClockHz = 100000;
 constexpr std::uint8_t kDisplayWidth = 128;
+constexpr std::uint8_t kDisplayWidthTiles = 16;
+constexpr std::uint8_t kDisplayHeightTiles = 4;
+constexpr std::size_t kDisplayServiceDataBytes = 64;
+constexpr bool kPartialUpdateSupported = true;
+constexpr std::uint16_t kDisplayRotationDegrees = 0;
 constexpr std::array<std::uint8_t, 2> kStatusBaselines = {10, 29};
 constexpr std::uint8_t kInputBaseline = 20;
 std::unique_ptr<U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C> i2c0Display;
@@ -40,8 +46,11 @@ enum class DisplayBufferSource { None, Local, Remote };
 DisplayBufferSource displayBufferSource = DisplayBufferSource::None;
 bool displayRequested = false;
 bool displayHealthy = false;
+DirtyTiles dirtyTiles(kDisplayWidthTiles, kDisplayHeightTiles);
+RefreshMode refreshMode = RefreshMode::Full;
 
 void stopDisplay() {
+  dirtyTiles.clear();
   if (display && displayHealthy) {
     display->clearBuffer();
     display->sendBuffer();
@@ -185,6 +194,8 @@ bool configureDisplay(const std::optional<OledConfig> &config) {
     return false;
   }
   displayHealthy = true;
+  refreshMode =
+      selectRefreshMode(kPartialUpdateSupported, kDisplayRotationDegrees);
   display->setFont(u8g2_font_6x13_tf);
   display->clearBuffer();
   display->sendBuffer();
@@ -197,6 +208,7 @@ bool renderLocalDisplay(const DisplayFrame &frame) {
       lastDisplayFrame.has_value() && *lastDisplayFrame == frame) {
     return true;
   }
+  dirtyTiles.clear();
   display->setFont(u8g2_font_6x13_tf);
   display->clearBuffer();
   for (std::size_t index = 0; index < kStatusBaselines.size(); ++index) {
@@ -220,7 +232,9 @@ bool renderRemoteDisplay(const RemoteDisplayCommit &scene,
   if (!display || !displayHealthy) return !displayRequested;
   if (!supportsRemoteScene(scene)) return false;
   lastDisplayFrame.reset();
-  if (fullRedraw || displayBufferSource != DisplayBufferSource::Remote) {
+  const bool redrawAll =
+      fullRedraw || displayBufferSource != DisplayBufferSource::Remote;
+  if (redrawAll) {
     display->clearBuffer();
   } else {
     display->setDrawColor(0);
@@ -241,17 +255,36 @@ bool renderRemoteDisplay(const RemoteDisplayCommit &scene,
     display->drawStr(operation.x, operation.baselineY,
                      operation.text.c_str());
   }
-  display->sendBuffer();
+  if (redrawAll) {
+    dirtyTiles.markPixels({0, 0, kDisplayWidth,
+                           kDisplayHeightTiles * 8U});
+  } else {
+    for (std::size_t index = 0; index < scene.dirtyCount; ++index) {
+      dirtyTiles.markPixels(scene.dirtyBounds[index]);
+    }
+  }
   displayBufferSource = DisplayBufferSource::Remote;
   return true;
 }
 
 void resetRemoteDisplay() {
+  dirtyTiles.clear();
   lastDisplayFrame.reset();
   displayBufferSource = DisplayBufferSource::None;
 }
 
-void serviceDisplay() {}
+void serviceDisplay() {
+  if (!display || !displayHealthy || !dirtyTiles.hasDirty()) return;
+  if (refreshMode == RefreshMode::Full) {
+    display->sendBuffer();
+    dirtyTiles.clear();
+    return;
+  }
+  const auto run = dirtyTiles.takeRun(kDisplayServiceDataBytes);
+  if (run.has_value()) {
+    display->updateDisplayArea(run->tx, run->ty, run->tw, run->th);
+  }
+}
 
 void showRandomKeyColor() {
   const auto hue = static_cast<std::uint16_t>(random(0x10000L));

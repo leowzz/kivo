@@ -7,6 +7,7 @@
 #include "BoardProfile.h"
 #include "DisplayController.h"
 #include "DisplayStatus.h"
+#include "DirtyTiles.h"
 #include "ActionRunDispatcher.h"
 #include "ActionRunController.h"
 #include "GpioTriggerController.h"
@@ -28,6 +29,83 @@ static_assert(sizeof(RemoteDisplayCommit) <= 1280,
 
 void setUp() {}
 void tearDown() {}
+
+void test_dirty_tiles_emit_only_changed_counter_region() {
+  DirtyTiles dirty(16, 4);
+  dirty.markPixels({64, 0, 64, 16});
+
+  std::size_t bytes = 0;
+  while (const auto run = dirty.takeRun(64)) bytes += run->dataBytes();
+
+  TEST_ASSERT_EQUAL_UINT32(128, bytes);
+}
+
+void test_dirty_tiles_respect_per_loop_budget_and_coalesce_updates() {
+  DirtyTiles dirty(16, 4);
+  dirty.markPixels({0, 0, 128, 32});
+
+  const auto first = dirty.takeRun(64);
+  TEST_ASSERT_TRUE(first.has_value());
+  TEST_ASSERT_LESS_OR_EQUAL_UINT32(64, first->dataBytes());
+  TEST_ASSERT_EQUAL_UINT8(0, first->tx);
+  TEST_ASSERT_EQUAL_UINT8(0, first->ty);
+  TEST_ASSERT_EQUAL_UINT8(8, first->tw);
+  TEST_ASSERT_EQUAL_UINT8(1, first->th);
+
+  dirty.markPixels({64, 0, 64, 16});
+  TEST_ASSERT_TRUE(dirty.hasDirty());
+}
+
+void test_dirty_tiles_round_outward_clip_and_stay_within_one_row() {
+  DirtyTiles dirty(16, 4);
+  dirty.markPixels({63, 7, 10, 3});
+  dirty.markPixels({127, 31, 8, 8});
+
+  const auto first = dirty.takeRun(512);
+  TEST_ASSERT_TRUE(first.has_value());
+  TEST_ASSERT_EQUAL_UINT8(7, first->tx);
+  TEST_ASSERT_EQUAL_UINT8(0, first->ty);
+  TEST_ASSERT_EQUAL_UINT8(3, first->tw);
+  TEST_ASSERT_EQUAL_UINT8(1, first->th);
+
+  const auto second = dirty.takeRun(512);
+  TEST_ASSERT_TRUE(second.has_value());
+  TEST_ASSERT_EQUAL_UINT8(7, second->tx);
+  TEST_ASSERT_EQUAL_UINT8(1, second->ty);
+  TEST_ASSERT_EQUAL_UINT8(3, second->tw);
+  TEST_ASSERT_EQUAL_UINT8(1, second->th);
+
+  const auto third = dirty.takeRun(512);
+  TEST_ASSERT_TRUE(third.has_value());
+  TEST_ASSERT_EQUAL_UINT8(15, third->tx);
+  TEST_ASSERT_EQUAL_UINT8(3, third->ty);
+  TEST_ASSERT_EQUAL_UINT8(1, third->tw);
+  TEST_ASSERT_EQUAL_UINT8(1, third->th);
+  TEST_ASSERT_FALSE(dirty.takeRun(512).has_value());
+}
+
+void test_dirty_tiles_reject_sub_tile_budget_and_clear_explicitly() {
+  DirtyTiles dirty(16, 4);
+  dirty.markPixels({0, 0, 128, 32});
+
+  TEST_ASSERT_FALSE(dirty.takeRun(7).has_value());
+  TEST_ASSERT_TRUE(dirty.hasDirty());
+
+  std::size_t bytes = 0;
+  while (const auto run = dirty.takeRun(64)) bytes += run->dataBytes();
+  TEST_ASSERT_EQUAL_UINT32(512, bytes);
+  TEST_ASSERT_FALSE(dirty.hasDirty());
+
+  dirty.markPixels({0, 0, 8, 8});
+  dirty.clear();
+  TEST_ASSERT_FALSE(dirty.hasDirty());
+}
+
+void test_rotated_or_unsupported_panel_requests_full_refresh() {
+  TEST_ASSERT_EQUAL(RefreshMode::Full, selectRefreshMode(false, 0));
+  TEST_ASSERT_EQUAL(RefreshMode::Full, selectRefreshMode(true, 90));
+  TEST_ASSERT_EQUAL(RefreshMode::Tiles, selectRefreshMode(true, 0));
+}
 
 GpioTriggerController directController(std::uint32_t startMs) {
   TopologyBuilder builder(kLuatOsEsp32S3Aio);
@@ -1572,6 +1650,11 @@ void test_hid_consumer_control_waits_for_press_and_release_report_slots() {
 
 int main(int, char **) {
   UNITY_BEGIN();
+  RUN_TEST(test_dirty_tiles_emit_only_changed_counter_region);
+  RUN_TEST(test_dirty_tiles_respect_per_loop_budget_and_coalesce_updates);
+  RUN_TEST(test_dirty_tiles_round_outward_clip_and_stay_within_one_row);
+  RUN_TEST(test_dirty_tiles_reject_sub_tile_budget_and_clear_explicitly);
+  RUN_TEST(test_rotated_or_unsupported_panel_requests_full_refresh);
   RUN_TEST(test_startup_stays_local_until_first_full_remote_scene);
   RUN_TEST(test_startup_refresh_does_not_demote_remote_or_critical_content);
   RUN_TEST(test_display_reconfiguration_redraws_the_current_visible_source);
