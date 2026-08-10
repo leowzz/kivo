@@ -47,7 +47,7 @@
 
 **Interfaces:**
 - Consumes: repository root `Path` and tag-form strings such as `v0.5.10`.
-- Produces: `VersionError`, `TRACKED_VERSION_FILES`, `validate_tag_version()`, `read_env_version()`, `numeric_version()`, `bump_patch()`, `resolve_firmware_build_id()`, `set_repo_version()`, `check_repo_version()`, and CLI commands `get`, `set`, and `check`.
+- Produces: `VersionError`, `TRACKED_VERSION_FILES`, `validate_tag_version()`, `read_env_version()`, `numeric_version()`, `bump_patch()`, `set_repo_version()`, `check_repo_version()`, and CLI commands `get`, `set`, and `check`.
 
 - [ ] **Step 1: Create the shared minimal repository fixture**
 
@@ -184,11 +184,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 import re
 import sys
-from typing import Mapping, Sequence
+from typing import Sequence
 
 TAG_VERSION_RE = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 TRACKED_VERSION_FILES = (
@@ -237,15 +236,6 @@ def read_env_version(path: Path) -> str:
     return validate_tag_version(lines[0].removeprefix("version="))
 
 
-def resolve_firmware_build_id(root: Path, environ: Mapping[str, str]) -> str:
-    explicit = environ.get("KIVO_FIRMWARE_BUILD_ID")
-    if explicit is not None:
-        if not explicit or re.fullmatch(r"\S+", explicit) is None:
-            raise VersionError(
-                "KIVO_FIRMWARE_BUILD_ID must be one non-whitespace token"
-            )
-        return explicit
-    return read_env_version(root / ".env")
 ```
 
 Implement block-aware parsing with these exact boundaries:
@@ -519,13 +509,14 @@ Expected: the commit contains only the release orchestrator and its tests.
 
 **Files:**
 - Create: `test/test_platformio_build_id.py`
+- Modify: `scripts/repo_version.py`
 - Modify: `scripts/platformio_build_id.py`
 - Modify: `Makefile`
 - Modify: `test/test_make_upload_selection.py`
 
 **Interfaces:**
-- Consumes: Task 1 `resolve_firmware_build_id()`, optional Make `BUILD_ID`, optional `KIVO_FIRMWARE_BUILD_ID`, and repository `.env`.
-- Produces: exact firmware macro value such as `v0.5.10`, with explicit caller overrides preserved.
+- Consumes: Task 1 `read_env_version()`, optional Make `BUILD_ID`, optional `KIVO_FIRMWARE_BUILD_ID`, and repository `.env`.
+- Produces: `resolve_firmware_build_id()` and the exact firmware macro value such as `v0.5.10`, with explicit caller overrides preserved.
 
 - [ ] **Step 1: Write failing PlatformIO resolution tests**
 
@@ -604,10 +595,28 @@ rtk pytest test/test_platformio_build_id.py -q
 rtk pytest test/test_make_upload_selection.py -q
 ```
 
-Expected: the adapter still falls back to `0.1.0+dev`, and Make does not read
-the supplied `.env` or reject a missing version.
+Expected: `test/test_platformio_build_id.py` fails during collection because
+`resolve_firmware_build_id` does not exist yet; Make does not read the supplied
+`.env` or reject a missing version.
 
 - [ ] **Step 4: Implement Make and PlatformIO `.env` resolution**
+
+First add the test-driven resolver to `scripts/repo_version.py`:
+
+```python
+from typing import Mapping
+
+
+def resolve_firmware_build_id(root: Path, environ: Mapping[str, str]) -> str:
+    explicit = environ.get("KIVO_FIRMWARE_BUILD_ID")
+    if explicit is not None:
+        if not explicit or re.fullmatch(r"\S+", explicit) is None:
+            raise VersionError(
+                "KIVO_FIRMWARE_BUILD_ID must be one non-whitespace token"
+            )
+        return explicit
+    return read_env_version(root / ".env")
+```
 
 At the top of `Makefile`, replace the hard-coded build ID with:
 
@@ -662,7 +671,7 @@ Run:
 
 ```bash
 rtk git diff --check
-rtk git add Makefile scripts/platformio_build_id.py test/test_make_upload_selection.py test/test_platformio_build_id.py
+rtk git add Makefile scripts/repo_version.py scripts/platformio_build_id.py test/test_make_upload_selection.py test/test_platformio_build_id.py
 rtk git commit -m "build: read firmware version from env file"
 ```
 
