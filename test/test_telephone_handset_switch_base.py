@@ -27,8 +27,8 @@ def test_canonical_source_and_cell_contract() -> None:
     )
     lower = macro.measure_switch_section(cell, z=1.0, nominal_size=14.8)
     upper = macro.measure_switch_section(cell, z=2.7, nominal_size=14.0)
-    np.testing.assert_allclose(lower.sizes, [[14.798, 14.798]], atol=0.003)
-    np.testing.assert_allclose(upper.sizes, [[14.0, 14.0]], atol=0.003)
+    np.testing.assert_allclose(lower.sizes, [[14.798, 14.798]], rtol=0.0, atol=0.003)
+    np.testing.assert_allclose(upper.sizes, [[14.0, 14.0]], rtol=0.0, atol=0.003)
 
 
 def test_canonical_loader_rejects_changed_source(tmp_path: Path) -> None:
