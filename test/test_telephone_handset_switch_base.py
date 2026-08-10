@@ -84,6 +84,18 @@ def section_loop_sizes(mesh: trimesh.Trimesh, axis: int, level: float) -> np.nda
     return np.array(sizes)
 
 
+def test_generate_base_preserves_exact_inner_chamfer_slope() -> None:
+    source = base.load_canonical_source(SOURCE_ROOT)
+    mesh = base.generate_base(source)
+
+    for level, expected in (
+        (27.8, (55.4, 70.4)),
+        (28.2, (56.2, 71.2)),
+    ):
+        loops = section_loop_sizes(mesh, axis=2, level=level)
+        assert any(np.allclose(size, expected, rtol=0.0, atol=0.003) for size in loops)
+
+
 def test_generate_base_preserves_outer_pocket_and_switch_dimensions() -> None:
     source = base.load_canonical_source(SOURCE_ROOT)
     mesh = base.generate_base(source)

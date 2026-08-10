@@ -155,14 +155,16 @@ def inner_chamfer_cutter() -> trimesh.Trimesh:
         join_type=manifold3d.JoinType.Round,
         circular_segments=32,
     )
-    slice_height = 0.01
-    lower = lower_section.extrude(slice_height).translate(
-        (0.0, 0.0, OUTER_HEIGHT - CHAMFER)
-    )
-    upper = upper_section.extrude(slice_height).translate(
-        (0.0, 0.0, OUTER_HEIGHT - slice_height)
-    )
-    return manifold_to_mesh(manifold3d.Manifold.batch_hull([lower, upper]))
+    points = [
+        [float(x), float(y), z]
+        for section, z in (
+            (lower_section, OUTER_HEIGHT - CHAMFER),
+            (upper_section, OUTER_HEIGHT),
+        )
+        for polygon in section.to_polygons()
+        for x, y in polygon
+    ]
+    return manifold_to_mesh(manifold3d.Manifold.hull_points(points))
 
 
 def build_outer_ring() -> trimesh.Trimesh:
