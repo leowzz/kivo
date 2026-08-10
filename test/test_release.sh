@@ -165,12 +165,28 @@ for version_file in \
   cp "$ROOT/$version_file" "$FRESH_REPO/$version_file"
 done
 cp "$ROOT/scripts/repo_version.py" "$FRESH_REPO/scripts/repo_version.py"
+cp "$FRESH_REPO/.env.example" "$FRESH_REPO/.env"
+(cd "$FRESH_REPO" && python scripts/repo_version.py set v1.2.3)
+rm "$FRESH_REPO/.env"
+expected_tag="$(awk '
+  /^version=/ {
+    count += 1
+    value = substr($0, length("version=") + 1)
+    next
+  }
+  { invalid = 1 }
+  END {
+    if (count != 1 || invalid || value == "") exit 1
+    print value
+  }
+' "$FRESH_REPO/.env.example")"
 
-if missing_env_output="$(cd "$FRESH_REPO" && python scripts/repo_version.py check v0.1.0 2>&1)"; then
+if missing_env_output="$(cd "$FRESH_REPO" && python scripts/repo_version.py check "$expected_tag" 2>&1)"; then
   echo "fresh checkout unexpectedly passed without .env" >&2
   exit 1
 fi
 grep -Fq 'missing ' <<<"$missing_env_output"
-grep -Fq 'fresh-checkout/.env' <<<"$missing_env_output"
+grep -Fq '.env' <<<"$missing_env_output"
+grep -Fq 'cp .env.example .env' <<<"$missing_env_output"
 cp "$FRESH_REPO/.env.example" "$FRESH_REPO/.env"
-(cd "$FRESH_REPO" && python scripts/repo_version.py check v0.1.0)
+(cd "$FRESH_REPO" && python scripts/repo_version.py check "$expected_tag")
