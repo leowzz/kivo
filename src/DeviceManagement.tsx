@@ -98,7 +98,6 @@ interface DeviceManagementProps {
   onChangeProfile?(profile: DeviceProfile): void;
   onSaveSharedProfile?(profile: DeviceProfile): void | Promise<void>;
   onDuplicateProfileForDevice?(request: { deviceId: string; sourceProfile: DeviceProfile; name: string }): Promise<void>;
-  onSetManualSaveProfile?(profileId: string, enabled: boolean): void;
   onHardwareSelectionChange?(hardwareProfileId: string | null, deviceId: string | null): void;
   onBeginLearning?(hardwareProfileId: string, deviceId: string, pins: number[]): void;
   onEndLearning?(deviceId: string): void;
@@ -179,7 +178,6 @@ export function DeviceManagement({
   onChangeProfile,
   onSaveSharedProfile,
   onDuplicateProfileForDevice,
-  onSetManualSaveProfile,
   onHardwareSelectionChange,
   onBeginLearning,
   onEndLearning,
@@ -409,10 +407,6 @@ export function DeviceManagement({
   const sharedDeviceCount = editingProfile
     ? devices.filter((device) => device.runtimeAssignment?.device_profile_id === editingProfile.profile.id).length
     : 0;
-  const updateManualSaveMode = useCallback(() => {
-    if (!editingProfile) return;
-    onSetManualSaveProfile?.(editingProfile.profile.id, sharedDeviceCount > 1);
-  }, [editingProfile?.profile.id, onSetManualSaveProfile, sharedDeviceCount]);
   const updateEditingProfile = useCallback((next: DeviceProfile) => onChangeProfile?.(next), [onChangeProfile]);
   const handleWorkspaceSelection = useCallback((hardwareProfileId: string | null, deviceId: string | null) => {
     onHardwareSelectionChange?.(hardwareProfileId, deviceId);
@@ -576,13 +570,13 @@ export function DeviceManagement({
                     setSelection({ kind: "device", id: device.deviceId })
                   }
                 >
-                  <strong>{device.name}</strong>
-                  <span>
+                  <strong title={device.name}>{device.name}</strong>
+                  <span title={boards.get(device.boardProfileId)?.displayName ?? device.boardProfileId}>
                     {boards.get(device.boardProfileId)?.displayName ??
                       device.boardProfileId}
                   </span>
-                  <span>{status(device, language)}</span>
-                  <span>{assignmentLabel(device, deviceProfiles)}</span>
+                  <span title={status(device, language)}>{status(device, language)}</span>
+                  <span title={assignmentLabel(device, deviceProfiles)}>{assignmentLabel(device, deviceProfiles)}</span>
                 </button>
               </li>
             ))}
@@ -608,8 +602,8 @@ export function DeviceManagement({
                       setSelection({ kind: "candidate", id: candidate.key })
                     }
                   >
-                    <strong>{candidateLabels.get(candidate.key)}</strong>
-                    <span>
+                    <strong title={candidateLabels.get(candidate.key)}>{candidateLabels.get(candidate.key)}</strong>
+                    <span title={boards.get(candidate.boardProfileId)?.displayName ?? candidate.boardProfileId}>
                       {boards.get(candidate.boardProfileId)?.displayName ??
                         candidate.boardProfileId}
                     </span>
@@ -838,10 +832,11 @@ export function DeviceManagement({
                     <option value="">{t(language, "model.select")}</option>
                     {compatibleHardware.map((hardware) => <option key={hardware.id} value={hardware.id}>{hardware.name}</option>)}
                   </select>
-                  <button type="button" disabled={!assignmentDraft.hardwareProfileId} onClick={() => setAssignmentDraft((current) => ({ ...current }))}>{t(language, "devices.applyHardware")}</button>
+                  <button className="secondary-button" type="button" disabled={!assignmentDraft.hardwareProfileId} onClick={() => setAssignmentDraft((current) => ({ ...current }))}>{t(language, "devices.applyHardware")}</button>
                 </div>
               )}
               <button
+                className="primary-button"
                 type="button"
                 disabled={!selectedDraftHardware || assignmentSaving}
                 onClick={() => setAssignmentConfirmation("save")}
@@ -849,6 +844,7 @@ export function DeviceManagement({
                 {t(language, "devices.saveAssignment")}
               </button>
               <button
+                className="danger-button"
                 type="button"
                 disabled={!selectedDevice.runtimeAssignment || assignmentSaving}
                 onClick={() => setAssignmentConfirmation("clear")}
@@ -860,18 +856,18 @@ export function DeviceManagement({
               <section className="device-workspace" aria-label={t(language, "devices.configurationSettings")}>
                 {selectedDevice.connection === "offline" && <p className="form-hint">{t(language, "devices.offlineEditing")}</p>}
                 <div className="device-workspace-toolbar">
-                  <button type="button" aria-label={t(language, "devices.configurationSettings")} onClick={() => { setSettingsOpen(true); updateManualSaveMode(); }}>{t(language, "devices.configurationSettings")}</button>
+                  <button className="secondary-button" type="button" aria-label={t(language, "devices.configurationSettings")} onClick={() => setSettingsOpen(true)}>{t(language, "devices.configurationSettings")}</button>
                   <div className="device-workspace-tabs" role="tablist" aria-label={t(language, "devices.detail")}>
-                    <button type="button" role="tab" aria-selected={workspaceTab === "overview"} onClick={() => { setWorkspaceTab("overview"); updateManualSaveMode(); }}>{t(language, "devices.workspaceOverview")}</button>
-                    <button type="button" role="tab" aria-selected={workspaceTab === "io"} onClick={() => { setWorkspaceTab("io"); updateManualSaveMode(); }}>{t(language, "devices.workspaceIo")}</button>
-                    <button type="button" role="tab" aria-selected={workspaceTab === "layout"} onClick={() => { setWorkspaceTab("layout"); updateManualSaveMode(); }}>{t(language, "devices.workspaceLayout")}</button>
+                    <button type="button" role="tab" aria-selected={workspaceTab === "overview"} onClick={() => setWorkspaceTab("overview")}>{t(language, "devices.workspaceOverview")}</button>
+                    <button type="button" role="tab" aria-selected={workspaceTab === "io"} onClick={() => setWorkspaceTab("io")}>{t(language, "devices.workspaceIo")}</button>
+                    <button type="button" role="tab" aria-selected={workspaceTab === "layout"} onClick={() => setWorkspaceTab("layout")}>{t(language, "devices.workspaceLayout")}</button>
                   </div>
                 </div>
                 {(workspaceTab === "io" || workspaceTab === "layout") && sharedDeviceCount > 1 && (
                   <div className="shared-configuration-warning" role="status">
                     {t(language, "devices.sharedWarning", { name: editingProfile.profile.name, count: sharedDeviceCount })}
-                    <button type="button" onClick={() => void onSaveSharedProfile?.(editingProfile)}>{t(language, "devices.saveShared")}</button>
-                    <button type="button" onClick={() => void onDuplicateProfileForDevice?.({ deviceId: selectedDevice.deviceId, sourceProfile: editingProfile, name: `${editingProfile.profile.name} (${selectedDevice.name})` })}>{t(language, "devices.duplicateForDevice")}</button>
+                    <button className="secondary-button" type="button" onClick={() => void onSaveSharedProfile?.(editingProfile)}>{t(language, "devices.saveShared")}</button>
+                    <button className="secondary-button" type="button" onClick={() => void onDuplicateProfileForDevice?.({ deviceId: selectedDevice.deviceId, sourceProfile: editingProfile, name: `${editingProfile.profile.name} (${selectedDevice.name})` })}>{t(language, "devices.duplicateForDevice")}</button>
                   </div>
                 )}
                 {workspaceTab === "overview" && <p className="form-hint">{t(language, "devices.sharedWarning", { name: editingProfile.profile.name, count: sharedDeviceCount || 1 })}</p>}

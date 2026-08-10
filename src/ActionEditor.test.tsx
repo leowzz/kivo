@@ -56,6 +56,17 @@ test("shows only populated groups in trigger order with compact summaries", () =
   expect(screen.queryByRole("heading", { name: "Long press", level: 3 })).not.toBeInTheDocument();
 });
 
+test("uses the picker technical key names in Action summaries", () => {
+  render(<Harness initial={{
+    ...emptyGroups(),
+    press: [{ type: "hotkey", keys: ["primary", "alt", "left_alt", "right_alt"] }],
+  }} />);
+
+  expect(screen.getByText(
+    "Hotkey - Primary (Command / Control) + Option / Alt + Left Option / Alt + Right Option / Alt",
+  )).toBeInTheDocument();
+});
+
 test("changing trigger appends the Action to the destination group", async () => {
   const user = userEvent.setup();
   const onChange = vi.fn();

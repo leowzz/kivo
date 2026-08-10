@@ -612,6 +612,19 @@ test("embeds I/O Mapping and Key Layout as device workspace tabs", async () => {
   expect(screen.queryByRole("dialog", { name: "按键布局" })).not.toBeInTheDocument();
 });
 
+test("uses shared button primitives for device workspace commands", async () => {
+  const user = userEvent.setup();
+  renderManagement();
+
+  expect(screen.getByRole("button", { name: "保存运行分配" })).toHaveClass("primary-button");
+  expect(screen.getByRole("button", { name: "清除运行分配" })).toHaveClass("danger-button");
+  expect(screen.getByRole("button", { name: "配置设置" })).toHaveClass("secondary-button");
+
+  await user.click(screen.getByRole("tab", { name: "I/O 映射" }));
+  expect(screen.getByRole("button", { name: "保存共享配置" })).toHaveClass("secondary-button");
+  expect(screen.getByRole("button", { name: "复制并仅用于此设备" })).toHaveClass("secondary-button");
+});
+
 test("shows a persistent shared configuration warning with save action", async () => {
   renderManagement({
     devices: [device(), device({ deviceId: "rp-b", name: "RP2040 B" })],

@@ -95,12 +95,13 @@ export function useAutosave<T>({
   }, []);
 
   useEffect(() => {
-    revision.current += 1;
+    const valueChanged = !Object.is(latest.current.value, value);
+    if (valueChanged) revision.current += 1;
     const target = { revision: revision.current, value, valid };
     latest.current = target;
     if (timer.current) clearTimeout(timer.current);
     if (!valid) {
-      setStatus("idle");
+      setStatus((current) => !valueChanged && current === "saved" ? current : "idle");
       setError(null);
       return;
     }

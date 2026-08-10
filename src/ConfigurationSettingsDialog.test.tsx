@@ -27,6 +27,10 @@ test("saves validated timing settings and can duplicate the complete draft", asy
     />,
   );
 
+  expect(screen.getByRole("button", { name: "取消" })).toHaveClass("secondary-button");
+  expect(screen.getByRole("button", { name: "保存共享配置" })).toHaveClass("primary-button");
+  expect(screen.getByRole("button", { name: "复制并仅用于此设备" })).toHaveClass("secondary-button");
+
   await user.clear(screen.getByRole("spinbutton", { name: "长按阈值" }));
   await user.type(screen.getByRole("spinbutton", { name: "长按阈值" }), "700");
   await user.click(screen.getByRole("button", { name: "保存共享配置" }));

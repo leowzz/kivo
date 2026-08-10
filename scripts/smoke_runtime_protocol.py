@@ -140,13 +140,16 @@ def run_smoke(
     if exercise_actions:
         event_id = state_down_event(device)
         run_id = 1 if protocol_version >= 6 else event_id
-        write_line(device, f"PASTE {run_id} 1 2\n")
+        total = 3 if protocol_version >= 6 else 2
+        write_line(device, f"PASTE {run_id} 1 {total}\n")
         expect_tokens(device, ["DONE", str(run_id), "1"])
         if protocol_version >= 6:
-            write_line(device, f"HOST {run_id} 2 2\n")
+            write_line(device, f"DELAY {run_id} 2 3 500\n")
+            expect_tokens(device, ["DONE", str(run_id), "2"])
+            write_line(device, f"MEDIA {run_id} 3 3 205\n")
         else:
             write_line(device, f"HOTKEY {run_id} 2 2 1 25\n")
-        expect_tokens(device, ["DONE", str(run_id), "2"])
+        expect_tokens(device, ["DONE", str(run_id), str(total)])
 
 
 def parse_pins(value: str) -> list[int]:

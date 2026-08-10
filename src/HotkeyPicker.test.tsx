@@ -8,11 +8,13 @@ test("renders searchable categories and supports a six-key multi-select", async 
   const onChange = vi.fn();
   render(<HotkeyPicker value={[]} onChange={onChange} language="en-US" />);
 
-  expect(screen.getByText("Common")).toBeInTheDocument();
-  expect(screen.getByText("Function Keys F1-F24")).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Common" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("tab", { name: "Function Keys F1-F24" })).toBeInTheDocument();
+  await user.click(screen.getByRole("tab", { name: "Letters" }));
   await user.click(screen.getByRole("checkbox", { name: "A" }));
   expect(onChange).toHaveBeenLastCalledWith(["a"]);
 
+  await user.click(screen.getByRole("tab", { name: "Common" }));
   const search = screen.getByRole("searchbox", { name: "Search keys" });
   await user.type(search, "escape");
   expect(screen.getByRole("checkbox", { name: "Escape" })).toBeInTheDocument();
@@ -24,6 +26,7 @@ test("locks unselected ordinary keys at six while selected keys remain removable
   const onChange = vi.fn();
   render(<HotkeyPicker value={["a", "b", "c", "d", "e", "f"]} onChange={onChange} language="en-US" />);
 
+  await user.click(screen.getByRole("tab", { name: "Letters" }));
   expect(screen.getByRole("checkbox", { name: "A" })).toBeChecked();
   expect(screen.getByRole("checkbox", { name: "G" })).toBeDisabled();
   await user.click(screen.getByRole("button", { name: /Remove A/i }));
@@ -88,8 +91,60 @@ test("aborts an unsupported recording without replacing the previous chord", asy
   expect(screen.getByRole("button", { name: "Record shortcut" })).toBeInTheDocument();
 });
 
-test("translates category and modifier labels", async () => {
+test("localizes categories but keeps protocol key names stable", async () => {
   render(<HotkeyPicker value={[]} onChange={vi.fn()} language="zh-CN" />);
-  expect(screen.getByText("常用")).toBeInTheDocument();
-  expect(screen.getByRole("checkbox", { name: "命令" })).toBeInTheDocument();
+  expect(screen.getByRole("tablist", { name: "按键分类" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "常用" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("checkbox", { name: "Command" })).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "Control" })).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "Option / Alt" })).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "Shift" })).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "Enter" })).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "Backspace" })).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "Space" })).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "Caps Lock" })).toBeInTheDocument();
+  expect(screen.queryByRole("checkbox", { name: "命令" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("checkbox", { name: "回车" })).not.toBeInTheDocument();
+});
+
+test("shows one category panel and keeps recording above search", async () => {
+  const user = userEvent.setup();
+  render(<HotkeyPicker value={["enter"]} onChange={vi.fn()} language="zh-CN" />);
+
+  const record = screen.getByRole("button", { name: "录入快捷键" });
+  const search = screen.getByRole("searchbox", { name: "搜索按键" });
+  expect(record.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.getAllByRole("tabpanel")).toHaveLength(1);
+  expect(screen.getByRole("checkbox", { name: "Enter" })).toBeChecked();
+
+  await user.click(screen.getByRole("tab", { name: "功能键 F1-F24" }));
+  expect(screen.getAllByRole("tabpanel")).toHaveLength(1);
+  expect(screen.getByRole("checkbox", { name: "F1" })).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "F24" })).toBeInTheDocument();
+  expect(screen.queryByRole("checkbox", { name: "Enter" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "移除 Enter" })).toBeInTheDocument();
+});
+
+test("only the active category tab controls the rendered panel", async () => {
+  const user = userEvent.setup();
+  render(<HotkeyPicker value={[]} onChange={vi.fn()} language="en-US" />);
+
+  const expectTabPanelRelationship = () => {
+    const panel = screen.getByRole("tabpanel");
+    const activeTab = screen.getByRole("tab", { selected: true });
+
+    for (const tab of screen.getAllByRole("tab")) {
+      if (tab === activeTab) {
+        expect(tab).toHaveAttribute("aria-controls", panel.id);
+        expect(document.getElementById(tab.getAttribute("aria-controls")!)).toBe(panel);
+      } else {
+        expect(tab).not.toHaveAttribute("aria-controls");
+      }
+    }
+    expect(panel).toHaveAttribute("aria-labelledby", activeTab.id);
+  };
+
+  expectTabPanelRelationship();
+  await user.click(screen.getByRole("tab", { name: "Letters" }));
+  expectTabPanelRelationship();
 });

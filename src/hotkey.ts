@@ -58,18 +58,18 @@ const MODIFIER_CODES: Record<string, string> = {
 };
 
 const HOTKEY_LABELS: Record<string, string> = {
-  alt: "Option",
-  option: "Option",
+  alt: "Option / Alt",
+  option: "Option / Alt",
   cmd: "Command",
   ctrl: "Control",
   shift: "Shift",
-  primary: "Cmd/Ctrl",
+  primary: "Primary (Command / Control)",
   left_cmd: "Left Command",
   right_cmd: "Right Command",
   left_ctrl: "Left Control",
   right_ctrl: "Right Control",
-  left_alt: "Left Option",
-  right_alt: "Right Option",
+  left_alt: "Left Option / Alt",
+  right_alt: "Right Option / Alt",
   left_shift: "Left Shift",
   right_shift: "Right Shift",
   enter: "Enter",
@@ -235,10 +235,12 @@ export function validateHotkey(keys: string[]): "empty_hotkey" | "duplicate_key"
   return ordinary.size > 6 ? "too_many_keys" : null;
 }
 
+export function hotkeyDisplayLabel(token: string) {
+  return HOTKEY_LABELS[token.toLowerCase()] ?? token.toUpperCase();
+}
+
 export function formatHotkey(keys: string[]) {
-  return keys
-    .map((key) => HOTKEY_LABELS[key.toLowerCase()] ?? key.toUpperCase())
-    .join(" + ");
+  return keys.map(hotkeyDisplayLabel).join(" + ");
 }
 
 export function normalizeHotkey(event: KeyboardEvent): string[] | null {

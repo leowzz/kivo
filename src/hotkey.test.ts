@@ -55,6 +55,12 @@ test("formats sided modifiers using their canonical label", () => {
   expect(formatHotkey(["left_cmd"])).toBe("Left Command");
 });
 
+test("formats protocol modifiers with the same technical labels as the picker", () => {
+  expect(formatHotkey(["primary", "alt", "left_alt", "right_alt"])).toBe(
+    "Primary (Command / Control) + Option / Alt + Left Option / Alt + Right Option / Alt",
+  );
+});
+
 test("maps physical modifier codes without collapsing sides", () => {
   expect(keyboardCodeToToken("MetaLeft")).toBe("left_cmd");
   expect(keyboardCodeToToken("MetaRight")).toBe("right_cmd");

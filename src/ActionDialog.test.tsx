@@ -21,6 +21,9 @@ test("Cancel discards local edits and Delete is available only in edit mode", as
   const onDelete = vi.fn();
   const initial = { trigger: "release" as const, action: { type: "paste" as const, text: "hello" } };
   const { rerender } = render(<ActionDialog open mode="edit" language="en-US" initial={initial} onSave={vi.fn()} onCancel={onCancel} onDelete={onDelete} />);
+  expect(screen.getByRole("button", { name: "Cancel" })).toHaveClass("secondary-button");
+  expect(screen.getByRole("button", { name: "Save" })).toHaveClass("primary-button");
+  expect(screen.getByRole("button", { name: "Delete action" })).toHaveClass("danger-button");
   await user.clear(screen.getByLabelText("Text"));
   await user.click(screen.getByRole("button", { name: "Cancel" }));
   expect(onCancel).toHaveBeenCalledOnce();

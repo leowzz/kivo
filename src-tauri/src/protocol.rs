@@ -970,6 +970,48 @@ mod tests {
     }
 
     #[test]
+    fn sequences_paste_delay_and_media_in_one_protocol_v6_run() {
+        let actions = vec![
+            ButtonAction::Paste {
+                text: "你好\nKivo".into(),
+            },
+            ButtonAction::Delay { duration_ms: 500 },
+            ButtonAction::Media {
+                command: MediaCommand::PlayPause,
+            },
+        ];
+        let mut sequence = ActionSequence::new(77, "A".into(), ActionTrigger::Press, actions);
+        let mut commands = Vec::new();
+        let mut clipboard = Vec::new();
+
+        for expected_step in 1..=3 {
+            let step = sequence.next_step().unwrap();
+            assert_eq!(step.run_id, 77);
+            assert_eq!(step.step, expected_step);
+            assert_eq!(step.total, 3);
+            commands.push(
+                step.command_v6(|text| {
+                    clipboard.push(text.to_owned());
+                    Ok(())
+                })
+                .unwrap(),
+            );
+            sequence.acknowledge(77, expected_step).unwrap();
+        }
+
+        assert_eq!(clipboard, vec!["你好\nKivo"]);
+        assert_eq!(
+            commands,
+            vec![
+                format_paste_command(77, 1, 3),
+                "DELAY 77 2 3 500\n".into(),
+                "MEDIA 77 3 3 205\n".into(),
+            ]
+        );
+        assert!(sequence.is_complete());
+    }
+
+    #[test]
     fn encodes_function_punctuation_and_numpad_keys() {
         assert_eq!(encode_hotkey(&["f1".into()]).unwrap(), chord(0, &[0x3a]));
         assert_eq!(encode_hotkey(&["f24".into()]).unwrap(), chord(0, &[0x73]));

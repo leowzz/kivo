@@ -1006,142 +1006,217 @@ fn restore_backup(
     })
 }
 
+type SetupResult = Result<(), Box<dyn std::error::Error>>;
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartupFailure {
+    code: String,
+    detail: String,
+}
+
+impl StartupFailure {
+    fn from_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        let code = error
+            .downcast_ref::<AppError>()
+            .map_or_else(|| "startup_failed".into(), |error| error.code.clone());
+        Self {
+            code,
+            detail: error.to_string(),
+        }
+    }
+}
+
+#[derive(Default)]
+struct StartupState {
+    failure: RwLock<Option<StartupFailure>>,
+}
+
+fn settle_setup_result(
+    result: SetupResult,
+    report_failure: impl FnOnce(&(dyn std::error::Error + 'static)),
+) -> bool {
+    match result {
+        Ok(()) => true,
+        Err(error) => {
+            report_failure(error.as_ref());
+            false
+        }
+    }
+}
+
+fn report_startup_failure(app: &mut tauri::App, error: &(dyn std::error::Error + 'static)) {
+    eprintln!("failed to start Kivo: {error}");
+    runtime_log::emit_lifecycle(
+        runtime_log::RuntimeLogEntry::new(
+            now_ms(),
+            runtime_log::RuntimeLogLevel::Error,
+            "application_startup_failed",
+            serde_json::json!({}),
+        )
+        .with_detail(error.to_string()),
+    );
+    if let Some(state) = app.try_state::<StartupState>()
+        && let Ok(mut failure) = state.failure.write()
+    {
+        *failure = Some(StartupFailure::from_error(error));
+    }
+}
+
+#[tauri::command]
+fn get_startup_failure(state: tauri::State<'_, StartupState>) -> Option<StartupFailure> {
+    state
+        .failure
+        .read()
+        .map(|failure| failure.clone())
+        .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let config_directory = app.path().app_config_dir()?;
-            fs::create_dir_all(&config_directory)?;
-            let bundled_profiles = app.path().resource_dir()?.join("models");
-            let workspace = match Workspace::load(&config_directory, &bundled_profiles) {
-                Ok(workspace) => workspace,
-                Err(error) => {
-                    eprintln!("failed to load workspace: {error}");
-                    return Err(error.into());
+            app.manage(StartupState::default());
+            let result: SetupResult = (|| {
+                let config_directory = app.path().app_config_dir()?;
+                fs::create_dir_all(&config_directory)?;
+                if let Err(error) = runtime_log::install(app.handle(), &config_directory) {
+                    eprintln!("failed to install runtime logger: {error}");
                 }
-            };
-            if let Err(error) = runtime_log::install(app.handle(), &config_directory) {
-                eprintln!("failed to install runtime logger: {error}");
-            }
-            runtime_log::emit_lifecycle(runtime_log::RuntimeLogEntry::new(
-                now_ms(),
-                runtime_log::RuntimeLogLevel::Info,
-                "application_started",
-                serde_json::json!({"version": env!("CARGO_PKG_VERSION")}),
-            ));
-            let metrics = match MetricsStore::open(&config_directory.join("data/metrics.sqlite3")) {
-                Ok(metrics) => Some(Arc::new(metrics)),
-                Err(error) => {
-                    runtime_log::emit(
-                        runtime_log::RuntimeLogEntry::new(
-                            now_ms(),
-                            runtime_log::RuntimeLogLevel::Error,
-                            "metrics_initialization_failed",
-                            serde_json::json!({}),
-                        )
-                        .with_detail(runtime_log::metrics_initialization_failure_detail(&error)),
-                    );
-                    None
+                runtime_log::emit_lifecycle(runtime_log::RuntimeLogEntry::new(
+                    now_ms(),
+                    runtime_log::RuntimeLogLevel::Info,
+                    "application_started",
+                    serde_json::json!({"version": env!("CARGO_PKG_VERSION")}),
+                ));
+                let bundled_profiles = app.path().resource_dir()?.join("models");
+                let workspace = match Workspace::load(&config_directory, &bundled_profiles) {
+                    Ok(workspace) => workspace,
+                    Err(error) => return Err(error.into()),
+                };
+                let metrics =
+                    match MetricsStore::open(&config_directory.join("data/metrics.sqlite3")) {
+                        Ok(metrics) => Some(Arc::new(metrics)),
+                        Err(error) => {
+                            runtime_log::emit(
+                                runtime_log::RuntimeLogEntry::new(
+                                    now_ms(),
+                                    runtime_log::RuntimeLogLevel::Error,
+                                    "metrics_initialization_failed",
+                                    serde_json::json!({}),
+                                )
+                                .with_detail(
+                                    runtime_log::metrics_initialization_failure_detail(&error),
+                                ),
+                            );
+                            None
+                        }
+                    };
+                let operation_barrier = Arc::new(RwLock::new(()));
+                let workspace = Arc::new(RwLock::new(workspace));
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                {
+                    let workspace_guard = workspace
+                        .read()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    tray::setup(app, &[], &workspace_guard)?;
                 }
-            };
-            let operation_barrier = Arc::new(RwLock::new(()));
-            let workspace = Arc::new(RwLock::new(workspace));
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            {
-                let workspace_guard = workspace
-                    .read()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                tray::setup(app, &[], &workspace_guard)?;
-            }
-            let paste = Arc::new(PasteCoordinator::system());
-            let launcher = Arc::new(device::SystemWorkerLauncher::new(
-                paste.handle(),
-                metrics.clone(),
-                Arc::clone(&operation_barrier),
-            ));
-            let enumerator: Arc<dyn UsbEnumerator> = Arc::new(coordinator::SystemUsbEnumerator);
-            let coordinator = Arc::new(Mutex::new(RuntimeCoordinator::with_paste(
-                Arc::clone(&enumerator),
-                launcher,
-                Arc::clone(&workspace),
-                Some(paste.handle()),
-            )));
-            let stop = Arc::new(AtomicBool::new(false));
-            let scan_requested = Arc::new(AtomicBool::new(false));
-            let coordinator_thread = {
-                let coordinator = Arc::clone(&coordinator);
-                let workspace = Arc::clone(&workspace);
-                let metrics = metrics.clone();
-                let stop = Arc::clone(&stop);
-                let scan_requested = Arc::clone(&scan_requested);
-                let app_handle = app.handle().clone();
-                thread::spawn(move || {
-                    let mut scanner = BackgroundDeviceScanner::new(enumerator);
-                    let mut log_inventory = runtime_log::DeviceLogInventory::default();
-                    while !stop.load(Ordering::Relaxed) {
-                        if scan_requested.swap(false, Ordering::Relaxed) {
-                            scanner.request_scan();
-                        }
-                        let RuntimePoll {
-                            scan,
-                            scan_error,
-                            events,
-                        } = poll_runtime_coordinator(&mut scanner, coordinator.as_ref());
-                        let timestamp_ms = now_ms();
-                        if let Some(error) = scan_error.as_deref() {
-                            for entry in log_inventory.observe_scan_error(timestamp_ms, Some(error))
-                            {
-                                runtime_log::emit(entry);
+                let paste = Arc::new(PasteCoordinator::system());
+                let launcher = Arc::new(device::SystemWorkerLauncher::new(
+                    paste.handle(),
+                    metrics.clone(),
+                    Arc::clone(&operation_barrier),
+                ));
+                let enumerator: Arc<dyn UsbEnumerator> = Arc::new(coordinator::SystemUsbEnumerator);
+                let coordinator = Arc::new(Mutex::new(RuntimeCoordinator::with_paste(
+                    Arc::clone(&enumerator),
+                    launcher,
+                    Arc::clone(&workspace),
+                    Some(paste.handle()),
+                )));
+                let stop = Arc::new(AtomicBool::new(false));
+                let scan_requested = Arc::new(AtomicBool::new(false));
+                let coordinator_thread = {
+                    let coordinator = Arc::clone(&coordinator);
+                    let workspace = Arc::clone(&workspace);
+                    let metrics = metrics.clone();
+                    let stop = Arc::clone(&stop);
+                    let scan_requested = Arc::clone(&scan_requested);
+                    let app_handle = app.handle().clone();
+                    thread::spawn(move || {
+                        let mut scanner = BackgroundDeviceScanner::new(enumerator);
+                        let mut log_inventory = runtime_log::DeviceLogInventory::default();
+                        while !stop.load(Ordering::Relaxed) {
+                            if scan_requested.swap(false, Ordering::Relaxed) {
+                                scanner.request_scan();
                             }
-                        }
-                        if let Some(scan) = scan {
-                            for entry in log_inventory.observe_scan_error(timestamp_ms, None) {
-                                runtime_log::emit(entry);
+                            let RuntimePoll {
+                                scan,
+                                scan_error,
+                                events,
+                            } = poll_runtime_coordinator(&mut scanner, coordinator.as_ref());
+                            let timestamp_ms = now_ms();
+                            if let Some(error) = scan_error.as_deref() {
+                                for entry in
+                                    log_inventory.observe_scan_error(timestamp_ms, Some(error))
+                                {
+                                    runtime_log::emit(entry);
+                                }
                             }
-                            for entry in
-                                log_inventory.observe(timestamp_ms, &scan.devices, &scan.candidates)
-                            {
-                                runtime_log::emit(entry);
+                            if let Some(scan) = scan {
+                                for entry in log_inventory.observe_scan_error(timestamp_ms, None) {
+                                    runtime_log::emit(entry);
+                                }
+                                for entry in log_inventory.observe(
+                                    timestamp_ms,
+                                    &scan.devices,
+                                    &scan.candidates,
+                                ) {
+                                    runtime_log::emit(entry);
+                                }
+                                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                                if let Ok(workspace) = workspace.read() {
+                                    tray::update(&app_handle, &scan.devices, &workspace);
+                                }
                             }
-                            #[cfg(any(target_os = "macos", target_os = "windows"))]
-                            if let Ok(workspace) = workspace.read() {
-                                tray::update(&app_handle, &scan.devices, &workspace);
+                            for event in events {
+                                let payload =
+                                    enrich_runtime_event(&workspace, metrics.as_deref(), event);
+                                runtime_log::emit_runtime_event(&payload);
+                                let _ = app_handle.emit("runtime-event", payload);
                             }
+                            thread::sleep(RUNTIME_EVENT_POLL_INTERVAL);
                         }
-                        for event in events {
-                            let payload =
-                                enrich_runtime_event(&workspace, metrics.as_deref(), event);
-                            runtime_log::emit_runtime_event(&payload);
-                            let _ = app_handle.emit("runtime-event", payload);
-                        }
-                        thread::sleep(RUNTIME_EVENT_POLL_INTERVAL);
-                    }
-                    coordinator
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .shutdown();
-                })
-            };
-            app.manage(AppState {
-                workspace,
-                operation_barrier,
-                metrics,
-                coordinator: Some(coordinator),
-                paste: Some(paste),
-                stop,
-                scan_requested,
-                coordinator_thread: Mutex::new(Some(coordinator_thread)),
-            });
-            runtime_log::emit_lifecycle(runtime_log::RuntimeLogEntry::new(
-                now_ms(),
-                runtime_log::RuntimeLogLevel::Info,
-                "application_ready",
-                serde_json::json!({}),
-            ));
+                        coordinator
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .shutdown();
+                    })
+                };
+                app.manage(AppState {
+                    workspace,
+                    operation_barrier,
+                    metrics,
+                    coordinator: Some(coordinator),
+                    paste: Some(paste),
+                    stop,
+                    scan_requested,
+                    coordinator_thread: Mutex::new(Some(coordinator_thread)),
+                });
+                runtime_log::emit_lifecycle(runtime_log::RuntimeLogEntry::new(
+                    now_ms(),
+                    runtime_log::RuntimeLogLevel::Info,
+                    "application_ready",
+                    serde_json::json!({}),
+                ));
+                Ok(())
+            })();
+            settle_setup_result(result, |error| report_startup_failure(app, error));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_startup_failure,
             get_snapshot,
             retry_candidate,
             save_device_profile,
@@ -1195,24 +1270,24 @@ pub fn run() {
                 "application_exit_requested",
                 serde_json::json!({}),
             ));
-            app_handle
-                .state::<AppState>()
-                .stop
-                .store(true, Ordering::Relaxed);
+            if let Some(state) = app_handle.try_state::<AppState>() {
+                state.stop.store(true, Ordering::Relaxed);
+            }
         }
         tauri::RunEvent::Exit => {
-            let state = app_handle.state::<AppState>();
-            state.stop.store(true, Ordering::Relaxed);
-            if let Some(coordinator) = state
-                .coordinator_thread
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .take()
-            {
-                let _ = coordinator.join();
-            }
-            if let Some(paste) = &state.paste {
-                paste.shutdown();
+            if let Some(state) = app_handle.try_state::<AppState>() {
+                state.stop.store(true, Ordering::Relaxed);
+                if let Some(coordinator) = state
+                    .coordinator_thread
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take()
+                {
+                    let _ = coordinator.join();
+                }
+                if let Some(paste) = &state.paste {
+                    paste.shutdown();
+                }
             }
             runtime_log::shutdown_with_entry(runtime_log::RuntimeLogEntry::new(
                 now_ms(),
@@ -1250,6 +1325,22 @@ mod tests {
     };
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn startup_schema_failure_is_consumed_instead_of_reaching_tauri() {
+        let error = AppError::new("unsupported_profile_schema");
+        let failure = StartupFailure::from_error(&error);
+        let mut reported = None;
+        let ready = settle_setup_result(
+            Err::<(), Box<dyn std::error::Error>>(Box::new(error)),
+            |error| reported = Some(error.to_string()),
+        );
+
+        assert!(!ready);
+        assert_eq!(reported.as_deref(), Some("unsupported_profile_schema"));
+        assert_eq!(failure.code, "unsupported_profile_schema");
+        assert_eq!(failure.detail, "unsupported_profile_schema");
+    }
 
     #[test]
     fn repeated_operation_contexts_use_camel_case_identifiers() {

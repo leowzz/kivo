@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { X } from "lucide-react";
 import { t } from "./i18n";
 import type { DeviceProfile, Language, TriggerSettings } from "./types";
 
@@ -54,7 +55,7 @@ export function ConfigurationSettingsDialog({
       <section className="device-setup-dialog configuration-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="configuration-settings-title">
         <header className="device-setup-header">
           <h2 id="configuration-settings-title">{t(language, "settings.title")}</h2>
-          <button className="icon-button" type="button" aria-label={t(language, "common.close")} title={t(language, "common.close")} onClick={onCancel}>×</button>
+          <button className="icon-button" type="button" aria-label={t(language, "common.close")} title={t(language, "common.close")} onClick={onCancel}><X size={17} aria-hidden="true" /></button>
         </header>
         <div className="device-setup-body">
           <div className="settings-fields">
@@ -77,9 +78,9 @@ export function ConfigurationSettingsDialog({
           </div>
         </div>
         <footer className="device-setup-footer">
-          <button type="button" onClick={onCancel}>{t(language, "common.cancel")}</button>
-          <button type="button" disabled={Boolean(validation) || busy} onClick={() => onSave(settings)}>{saveLabel}</button>
-          <button className="primary-button" type="button" disabled={!copyName.trim() || Boolean(validation) || busy} onClick={async () => {
+          <button className="secondary-button" type="button" onClick={onCancel}>{t(language, "common.cancel")}</button>
+          <button className="primary-button" type="button" disabled={Boolean(validation) || busy} onClick={() => onSave(settings)}>{saveLabel}</button>
+          <button className="secondary-button" type="button" disabled={!copyName.trim() || Boolean(validation) || busy} onClick={async () => {
             setBusy(true);
             try { await onDuplicate(copyName.trim()); } finally { setBusy(false); }
           }}>{t(language, "devices.duplicateForDevice")}</button>

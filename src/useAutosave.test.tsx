@@ -58,3 +58,25 @@ test("retains a failed revision and retries it", async () => {
   expect(result.current.status).toBe("saved");
   expect(save).toHaveBeenCalledTimes(2);
 });
+
+test("reports saved when the persisted value becomes clean during the request", async () => {
+  const pending = deferred<void>();
+  const save = vi.fn().mockReturnValue(pending.promise);
+  const queue = new SerializedSaveQueue();
+  const draft = { text: "saved value" };
+  const { rerender, result } = renderHook(
+    ({ valid }) => useAutosave({ value: draft, valid, delayMs: 400, save, queue }),
+    { initialProps: { valid: true } },
+  );
+
+  await act(() => vi.advanceTimersByTimeAsync(400));
+  expect(result.current.status).toBe("saving");
+  rerender({ valid: false });
+
+  await act(async () => {
+    pending.resolve();
+    await pending.promise;
+    await queue.flush();
+  });
+  expect(result.current.status).toBe("saved");
+});

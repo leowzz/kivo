@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save as saveFile } from "@tauri-apps/plugin-dialog";
 import {
+  AlertTriangle,
   ArchiveRestore,
   DatabaseBackup,
   Download,
@@ -43,6 +44,7 @@ import type {
   PhysicalInput,
   RuntimeAssignment,
   RuntimeEvent,
+  StartupFailure,
   TriggerActions,
 } from "./types";
 import { SerializedSaveQueue, useAutosave } from "./useAutosave";
@@ -68,9 +70,12 @@ type HardwareEditorTarget = {
   deviceId: string | null;
 };
 type ProfileAutosaveTarget = {
-  profileId: string;
-  profile: DeviceProfile;
-} | null;
+  profiles: DeviceProfile[];
+};
+type PersistedProfileSave = {
+  serialized: string;
+  snapshot: AppSnapshot;
+};
 
 const PREVIEW_MODE = import.meta.env.DEV && new URLSearchParams(window.location.search).has("preview");
 const REGISTRY_REFRESH_MS = 1_500;
@@ -227,10 +232,11 @@ export default function App() {
   const [selectedManagedDeviceId, setSelectedManagedDeviceId] = useState<string | null>(null);
   const [hardwareEditorTarget, setHardwareEditorTarget] = useState<HardwareEditorTarget | null>(null);
   const [capturedDraftProfileIds, setCapturedDraftProfileIds] = useState<Set<string>>(() => new Set());
-  const [manualSaveProfileIds, setManualSaveProfileIds] = useState<Set<string>>(() => new Set());
+  const [pendingSharedDraftProfileIds, setPendingSharedDraftProfileIds] = useState<Set<string>>(() => new Set());
   const [tentativeLearningCounts, setTentativeLearningCounts] = useState<Map<string, number>>(() => new Map());
   const [pressedButtonIds, setPressedButtonIds] = useState<Set<string>>(() => new Set());
   const [loaded, setLoaded] = useState(false);
+  const [startupFailure, setStartupFailure] = useState<StartupFailure | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [setupOpen, setSetupOpen] = useState(false);
@@ -251,6 +257,8 @@ export default function App() {
   const hardwareEditorTargetRef = useRef<HardwareEditorTarget | null>(null);
   const learningEditingRevisionRef = useRef(0);
   const profileDraftsRef = useRef<Map<string, DeviceProfile>>(new Map());
+  const autosaveTargetRef = useRef<ProfileAutosaveTarget>({ profiles: [] });
+  const persistedProfileSavesRef = useRef<Map<string, PersistedProfileSave>>(new Map());
   const setupSeenRef = useRef<Set<string>>(new Set());
 
   const { deviceProfiles, editorProfile, boardProfiles, devices, candidates } = registry;
@@ -269,8 +277,6 @@ export default function App() {
   const editorLearningActive = devices.some((device) =>
     device.learning?.deviceProfileId === editorProfileConfig?.profile.id
   );
-  const dirty = Boolean(editorProfileConfig &&
-    savedDeviceProfiles[editorProfileConfig.profile.id] !== JSON.stringify(editorProfileConfig));
   const summary = deviceSummary(devices);
   const attentionCount = summary.attention + candidates.length;
   const currentSetupPresence = useMemo(
@@ -327,18 +333,22 @@ export default function App() {
       for (const profileId of profileDraftsRef.current.keys()) {
         if (!snapshotProfileIds.has(profileId)) profileDraftsRef.current.delete(profileId);
       }
+      for (const profileId of persistedProfileSavesRef.current.keys()) {
+        if (!snapshotProfileIds.has(profileId)) persistedProfileSavesRef.current.delete(profileId);
+      }
       setCapturedDraftProfileIds((current) => {
         const next = new Set([...current].filter((profileId) => snapshotProfileIds.has(profileId)));
         return next.size === current.size ? current : next;
       });
-      setManualSaveProfileIds((current) => {
+      setPendingSharedDraftProfileIds((current) => {
         const next = new Set([...current].filter((profileId) => snapshotProfileIds.has(profileId)));
         return next.size === current.size ? current : next;
       });
     } else {
       profileDraftsRef.current.clear();
+      persistedProfileSavesRef.current.clear();
       setCapturedDraftProfileIds(new Set());
-      setManualSaveProfileIds(new Set());
+      setPendingSharedDraftProfileIds(new Set());
     }
     setRegistry({
       deviceProfiles: serverProfiles.map((profile) =>
@@ -410,32 +420,58 @@ export default function App() {
     return request;
   }, [applySnapshot, replaceRegistrySnapshot]);
 
-  const saveEditorProfile = useCallback(async (profile: DeviceProfile | undefined) => {
-    if (!profile) return;
+  const saveProfiles = useCallback(async (profiles: DeviceProfile[]) => {
+    if (profiles.length === 0) return;
+    let savedSnapshot: AppSnapshot | null = null;
     if (!PREVIEW_MODE) {
-      const snapshot = await invoke<AppSnapshot>("save_device_profile", { profile });
-      if (mountedRef.current) replaceRegistrySnapshot(snapshot);
+      for (const profile of profiles) {
+        const serialized = JSON.stringify(profile);
+        const persisted = persistedProfileSavesRef.current.get(profile.profile.id);
+        if (persisted?.serialized === serialized) {
+          savedSnapshot = persisted.snapshot;
+          continue;
+        }
+        savedSnapshot = await invoke<AppSnapshot>("save_device_profile", { profile });
+        persistedProfileSavesRef.current.set(profile.profile.id, {
+          serialized,
+          snapshot: savedSnapshot,
+        });
+      }
     }
-    profileDraftsRef.current.delete(profile.profile.id);
-    setManualSaveProfileIds((current) => {
-      if (!current.has(profile.profile.id)) return current;
-      const next = new Set(current);
-      next.delete(profile.profile.id);
-      return next;
+    if (savedSnapshot && mountedRef.current) replaceRegistrySnapshot(savedSnapshot);
+    const serializedProfiles = new Map(profiles.map((profile) =>
+      [profile.profile.id, JSON.stringify(profile)]
+    ));
+    const settledProfileIds = new Set<string>();
+    for (const [profileId, serialized] of serializedProfiles) {
+      const currentDraft = profileDraftsRef.current.get(profileId);
+      if (!currentDraft || JSON.stringify(currentDraft) === serialized) {
+        profileDraftsRef.current.delete(profileId);
+        settledProfileIds.add(profileId);
+      }
+    }
+    setPendingSharedDraftProfileIds((current) => {
+      const next = new Set([...current].filter((profileId) => !settledProfileIds.has(profileId)));
+      return next.size === current.size ? current : next;
     });
     setCapturedDraftProfileIds((current) => {
-      if (!current.has(profile.profile.id)) return current;
-      const next = new Set(current);
-      next.delete(profile.profile.id);
-      return next;
+      const next = new Set([...current].filter((profileId) => !settledProfileIds.has(profileId)));
+      return next.size === current.size ? current : next;
     });
-    setSavedDeviceProfiles((current) => ({
-      ...current,
-      [profile.profile.id]: JSON.stringify(profile),
-    }));
+    setSavedDeviceProfiles((current) => Object.fromEntries([
+      ...Object.entries(current),
+      ...serializedProfiles,
+    ]));
+    for (const [profileId, serialized] of serializedProfiles) {
+      if (persistedProfileSavesRef.current.get(profileId)?.serialized === serialized) {
+        persistedProfileSavesRef.current.delete(profileId);
+      }
+    }
   }, [replaceRegistrySnapshot]);
 
-  const saveProfile = saveEditorProfile;
+  const saveEditorProfile = useCallback(async (profile: DeviceProfile | undefined) => {
+    if (profile) await saveProfiles([profile]);
+  }, [saveProfiles]);
 
   const renameManagedDevice = useCallback(async (deviceId: string, name: string) => {
     try {
@@ -525,17 +561,37 @@ export default function App() {
     );
   }, [devices, editorProfileConfig?.profile.id]);
 
-  const autosaveTarget = useMemo<ProfileAutosaveTarget>(() => editorProfileConfig
-    ? { profileId: editorProfileConfig.profile.id, profile: editorProfileConfig }
-    : null, [editorProfileConfig]);
+  const dirtyProfiles = useMemo(() => deviceProfiles.filter((profile) =>
+    savedDeviceProfiles[profile.profile.id] !== JSON.stringify(profile)
+  ), [deviceProfiles, savedDeviceProfiles]);
+  const autosaveProfiles = useMemo(() => dirtyProfiles.filter((profile) => {
+    const profileId = profile.profile.id;
+    return !capturedDraftProfileIds.has(profileId) &&
+      !pendingSharedDraftProfileIds.has(profileId) &&
+      !tentativeLearningCounts.has(profileId) &&
+      !devices.some((device) => device.learning?.deviceProfileId === profileId) &&
+      isValidDraft(profile, boardProfiles);
+  }), [
+    boardProfiles,
+    capturedDraftProfileIds,
+    devices,
+    dirtyProfiles,
+    pendingSharedDraftProfileIds,
+    tentativeLearningCounts,
+  ]);
+  const autosaveTarget = useMemo<ProfileAutosaveTarget>(() => {
+    if (autosaveProfiles.length > 0) {
+      const target = { profiles: autosaveProfiles };
+      autosaveTargetRef.current = target;
+      return target;
+    }
+    if (dirtyProfiles.length === 0) return autosaveTargetRef.current;
+    return { profiles: [] };
+  }, [autosaveProfiles, dirtyProfiles.length]);
   const autosave = useAutosave<ProfileAutosaveTarget>({
     value: autosaveTarget,
-    valid: dirty && !capturedDraftProfileIds.has(editorProfileConfig?.profile.id ?? "") &&
-      !manualSaveProfileIds.has(editorProfileConfig?.profile.id ?? "") &&
-      !tentativeLearningCounts.has(editorProfileConfig?.profile.id ?? "") &&
-      !editorLearningActive &&
-      isValidDraft(editorProfileConfig, boardProfiles),
-    save: (target) => saveProfile(target?.profile),
+    valid: autosaveProfiles.length > 0,
+    save: (target) => saveProfiles(target.profiles),
     queue,
   });
 
@@ -594,15 +650,23 @@ export default function App() {
     mountedRef.current = true;
     let active = true;
     let unlisten: (() => void) | undefined;
-    const refreshTimer = PREVIEW_MODE ? undefined : setInterval(() => {
-      void refreshRegistry();
-    }, REGISTRY_REFRESH_MS);
+    let refreshTimer: ReturnType<typeof setInterval> | undefined;
     void (async () => {
       try {
         if (PREVIEW_MODE) {
           applySnapshot((await import("./preview")).previewSnapshot);
           return;
         }
+        const startup = await invoke<StartupFailure | null>("get_startup_failure")
+          .catch(() => null);
+        if (!active) return;
+        if (startup?.code) {
+          setStartupFailure(startup);
+          return;
+        }
+        refreshTimer = setInterval(() => {
+          void refreshRegistry();
+        }, REGISTRY_REFRESH_MS);
         const registeredUnlisten = await listen<RuntimeEvent>("runtime-event", ({ payload }) => {
           if (!active) return;
           if (payload.homeUpdate && payload.deviceProfileId === profileRef.current?.profile.id) {
@@ -736,10 +800,10 @@ export default function App() {
     if (profileId) updateProfile(profileId, update);
   }, [editorProfileConfig?.profile.id, updateProfile]);
 
-  const setProfileManualSave = useCallback((profileId: string, enabled: boolean) => {
-    setManualSaveProfileIds((current) => {
+  const setSharedDraftPending = useCallback((profileId: string, pending: boolean) => {
+    setPendingSharedDraftProfileIds((current) => {
       const next = new Set(current);
-      if (enabled) next.add(profileId);
+      if (pending) next.add(profileId);
       else next.delete(profileId);
       return next;
     });
@@ -750,8 +814,8 @@ export default function App() {
     const sharedDeviceCount = devices.filter(
       (device) => device.runtimeAssignment?.device_profile_id === profile.profile.id,
     ).length;
-    setProfileManualSave(profile.profile.id, sharedDeviceCount > 1);
-  }, [devices, setProfileManualSave, updateProfile]);
+    setSharedDraftPending(profile.profile.id, sharedDeviceCount > 1);
+  }, [devices, setSharedDraftPending, updateProfile]);
 
   const saveManagedSharedProfile = useCallback(async (profile: DeviceProfile) => {
     await autosave.flush();
@@ -779,7 +843,7 @@ export default function App() {
       request: { device_id: deviceId, source_profile: profile, name },
     });
     profileDraftsRef.current.delete(profile.profile.id);
-    setManualSaveProfileIds((current) => {
+    setPendingSharedDraftProfileIds((current) => {
       const next = new Set(current);
       next.delete(profile.profile.id);
       return next;
@@ -945,6 +1009,38 @@ export default function App() {
     ? editorProfileConfig.actions[selectedButtonId] ?? emptyTriggerActions()
     : emptyTriggerActions();
 
+  if (startupFailure) {
+    const incompatible = startupFailure.code === "unsupported_profile_schema" ||
+      startupFailure.code === "unsupported_settings_schema";
+    return (
+      <main className="startup-failure-shell">
+        <header className="startup-failure-brand">
+          <img src={brandIcon} alt="" />
+          <span>Kivo</span>
+        </header>
+        <section className="startup-failure-content" role="alert">
+          <AlertTriangle size={28} aria-hidden="true" />
+          <div>
+            <h1>Kivo 无法启动</h1>
+            {incompatible ? (
+              <>
+                <p>当前配置由较新版本创建。请更新 Kivo 后重试。</p>
+                <p>现有配置未被修改。</p>
+                <p lang="en">This configuration was created by a newer version of Kivo. Update Kivo and try again. Your configuration has not been changed.</p>
+              </>
+            ) : (
+              <>
+                <p>启动初始化失败。现有配置未被修改。</p>
+                <p lang="en">Kivo could not start. Your configuration has not been changed.</p>
+              </>
+            )}
+            <code>{startupFailure.code}</code>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="product-shell">
       <header className="topbar">
@@ -958,6 +1054,7 @@ export default function App() {
         </div>
         <div className={`save-state is-${autosave.status}`} aria-live="polite">
           {autosave.status === "saving" && t(language, "save.saving")}
+          {autosave.status === "saved" && t(language, "save.saved")}
           {autosave.status === "error" && (
             <><span>{t(language, "save.failed")}</span><button type="button" onClick={() => void autosave.retry()}>{t(language, "save.retry")}</button></>
           )}
@@ -1072,7 +1169,6 @@ export default function App() {
               onChangeProfile={changeManagedProfile}
               onSaveSharedProfile={saveManagedSharedProfile}
               onDuplicateProfileForDevice={duplicateManagedProfileForDevice}
-              onSetManualSaveProfile={setProfileManualSave}
               onHardwareSelectionChange={handleHardwareEditorSelection}
               onBeginLearning={beginManagedLearning}
               onEndLearning={endManagedLearning}

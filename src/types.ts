@@ -254,6 +254,11 @@ export interface AppSnapshot {
   homeMetrics: HomeMetricsSnapshot | null;
 }
 
+export interface StartupFailure {
+  code: string;
+  detail: string;
+}
+
 export interface ImportPreview {
   profileId: string;
   profileName: string;

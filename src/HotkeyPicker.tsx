@@ -1,9 +1,10 @@
 import { ChevronDown, Keyboard, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
   HOTKEY_CATEGORIES,
   canonicalHotkeyToken,
-  formatHotkey,
+  hotkeyDisplayLabel,
   isModifierToken,
   keyboardCodeToToken,
   validateHotkey,
@@ -47,22 +48,6 @@ const CATEGORY_LABELS: Record<string, MessageKey> = {
   "Numeric Keypad": "behavior.keyCategory.numpad",
 };
 
-const KEY_LABELS: Record<string, MessageKey> = {
-  primary: "behavior.key.primary", cmd: "behavior.key.command", ctrl: "behavior.key.control", alt: "behavior.key.option", option: "behavior.key.option", shift: "behavior.key.shift",
-  left_cmd: "behavior.key.leftCommand", right_cmd: "behavior.key.rightCommand", left_ctrl: "behavior.key.leftControl", right_ctrl: "behavior.key.rightControl",
-  left_alt: "behavior.key.leftOption", right_alt: "behavior.key.rightOption", left_shift: "behavior.key.leftShift", right_shift: "behavior.key.rightShift",
-};
-
-function displayLabel(language: Language, token: string) {
-  const label = KEY_LABELS[token];
-  if (label) return t(language, label);
-  if (language === "zh-CN") {
-    const labels: Record<string, string> = { enter: "回车", escape: "Esc", backspace: "退格", tab: "Tab", space: "空格", up: "上", down: "下", left: "左", right: "右", delete: "删除", home: "首页", end: "末尾", page_up: "上页", page_down: "下页", caps_lock: "大写锁定", insert: "插入", application: "菜单", num_lock: "数字锁定" };
-    return labels[token] ?? formatHotkey([token]);
-  }
-  return formatHotkey([token]);
-}
-
 function hasUsage(value: string[], token: string) {
   const usage = canonicalHotkeyToken(token);
   return value.some((item) => canonicalHotkeyToken(item) === usage);
@@ -74,10 +59,12 @@ function ordinaryCount(value: string[]) {
 
 export function HotkeyPicker({ value, onChange, language, error, onRecordingChange }: HotkeyPickerProps) {
   const [search, setSearch] = useState("");
+  const [activeCategoryName, setActiveCategoryName] = useState<(typeof HOTKEY_CATEGORIES)[number]["name"]>(HOTKEY_CATEGORIES[0].name);
   const [showPhysicalModifiers, setShowPhysicalModifiers] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recordingError, setRecordingError] = useState<string | null>(null);
   const onChangeRef = useRef(onChange);
+  const categoryTabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const normalizedSearch = search.trim().toLowerCase();
 
   useEffect(() => {
@@ -141,10 +128,23 @@ export function HotkeyPicker({ value, onChange, language, error, onRecordingChan
     };
   }, [recording]);
 
-  const filteredCategories = useMemo(() => HOTKEY_CATEGORIES.map((category) => ({
-    ...category,
-    tokens: category.tokens.filter((token) => !isModifierToken(token) && (!normalizedSearch || `${displayLabel(language, token)} ${t(language, CATEGORY_LABELS[category.name])}`.toLowerCase().includes(normalizedSearch))),
-  })).filter((category) => category.tokens.length > 0 || !normalizedSearch), [language, normalizedSearch]);
+  const activeCategory = HOTKEY_CATEGORIES.find(({ name }) => name === activeCategoryName) ?? HOTKEY_CATEGORIES[0];
+  const filteredTokens = useMemo(() => activeCategory.tokens.filter((token) =>
+    !isModifierToken(token) &&
+    (!normalizedSearch || hotkeyDisplayLabel(token).toLowerCase().includes(normalizedSearch))
+  ), [activeCategory, normalizedSearch]);
+
+  const handleCategoryKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => {
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowRight") nextIndex = (index + 1) % HOTKEY_CATEGORIES.length;
+    if (event.key === "ArrowLeft") nextIndex = (index - 1 + HOTKEY_CATEGORIES.length) % HOTKEY_CATEGORIES.length;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = HOTKEY_CATEGORIES.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    setActiveCategoryName(HOTKEY_CATEGORIES[nextIndex].name);
+    categoryTabRefs.current[nextIndex]?.focus();
+  };
 
   const toggle = (token: string) => {
     const index = value.findIndex((item) => canonicalHotkeyToken(item) === canonicalHotkeyToken(token));
@@ -166,11 +166,14 @@ export function HotkeyPicker({ value, onChange, language, error, onRecordingChan
       <div className="hotkey-chips" aria-label={t(language, "behavior.shortcut")}>
         {value.length === 0 && <span className="hotkey-empty">-</span>}
         {value.map((token) => (
-          <button className="hotkey-chip" type="button" key={token} aria-label={t(language, "behavior.removeKey", { key: displayLabel(language, token) })} onClick={() => toggle(token)}>
-            {displayLabel(language, token)} <X size={12} aria-hidden="true" />
+          <button className="hotkey-chip" type="button" key={token} aria-label={t(language, "behavior.removeKey", { key: hotkeyDisplayLabel(token) })} onClick={() => toggle(token)}>
+            {hotkeyDisplayLabel(token)} <X size={12} aria-hidden="true" />
           </button>
         ))}
       </div>
+      <button type="button" className={recording ? "record-button is-recording" : "record-button"} aria-label={t(language, recording ? "behavior.stopRecording" : "behavior.recordShortcut")} onClick={startRecording}>
+        <Keyboard size={16} aria-hidden="true" />{t(language, recording ? "behavior.stopRecording" : "behavior.recordShortcut")}
+      </button>
       <label className="hotkey-search">
         <span>{t(language, "behavior.searchKeys")}</span>
         <input type="search" role="searchbox" aria-label={t(language, "behavior.searchKeys")} value={search} onChange={(event) => setSearch(event.target.value)} />
@@ -178,8 +181,8 @@ export function HotkeyPicker({ value, onChange, language, error, onRecordingChan
       <div className="hotkey-modifier-row">
         {COMPACT_MODIFIERS.map(({ token }) => (
           <label key={token}>
-            <input type="checkbox" checked={hasUsage(value, token)} onChange={() => toggle(token)} aria-label={displayLabel(language, token)} />
-            <span>{displayLabel(language, token)}</span>
+            <input type="checkbox" checked={hasUsage(value, token)} onChange={() => toggle(token)} aria-label={hotkeyDisplayLabel(token)} />
+            <span>{hotkeyDisplayLabel(token)}</span>
           </label>
         ))}
         <button type="button" className="hotkey-disclosure" aria-expanded={showPhysicalModifiers} onClick={() => setShowPhysicalModifiers((open) => !open)}>
@@ -190,34 +193,52 @@ export function HotkeyPicker({ value, onChange, language, error, onRecordingChan
         <div className="hotkey-physical-modifiers">
           {PHYSICAL_MODIFIERS.map((token) => (
             <label key={token}>
-              <input type="checkbox" checked={hasUsage(value, token)} onChange={() => toggle(token)} aria-label={displayLabel(language, token)} />
-              <span>{displayLabel(language, token)}</span>
+              <input type="checkbox" checked={hasUsage(value, token)} onChange={() => toggle(token)} aria-label={hotkeyDisplayLabel(token)} />
+              <span>{hotkeyDisplayLabel(token)}</span>
             </label>
           ))}
         </div>
       )}
-      <div className="hotkey-category-list">
-        {filteredCategories.map((category) => (
-          <fieldset key={category.name} className="hotkey-category">
-            <legend>{t(language, CATEGORY_LABELS[category.name])}</legend>
-            <div className="hotkey-key-grid">
-              {category.tokens.map((token) => {
-                const selected = hasUsage(value, token);
-                const disabled = !selected && !isModifierToken(token) && ordinaryCount(value) >= 6;
-                return (
-                  <label key={token} className={disabled ? "is-disabled" : undefined}>
-                    <input type="checkbox" checked={selected} disabled={disabled} onChange={() => toggle(token)} aria-label={displayLabel(language, token)} />
-                    <span>{displayLabel(language, token)}</span>
-                  </label>
-                );
-              })}
-            </div>
-          </fieldset>
-        ))}
+      <div className="hotkey-category-tabs" role="tablist" aria-label={t(language, "behavior.keyCategories")}>
+        {HOTKEY_CATEGORIES.map((category, index) => {
+          const selected = category.name === activeCategory.name;
+          return (
+            <button
+              key={category.name}
+              ref={(element) => { categoryTabRefs.current[index] = element; }}
+              id={`hotkey-category-tab-${index}`}
+              type="button"
+              role="tab"
+              tabIndex={selected ? 0 : -1}
+              aria-selected={selected}
+              aria-controls={selected ? `hotkey-category-panel-${index}` : undefined}
+              onClick={() => setActiveCategoryName(category.name)}
+              onKeyDown={(event) => handleCategoryKeyDown(event, index)}
+            >
+              {t(language, CATEGORY_LABELS[category.name])}
+            </button>
+          );
+        })}
       </div>
-      <button type="button" className={recording ? "record-button is-recording" : "record-button"} aria-label={t(language, recording ? "behavior.stopRecording" : "behavior.recordShortcut")} onClick={startRecording}>
-        <Keyboard size={16} aria-hidden="true" />{t(language, recording ? "behavior.stopRecording" : "behavior.recordShortcut")}
-      </button>
+      <div
+        className="hotkey-category-panel"
+        id={`hotkey-category-panel-${HOTKEY_CATEGORIES.indexOf(activeCategory)}`}
+        role="tabpanel"
+        aria-labelledby={`hotkey-category-tab-${HOTKEY_CATEGORIES.indexOf(activeCategory)}`}
+      >
+        <div className="hotkey-key-grid">
+          {filteredTokens.map((token) => {
+            const selected = hasUsage(value, token);
+            const disabled = !selected && ordinaryCount(value) >= 6;
+            return (
+              <label key={token} className={disabled ? "is-disabled" : undefined}>
+                <input type="checkbox" checked={selected} disabled={disabled} onChange={() => toggle(token)} aria-label={hotkeyDisplayLabel(token)} />
+                <span>{hotkeyDisplayLabel(token)}</span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
       {(error || recordingError) && <small className="field-error">{hotkeyValidationMessage(language, recordingError ?? error)}</small>}
     </div>
   );

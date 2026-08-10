@@ -125,8 +125,6 @@
 .action-dialog-fields > .hotkey-picker { min-width: 0; }
 .dialog-actions { display: flex; align-items: center; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border-subtle); }
 .dialog-actions-spacer { flex: 1; }
-.button-primary { color: #fff; border-color: var(--green-9); background: var(--green-9); }
-.button-danger { color: var(--red-text); border-color: var(--red-border); background: var(--red-bg); }
 .hotkey-picker { display: grid; gap: 10px; min-width: 0; }
 .hotkey-chips { min-height: 34px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; border: 1px solid var(--border-default); border-radius: var(--radius-6); padding: 5px 7px; background: var(--gray-2); }
 .hotkey-empty { color: var(--gray-8); font-size: var(--text-12); }
@@ -137,12 +135,14 @@
 .hotkey-modifier-row label, .hotkey-physical-modifiers label { min-height: 30px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border-default); border-radius: var(--radius-6); padding: 0 8px; color: var(--gray-11); font-size: var(--text-11); }
 .hotkey-modifier-row input, .hotkey-physical-modifiers input { margin: 0; }
 .hotkey-disclosure { min-height: 30px; display: inline-flex; align-items: center; gap: 4px; border: 0; padding: 0 5px; color: var(--gray-10); background: transparent; font-size: var(--text-11); }
-.hotkey-category-list { display: grid; gap: 10px; }
-.hotkey-category { min-width: 0; margin: 0; border: 1px solid var(--border-subtle); border-radius: var(--radius-6); padding: 8px; }
-.hotkey-category legend { padding: 0 5px; color: var(--gray-10); font-size: var(--text-11); font-weight: var(--weight-semibold); }
-.hotkey-key-grid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 5px; }
-.hotkey-key-grid label { min-width: 0; min-height: 30px; display: flex; align-items: center; gap: 4px; border: 1px solid var(--border-default); border-radius: var(--radius-6); padding: 0 5px; color: var(--gray-11); font-size: var(--text-11); }
-.hotkey-key-grid label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hotkey-category-tabs { min-width: 0; display: flex; align-items: center; gap: 3px; overflow-x: auto; padding-bottom: 2px; border-bottom: 1px solid var(--border-subtle); scrollbar-width: thin; }
+.hotkey-category-tabs button { flex: 0 0 auto; min-height: 31px; border: 0; border-radius: var(--radius-6) var(--radius-6) 0 0; padding: 0 9px; color: var(--gray-10); background: transparent; box-shadow: none; font-size: var(--text-11); white-space: nowrap; }
+.hotkey-category-tabs button:hover { color: var(--gray-12); background: var(--gray-3); box-shadow: none; }
+.hotkey-category-tabs button[aria-selected="true"] { color: var(--green-11); background: var(--green-2); box-shadow: inset 0 -2px var(--green-9); font-weight: var(--weight-semibold); }
+.hotkey-category-panel { min-width: 0; min-height: 75px; border: 1px solid var(--border-subtle); border-radius: var(--radius-6); padding: 8px; }
+.hotkey-key-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 5px; }
+.hotkey-key-grid label { min-width: 0; min-height: 34px; display: flex; align-items: center; gap: 4px; border: 1px solid var(--border-default); border-radius: var(--radius-6); padding: 3px 5px; color: var(--gray-11); font-size: var(--text-11); }
+.hotkey-key-grid label span { min-width: 0; overflow-wrap: anywhere; }
 .hotkey-key-grid label.is-disabled { opacity: .48; }
 .hotkey-key-grid input { margin: 0; }
 
@@ -164,7 +164,6 @@
 
 @media (max-width: 640px) {
   .action-dialog { width: min(680px, calc(100vw - 20px)); }
-  .hotkey-key-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
 /* ===== 硬件映射 ===== */
@@ -253,8 +252,8 @@
 }
 
 /* ===== 设备管理 ===== */
-.device-management { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 340px; overflow: hidden; }
-.device-list-region { min-width: 0; overflow: auto; padding: 18px; }
+.device-management { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(320px, 360px) minmax(0, 1fr); overflow: hidden; }
+.device-list-region { min-width: 0; overflow: auto; padding: 16px 12px; }
 .device-list-header { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 10px 14px; margin-bottom: 14px; }
 .device-list-header h2 { margin: 0 auto 0 0; color: var(--gray-11); font-size: var(--text-17); }
 .device-search { min-width: min(200px, 100%); flex: 1 1 200px; display: grid; gap: 5px; color: var(--gray-10); font-size: var(--text-11); }
@@ -262,15 +261,16 @@
 .device-filter { display: flex; flex-wrap: wrap; gap: 2px; border: 1px solid var(--border-default); border-radius: var(--radius-6); padding: 2px; }
 .device-filter button { min-width: 58px; height: 28px; border: 0; border-radius: 4px; padding: 0 var(--space-8); color: var(--gray-10); background: transparent; font-size: var(--text-11); }
 .device-filter button.is-active { color: #fff; background: var(--green-9); }
-.device-table { min-width: 560px; border: 1px solid var(--border-default); border-radius: var(--radius-8); overflow: hidden; background: var(--bg-surface); }
+.device-table { width: 100%; min-width: 0; border: 1px solid var(--border-default); border-radius: var(--radius-8); overflow: hidden; background: var(--bg-surface); }
 .device-table ul, .candidate-section ul { margin: 0; padding: 0; list-style: none; }
-.device-table-head, .device-row { display: grid; grid-template-columns: minmax(110px, 1.1fr) minmax(120px, 1fr) 92px minmax(140px, 1.2fr); gap: 10px; align-items: center; }
-.device-table-head { min-height: 32px; padding: 0 var(--space-12); color: var(--gray-9); background: var(--gray-2); font-size: 10px; font-weight: var(--weight-semibold); }
-.device-row { width: 100%; min-height: 46px; border: 0; border-top: 1px solid var(--gray-4); padding: 7px var(--space-12); color: var(--gray-11); background: var(--bg-surface); text-align: left; font-size: var(--text-12); }
+.device-table-head, .device-row { display: grid; grid-template-columns: minmax(70px, 1.15fr) minmax(64px, .9fr) minmax(52px, .62fr) minmax(74px, 1fr); gap: 6px; align-items: center; }
+.device-table-head { min-height: 32px; padding: 0 8px; color: var(--gray-9); background: var(--gray-2); font-size: 10px; font-weight: var(--weight-semibold); }
+.device-table-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.device-row { width: 100%; min-height: 46px; border: 0; border-top: 1px solid var(--gray-4); padding: 7px 8px; color: var(--gray-11); background: var(--bg-surface); text-align: left; font-size: var(--text-11); }
 .device-row:hover { background: var(--green-1); }
 .device-row.is-selected { background: var(--green-2); box-shadow: inset 3px 0 var(--green-9); }
 .device-row strong, .device-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.candidate-section { min-width: 560px; margin-top: 18px; border-top: 2px solid var(--amber-text); }
+.candidate-section { width: 100%; min-width: 0; margin-top: 18px; border-top: 2px solid var(--amber-text); }
 .candidate-section h3 { margin: 10px 0 6px; color: var(--amber-text); font-size: var(--text-12); }
 .candidate-row { border: 1px solid var(--amber-border); }
 .device-detail { min-width: 0; overflow: auto; border-left: 1px solid var(--border-default); padding: 18px; background: var(--bg-surface); }

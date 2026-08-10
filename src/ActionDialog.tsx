@@ -156,10 +156,10 @@ export function ActionDialog({ open, language, mode, initial, onSave, onDelete, 
           {error && draft.action.type !== "hotkey" && <small className="field-error">{error}</small>}
         </div>
         <div className="dialog-actions">
-          {mode === "edit" && <button type="button" className="button-danger" aria-label={t(language, "behavior.deleteAction")} onClick={onDelete}>{t(language, "behavior.deleteAction")}</button>}
+          {mode === "edit" && <button type="button" className="danger-button" aria-label={t(language, "behavior.deleteAction")} onClick={onDelete}>{t(language, "behavior.deleteAction")}</button>}
           <span className="dialog-actions-spacer" />
-          <button type="button" onClick={onCancel}>{t(language, "behavior.cancel")}</button>
-          <button type="button" className="button-primary" onClick={save}>{t(language, "behavior.save")}</button>
+          <button type="button" className="secondary-button" onClick={onCancel}>{t(language, "behavior.cancel")}</button>
+          <button type="button" className="primary-button" onClick={save}>{t(language, "behavior.save")}</button>
         </div>
       </section>
     </div>

@@ -3247,6 +3247,71 @@ mod tests {
         assert_eq!(next.activities[1].params["keys"], "primary+enter");
     }
 
+    #[test]
+    fn protocol_v6_device_session_runs_deferred_paste_delay_and_media_in_one_host_run() {
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            TriggerActions::press(vec![
+                ButtonAction::Paste {
+                    text: "甲乙丙".into(),
+                },
+                ButtonAction::Delay { duration_ms: 500 },
+                ButtonAction::Media {
+                    command: crate::profile::MediaCommand::PlayPause,
+                },
+            ]),
+        );
+        let mut session = DeviceSession::new(runtime);
+        session.on_message_deferred(protocol6_hello(), 0, 100);
+        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
+
+        let pending = session.on_message_deferred(
+            DeviceMessage::State {
+                event_id: 700,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            91,
+            102,
+        );
+        assert!(pending.lines.is_empty());
+        assert_eq!(pending.paste_requests.len(), 1);
+        let request = &pending.paste_requests[0];
+        assert_eq!(request.receive_sequence, 91);
+        assert_eq!(request.event_id, 1);
+        assert_eq!(request.step, 1);
+        assert_eq!(request.total, 3);
+        assert_eq!(request.text, "甲乙丙");
+
+        let mismatched_grant = session.grant_paste(700, 1);
+        assert!(mismatched_grant.lines.is_empty());
+        assert_eq!(mismatched_grant.activities[0].code, "paste_grant_mismatch");
+
+        let paste = session.grant_paste(1, 1);
+        assert_eq!(paste.lines, [format_paste_command(1, 1, 3)]);
+
+        let delay = session.on_message_deferred(DeviceMessage::Done { run_id: 1, step: 1 }, 0, 103);
+        assert_eq!(delay.lines, ["DELAY 1 2 3 500\n"]);
+        assert_eq!(
+            delay.action_timeout,
+            Some(ACTION_ACK_TIMEOUT + Duration::from_millis(500)),
+        );
+
+        let media = session.on_message_deferred(DeviceMessage::Done { run_id: 1, step: 2 }, 0, 604);
+        assert_eq!(media.lines, ["MEDIA 1 3 3 205\n"]);
+
+        let completed =
+            session.on_message_deferred(DeviceMessage::Done { run_id: 1, step: 3 }, 0, 605);
+        assert!(completed.lines.is_empty());
+        assert!(completed.activities.iter().any(|activity| {
+            activity.code == "action_step_completed"
+                && activity.params.get("runId").map(String::as_str) == Some("1")
+                && activity.params.get("step").map(String::as_str) == Some("3")
+        }));
+        assert!(session.active.is_none());
+    }
+
     struct FailingClipboard;
 
     impl ClipboardWriter for FailingClipboard {

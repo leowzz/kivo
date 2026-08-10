@@ -196,7 +196,7 @@ def test_smoke_rejects_wrong_learning_ack() -> None:
         )
 
 
-def test_smoke_actions_use_host_created_run_and_sequential_done_steps() -> None:
+def test_smoke_actions_use_one_host_created_run_and_sequential_done_steps() -> None:
     device = FakeSerial(
         [
             b"HELLO 6 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n",
@@ -207,6 +207,7 @@ def test_smoke_actions_use_host_created_run_and_sequential_done_steps() -> None:
             b"STATE 7 DIRECT 1 DOWN\n",
             b"DONE 1 1\n",
             b"DONE 1 2\n",
+            b"DONE 1 3\n",
         ]
     )
 
@@ -220,11 +221,40 @@ def test_smoke_actions_use_host_created_run_and_sequential_done_steps() -> None:
         exercise_actions=True,
     )
 
-    assert device.writes[-2:] == [b"PASTE 1 1 2\n", b"HOST 1 2 2\n"]
+    action_writes = device.writes[6:]
+    assert action_writes == [
+        b"PASTE 1 1 3\n",
+        b"DELAY 1 2 3 500\n",
+        b"MEDIA 1 3 3 205\n",
+    ]
 
 
-@pytest.mark.parametrize("done", [b"DONE 8 1\n", b"DONE 1 2\n"])
-def test_smoke_rejects_wrong_action_completion(done: bytes) -> None:
+@pytest.mark.parametrize(
+    ("done_responses", "expected_done", "expected_writes"),
+    [
+        ([b"DONE 8 1\n"], "DONE 1 1", [b"PASTE 1 1 3\n"]),
+        ([b"DONE 1 2\n"], "DONE 1 1", [b"PASTE 1 1 3\n"]),
+        (
+            [b"DONE 1 1\n", b"DONE 1 3\n"],
+            "DONE 1 2",
+            [b"PASTE 1 1 3\n", b"DELAY 1 2 3 500\n"],
+        ),
+        (
+            [b"DONE 1 1\n", b"DONE 1 2\n", b"DONE 2 3\n"],
+            "DONE 1 3",
+            [
+                b"PASTE 1 1 3\n",
+                b"DELAY 1 2 3 500\n",
+                b"MEDIA 1 3 3 205\n",
+            ],
+        ),
+    ],
+)
+def test_smoke_rejects_wrong_action_completion_before_advancing(
+    done_responses: list[bytes],
+    expected_done: str,
+    expected_writes: list[bytes],
+) -> None:
     device = FakeSerial(
         [
             b"HELLO 6 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n",
@@ -232,10 +262,10 @@ def test_smoke_rejects_wrong_action_completion(done: bytes) -> None:
             b"LEARN_OK 2\n",
             b"LEARN_OK 2\n",
             b"STATE 7 DIRECT 1 DOWN\n",
-            done,
+            *done_responses,
         ]
     )
-    with pytest.raises(RuntimeError, match="DONE 1 1"):
+    with pytest.raises(RuntimeError, match=expected_done):
         run_smoke(
             device,
             family="esp32s3",
@@ -245,6 +275,8 @@ def test_smoke_rejects_wrong_action_completion(done: bytes) -> None:
             rejected_pins=[],
             exercise_actions=True,
         )
+    action_writes = device.writes[6:]
+    assert action_writes == expected_writes
 
 
 @pytest.mark.parametrize("protocol_version", [3, 4, 5])
