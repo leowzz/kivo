@@ -884,19 +884,31 @@ impl CodexTaskSource {
         now: Instant,
         persisted: &BTreeMap<PathBuf, PersistedCursor>,
     ) -> Result<(), &'static str> {
-        let mut pending = vec![self.sessions_path.clone()];
+        let canonical_sessions = self
+            .sessions_path
+            .canonicalize()
+            .map_err(|_| "codex_rollout_scan_failed")?;
+        let mut pending = vec![canonical_sessions.clone()];
         while let Some(directory) = pending.pop() {
             let entries = fs::read_dir(directory).map_err(|_| "codex_rollout_scan_failed")?;
             for entry in entries {
                 let entry = entry.map_err(|_| "codex_rollout_scan_failed")?;
                 let path = entry.path();
-                let metadata = entry.metadata().map_err(|_| "codex_rollout_scan_failed")?;
-                if metadata.is_dir() {
+                let file_type = entry.file_type().map_err(|_| "codex_rollout_scan_failed")?;
+                if file_type.is_dir() {
                     pending.push(path);
-                } else if is_recent_rollout(&path, &metadata) {
+                } else if path.extension() == Some(OsStr::new("jsonl")) {
                     let canonical = path
                         .canonicalize()
                         .map_err(|_| "codex_rollout_scan_failed")?;
+                    if !canonical.starts_with(&canonical_sessions) {
+                        continue;
+                    }
+                    let metadata =
+                        fs::metadata(&canonical).map_err(|_| "codex_rollout_scan_failed")?;
+                    if !metadata.is_file() || !is_recent_rollout(&path, &metadata) {
+                        continue;
+                    }
                     if let std::collections::btree_map::Entry::Vacant(entry) =
                         self.files.entry(canonical.clone())
                     {
@@ -950,17 +962,46 @@ impl CodexTaskSource {
     fn normalized_notify_candidate(&self, path: &Path, allow_missing: bool) -> Option<PathBuf> {
         let lexical_path = lexically_normalize(path);
         let lexical_sessions = lexically_normalize(&self.sessions_path);
-        let path = canonicalize_notify_path(path);
-        if path.extension() != Some(OsStr::new("jsonl"))
-            || (!lexical_path.starts_with(&lexical_sessions)
-                && !path.starts_with(canonicalize_notify_path(&self.sessions_path)))
-        {
+        if lexical_path.extension() != Some(OsStr::new("jsonl")) {
             return None;
         }
-        match fs::metadata(&path) {
-            Ok(metadata) if metadata.is_file() => Some(path),
-            Ok(_) => None,
-            Err(_) if allow_missing => Some(path),
+        let canonical_sessions = self.sessions_path.canonicalize().ok();
+        match lexical_path.canonicalize() {
+            Ok(canonical) => {
+                if canonical_sessions
+                    .as_ref()
+                    .is_some_and(|sessions| canonical.starts_with(sessions))
+                    && fs::metadata(&canonical).is_ok_and(|metadata| metadata.is_file())
+                {
+                    Some(canonical)
+                } else {
+                    None
+                }
+            }
+            Err(error)
+                if allow_missing
+                    && error.kind() == std::io::ErrorKind::NotFound
+                    && fs::symlink_metadata(&lexical_path)
+                        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                let canonical_parent = lexical_path.parent()?.canonicalize();
+                match canonical_parent {
+                    Ok(parent)
+                        if canonical_sessions
+                            .as_ref()
+                            .is_some_and(|sessions| parent.starts_with(sessions)) =>
+                    {
+                        lexical_path.file_name().map(|name| parent.join(name))
+                    }
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::NotFound
+                            && lexical_path.starts_with(lexical_sessions) =>
+                    {
+                        Some(lexical_path)
+                    }
+                    _ => None,
+                }
+            }
             Err(_) => None,
         }
     }
@@ -1020,6 +1061,15 @@ impl CodexTaskSource {
         now: Instant,
         allow_file_deletion: bool,
     ) -> Result<(), &'static str> {
+        let canonical_sessions = self
+            .sessions_path
+            .canonicalize()
+            .map_err(|_| "codex_rollout_read_failed")?;
+        match path.canonicalize() {
+            Ok(canonical) if canonical.starts_with(canonical_sessions) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            _ => return Err("codex_rollout_read_failed"),
+        }
         let metadata = match fs::metadata(path) {
             Ok(metadata) => metadata,
             Err(error)
@@ -2419,6 +2469,234 @@ mod tests {
 
         source.sync_file(&tracked_path, now, true).unwrap();
         assert!(source.files.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authoritative_discovery_rejects_external_rollout_file_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let linked_path = rollout_path(&temp);
+        let external_path = temp.path().join("external-rollout.jsonl");
+        fs::write(
+            &external_path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-external-file\",\"cwd\":\"/private/external\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-external\"}}\n",
+            ),
+        )
+        .unwrap();
+        symlink(&external_path, &linked_path).unwrap();
+
+        let metadata = FakeMetadataClient::healthy(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        let snapshot = source.poll_tasks(Instant::now()).unwrap();
+
+        assert!(snapshot.task("thread-external-file").is_none());
+        assert!(source.files.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authoritative_discovery_rejects_external_rollout_directory_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let sessions_file = rollout_path(&temp);
+        let external_directory = temp.path().join("external-rollouts");
+        fs::create_dir(&external_directory).unwrap();
+        fs::write(
+            external_directory.join("rollout-external.jsonl"),
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-external-directory\",\"cwd\":\"/private/external\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-external\"}}\n",
+            ),
+        )
+        .unwrap();
+        symlink(
+            &external_directory,
+            sessions_file.parent().unwrap().join("linked-directory"),
+        )
+        .unwrap();
+
+        let metadata = FakeMetadataClient::healthy(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        let snapshot = source.poll_tasks(Instant::now()).unwrap();
+
+        assert!(snapshot.task("thread-external-directory").is_none());
+        assert!(source.files.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn notify_admission_rejects_external_rollout_file_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let linked_path = rollout_path(&temp);
+        let metadata = FakeMetadataClient::healthy(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        source.watcher.take();
+        let (notify_tx, notify_rx) = mpsc::channel();
+        source.notify_rx = notify_rx;
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+
+        let external_path = temp.path().join("external-rollout.jsonl");
+        fs::write(
+            &external_path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-external-file\",\"cwd\":\"/private/external\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-external\"}}\n",
+            ),
+        )
+        .unwrap();
+        symlink(&external_path, &linked_path).unwrap();
+        notify_tx
+            .send(Ok(notify::Event::new(notify::EventKind::Create(
+                notify::event::CreateKind::File,
+            ))
+            .add_path(linked_path)))
+            .unwrap();
+
+        let snapshot = source.poll_tasks(now + Duration::from_millis(250)).unwrap();
+        assert!(snapshot.task("thread-external-file").is_none());
+        assert!(source.pending_notify_paths.is_empty());
+        assert!(source.files.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn notify_admission_rejects_rollout_below_external_directory_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let sessions_file = rollout_path(&temp);
+        let metadata = FakeMetadataClient::healthy(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        source.watcher.take();
+        let (notify_tx, notify_rx) = mpsc::channel();
+        source.notify_rx = notify_rx;
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+
+        let external_directory = temp.path().join("external-rollouts");
+        fs::create_dir(&external_directory).unwrap();
+        fs::write(
+            external_directory.join("rollout-external.jsonl"),
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-external-directory\",\"cwd\":\"/private/external\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-external\"}}\n",
+            ),
+        )
+        .unwrap();
+        let linked_directory = sessions_file.parent().unwrap().join("linked-directory");
+        symlink(&external_directory, &linked_directory).unwrap();
+        notify_tx
+            .send(Ok(notify::Event::new(notify::EventKind::Create(
+                notify::event::CreateKind::File,
+            ))
+            .add_path(linked_directory.join("rollout-external.jsonl"))))
+            .unwrap();
+
+        let snapshot = source.poll_tasks(now + Duration::from_millis(250)).unwrap();
+        assert!(snapshot.task("thread-external-directory").is_none());
+        assert!(source.pending_notify_paths.is_empty());
+        assert!(source.files.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pending_missing_rollout_cannot_become_external_symlink_before_retry() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let linked_path = rollout_path(&temp);
+        let metadata = FakeMetadataClient::unavailable(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        source.watcher.take();
+        let (notify_tx, notify_rx) = mpsc::channel();
+        source.notify_rx = notify_rx;
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+
+        notify_tx
+            .send(Ok(notify::Event::new(notify::EventKind::Remove(
+                notify::event::RemoveKind::File,
+            ))
+            .add_path(linked_path.clone())))
+            .unwrap();
+        source.poll_tasks(now + Duration::from_millis(250)).unwrap();
+        assert_eq!(source.pending_notify_paths.len(), 1);
+
+        let external_path = temp.path().join("external-rollout.jsonl");
+        fs::write(
+            &external_path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-external-pending\",\"cwd\":\"/private/external\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-external\"}}\n",
+            ),
+        )
+        .unwrap();
+        symlink(&external_path, &linked_path).unwrap();
+
+        assert_eq!(
+            source
+                .poll_tasks(now + FILESYSTEM_POLL_INTERVAL)
+                .unwrap_err(),
+            "codex_channels_unavailable"
+        );
+        assert_eq!(source.pending_notify_paths.len(), 1);
+        assert!(
+            source
+                .build_snapshot()
+                .task("thread-external-pending")
+                .is_none()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tracked_rollout_replaced_by_external_symlink_stays_unavailable() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-internal\",\"cwd\":\"/work/kivo\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-internal\"}}\n",
+            ),
+        )
+        .unwrap();
+        let metadata = FakeMetadataClient::unavailable(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+
+        let external_path = temp.path().join("external-rollout.jsonl");
+        fs::write(
+            &external_path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-external-tracked\",\"cwd\":\"/private/external\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-external\"}}\n",
+            ),
+        )
+        .unwrap();
+        fs::remove_file(&path).unwrap();
+        symlink(&external_path, &path).unwrap();
+
+        assert_eq!(
+            source
+                .poll_tasks(now + FILESYSTEM_POLL_INTERVAL)
+                .unwrap_err(),
+            "codex_channels_unavailable"
+        );
+        let snapshot = source.build_snapshot();
+        assert!(snapshot.task("thread-internal").is_some());
+        assert!(snapshot.task("thread-external-tracked").is_none());
     }
 
     #[test]

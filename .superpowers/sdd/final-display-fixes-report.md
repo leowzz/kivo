@@ -212,3 +212,45 @@ Fresh final gate results:
 - ESP32-S3 build: PASS; 35,644/327,680 bytes RAM (10.9%),
   348,169/3,342,336 bytes flash (10.4%).
 - `git diff --check`: PASS.
+
+## Rollout Containment Follow-up
+
+The final containment fix was implemented on top of `6bc4c87` without adding
+runtime discovery.
+
+- RED: an existing `.jsonl` symlink below sessions was canonicalized to an
+  external valid rollout and exposed its task during authoritative discovery.
+  Notification admission likewise exposed an external task through both a file
+  symlink and a file below a symlinked directory. On this Unix backend,
+  authoritative discovery already did not recurse into the directory symlink;
+  that regression was GREEN before the fix and remains so.
+- A second RED pair proved admission-time checks alone were insufficient: a
+  queued missing rollout and an already tracked rollout could each be replaced
+  by an external symlink before the next sync, exposing the external task.
+- GREEN: every existing notification candidate and every discovered JSONL target
+  must canonicalize below the canonical sessions root before parsing. Discovery
+  uses entry file types and never traverses directory symlinks. `sync_file`
+  repeats canonical containment before every read, so a post-admission or
+  post-discovery symlink replacement makes rollout health unavailable while
+  retaining pending or tracked state.
+- Lexical containment is used only when the target and parent are genuinely
+  missing. A readable canonical parent must itself remain below the canonical
+  sessions root. Existing macOS `/var` to `/private` aliases, lexical alias
+  deduplication, traversal normalization, expected deletion, root and nested
+  parent outage retention, pending retries, and no-recursive-runtime-discovery
+  regressions remain GREEN.
+- Focused `display::codex`: 59 passed. Rustfmt and Clippy with all targets and
+  features passed.
+
+Fresh containment follow-up gate results:
+
+- Exact pinned `make test`: PASS.
+- Python suites: 33 + 32 + 32 passed.
+- PlatformIO native: 89/89 passed.
+- Rust: 396 passed, 1 intentional ignore, plus 2 integration tests passed.
+- Frontend: 211/211 passed; production build passed.
+- RP2040 build: PASS; 22,912/262,144 bytes RAM (8.7%),
+  133,176/16,773,120 bytes flash (0.8%).
+- ESP32-S3 build: PASS; 35,644/327,680 bytes RAM (10.9%),
+  348,169/3,342,336 bytes flash (10.4%).
+- `git diff --check`: PASS.
