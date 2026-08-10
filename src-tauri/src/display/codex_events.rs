@@ -230,10 +230,12 @@ impl CodexRolloutIndex {
             }
             CodexRolloutEvent::TurnCompleted { turn_id } => {
                 self.open_turn_ids.remove(&turn_id);
+                self.user_input_call_ids.clear();
                 self.record_terminal_event(CodexTerminalEvent::ResponseReady, emit_terminal_event);
             }
             CodexRolloutEvent::TurnInterrupted { turn_id } => {
                 self.open_turn_ids.remove(&turn_id);
+                self.user_input_call_ids.clear();
                 self.record_terminal_event(CodexTerminalEvent::Interrupted, emit_terminal_event);
             }
             CodexRolloutEvent::UserInputRequested { call_id } => {
@@ -314,5 +316,69 @@ mod tests {
         assert_eq!(task.input_need, Some(CodexInputNeed::UserInput));
         assert_eq!(task.event, None);
         assert_eq!(task.terminal_sequence, 0);
+    }
+
+    #[test]
+    fn turn_completion_clears_unresolved_user_input_for_the_task() {
+        let mut index = CodexRolloutIndex::default();
+        for line in [
+            r#"{"type":"session_meta","payload":{"id":"thread-a","cwd":"/work/kivo"}}"#,
+            r#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-a"}}"#,
+            r#"{"type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"call-a"}}"#,
+            r#"{"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-a"}}"#,
+        ] {
+            index.apply_line(line).unwrap();
+        }
+
+        let task = &index.current_tasks()[0];
+        assert!(!task.running);
+        assert_eq!(task.input_need, None);
+        assert_eq!(task.event, Some(CodexTerminalEvent::ResponseReady));
+        assert!(index.cursor_state().unwrap().open_call_ids.is_empty());
+    }
+
+    #[test]
+    fn turn_interruption_clears_restored_user_input_for_the_task() {
+        let mut index = CodexRolloutIndex::default();
+        index.restore_cursor_state(CodexRolloutCursorState {
+            thread_id: "thread-a".into(),
+            cwd: PathBuf::from("/work/kivo"),
+            open_turn_ids: BTreeSet::from(["turn-a".into()]),
+            open_call_ids: BTreeSet::from(["call-a".into()]),
+        });
+
+        index
+            .apply_line(
+                r#"{"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-a","reason":"interrupted"}}"#,
+            )
+            .unwrap();
+
+        let task = &index.current_tasks()[0];
+        assert!(!task.running);
+        assert_eq!(task.input_need, None);
+        assert_eq!(task.event, Some(CodexTerminalEvent::Interrupted));
+        assert!(index.cursor_state().unwrap().open_call_ids.is_empty());
+    }
+
+    #[test]
+    fn initial_scan_terminal_clears_unresolved_user_input_without_replaying_alert() {
+        let mut index = CodexRolloutIndex::default();
+        index
+            .apply_initial_scan(
+                [
+                    r#"{"type":"session_meta","payload":{"id":"thread-a","cwd":"/work/kivo"}}"#,
+                    r#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-a"}}"#,
+                    r#"{"type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"call-a"}}"#,
+                    r#"{"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-a"}}"#,
+                ],
+            )
+            .unwrap();
+
+        let task = &index.current_tasks()[0];
+        assert!(!task.running);
+        assert_eq!(task.input_need, None);
+        assert_eq!(task.event, None);
+        assert_eq!(task.terminal_sequence, 0);
+        assert!(index.cursor_state().unwrap().open_call_ids.is_empty());
     }
 }

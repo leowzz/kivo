@@ -2093,6 +2093,7 @@ mod tests {
         display_failures: Arc<Mutex<BTreeSet<DeviceId>>>,
         hellos: Mutex<BTreeMap<String, HelloCapabilities>>,
         stopped: Arc<Mutex<Vec<DeviceId>>>,
+        joined: Arc<Mutex<Vec<DeviceId>>>,
         commands: Arc<Mutex<BTreeMap<DeviceId, Vec<WorkerCommand>>>>,
         renderers: Mutex<Option<Arc<RendererRegistry>>>,
     }
@@ -2163,6 +2164,7 @@ mod tests {
     struct FakeWorker {
         device_id: DeviceId,
         stopped: Arc<Mutex<Vec<DeviceId>>>,
+        joined: Arc<Mutex<Vec<DeviceId>>>,
         commands: Arc<Mutex<BTreeMap<DeviceId, Vec<WorkerCommand>>>>,
         update_port_failures: Arc<Mutex<BTreeSet<String>>>,
         display_failures: Arc<Mutex<BTreeSet<DeviceId>>>,
@@ -2197,7 +2199,9 @@ mod tests {
             self.stopped.lock().unwrap().push(self.device_id.clone());
         }
 
-        fn join(&mut self) {}
+        fn join(&mut self) {
+            self.joined.lock().unwrap().push(self.device_id.clone());
+        }
     }
 
     impl WorkerLauncher for FakeLauncher {
@@ -2226,6 +2230,7 @@ mod tests {
             Ok(Box::new(FakeWorker {
                 device_id: start.device_id,
                 stopped: Arc::clone(&self.stopped),
+                joined: Arc::clone(&self.joined),
                 commands: Arc::clone(&self.commands),
                 update_port_failures: Arc::clone(&self.update_port_failures),
                 display_failures: Arc::clone(&self.display_failures),
@@ -2621,7 +2626,8 @@ mod tests {
         scan(&mut coordinator);
 
         assert!(!coordinator.workers.contains_key(&id));
-        assert!(launcher.stopped.lock().unwrap().contains(&id));
+        assert_eq!(*launcher.stopped.lock().unwrap(), vec![id.clone()]);
+        assert_eq!(*launcher.joined.lock().unwrap(), vec![id.clone()]);
         assert!(coordinator.candidates().iter().any(|candidate| {
             candidate.device_id.as_ref() == Some(&id)
                 && candidate.latest_error.as_deref() == Some("device_worker_stopped")

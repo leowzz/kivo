@@ -230,7 +230,7 @@ impl SystemCodexMetadataClient {
         self.connection.is_some()
     }
 
-    fn ensure_connected(&mut self) -> Result<(), &'static str> {
+    fn ensure_connected(&mut self, deadline: Instant) -> Result<(), &'static str> {
         if self.connection.is_some() {
             return Ok(());
         }
@@ -247,6 +247,7 @@ impl SystemCodexMetadataClient {
                     "version": env!("CARGO_PKG_VERSION")
                 }
             }),
+            deadline,
         )?;
         let codex_home = initialize
             .codex_home
@@ -275,7 +276,8 @@ impl CodexMetadataClient for SystemCodexMetadataClient {
     }
 
     fn poll_updated(&mut self, last_seen: Option<u64>) -> Result<Vec<CodexThreadMetadata>, String> {
-        if let Err(code) = self.ensure_connected() {
+        let deadline = Instant::now() + APP_SERVER_RESPONSE_DEADLINE;
+        if let Err(code) = self.ensure_connected(deadline) {
             self.disconnect();
             return Err(code.into());
         }
@@ -295,6 +297,7 @@ impl CodexMetadataClient for SystemCodexMetadataClient {
                     request_id,
                     "thread/list",
                     thread_list_params(cursor.as_deref()),
+                    deadline,
                 ) {
                 Ok(response) => response,
                 Err(code) => {
@@ -392,30 +395,10 @@ impl AppServerConnection {
         id: u64,
         method: &'static str,
         params: Value,
+        deadline: Instant,
     ) -> Result<AppServerResult, &'static str> {
         self.write_message(&json!({"id": id, "method": method, "params": params}))?;
-        let deadline = Instant::now() + APP_SERVER_RESPONSE_DEADLINE;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err("codex_app_server_timeout");
-            }
-            match self.responses.recv_timeout(remaining) {
-                Ok(response) if response.id == id => {
-                    if response.error {
-                        return Err("codex_app_server_request_failed");
-                    }
-                    return response.result.ok_or("codex_app_server_invalid_response");
-                }
-                Ok(_) => continue,
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    return Err("codex_app_server_timeout");
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err("codex_app_server_eof");
-                }
-            }
-        }
+        wait_for_app_server_response(&self.responses, id, deadline)
     }
 
     fn notify(&mut self, method: &'static str, params: Option<Value>) -> Result<(), &'static str> {
@@ -440,6 +423,34 @@ impl AppServerConnection {
         let _ = self.child.wait();
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
+        }
+    }
+}
+
+fn wait_for_app_server_response(
+    responses: &Receiver<AppServerResponse>,
+    id: u64,
+    deadline: Instant,
+) -> Result<AppServerResult, &'static str> {
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("codex_app_server_timeout");
+        }
+        match responses.recv_timeout(remaining) {
+            Ok(response) if response.id == id => {
+                if response.error {
+                    return Err("codex_app_server_request_failed");
+                }
+                return response.result.ok_or("codex_app_server_invalid_response");
+            }
+            Ok(_) => continue,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return Err("codex_app_server_timeout");
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("codex_app_server_eof");
+            }
         }
     }
 }
@@ -918,14 +929,14 @@ impl CodexTaskSource {
             return;
         }
         self.last_filesystem_poll = Some(now);
-        let sessions_available = self.sessions_path.is_dir();
+        let mut all_readable = directory_is_readable(&self.sessions_path);
         let paths = self.files.keys().cloned().collect::<Vec<_>>();
-        let mut readable_file = false;
         for path in paths {
-            readable_file |= self.sync_file(&path, now).is_ok();
+            if self.sync_file(&path, now).is_err() {
+                all_readable = false;
+            }
         }
-        readable_file &= !self.files.is_empty();
-        self.rollout_health = if sessions_available || readable_file {
+        self.rollout_health = if all_readable {
             ChannelHealth::Healthy
         } else {
             ChannelHealth::Unavailable
@@ -936,10 +947,11 @@ impl CodexTaskSource {
     fn sync_file(&mut self, path: &Path, now: Instant) -> Result<(), &'static str> {
         let metadata = match fs::metadata(path) {
             Ok(metadata) => metadata,
-            Err(_) => {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 self.files.remove(path);
                 return Ok(());
             }
+            Err(_) => return Err("codex_rollout_read_failed"),
         };
         let identity = file_identity(&metadata);
         let observed_session = first_session_identity(path)?;
@@ -965,28 +977,37 @@ impl CodexTaskSource {
 
         let state = self.files.get_mut(path).expect("rollout state exists");
         let physical_offset = state.offset + state.trailing.len() as u64;
-        if metadata.len() == physical_offset {
-            return Ok(());
+        if metadata.len() > physical_offset {
+            state.modified = metadata.modified().ok();
+            let mut file = File::open(path).map_err(|_| "codex_rollout_read_failed")?;
+            file.seek(SeekFrom::Start(physical_offset))
+                .map_err(|_| "codex_rollout_read_failed")?;
+            file.read_to_end(&mut state.trailing)
+                .map_err(|_| "codex_rollout_read_failed")?;
         }
-        state.modified = metadata.modified().ok();
-        let before = state.index.current_tasks();
-        let mut file = File::open(path).map_err(|_| "codex_rollout_read_failed")?;
-        file.seek(SeekFrom::Start(physical_offset))
-            .map_err(|_| "codex_rollout_read_failed")?;
-        file.read_to_end(&mut state.trailing)
-            .map_err(|_| "codex_rollout_read_failed")?;
         let Some(last_newline) = state.trailing.iter().rposition(|byte| *byte == b'\n') else {
             return Ok(());
         };
+        for line in state.trailing[..=last_newline].split(|byte| *byte == b'\n') {
+            if line.is_empty() {
+                continue;
+            }
+            let line = std::str::from_utf8(line).map_err(|_| "codex_rollout_parse_failed")?;
+            parse_rollout_line(line).map_err(|_| "codex_rollout_parse_failed")?;
+        }
+
+        let before = state.index.current_tasks();
         let complete = state.trailing.drain(..=last_newline).collect::<Vec<_>>();
         state.offset += complete.len() as u64;
         for line in complete.split(|byte| *byte == b'\n') {
             if line.is_empty() {
                 continue;
             }
-            if let Ok(line) = std::str::from_utf8(line) {
-                let _ = state.index.apply_line(line);
-            }
+            let line = std::str::from_utf8(line).map_err(|_| "codex_rollout_parse_failed")?;
+            state
+                .index
+                .apply_line(line)
+                .map_err(|_| "codex_rollout_parse_failed")?;
         }
         if state.index.current_tasks() != before {
             state.updated_at = now;
@@ -1142,6 +1163,10 @@ fn is_recent_rollout(path: &Path, metadata: &fs::Metadata) -> bool {
             .ok()
             .and_then(|modified| SystemTime::now().duration_since(modified).ok())
             .is_some_and(|age| age <= RECENT_ROLLOUT_AGE)
+}
+
+fn directory_is_readable(path: &Path) -> bool {
+    fs::read_dir(path).is_ok_and(|mut entries| entries.all(|entry| entry.is_ok()))
 }
 
 #[cfg(unix)]
@@ -1746,6 +1771,36 @@ mod tests {
         assert!(!format!("{routed:?}").contains("must not retain"));
     }
 
+    #[test]
+    fn one_absolute_deadline_bounds_all_metadata_page_responses() {
+        let (sender, responses) = mpsc::channel();
+        sender
+            .send(AppServerResponse {
+                id: 1,
+                error: false,
+                result: Some(AppServerResult {
+                    codex_home: None,
+                    data: Some(Vec::new()),
+                    next_cursor: Some("second".into()),
+                }),
+            })
+            .unwrap();
+        let started = Instant::now();
+        let deadline = started + Duration::from_millis(250);
+
+        let first = wait_for_app_server_response(&responses, 1, deadline).unwrap();
+        assert_eq!(first.next_cursor.as_deref(), Some("second"));
+        thread::sleep(Duration::from_millis(180));
+        let second_started = Instant::now();
+        assert_eq!(
+            wait_for_app_server_response(&responses, 2, deadline).unwrap_err(),
+            "codex_app_server_timeout"
+        );
+
+        assert!(second_started.elapsed() < Duration::from_millis(120));
+        assert!(started.elapsed() < Duration::from_millis(320));
+    }
+
     #[cfg(unix)]
     #[test]
     fn executable_discovery_uses_path_entries() {
@@ -2013,6 +2068,132 @@ mod tests {
             Some(CodexInputNeed::UserInput)
         );
         assert!(snapshot.task("thread-unknown").is_none());
+    }
+
+    #[test]
+    fn one_failed_tracked_cursor_makes_rollout_unavailable_even_when_another_succeeds() {
+        let temp = TempDir::new().unwrap();
+        let first = rollout_path(&temp);
+        let second = first.with_file_name("rollout-second.jsonl");
+        for (path, thread_id) in [(&first, "thread-first"), (&second, "thread-second")] {
+            fs::write(
+                path,
+                format!(
+                    "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{thread_id}\",\"cwd\":\"/work/kivo\"}}}}\n\
+                     {{\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_started\",\"turn_id\":\"turn-a\"}}}}\n"
+                ),
+            )
+            .unwrap();
+        }
+        let metadata = FakeMetadataClient::unavailable(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        let now = Instant::now();
+        assert_eq!(source.poll_tasks(now).unwrap().tasks.len(), 2);
+
+        fs::write(
+            &second,
+            concat!(
+                "{not valid json but long enough to replace the first record}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-b\"}}\n",
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            source
+                .poll_tasks(now + FILESYSTEM_POLL_INTERVAL)
+                .unwrap_err(),
+            "codex_channels_unavailable"
+        );
+    }
+
+    #[test]
+    fn corrupt_complete_append_makes_rollout_unavailable() {
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-a\",\"cwd\":\"/work/kivo\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-a\"}}\n",
+            ),
+        )
+        .unwrap();
+        let metadata = FakeMetadataClient::unavailable(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(b"{not valid json}\n").unwrap();
+        file.flush().unwrap();
+
+        assert_eq!(
+            source
+                .poll_tasks(now + FILESYSTEM_POLL_INTERVAL)
+                .unwrap_err(),
+            "codex_channels_unavailable"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_sessions_directory_makes_rollout_unavailable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-a\",\"cwd\":\"/work/kivo\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-a\"}}\n",
+            ),
+        )
+        .unwrap();
+        let metadata = FakeMetadataClient::unavailable(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+
+        let sessions = temp.path().join(".codex/sessions");
+        let original_permissions = fs::metadata(&sessions).unwrap().permissions();
+        fs::set_permissions(&sessions, fs::Permissions::from_mode(0o000)).unwrap();
+        let result = source.poll_tasks(now + FILESYSTEM_POLL_INTERVAL);
+        fs::set_permissions(&sessions, original_permissions).unwrap();
+
+        assert_eq!(result.unwrap_err(), "codex_channels_unavailable");
+    }
+
+    #[test]
+    fn deleted_tracked_rollout_removes_its_cursor_without_failing_health() {
+        let temp = TempDir::new().unwrap();
+        let retained = rollout_path(&temp);
+        let deleted = retained.with_file_name("rollout-deleted.jsonl");
+        for (path, thread_id) in [(&retained, "thread-retained"), (&deleted, "thread-deleted")] {
+            fs::write(
+                path,
+                format!(
+                    "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{thread_id}\",\"cwd\":\"/work/kivo\"}}}}\n\
+                     {{\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_started\",\"turn_id\":\"turn-a\"}}}}\n"
+                ),
+            )
+            .unwrap();
+        }
+        let metadata = FakeMetadataClient::unavailable(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+
+        fs::remove_file(&deleted).unwrap();
+        let snapshot = source.poll_tasks(now + FILESYSTEM_POLL_INTERVAL).unwrap();
+
+        assert_eq!(snapshot.health, SourceHealth::Degraded);
+        assert!(snapshot.task("thread-retained").is_some());
+        assert!(snapshot.task("thread-deleted").is_none());
+        let persisted = fs::read_to_string(&source.cursor_store_path).unwrap();
+        assert!(persisted.contains("thread-retained"));
+        assert!(!persisted.contains("thread-deleted"));
     }
 
     #[test]

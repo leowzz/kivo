@@ -169,6 +169,9 @@ mod tests {
         title: &'static str,
         detail: Option<&'static str>,
         include_task: bool,
+        metric: u32,
+        progress: Option<u8>,
+        expires_at: Option<Instant>,
     }
 
     impl FakeUpdate {
@@ -178,6 +181,9 @@ mod tests {
                 title: "Codex",
                 detail: None,
                 include_task: false,
+                metric: 0,
+                progress: None,
+                expires_at: None,
             }
         }
     }
@@ -213,9 +219,16 @@ mod tests {
                 self.last.title,
             )
             .unwrap()
+            .with_metric("running", self.last.metric)
             .with_updated_at(now);
             if let Some(detail) = self.last.detail {
                 summary = summary.with_detail(detail);
+            }
+            if let Some(progress) = self.last.progress {
+                summary = summary.with_progress(progress).unwrap();
+            }
+            if let Some(expires_at) = self.last.expires_at {
+                summary = summary.with_expiry(expires_at);
             }
             let mut items = vec![summary];
             if self.last.include_task {
@@ -302,6 +315,7 @@ mod tests {
 
     #[test]
     fn service_emits_only_semantically_changed_snapshots() {
+        let expiry = Instant::now() + Duration::from_secs(60);
         let initial = FakeUpdate::healthy();
         let degraded = FakeUpdate {
             health: SourceHealth::Degraded,
@@ -317,7 +331,26 @@ mod tests {
         };
         let with_task = FakeUpdate {
             include_task: true,
+            expires_at: Some(expiry + Duration::from_nanos(1)),
+            progress: Some(50),
+            metric: 2,
             ..detailed.clone()
+        };
+        let metric_changed = FakeUpdate {
+            metric: 2,
+            ..detailed.clone()
+        };
+        let progress_changed = FakeUpdate {
+            progress: Some(50),
+            ..metric_changed.clone()
+        };
+        let expiring = FakeUpdate {
+            expires_at: Some(expiry),
+            ..progress_changed.clone()
+        };
+        let expiry_boundary_changed = FakeUpdate {
+            expires_at: Some(expiry + Duration::from_nanos(1)),
+            ..expiring.clone()
         };
         let mut providers = ProviderRegistry::default();
         providers
@@ -327,6 +360,11 @@ mod tests {
                 degraded,
                 renamed,
                 detailed,
+                metric_changed,
+                progress_changed,
+                expiring.clone(),
+                expiring,
+                expiry_boundary_changed,
                 with_task,
             ])))
             .unwrap();
@@ -334,7 +372,7 @@ mod tests {
         let (sender, snapshots) = mpsc::channel();
         let service = DisplayService::spawn(providers, Arc::clone(&stop), sender).unwrap();
 
-        let emitted = (0..5)
+        let emitted = (0..9)
             .map(|_| snapshots.recv_timeout(Duration::from_secs(1)).unwrap())
             .collect::<Vec<_>>();
 
@@ -345,8 +383,15 @@ mod tests {
             emitted[3].items[0].detail.as_deref(),
             Some("status changed")
         );
-        assert_eq!(emitted[4].items.len(), 2);
-        assert_eq!(emitted[4].items[0].id, "codex.task.review");
+        assert_eq!(emitted[4].items[0].metrics["running"], 2);
+        assert_eq!(emitted[5].items[0].progress, Some(50));
+        assert_eq!(emitted[6].items[0].expires_at, Some(expiry));
+        assert_eq!(
+            emitted[7].items[0].expires_at,
+            Some(expiry + Duration::from_nanos(1))
+        );
+        assert_eq!(emitted[8].items.len(), 2);
+        assert_eq!(emitted[8].items[0].id, "codex.task.review");
         assert!(snapshots.recv_timeout(Duration::from_millis(150)).is_err());
 
         stop.store(true, Ordering::Relaxed);

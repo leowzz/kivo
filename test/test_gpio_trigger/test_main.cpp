@@ -42,18 +42,26 @@ void test_dirty_tiles_emit_only_changed_counter_region() {
 
 void test_dirty_tiles_respect_per_loop_budget_and_coalesce_updates() {
   DirtyTiles dirty(16, 4);
-  dirty.markPixels({0, 0, 128, 32});
+  dirty.markPixels({0, 0, 16, 8});
+  dirty.markPixels({32, 0, 16, 8});
+  dirty.markPixels({8, 0, 32, 8});
 
-  const auto first = dirty.takeRun(64);
+  const auto first = dirty.takeRun(32);
   TEST_ASSERT_TRUE(first.has_value());
-  TEST_ASSERT_LESS_OR_EQUAL_UINT32(64, first->dataBytes());
   TEST_ASSERT_EQUAL_UINT8(0, first->tx);
   TEST_ASSERT_EQUAL_UINT8(0, first->ty);
-  TEST_ASSERT_EQUAL_UINT8(8, first->tw);
+  TEST_ASSERT_EQUAL_UINT8(4, first->tw);
   TEST_ASSERT_EQUAL_UINT8(1, first->th);
+  TEST_ASSERT_EQUAL_UINT32(32, first->dataBytes());
 
-  dirty.markPixels({64, 0, 64, 16});
-  TEST_ASSERT_TRUE(dirty.hasDirty());
+  const auto second = dirty.takeRun(32);
+  TEST_ASSERT_TRUE(second.has_value());
+  TEST_ASSERT_EQUAL_UINT8(4, second->tx);
+  TEST_ASSERT_EQUAL_UINT8(0, second->ty);
+  TEST_ASSERT_EQUAL_UINT8(2, second->tw);
+  TEST_ASSERT_EQUAL_UINT8(1, second->th);
+  TEST_ASSERT_EQUAL_UINT32(16, second->dataBytes());
+  TEST_ASSERT_FALSE(dirty.takeRun(32).has_value());
 }
 
 void test_dirty_tiles_round_outward_clip_and_stay_within_one_row() {

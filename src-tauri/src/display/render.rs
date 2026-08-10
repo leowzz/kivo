@@ -187,8 +187,12 @@ impl DisplayRenderer for MonoText128x32Renderer {
 
     fn render(&self, snapshot: &DisplaySnapshot) -> Result<RenderedScene, &'static str> {
         let (left, right, bottom) = match select_view(snapshot) {
-            View::Task { label, message } => {
-                let (left, right) = split_label(&label);
+            View::Task {
+                label,
+                message,
+                additional_waits,
+            } => {
+                let (left, right) = split_task_label(&label, additional_waits);
                 (left, right, message)
             }
             View::Summary {
@@ -226,14 +230,29 @@ impl DisplayRenderer for MonoText128x32Renderer {
 }
 
 enum View {
-    Task { label: String, message: String },
-    Summary { running: u32, needs_input: u32 },
+    Task {
+        label: String,
+        message: String,
+        additional_waits: u32,
+    },
+    Summary {
+        running: u32,
+        needs_input: u32,
+    },
     Offline,
     Idle,
 }
 
 fn select_view(snapshot: &DisplaySnapshot) -> View {
     if let Some(item) = newest(snapshot, |item| item.state == DisplayState::NeedsInput) {
+        let additional_waits = snapshot
+            .items
+            .iter()
+            .filter(|item| item.id != SUMMARY_ID && item.state == DisplayState::NeedsInput)
+            .count()
+            .saturating_sub(1)
+            .try_into()
+            .unwrap_or(u32::MAX);
         return task_view(
             item,
             if item.detail.as_deref() == Some("approval needed") {
@@ -241,16 +260,17 @@ fn select_view(snapshot: &DisplaySnapshot) -> View {
             } else {
                 "NEEDS INPUT"
             },
+            additional_waits,
         );
     }
     if let Some(item) = newest(snapshot, |item| item.state == DisplayState::Error) {
-        return task_view(item, "CODEX ERROR");
+        return task_view(item, "CODEX ERROR", 0);
     }
     if let Some(item) = newest(snapshot, |item| item.state == DisplayState::Success) {
-        return task_view(item, "RESPONSE READY");
+        return task_view(item, "RESPONSE READY", 0);
     }
     if let Some(item) = newest(snapshot, |item| item.state == DisplayState::Warning) {
-        return task_view(item, "TASK STOPPED");
+        return task_view(item, "TASK STOPPED", 0);
     }
 
     match snapshot.health("codex") {
@@ -270,10 +290,11 @@ fn newest(
         .max_by_key(|item| (item.updated_at, Reverse(item.id.as_str())))
 }
 
-fn task_view(item: &DisplayItem, message: &str) -> View {
+fn task_view(item: &DisplayItem, message: &str, additional_waits: u32) -> View {
     View::Task {
         label: ascii_project_title(&item.title, thread_id(item)),
         message: message.to_owned(),
+        additional_waits,
     }
 }
 
@@ -337,6 +358,23 @@ pub(crate) fn ascii_project_title(project: &str, thread_id: &str) -> String {
 fn split_label(label: &str) -> (String, String) {
     let mut chars = label.chars();
     (chars.by_ref().take(8).collect(), chars.take(8).collect())
+}
+
+fn split_task_label(label: &str, additional_waits: u32) -> (String, String) {
+    if additional_waits == 0 {
+        return split_label(label);
+    }
+    let indicator = format!("+{}", compact_count(additional_waits));
+    let mut chars = label.chars();
+    let left = chars.by_ref().take(8).collect();
+    let right_capacity = 8usize.saturating_sub(indicator.len());
+    let label_suffix: String = chars.take(right_capacity.saturating_sub(1)).collect();
+    let right = if label_suffix.is_empty() {
+        indicator
+    } else {
+        format!("{label_suffix} {indicator}")
+    };
+    (left, right)
 }
 
 fn text_region(slot: u8, id: &'static str, bounds: Rect, text: String) -> DisplayRegion {
@@ -678,6 +716,148 @@ mod tests {
             .unwrap();
 
         assert_eq!(scene.text("row1"), "RESPONSE READY");
+    }
+
+    #[test]
+    fn two_waiting_tasks_show_the_newest_short_label_with_plus_one() {
+        let now = Instant::now();
+        let older = waiting_item("codex.task.older", "other", now);
+        let newer = waiting_item("codex.task.newer", "kivo", now + Duration::from_secs(1));
+
+        let scene = MonoText128x32Renderer
+            .render(&DisplaySnapshot {
+                items: vec![older, newer],
+                health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
+            })
+            .unwrap();
+
+        assert_eq!(scene.text("row0_left"), "KIVO");
+        assert_eq!(scene.text("row0_right"), "+1");
+        assert_eq!(scene.text("row1"), "NEEDS INPUT");
+    }
+
+    #[test]
+    fn multi_wait_indicator_reserves_bounded_space_after_a_long_label() {
+        let now = Instant::now();
+        let selected = waiting_item("codex.task.a", "1234567890ABCDEF", now);
+        let other = waiting_item("codex.task.b", "other", now - Duration::from_secs(1));
+
+        let scene = MonoText128x32Renderer
+            .render(&DisplaySnapshot {
+                items: vec![selected, other],
+                health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
+            })
+            .unwrap();
+
+        assert_eq!(scene.text("row0_left"), "12345678");
+        assert_eq!(scene.text("row0_right"), "90ABC +1");
+        assert!(scene.text("row0_left").len() <= 8);
+        assert!(scene.text("row0_right").len() <= 8);
+    }
+
+    #[test]
+    fn equal_time_wait_selection_is_stable_by_id_and_input_order_independent() {
+        let now = Instant::now();
+        for items in [
+            vec![
+                waiting_item("codex.task.b", "beta", now),
+                waiting_item("codex.task.a", "alpha", now),
+            ],
+            vec![
+                waiting_item("codex.task.a", "alpha", now),
+                waiting_item("codex.task.b", "beta", now),
+            ],
+        ] {
+            let scene = MonoText128x32Renderer
+                .render(&DisplaySnapshot {
+                    items,
+                    health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
+                })
+                .unwrap();
+
+            assert_eq!(scene.text("row0_left"), "ALPHA");
+            assert_eq!(scene.text("row0_right"), "+1");
+        }
+    }
+
+    #[test]
+    fn large_multi_wait_counts_are_bounded() {
+        let now = Instant::now();
+        let items = (0..1001)
+            .map(|index| {
+                waiting_item(
+                    &format!("codex.task.{index:04}"),
+                    if index == 0 { "kivo" } else { "other" },
+                    now,
+                )
+            })
+            .collect();
+
+        let scene = MonoText128x32Renderer
+            .render(&DisplaySnapshot {
+                items,
+                health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
+            })
+            .unwrap();
+
+        assert_eq!(scene.text("row0_left"), "KIVO");
+        assert_eq!(scene.text("row0_right"), "+999+");
+        assert!(scene.text("row0_right").len() <= 8);
+    }
+
+    #[test]
+    fn clearing_all_waits_returns_to_summary_without_changing_regions() {
+        let now = Instant::now();
+        let waiting_scene = MonoText128x32Renderer
+            .render(&DisplaySnapshot {
+                items: vec![
+                    waiting_item("codex.task.a", "kivo", now),
+                    waiting_item("codex.task.b", "other", now),
+                ],
+                health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
+            })
+            .unwrap();
+        let summary = DisplayItem::new(
+            "codex.summary",
+            "codex",
+            DisplayPriority::Ambient,
+            DisplayState::Running,
+            "Codex",
+        )
+        .unwrap()
+        .with_metric("running", 2)
+        .with_metric("needs_input", 0);
+        let summary_scene = MonoText128x32Renderer
+            .render(&DisplaySnapshot {
+                items: vec![summary],
+                health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
+            })
+            .unwrap();
+
+        assert_eq!(summary_scene.text("row0_left"), "CODEX");
+        assert_eq!(summary_scene.text("row0_right"), "2 RUN");
+        assert_eq!(summary_scene.text("row1"), "");
+        assert_eq!(region_layout(&waiting_scene), region_layout(&summary_scene));
+    }
+
+    fn waiting_item(id: &str, title: &str, updated_at: Instant) -> DisplayItem {
+        DisplayItem::new(
+            id,
+            "codex",
+            DisplayPriority::Attention,
+            DisplayState::NeedsInput,
+            title,
+        )
+        .unwrap()
+        .with_updated_at(updated_at)
+    }
+
+    fn region_layout(scene: &RenderedScene) -> Vec<(u8, &'static str, Rect)> {
+        scene
+            .regions
+            .iter()
+            .map(|region| (region.slot, region.id, region.bounds))
+            .collect()
     }
 
     fn text_position(scene: &RenderedScene, id: &str) -> Option<(u16, u16)> {
