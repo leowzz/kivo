@@ -738,9 +738,11 @@ pub struct CodexTaskSource {
     codex_home: PathBuf,
     sessions_path: PathBuf,
     watcher: Option<RecommendedWatcher>,
+    watch_registration: fn(&mut Option<RecommendedWatcher>, &Path) -> bool,
     notify_rx: Receiver<notify::Result<Event>>,
     pending_notify_paths: BTreeSet<PathBuf>,
     notify_overflowed: bool,
+    notify_authority_lost: bool,
     files: BTreeMap<PathBuf, RolloutFileState>,
     metadata_tasks: BTreeMap<String, CodexThreadMetadata>,
     metadata_anchors: MetadataTimeAnchors,
@@ -813,9 +815,11 @@ impl CodexTaskSource {
             codex_home,
             sessions_path,
             watcher,
+            watch_registration: register_rollout_watch,
             notify_rx,
             pending_notify_paths: BTreeSet::new(),
             notify_overflowed: false,
+            notify_authority_lost: false,
             files: BTreeMap::new(),
             metadata_tasks: BTreeMap::new(),
             metadata_anchors: MetadataTimeAnchors::default(),
@@ -832,6 +836,8 @@ impl CodexTaskSource {
     }
 
     fn configure_rollout_home(&mut self, now: Instant) {
+        self.notify_authority_lost = true;
+        self.rollout_health = ChannelHealth::Unavailable;
         if let Some(watcher) = &mut self.watcher {
             let _ = watcher.unwatch(&self.sessions_path);
         }
@@ -842,25 +848,16 @@ impl CodexTaskSource {
             self.rollout_health = ChannelHealth::Unavailable;
             return;
         }
-        let _watch_active = match &mut self.watcher {
-            Some(watcher) => {
-                if watcher
-                    .watch(&self.sessions_path, RecursiveMode::Recursive)
-                    .is_ok()
-                {
-                    ChannelHealth::Healthy
-                } else {
-                    ChannelHealth::Unavailable
-                }
-            }
-            None => ChannelHealth::Unavailable,
-        };
+        let watch_active =
+            (self.watch_registration)(&mut self.watcher, self.sessions_path.as_path());
         let persisted = self.read_cursor_store();
-        if self.discover_rollouts(now, &persisted).is_err() {
-            self.rollout_health = ChannelHealth::Unavailable;
-        } else {
+        let discovery_succeeded = self.discover_rollouts(now, &persisted).is_ok();
+        if watch_active && discovery_succeeded {
+            self.notify_authority_lost = false;
             self.notify_overflowed = false;
             self.rollout_health = ChannelHealth::Healthy;
+        } else {
+            self.rollout_health = ChannelHealth::Unavailable;
         }
         let _ = self.persist_cursors();
     }
@@ -915,17 +912,56 @@ impl CodexTaskSource {
 
     fn collect_notify_events(&mut self) {
         while let Ok(event) = self.notify_rx.try_recv() {
-            if let Ok(event) = event {
-                for path in event.paths {
-                    if self.pending_notify_paths.len() == MAX_PENDING_NOTIFY_PATHS
-                        && !self.pending_notify_paths.contains(&path)
-                    {
-                        self.notify_overflowed = true;
-                    } else {
-                        self.pending_notify_paths.insert(path);
-                    }
+            let Ok(event) = event else {
+                self.mark_notify_authority_lost();
+                continue;
+            };
+            if event.need_rescan() {
+                self.mark_notify_authority_lost();
+                continue;
+            }
+            if notify_event_is_directory(&event) {
+                continue;
+            }
+            let is_rename = matches!(
+                event.kind,
+                notify::EventKind::Modify(notify::event::ModifyKind::Name(_))
+            );
+            for path in event.paths {
+                let Some(path) = self.normalized_notify_candidate(&path, !is_rename) else {
+                    continue;
+                };
+                if self.pending_notify_paths.len() == MAX_PENDING_NOTIFY_PATHS
+                    && !self.pending_notify_paths.contains(&path)
+                {
+                    self.notify_overflowed = true;
+                } else {
+                    self.pending_notify_paths.insert(path);
                 }
             }
+        }
+    }
+
+    fn mark_notify_authority_lost(&mut self) {
+        self.notify_authority_lost = true;
+        self.rollout_health = ChannelHealth::Unavailable;
+    }
+
+    fn normalized_notify_candidate(&self, path: &Path, allow_missing: bool) -> Option<PathBuf> {
+        let lexical_path = lexically_normalize(path);
+        let lexical_sessions = lexically_normalize(&self.sessions_path);
+        let path = canonicalize_notify_path(path);
+        if path.extension() != Some(OsStr::new("jsonl"))
+            || (!lexical_path.starts_with(&lexical_sessions)
+                && !path.starts_with(canonicalize_notify_path(&self.sessions_path)))
+        {
+            return None;
+        }
+        match fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() => Some(path),
+            Ok(_) => None,
+            Err(_) if allow_missing => Some(path),
+            Err(_) => None,
         }
     }
 
@@ -962,7 +998,7 @@ impl CodexTaskSource {
             return;
         }
 
-        let mut all_readable = !self.notify_overflowed;
+        let mut all_readable = !self.notify_overflowed && !self.notify_authority_lost;
         all_readable &= self.sync_pending_notify_paths(now, true);
         let paths = self.files.keys().cloned().collect::<Vec<_>>();
         for path in paths {
@@ -1198,6 +1234,12 @@ fn resolved_fallback_codex_home(app_home_fallback: &Path) -> PathBuf {
         .unwrap_or_else(|| app_home_fallback.join(".codex"))
 }
 
+fn register_rollout_watch(watcher: &mut Option<RecommendedWatcher>, path: &Path) -> bool {
+    watcher
+        .as_mut()
+        .is_some_and(|watcher| watcher.watch(path, RecursiveMode::Recursive).is_ok())
+}
+
 fn is_recent_rollout(path: &Path, metadata: &fs::Metadata) -> bool {
     path.extension()
         .is_some_and(|extension| extension == "jsonl")
@@ -1213,12 +1255,48 @@ fn directory_is_readable(path: &Path) -> bool {
 }
 
 fn canonicalize_notify_path(path: &Path) -> PathBuf {
+    let path = lexically_normalize(path);
     path.canonicalize().unwrap_or_else(|_| {
         path.parent()
             .and_then(|parent| parent.canonicalize().ok())
             .and_then(|parent| path.file_name().map(|name| parent.join(name)))
-            .unwrap_or_else(|| path.to_path_buf())
+            .unwrap_or(path)
     })
+}
+
+fn lexically_normalize(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if matches!(
+                    normalized.components().next_back(),
+                    Some(std::path::Component::Normal(_))
+                ) {
+                    normalized.pop();
+                } else if !normalized.has_root() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
+fn notify_event_is_directory(event: &Event) -> bool {
+    matches!(
+        event.kind,
+        notify::EventKind::Create(notify::event::CreateKind::Folder)
+            | notify::EventKind::Remove(notify::event::RemoveKind::Folder)
+    ) || matches!(
+        event.kind,
+        notify::EventKind::Modify(notify::event::ModifyKind::Name(_))
+    ) && event
+        .paths
+        .iter()
+        .any(|path| fs::metadata(path).is_ok_and(|metadata| metadata.is_dir()))
 }
 
 #[cfg(unix)]
@@ -2341,6 +2419,229 @@ mod tests {
 
         source.sync_file(&tracked_path, now, true).unwrap();
         assert!(source.files.is_empty());
+    }
+
+    #[test]
+    fn notify_admission_ignores_directories_and_non_rollouts_but_keeps_deleted_jsonl() {
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        let metadata = FakeMetadataClient::healthy(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        source.watcher.take();
+        let (notify_tx, notify_rx) = mpsc::channel();
+        source.notify_rx = notify_rx;
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+
+        let parent = path.parent().unwrap();
+        let created_directory = parent.join("created.jsonl");
+        fs::create_dir(&created_directory).unwrap();
+        notify_tx
+            .send(Ok(notify::Event::new(notify::EventKind::Create(
+                notify::event::CreateKind::Folder,
+            ))
+            .add_path(created_directory)))
+            .unwrap();
+
+        let renamed_from = parent.join("renamed-from.jsonl");
+        let renamed_to = parent.join("renamed-to.jsonl");
+        fs::create_dir(&renamed_from).unwrap();
+        fs::rename(&renamed_from, &renamed_to).unwrap();
+        notify_tx
+            .send(Ok(notify::Event::new(notify::EventKind::Modify(
+                notify::event::ModifyKind::Name(notify::event::RenameMode::Both),
+            ))
+            .add_path(renamed_from)
+            .add_path(renamed_to)))
+            .unwrap();
+
+        let renamed_away = parent.join("renamed-away.jsonl");
+        fs::create_dir(&renamed_away).unwrap();
+        fs::rename(&renamed_away, parent.join("renamed-away-directory")).unwrap();
+        notify_tx
+            .send(Ok(notify::Event::new(notify::EventKind::Modify(
+                notify::event::ModifyKind::Name(notify::event::RenameMode::From),
+            ))
+            .add_path(renamed_away)))
+            .unwrap();
+
+        let non_rollout = parent.join("notes.txt");
+        fs::write(&non_rollout, "not a rollout").unwrap();
+        notify_tx
+            .send(Ok(notify::Event::new(notify::EventKind::Create(
+                notify::event::CreateKind::File,
+            ))
+            .add_path(non_rollout)))
+            .unwrap();
+
+        let deleted_rollout = parent.join("rollout-deleted.jsonl");
+        fs::write(&deleted_rollout, "").unwrap();
+        fs::remove_file(&deleted_rollout).unwrap();
+        notify_tx
+            .send(Ok(notify::Event::new(notify::EventKind::Remove(
+                notify::event::RemoveKind::File,
+            ))
+            .add_path(deleted_rollout.clone())))
+            .unwrap();
+
+        source.poll_tasks(now + Duration::from_millis(250)).unwrap();
+
+        assert_eq!(
+            source.pending_notify_paths,
+            BTreeSet::from([canonicalize_notify_path(&deleted_rollout)])
+        );
+        assert!(source.files.is_empty());
+        assert!(!source.notify_overflowed);
+    }
+
+    #[test]
+    fn notify_aliases_are_normalized_before_pending_capacity_accounting() {
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        let metadata = FakeMetadataClient::healthy(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        source.watcher.take();
+        let (notify_tx, notify_rx) = mpsc::channel();
+        source.notify_rx = notify_rx;
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+
+        let parent = path.parent().unwrap();
+        let deleted_rollout = parent.join("rollout-alias.jsonl");
+        for index in 0..=MAX_PENDING_NOTIFY_PATHS {
+            notify_tx
+                .send(Ok(notify::Event::new(notify::EventKind::Any).add_path(
+                    parent
+                        .join(format!("missing-alias-{index}"))
+                        .join("..")
+                        .join("rollout-alias.jsonl"),
+                )))
+                .unwrap();
+        }
+
+        source.poll_tasks(now + Duration::from_millis(250)).unwrap();
+
+        assert_eq!(
+            source.pending_notify_paths,
+            BTreeSet::from([canonicalize_notify_path(&deleted_rollout)])
+        );
+        assert!(!source.notify_overflowed);
+    }
+
+    #[test]
+    fn notify_channel_error_stays_unavailable_across_known_file_polls() {
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-a\",\"cwd\":\"/work/kivo\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-a\"}}\n",
+            ),
+        )
+        .unwrap();
+        let metadata = FakeMetadataClient {
+            codex_home: temp.path().join(".codex"),
+            polls: VecDeque::from([Err("metadata_unavailable".into()), Ok(Vec::new())]),
+        };
+        let mut source = source_for(&temp, metadata);
+        source.watcher.take();
+        let (notify_tx, notify_rx) = mpsc::channel();
+        source.notify_rx = notify_rx;
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+
+        notify_tx
+            .send(Err(notify::Error::generic("events_lost")))
+            .unwrap();
+
+        assert_eq!(
+            source
+                .poll_tasks(now + Duration::from_millis(250))
+                .unwrap_err(),
+            "codex_channels_unavailable"
+        );
+        assert_eq!(
+            source
+                .poll_tasks(now + FILESYSTEM_POLL_INTERVAL)
+                .unwrap_err(),
+            "codex_channels_unavailable"
+        );
+        let later = source.poll_tasks(now + Duration::from_secs(2)).unwrap();
+        assert_eq!(later.health, SourceHealth::Degraded);
+        assert_eq!(source.rollout_health, ChannelHealth::Unavailable);
+    }
+
+    #[test]
+    fn pathless_rescan_event_marks_notify_authority_lost() {
+        let temp = TempDir::new().unwrap();
+        rollout_path(&temp);
+        let metadata = FakeMetadataClient::unavailable(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        source.watcher.take();
+        let (notify_tx, notify_rx) = mpsc::channel();
+        source.notify_rx = notify_rx;
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+
+        notify_tx
+            .send(Ok(
+                notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan)
+            ))
+            .unwrap();
+
+        assert_eq!(
+            source
+                .poll_tasks(now + Duration::from_millis(250))
+                .unwrap_err(),
+            "codex_channels_unavailable"
+        );
+        assert_eq!(source.rollout_health, ChannelHealth::Unavailable);
+    }
+
+    #[test]
+    fn watcher_registration_failure_cannot_report_healthy_after_discovery() {
+        let temp = TempDir::new().unwrap();
+        rollout_path(&temp);
+        let metadata = FakeMetadataClient::healthy(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        source.watch_registration = |_, _| false;
+        source.notify_overflowed = true;
+
+        source.configure_rollout_home(Instant::now());
+
+        assert!(source.notify_authority_lost);
+        assert!(source.notify_overflowed);
+        assert_eq!(source.rollout_health, ChannelHealth::Unavailable);
+    }
+
+    #[test]
+    fn successful_reconfigure_requires_watch_and_discovery_before_clearing_authority() {
+        let temp = TempDir::new().unwrap();
+        rollout_path(&temp);
+        let metadata = FakeMetadataClient::healthy(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        source.watch_registration = |_, _| false;
+        source.notify_overflowed = true;
+        let now = Instant::now();
+        source.configure_rollout_home(now);
+        assert!(source.notify_authority_lost);
+        assert!(source.notify_overflowed);
+
+        source.watch_registration = |_, _| true;
+        let sessions = temp.path().join(".codex/sessions");
+        let unavailable_sessions = temp.path().join(".codex/sessions-unavailable");
+        fs::rename(&sessions, &unavailable_sessions).unwrap();
+        source.configure_rollout_home(now + Duration::from_secs(1));
+        assert!(source.notify_authority_lost);
+        assert!(source.notify_overflowed);
+        assert_eq!(source.rollout_health, ChannelHealth::Unavailable);
+
+        fs::rename(&unavailable_sessions, &sessions).unwrap();
+        source.configure_rollout_home(now + Duration::from_secs(2));
+        assert!(!source.notify_authority_lost);
+        assert!(!source.notify_overflowed);
+        assert_eq!(source.rollout_health, ChannelHealth::Healthy);
     }
 
     #[test]

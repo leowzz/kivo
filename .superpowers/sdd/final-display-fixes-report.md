@@ -71,6 +71,56 @@ Result: PASS.
   348,169/3,342,336 bytes flash (10.4%).
 - `git diff --check`: PASS.
 
+## Notification Admission And Authority Follow-up
+
+The final watcher-authority fix was implemented on top of `d942b35` without a
+recurring discovery scan.
+
+- Admission RED: directory create and rename paths with `.jsonl` names entered
+  the pending set, and a non-JSONL file was passed to `sync_file`. More than 256
+  lexical aliases for one deleted rollout occupied all pending slots and set the
+  overflow bit. A `RenameMode::From` directory path arriving after the rename
+  also entered pending because its old path no longer had directory metadata.
+- Admission GREEN: paths are lexically normalized and canonicalized when
+  possible before pending capacity accounting. Only `.jsonl` file candidates
+  inside the sessions root are admitted. Existing directories, explicit folder
+  create/remove events, directory rename pairs, missing rename sources, and
+  non-JSONL paths are ignored. Missing `.jsonl` paths from file-removal events
+  remain eligible for the confirmed-readable deletion flow. The 257 aliases now
+  occupy one pending entry without overflow.
+- Authority RED: notify channel errors and pathless `need_rescan` events both
+  returned `Ok(Degraded)` while rollout health remained usable. The watcher
+  registration seam and authority state were initially absent; after adding the
+  minimal seam, a failed registration followed by successful discovery still
+  left authority clear and rollout health Healthy.
+- Authority GREEN: notify errors and rescan signals immediately set sticky
+  `notify_authority_lost` and rollout Unavailable. Ordinary interval polls,
+  readable-root checks, pending sync, and successful known-file stats cannot
+  clear it. Configuration starts pessimistically and clears authority, overflow,
+  and rollout unavailability only after both watcher registration and the
+  authoritative startup discovery succeed. Failed registration and failed
+  discovery each retain authority loss and overflow.
+- Health-transition self-review covered construction, successful and failed
+  configuration, channel error, rescan, overflow, root outage, non-due pending
+  sync, due pending/tracked sync, and successful reconfiguration. No unrelated
+  success path can promote rollout health while authority or overflow is lost.
+  Runtime interval polling continues to stat only pending and tracked paths.
+- Focused `display::codex`: 53 passed. Rustfmt and Clippy with all targets and
+  features passed.
+
+Fresh authority follow-up gate results:
+
+- Exact pinned `make test`: PASS.
+- Python suites: 33 + 32 + 32 passed.
+- PlatformIO native: 89/89 passed.
+- Rust: 390 passed, 1 intentional ignore, plus 2 integration tests passed.
+- Frontend: 211/211 passed; production build passed.
+- RP2040 build: PASS; 22,912/262,144 bytes RAM (8.7%),
+  133,176/16,773,120 bytes flash (0.8%).
+- ESP32-S3 build: PASS; 35,644/327,680 bytes RAM (10.9%),
+  348,169/3,342,336 bytes flash (10.4%).
+- `git diff --check`: PASS.
+
 ## Privacy And Diff Review
 
 - No new log event or dynamic log field was added. Existing display status logs
