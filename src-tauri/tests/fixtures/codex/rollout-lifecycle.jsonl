@@ -1,0 +1,7 @@
+{"timestamp":"2026-08-10T08:00:00Z","type":"session_meta","payload":{"id":"thread-a","cwd":"/work/kivo"}}
+{"timestamp":"2026-08-10T08:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-a","started_at":1}}
+{"timestamp":"2026-08-10T08:00:02Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"call-a"}}
+{"timestamp":"2026-08-10T08:00:03Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-a"}}
+{"timestamp":"2026-08-10T08:00:04Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-a","completed_at":4}}
+{"timestamp":"2026-08-10T08:01:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-b","started_at":60}}
+{"timestamp":"2026-08-10T08:01:01Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-b","reason":"interrupted","completed_at":61}}

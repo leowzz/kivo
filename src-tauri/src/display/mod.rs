@@ -1,3 +1,4 @@
+mod codex_events;
 mod hub;
 mod model;
 mod provider;
