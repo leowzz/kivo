@@ -89,6 +89,8 @@ grep -Fq 'bool renderRemoteDisplay(const RemoteDisplayCommit &, bool)' \
   "$ESP32S3_PLATFORM"
 grep -Fq 'DisplayUpdate commitRemote(const RemoteDisplayCommit &scene);' \
   "$DISPLAY_CONTROLLER"
+grep -Fq 'DisplayUpdate helperConnected(const DisplayFrame &ready);' \
+  "$DISPLAY_CONTROLLER"
 grep -Fq 'DisplayController displayController;' "$FIRMWARE_MAIN"
 grep -Fq 'platform::renderLocalDisplay(*update.local);' "$FIRMWARE_MAIN"
 grep -Fq 'platform::renderRemoteDisplay(*update.remote, update.fullRedraw);' \
@@ -96,6 +98,8 @@ grep -Fq 'platform::renderRemoteDisplay(*update.remote, update.fullRedraw);' \
 grep -Fq 'platform::resetRemoteDisplay();' "$FIRMWARE_MAIN"
 grep -Fq 'displayController.displayReconfigured()' "$FIRMWARE_MAIN"
 grep -Fq 'displayController.displayFailed(displayFailureFrame())' \
+  "$FIRMWARE_MAIN"
+grep -Fq 'displayController.helperConnected(displayStatus.frame())' \
   "$FIRMWARE_MAIN"
 grep -Fq 'responseLines = ResponseLineBuffer(kMaxResponseLineLength);' \
   "$FIRMWARE_MAIN"

@@ -466,7 +466,8 @@ void loop() {
     platform::resetRemoteDisplay();
     displayStatus.setUsbConnected(connected);
     if (connected) {
-      showStatus(LocalDisplayPriority::Startup);
+      applyDisplayUpdate(
+          displayController.helperConnected(displayStatus.frame()));
       writeLine(helloLine);
     } else {
       applyDisplayUpdate(

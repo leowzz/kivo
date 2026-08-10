@@ -23,6 +23,7 @@ class DisplayController {
                           LocalDisplayPriority priority);
   DisplayUpdate clearLocalOverride();
   DisplayUpdate commitRemote(const RemoteDisplayCommit &scene);
+  DisplayUpdate helperConnected(const DisplayFrame &ready);
   DisplayUpdate helperDisconnected(const DisplayFrame &offline);
   DisplayUpdate displayReconfigured() const;
   DisplayUpdate displayFailed(const DisplayFrame &failure);

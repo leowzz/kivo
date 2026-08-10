@@ -2,13 +2,9 @@
 
 DisplayUpdate DisplayController::showLocal(const DisplayFrame &frame,
                                            LocalDisplayPriority priority) {
+  if (disconnected_) return localUpdate();
   local_ = frame;
   if (priority == LocalDisplayPriority::Startup) {
-    if (disconnected_) {
-      localOverride_ = resumeLocalOverride_;
-      disconnected_ = false;
-      connected_ = true;
-    }
     if (localOverride_) {
       source_ = DisplaySource::Local;
       return localUpdate();
@@ -47,6 +43,16 @@ DisplayUpdate DisplayController::commitRemote(
   if (localOverride_) return {};
   source_ = DisplaySource::Remote;
   return remoteUpdate(scene.full);
+}
+
+DisplayUpdate DisplayController::helperConnected(const DisplayFrame &ready) {
+  if (disconnected_) localOverride_ = resumeLocalOverride_;
+  connected_ = true;
+  disconnected_ = false;
+  remote_.reset();
+  local_ = ready;
+  source_ = DisplaySource::Local;
+  return localUpdate();
 }
 
 DisplayUpdate DisplayController::helperDisconnected(
