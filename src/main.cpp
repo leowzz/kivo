@@ -293,7 +293,14 @@ void readHelperResponses(std::uint32_t nowMs) {
     }
 
     const auto line = responseLines.push(static_cast<char>(value));
-    if (line.has_value()) handleResponseLine(*line, nowMs);
+    if (!line.has_value()) continue;
+    if (line->overflow) {
+      const auto displayError =
+          discardMalformedDisplayCommand(remoteDisplay, line->line);
+      if (displayError.has_value()) writeLine(*displayError);
+      continue;
+    }
+    handleResponseLine(line->line, nowMs);
   }
 }
 

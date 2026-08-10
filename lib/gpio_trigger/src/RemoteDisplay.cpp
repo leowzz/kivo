@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <utility>
 
 #include "TriggerProtocol.h"
 
@@ -78,7 +79,7 @@ std::optional<std::string_view> displayErrorCode(std::string_view kind) {
   }
   if (kind == "DISPLAY_TEXT") return "invalid_text";
   if (kind == "DISPLAY_COMMIT") return "invalid_commit";
-  if (kind.size() > 8 && kind.substr(0, 8) == "DISPLAY_") {
+  if (kind.size() >= 8 && kind.substr(0, 8) == "DISPLAY_") {
     return "unsupported_display";
   }
   return std::nullopt;
@@ -111,7 +112,9 @@ DisplayResult RemoteDisplay::begin(std::uint32_t newRevision,
   if (mode == DisplayMode::Delta && baseRevision != revision_) {
     return DisplayResult::Resync;
   }
-  staged_ = StagedTransaction{newRevision, mode};
+  staged_.emplace();
+  staged_->revision = newRevision;
+  staged_->mode = mode;
   return DisplayResult::Accepted;
 }
 
@@ -121,22 +124,24 @@ bool RemoteDisplay::region(std::uint8_t slot, DisplayRect bounds) {
       findStagedRegion(slot) != nullptr) {
     return reject();
   }
-  auto &region = staged_->regions[staged_->regionCount++];
-  region.slot = slot;
-  region.bounds = bounds;
+  auto &regionState = staged_->regions[staged_->regionCount++];
+  regionState.slot = slot;
+  regionState.bounds = bounds;
   return true;
 }
 
 bool RemoteDisplay::clear(std::uint8_t slot) {
-  auto *regionState = findStagedRegion(slot);
-  if (regionState == nullptr || staged_->operationCount >= kMaxDisplayOps) {
+  if (findStagedRegion(slot) == nullptr ||
+      staged_->operationCount >= kMaxDisplayOps) {
     return reject();
   }
-  regionState->operations[regionState->operationCount] =
-      DisplayOperationKind::Clear;
-  regionState->operationTextIndexes[regionState->operationCount] = 0;
-  ++regionState->operationCount;
-  ++staged_->operationCount;
+  auto &operation = staged_->operations[staged_->operationCount++];
+  operation.text.clear();
+  operation.x = 0;
+  operation.baselineY = 0;
+  operation.slot = slot;
+  operation.fontId = 0;
+  operation.kind = DisplayOperationKind::Clear;
   return true;
 }
 
@@ -145,7 +150,6 @@ bool RemoteDisplay::text(std::uint8_t slot, std::uint16_t x,
                          std::string_view value) {
   auto *regionState = findStagedRegion(slot);
   if (regionState == nullptr || staged_->operationCount >= kMaxDisplayOps ||
-      regionState->textOpCount >= kMaxDisplayOps ||
       value.size() > kMaxDisplayTextBytes || fontId != kRemoteDisplayFontId) {
     return reject();
   }
@@ -161,71 +165,29 @@ bool RemoteDisplay::text(std::uint8_t slot, std::uint16_t x,
     if (character < 0x20 || character > 0x7e) return reject();
   }
 
-  const auto textIndex = regionState->textOpCount;
-  regionState->textOps[textIndex] =
-      {slot, x, baselineY, fontId, std::string(value)};
-  regionState->operations[regionState->operationCount] =
-      DisplayOperationKind::Text;
-  regionState->operationTextIndexes[regionState->operationCount] =
-      static_cast<std::uint8_t>(textIndex);
-  ++regionState->textOpCount;
-  ++regionState->operationCount;
-  ++staged_->operationCount;
+  auto &operation = staged_->operations[staged_->operationCount++];
+  operation.text.assign(value.data(), value.size());
+  operation.x = x;
+  operation.baselineY = baselineY;
+  operation.slot = slot;
+  operation.fontId = fontId;
+  operation.kind = DisplayOperationKind::Text;
   return true;
 }
 
-std::optional<RemoteDisplayCommit> RemoteDisplay::commit(
-    std::uint32_t revision) {
-  if (!staged_.has_value() || staged_->revision != revision) {
+const RemoteDisplayCommit *RemoteDisplay::commit(std::uint32_t revision) {
+  if (!staged_.has_value() || staged_->revision != revision ||
+      !buildCandidate()) {
     cancel();
-    return std::nullopt;
+    return nullptr;
   }
 
-  RemoteDisplayScene candidate;
-  candidate.revision = revision;
-  if (staged_->mode == DisplayMode::Full) {
-    candidate.regionCount = staged_->regionCount;
-    std::copy_n(staged_->regions.begin(), staged_->regionCount,
-                candidate.regions.begin());
-  } else if (committed_.has_value()) {
-    candidate = *committed_;
-    candidate.revision = revision;
-    for (std::size_t stagedIndex = 0;
-         stagedIndex < staged_->regionCount; ++stagedIndex) {
-      const auto &changed = staged_->regions[stagedIndex];
-      const auto existing = findRegionIndex(candidate, changed.slot);
-      if (existing.has_value()) {
-        candidate.regions[*existing] = changed;
-      } else if (candidate.regionCount < kMaxDisplayRegions) {
-        candidate.regions[candidate.regionCount++] = changed;
-      } else {
-        cancel();
-        return std::nullopt;
-      }
-    }
-  } else {
-    cancel();
-    return std::nullopt;
-  }
-
-  RemoteDisplayCommit result;
-  result.revision = revision;
+  lastCommit_.emplace();
+  auto &result = *lastCommit_;
+  static_cast<RemoteDisplayScene &>(result) = candidate_;
   result.full = staged_->mode == DisplayMode::Full;
-  result.regionCount = candidate.regionCount;
-  std::copy_n(candidate.regions.begin(), candidate.regionCount,
-              result.regions.begin());
+  result.dirtyCount = 0;
   bool dirtyOverflow = false;
-  const auto appendDirty = [&result, &dirtyOverflow](DisplayRect bounds) {
-    if (dirtyOverflow) return;
-    if (result.dirtyCount < kMaxDisplayRegions) {
-      result.dirtyBounds[result.dirtyCount++] = bounds;
-    } else {
-      result.dirtyBounds[0] =
-          {0, 0, kRemoteDisplayWidth, kRemoteDisplayHeight};
-      result.dirtyCount = 1;
-      dirtyOverflow = true;
-    }
-  };
   for (std::size_t index = 0; index < staged_->regionCount; ++index) {
     const auto &changed = staged_->regions[index];
     DisplayRect dirty = changed.bounds;
@@ -235,26 +197,22 @@ std::optional<RemoteDisplayCommit> RemoteDisplay::commit(
         dirty = unionRect(committed_->regions[*previous].bounds, dirty);
       }
     }
-    appendDirty(dirty);
+    appendDirty(dirty, dirtyOverflow);
   }
   if (result.full && committed_.has_value()) {
     for (std::size_t oldIndex = 0; oldIndex < committed_->regionCount;
          ++oldIndex) {
       const auto oldSlot = committed_->regions[oldIndex].slot;
-      bool retained = false;
-      for (std::size_t newIndex = 0; newIndex < staged_->regionCount;
-           ++newIndex) {
-        retained |= staged_->regions[newIndex].slot == oldSlot;
+      if (!stagedContainsSlot(oldSlot)) {
+        appendDirty(committed_->regions[oldIndex].bounds, dirtyOverflow);
       }
-      if (!retained) appendDirty(committed_->regions[oldIndex].bounds);
     }
   }
 
   revision_ = revision;
-  committed_ = candidate;
-  lastCommit_ = result;
+  committed_ = candidate_;
   cancel();
-  return result;
+  return &result;
 }
 
 void RemoteDisplay::cancel() { staged_.reset(); }
@@ -270,6 +228,70 @@ DisplayRegionState *RemoteDisplay::findStagedRegion(std::uint8_t slot) {
     if (staged_->regions[index].slot == slot) return &staged_->regions[index];
   }
   return nullptr;
+}
+
+bool RemoteDisplay::stagedContainsSlot(std::uint8_t slot) const {
+  if (!staged_.has_value()) return false;
+  for (std::size_t index = 0; index < staged_->regionCount; ++index) {
+    if (staged_->regions[index].slot == slot) return true;
+  }
+  return false;
+}
+
+bool RemoteDisplay::buildCandidate() {
+  if (staged_->mode == DisplayMode::Full) {
+    candidate_.revision = staged_->revision;
+    candidate_.regionCount = staged_->regionCount;
+    std::copy_n(staged_->regions.begin(), staged_->regionCount,
+                candidate_.regions.begin());
+    candidate_.operationCount = staged_->operationCount;
+    std::copy_n(staged_->operations.begin(), staged_->operationCount,
+                candidate_.operations.begin());
+    return true;
+  }
+  if (!committed_.has_value()) return false;
+
+  candidate_ = *committed_;
+  candidate_.revision = staged_->revision;
+  for (std::size_t index = 0; index < staged_->regionCount; ++index) {
+    const auto &changed = staged_->regions[index];
+    const auto existing = findRegionIndex(candidate_, changed.slot);
+    if (existing.has_value()) {
+      candidate_.regions[*existing] = changed;
+    } else if (candidate_.regionCount < kMaxDisplayRegions) {
+      candidate_.regions[candidate_.regionCount++] = changed;
+    } else {
+      return false;
+    }
+  }
+
+  std::size_t retainedCount = 0;
+  for (std::size_t index = 0; index < candidate_.operationCount; ++index) {
+    if (stagedContainsSlot(candidate_.operations[index].slot)) continue;
+    if (retainedCount != index) {
+      candidate_.operations[retainedCount] =
+          std::move(candidate_.operations[index]);
+    }
+    ++retainedCount;
+  }
+  if (retainedCount + staged_->operationCount > kMaxDisplayOps) return false;
+  std::copy_n(staged_->operations.begin(), staged_->operationCount,
+              candidate_.operations.begin() + retainedCount);
+  candidate_.operationCount = retainedCount + staged_->operationCount;
+  return true;
+}
+
+void RemoteDisplay::appendDirty(DisplayRect bounds, bool &overflowed) {
+  if (overflowed) return;
+  auto &result = *lastCommit_;
+  if (result.dirtyCount < kMaxDisplayRegions) {
+    result.dirtyBounds[result.dirtyCount++] = bounds;
+  } else {
+    result.dirtyBounds[0] =
+        {0, 0, kRemoteDisplayWidth, kRemoteDisplayHeight};
+    result.dirtyCount = 1;
+    overflowed = true;
+  }
 }
 
 bool RemoteDisplay::reject() {
@@ -323,7 +345,9 @@ std::optional<std::string> decodeDisplayText(std::string_view encoded) {
     if (thirdCharacter != '=') {
       decoded.push_back(static_cast<char>((value >> 8) & 0xff));
     }
-    if (fourthCharacter != '=') decoded.push_back(static_cast<char>(value & 0xff));
+    if (fourthCharacter != '=') {
+      decoded.push_back(static_cast<char>(value & 0xff));
+    }
   }
   for (const unsigned char character : decoded) {
     if (character < 0x20 || character > 0x7e) return std::nullopt;
@@ -393,14 +417,12 @@ std::optional<std::string> dispatchDisplayCommand(RemoteDisplay &display,
         return formatDisplayError(activeRevision.value_or(0), "invalid_text");
       }
       return std::nullopt;
-    case HelperCommandKind::DisplayCommit: {
-      const auto committed = display.commit(command.revision);
-      if (!committed.has_value()) {
+    case HelperCommandKind::DisplayCommit:
+      if (display.commit(command.revision) == nullptr) {
         return formatDisplayError(activeRevision.value_or(command.revision),
                                   "invalid_commit");
       }
       return formatDisplayOk(command.revision);
-    }
     default:
       return std::nullopt;
   }

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <utility>
 
 #include "RemoteDisplay.h"
 
@@ -99,21 +100,25 @@ void trimLineEnd(std::string_view &line) {
 }
 }  // namespace
 
-std::optional<std::string> ResponseLineBuffer::push(char character) {
+std::optional<ResponseLineEvent> ResponseLineBuffer::push(char character) {
   if (discardUntilNewline_) {
-    if (character == '\n') discardUntilNewline_ = false;
+    if (character == '\n') {
+      discardUntilNewline_ = false;
+      std::string prefix;
+      prefix.swap(line_);
+      return ResponseLineEvent{std::move(prefix), true};
+    }
     return std::nullopt;
   }
   if (character == '\n') {
     line_.push_back(character);
     std::string complete;
     complete.swap(line_);
-    return complete;
+    return ResponseLineEvent{std::move(complete), false};
   }
   if (line_.size() < maxLength_) {
     line_.push_back(character);
   } else {
-    line_.clear();
     discardUntilNewline_ = true;
   }
   return std::nullopt;

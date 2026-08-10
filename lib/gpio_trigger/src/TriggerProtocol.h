@@ -61,11 +61,16 @@ struct HelperCommand {
   std::vector<std::uint8_t> columns;
 };
 
+struct ResponseLineEvent {
+  std::string line;
+  bool overflow = false;
+};
+
 class ResponseLineBuffer {
  public:
   explicit ResponseLineBuffer(std::size_t maxLength) : maxLength_(maxLength) {}
 
-  std::optional<std::string> push(char character);
+  std::optional<ResponseLineEvent> push(char character);
 
  private:
   std::size_t maxLength_;

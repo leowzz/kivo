@@ -16,9 +16,9 @@ constexpr std::uint16_t kRemoteDisplayWidth = 128;
 constexpr std::uint16_t kRemoteDisplayHeight = 32;
 constexpr std::uint8_t kRemoteDisplayFontId = 0;
 
-enum class DisplayMode { Full, Delta };
-enum class DisplayResult { Accepted, Resync, Rejected };
-enum class DisplayOperationKind { Clear, Text };
+enum class DisplayMode : std::uint8_t { Full, Delta };
+enum class DisplayResult : std::uint8_t { Accepted, Resync, Rejected };
+enum class DisplayOperationKind : std::uint8_t { Clear, Text };
 
 struct DisplayRect {
   std::uint16_t x;
@@ -27,38 +27,40 @@ struct DisplayRect {
   std::uint16_t height;
 };
 
-struct DisplayTextOp {
-  std::uint8_t slot;
-  std::uint16_t x;
-  std::uint16_t baselineY;
-  std::uint8_t fontId;
+struct DisplayOperation {
   std::string text;
+  std::uint16_t x = 0;
+  std::uint16_t baselineY = 0;
+  std::uint8_t slot = 0;
+  std::uint8_t fontId = 0;
+  DisplayOperationKind kind = DisplayOperationKind::Clear;
 };
 
 struct DisplayRegionState {
   std::uint8_t slot = 0;
   DisplayRect bounds{};
-  std::array<DisplayOperationKind, kMaxDisplayOps> operations{};
-  std::array<std::uint8_t, kMaxDisplayOps> operationTextIndexes{};
-  std::size_t operationCount = 0;
-  std::array<DisplayTextOp, kMaxDisplayOps> textOps{};
-  std::size_t textOpCount = 0;
 };
 
 struct RemoteDisplayScene {
   std::uint32_t revision = 0;
   std::array<DisplayRegionState, kMaxDisplayRegions> regions{};
   std::size_t regionCount = 0;
+  std::array<DisplayOperation, kMaxDisplayOps> operations{};
+  std::size_t operationCount = 0;
 };
 
-struct RemoteDisplayCommit {
-  std::uint32_t revision = 0;
+struct RemoteDisplayCommit : RemoteDisplayScene {
   bool full = false;
-  std::array<DisplayRegionState, kMaxDisplayRegions> regions{};
-  std::size_t regionCount = 0;
   std::array<DisplayRect, kMaxDisplayRegions> dirtyBounds{};
   std::size_t dirtyCount = 0;
 };
+
+static_assert(sizeof(DisplayRegionState) <= 16,
+              "display regions must remain compact metadata");
+static_assert(sizeof(RemoteDisplayScene) <= 1200,
+              "display scenes must own only 24 operations");
+static_assert(sizeof(RemoteDisplayCommit) <= 1280,
+              "display commits must own only 24 operations");
 
 class RemoteDisplay {
  public:
@@ -68,7 +70,7 @@ class RemoteDisplay {
   bool clear(std::uint8_t slot);
   bool text(std::uint8_t slot, std::uint16_t x, std::uint16_t baselineY,
             std::uint8_t fontId, std::string_view value);
-  std::optional<RemoteDisplayCommit> commit(std::uint32_t revision);
+  const RemoteDisplayCommit *commit(std::uint32_t revision);
   void cancel();
 
   std::uint32_t revision() const { return revision_; }
@@ -81,22 +83,25 @@ class RemoteDisplay {
   }
 
  private:
-  struct StagedTransaction {
-    std::uint32_t revision = 0;
+  struct StagedTransaction : RemoteDisplayScene {
     DisplayMode mode = DisplayMode::Full;
-    std::array<DisplayRegionState, kMaxDisplayRegions> regions{};
-    std::size_t regionCount = 0;
-    std::size_t operationCount = 0;
   };
 
   DisplayRegionState *findStagedRegion(std::uint8_t slot);
+  bool stagedContainsSlot(std::uint8_t slot) const;
+  bool buildCandidate();
+  void appendDirty(DisplayRect bounds, bool &overflowed);
   bool reject();
 
   std::uint32_t revision_ = 0;
   std::optional<StagedTransaction> staged_;
   std::optional<RemoteDisplayScene> committed_;
+  RemoteDisplayScene candidate_;
   std::optional<RemoteDisplayCommit> lastCommit_;
 };
+
+static_assert(sizeof(RemoteDisplay) <= 5000,
+              "remote display state must remain bounded global storage");
 
 std::optional<std::string> decodeDisplayText(std::string_view encoded);
 std::string formatDisplayOk(std::uint32_t revision);
