@@ -110,8 +110,16 @@ def _version_line(lines: list[str], start: int, end: int, path: Path) -> int:
 
 
 def _read_json(path: Path) -> object:
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        document: dict[str, object] = {}
+        for key, value in pairs:
+            if key in document:
+                raise VersionError(f"{path}: duplicate JSON key {key!r}")
+            document[key] = value
+        return document
+
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(), object_pairs_hook=reject_duplicate_keys)
     except (FileNotFoundError, json.JSONDecodeError) as error:
         raise VersionError(f"{path}: invalid or missing JSON") from error
 
@@ -221,6 +229,9 @@ def _read_versions(root: Path) -> dict[str, str]:
 def set_repo_version(root: Path, tag: str) -> None:
     tag = validate_tag_version(tag)
     version = numeric_version(tag)
+    read_env_version(root / ".env")
+    _read_versions(root)
+
     package_json_path = root / "package.json"
     package_json = _read_json(package_json_path)
     if not isinstance(package_json, dict):
@@ -284,6 +295,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--root", type=Path, default=Path.cwd())
     commands = parser.add_subparsers(dest="command", required=True)
     get = commands.add_parser("get")
+    get.add_argument("--env-file", type=Path)
     get.add_argument("--numeric", action="store_true")
     get.add_argument("--bump-patch", action="store_true")
     set_command = commands.add_parser("set")
@@ -297,7 +309,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "get":
-            tag = read_env_version(args.root / ".env")
+            tag = read_env_version(args.env_file or args.root / ".env")
             if args.bump_patch:
                 tag = bump_patch(tag)
             print(numeric_version(tag) if args.numeric else tag)

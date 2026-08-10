@@ -12,6 +12,16 @@ from scripts.repo_version import (
     set_repo_version,
 )
 
+VERSION_FILES = (".env", *TRACKED_VERSION_FILES)
+
+
+def snapshot_version_files(root: Path) -> dict[str, bytes | None]:
+    return {
+        relative_path: path.read_bytes() if path.exists() else None
+        for relative_path in VERSION_FILES
+        if (path := root / relative_path)
+    }
+
 
 def test_set_repo_version_updates_kivo_fields_only(tmp_path: Path) -> None:
     seed_version_repo(tmp_path)
@@ -35,15 +45,98 @@ def test_set_repo_version_does_not_partially_update_invalid_repository(
     seed_version_repo(tmp_path)
     tauri_config = tmp_path / "src-tauri" / "tauri.conf.json"
     tauri_config.write_text('{"version": 123}\n')
-    files = (".env", *TRACKED_VERSION_FILES)
-    original_contents = {path: (tmp_path / path).read_text() for path in files}
+    original_contents = snapshot_version_files(tmp_path)
 
     with pytest.raises(VersionError, match="root version must be a string"):
         set_repo_version(tmp_path, "v1.2.3")
 
-    assert {
-        path: (tmp_path / path).read_text() for path in files
-    } == original_contents
+    assert snapshot_version_files(tmp_path) == original_contents
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "contents", "error"),
+    [
+        (
+            "package.json",
+            '{"name": "kivo"}\n',
+            "package.json: root version must be a string",
+        ),
+        (
+            "package.json",
+            '{"name": "kivo", "version": 123}\n',
+            "package.json: root version must be a string",
+        ),
+        (
+            "package-lock.json",
+            '{"packages": {"": {"version": "0.1.0"}}}\n',
+            "package-lock.json: root version must be a string",
+        ),
+        (
+            "package-lock.json",
+            '{"version": "0.1.0", "packages": {"": {"version": 123}}}\n',
+            "package-lock.json: packages root version must be a string",
+        ),
+    ],
+)
+def test_set_repo_version_rejects_invalid_npm_version_fields_without_writes(
+    tmp_path: Path, relative_path: str, contents: str, error: str
+) -> None:
+    seed_version_repo(tmp_path)
+    (tmp_path / relative_path).write_text(contents)
+    original_contents = snapshot_version_files(tmp_path)
+
+    with pytest.raises(VersionError, match=error):
+        set_repo_version(tmp_path, "v1.2.3")
+
+    assert snapshot_version_files(tmp_path) == original_contents
+
+
+def test_set_repo_version_rejects_missing_env_example_without_writes(
+    tmp_path: Path,
+) -> None:
+    seed_version_repo(tmp_path)
+    (tmp_path / ".env.example").unlink()
+    original_contents = snapshot_version_files(tmp_path)
+
+    with pytest.raises(VersionError, match=r"missing .*\.env\.example"):
+        set_repo_version(tmp_path, "v1.2.3")
+
+    assert snapshot_version_files(tmp_path) == original_contents
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "contents"),
+    [
+        (
+            "package.json",
+            '{"name": "kivo", "version": "0.1.0", "version": "9.9.9"}\n',
+        ),
+        (
+            "package-lock.json",
+            """{
+  "version": "0.1.0",
+  "packages": {
+    "": {"version": "0.1.0", "version": "9.9.9"}
+  }
+}
+""",
+        ),
+    ],
+)
+def test_set_repo_version_rejects_duplicate_json_version_keys_without_writes(
+    tmp_path: Path, relative_path: str, contents: str
+) -> None:
+    seed_version_repo(tmp_path)
+    (tmp_path / relative_path).write_text(contents)
+    original_contents = snapshot_version_files(tmp_path)
+
+    with pytest.raises(
+        VersionError,
+        match=rf"{relative_path.replace('.', r'\.')}: duplicate JSON key 'version'",
+    ):
+        set_repo_version(tmp_path, "v1.2.3")
+
+    assert snapshot_version_files(tmp_path) == original_contents
 
 
 @pytest.mark.parametrize(

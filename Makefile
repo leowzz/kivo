@@ -1,10 +1,14 @@
-.PHONY: all build build-esp32s3 build-rp2040 download-mode upload upload-esp32s3 upload-rp2040 require-build-id require-serial test helper helper-kill helper-build release
+.PHONY: all build build-esp32s3 build-rp2040 download-mode upload upload-esp32s3 upload-rp2040 require-build-id validate-env-build-id require-serial test helper helper-kill helper-build release
 
 ENV_FILE ?= .env
 -include $(ENV_FILE)
-ifeq ($(origin version),file)
-BUILD_ID ?= $(version)
+ifeq ($(origin BUILD_ID),undefined)
+  ifeq ($(origin version),file)
+BUILD_ID := $(version)
+require-build-id: validate-env-build-id
+  endif
 endif
+PYTHON ?= python3
 UV ?= uv
 UV_CMD = "$(UV)"
 ESP32S3_BUILD = KIVO_FIRMWARE_BUILD_ID="$(BUILD_ID)" $(UV_CMD) run pio run -e esp32s3
@@ -14,6 +18,9 @@ all: helper
 
 require-serial:
 	@test -n "$(SERIAL)" || { echo "SERIAL is required" >&2; exit 2; }
+
+validate-env-build-id:
+	@$(PYTHON) scripts/repo_version.py get --env-file "$(ENV_FILE)" >/dev/null
 
 require-build-id:
 	@case "$(BUILD_ID)" in \

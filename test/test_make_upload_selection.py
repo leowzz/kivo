@@ -80,6 +80,31 @@ def test_make_uses_env_version_as_default_build_id(tmp_path: Path) -> None:
     assert all("+dev" not in line for line in invocations)
 
 
+@pytest.mark.parametrize(
+    ("contents", "error"),
+    [
+        ("version=not-a-tag\n", "expected vX.Y.Z"),
+        (
+            "version=v1.2.3\nversion=v1.2.4\n",
+            "must contain exactly one version=vX.Y.Z line",
+        ),
+    ],
+)
+def test_make_rejects_invalid_env_before_firmware_tools(
+    tmp_path: Path, contents: str, error: str
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(contents)
+
+    result, invocations = run_make(
+        tmp_path, "build-rp2040", build_id=None, env_file=env_file
+    )
+
+    assert result.returncode != 0
+    assert error in result.stderr
+    assert invocations == []
+
+
 def test_make_firmware_target_explains_missing_env(tmp_path: Path) -> None:
     result, invocations = run_make(
         tmp_path,
