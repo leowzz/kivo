@@ -51,9 +51,21 @@ WIRE_HOLE_DIAMETER = 4.0
 CENTER_X = OUTER_WIDTH / 2.0
 CENTER_Y = OUTER_LENGTH / 2.0
 BOOLEAN_TOLERANCE = 5e-5
+PROFILE_TOLERANCE = 0.003
 PROTECTED_VOLUME_TOLERANCE = 0.02
 RING_SECTION_LEVEL = 20.0
 REQUIRED_SOLID_VOLUME_TOLERANCE = 0.01
+
+
+def circle_segments_for_sagitta(radius: float, tolerance: float) -> int:
+    required = int(np.ceil(np.pi / np.arccos(1.0 - tolerance / radius)))
+    return 4 * int(np.ceil(required / 4.0))
+
+
+ROUNDED_SECTION_SEGMENTS = circle_segments_for_sagitta(OUTER_RADIUS, PROFILE_TOLERANCE)
+WIRE_HOLE_SEGMENTS = circle_segments_for_sagitta(
+    WIRE_HOLE_DIAMETER / 2.0, PROFILE_TOLERANCE
+)
 
 OPEN_UNDERSIDE_PROBES = (
     ((8.0, 25.0, -0.1), (15.0, 35.0, 9.0)),
@@ -145,7 +157,7 @@ def rounded_rectangle_section(
     return core.offset(
         radius,
         join_type=manifold3d.JoinType.Round,
-        circular_segments=32,
+        circular_segments=ROUNDED_SECTION_SEGMENTS,
     ).translate(center)
 
 
@@ -208,7 +220,7 @@ def inner_chamfer_cutter() -> trimesh.Trimesh:
     upper_section = lower_section.offset(
         CHAMFER,
         join_type=manifold3d.JoinType.Round,
-        circular_segments=32,
+        circular_segments=ROUNDED_SECTION_SEGMENTS,
     )
     points = [
         [float(x), float(y), z]
@@ -368,7 +380,7 @@ def rear_hole_cutter() -> trimesh.Trimesh:
     cutter = trimesh.creation.cylinder(
         radius=WIRE_HOLE_DIAMETER / 2.0,
         height=WALL + 2.0,
-        sections=32,
+        sections=WIRE_HOLE_SEGMENTS,
     )
     cutter.apply_transform(
         trimesh.transformations.rotation_matrix(np.pi / 2.0, [1.0, 0.0, 0.0])
@@ -431,6 +443,54 @@ def turning_vertices(points: np.ndarray) -> np.ndarray:
     return points[cross > BOOLEAN_TOLERANCE * scale]
 
 
+def arc_chord_height_is_valid(
+    angles: np.ndarray,
+    start: float,
+    end: float,
+    radius: float,
+    tolerance: float,
+) -> bool:
+    if len(angles) == 0:
+        return False
+    angles = np.sort(angles)
+    angular_tolerance = tolerance / radius
+    if angles[0] < start - angular_tolerance or angles[-1] > end + angular_tolerance:
+        return False
+    angles = np.clip(angles, start, end)
+    covered = np.concatenate(([start], angles, [end]))
+    gaps = np.diff(covered)
+    if np.any(gaps < -angular_tolerance):
+        return False
+    sagittas = radius * (1.0 - np.cos(np.maximum(gaps, 0.0) / 2.0))
+    return bool(np.all(sagittas <= tolerance))
+
+
+def rounded_rectangle_arcs_are_valid(
+    vertices: np.ndarray,
+    nearest_core: np.ndarray,
+    expected_bounds: np.ndarray,
+    radius: float,
+    tolerance: float,
+) -> bool:
+    core_lower = expected_bounds[0] + radius
+    core_upper = expected_bounds[1] - radius
+    assigned = np.zeros(len(vertices), dtype=bool)
+    for signs in ((-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)):
+        signs_array = np.array(signs)
+        center = np.where(signs_array < 0.0, core_lower, core_upper)
+        corner = np.all(
+            np.isclose(nearest_core, center, rtol=0.0, atol=tolerance), axis=1
+        )
+        local = (vertices[corner] - center) * signs_array
+        if np.any(local < -tolerance):
+            return False
+        angles = np.arctan2(local[:, 1], local[:, 0])
+        if not arc_chord_height_is_valid(angles, 0.0, np.pi / 2.0, radius, tolerance):
+            return False
+        assigned |= corner
+    return bool(np.all(assigned))
+
+
 def require_rounded_rectangle_loop(
     loops: list[np.ndarray],
     expected_bounds: np.ndarray,
@@ -447,7 +507,11 @@ def require_rounded_rectangle_loop(
         core_upper = expected_bounds[1] - radius
         nearest_core = np.clip(vertices, core_lower, core_upper)
         radii = np.linalg.norm(vertices - nearest_core, axis=1)
-        if np.allclose(radii, radius, rtol=0.0, atol=tolerance):
+        if np.allclose(
+            radii, radius, rtol=0.0, atol=tolerance
+        ) and rounded_rectangle_arcs_are_valid(
+            vertices, nearest_core, expected_bounds, radius, tolerance
+        ):
             return bounds[1] - bounds[0]
     raise ValueError(f"{label} drifted")
 
@@ -466,7 +530,16 @@ def require_circular_loop(
         if not np.allclose(bounds, expected_bounds, rtol=0.0, atol=tolerance):
             continue
         radii = np.linalg.norm(vertices - center, axis=1)
-        if np.allclose(radii, radius, rtol=0.0, atol=tolerance):
+        if not np.allclose(radii, radius, rtol=0.0, atol=tolerance):
+            continue
+        relative = vertices - center
+        angles = np.sort(
+            np.mod(np.arctan2(relative[:, 1], relative[:, 0]), 2.0 * np.pi)
+        )
+        wrapped = np.concatenate((angles, [angles[0] + 2.0 * np.pi]))
+        gaps = np.diff(wrapped)
+        sagittas = radius * (1.0 - np.cos(gaps / 2.0))
+        if np.all(sagittas <= tolerance):
             return
     raise ValueError(f"{label} drifted")
 
@@ -673,14 +746,14 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
         np.array([[0.0, 0.0], [OUTER_WIDTH, OUTER_LENGTH]]),
         OUTER_RADIUS,
         "R4 outer corner ring profile",
-        0.003,
+        PROFILE_TOLERANCE,
     )
     measured_pocket_bounds = require_rounded_rectangle_loop(
         pocket_loops,
         np.array([[WALL, WALL], [OUTER_WIDTH - WALL, OUTER_LENGTH - WALL]]),
         INNER_RADIUS,
         "R1.6 inner pocket ring profile",
-        0.003,
+        PROFILE_TOLERANCE,
     )
     platform_loops = measured_section_loop_sizes(mesh, axis=2, level=12.7)
     require_loop_size(platform_loops, (24.0, 24.0), "switch platform", 0.003)
@@ -714,7 +787,7 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
         np.array([CENTER_X, 5.0]),
         WIRE_HOLE_DIAMETER / 2.0,
         "rear wire hole profile",
-        0.003,
+        PROFILE_TOLERANCE,
     )
 
     for probe in OPEN_UNDERSIDE_PROBES:

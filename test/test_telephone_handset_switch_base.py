@@ -1,6 +1,7 @@
 import hashlib
 from pathlib import Path
 
+import manifold3d
 import numpy as np
 import pytest
 import trimesh
@@ -82,6 +83,79 @@ def section_loop_sizes(mesh: trimesh.Trimesh, axis: int, level: float) -> np.nda
         projected = points[:, dimensions]
         sizes.append(projected.max(axis=0) - projected.min(axis=0))
     return np.array(sizes)
+
+
+def tangent_endpoint_section(
+    width: float,
+    length: float,
+    radius: float,
+    center: tuple[float, float],
+) -> manifold3d.CrossSection:
+    x0 = center[0] - width / 2.0
+    x1 = center[0] + width / 2.0
+    y0 = center[1] - length / 2.0
+    y1 = center[1] + length / 2.0
+    points = [
+        (x0 + radius, y0),
+        (x1 - radius, y0),
+        (x1, y0 + radius),
+        (x1, y1 - radius),
+        (x1 - radius, y1),
+        (x0 + radius, y1),
+        (x0, y1 - radius),
+        (x0, y0 + radius),
+    ]
+    return manifold3d.CrossSection([points])
+
+
+def build_profile_variant(
+    source: trimesh.Trimesh, *, chord_outer: bool, chord_inner: bool
+) -> trimesh.Trimesh:
+    mesh = base.generate_base(source)
+    if chord_outer:
+        outer_limit = base.manifold_to_mesh(
+            tangent_endpoint_section(
+                base.OUTER_WIDTH,
+                base.OUTER_LENGTH,
+                base.OUTER_RADIUS,
+                (base.CENTER_X, base.CENTER_Y),
+            )
+            .extrude(base.OUTER_HEIGHT + 0.2)
+            .translate((0.0, 0.0, -0.1))
+        )
+        return macro.boolean_meshes([mesh, outer_limit], "intersection")
+
+    if chord_inner:
+        outer = base.rounded_rectangle_section(
+            base.OUTER_WIDTH,
+            base.OUTER_LENGTH,
+            base.OUTER_RADIUS,
+            (base.CENTER_X, base.CENTER_Y),
+        )
+        inner = tangent_endpoint_section(
+            base.INNER_WIDTH,
+            base.INNER_LENGTH,
+            base.INNER_RADIUS,
+            (base.CENTER_X, base.CENTER_Y),
+        )
+        ring = base.manifold_to_mesh((outer - inner).extrude(base.OUTER_HEIGHT))
+        parts = [
+            ring,
+            base.build_switch_platform(source),
+            base.build_tower_and_ribs(),
+        ]
+        parts.extend(
+            base.build_safety_pad(x_side, y_side)
+            for x_side in (-1, 1)
+            for y_side in (-1, 1)
+        )
+        joined = macro.union_meshes(parts)
+        result = base.subtract_meshes(joined, [base.rear_hole_cutter()])
+        result.merge_vertices()
+        result.remove_unreferenced_vertices()
+        return result
+
+    raise ValueError("one profile must be chorded")
 
 
 def test_generate_base_preserves_exact_inner_chamfer_slope() -> None:
@@ -399,3 +473,44 @@ def test_validator_rejects_square_rear_wire_hole() -> None:
 
     with pytest.raises(ValueError, match="rear wire hole"):
         base.validate_base(square_hole, source)
+
+
+@pytest.mark.parametrize(
+    ("chord_outer", "chord_inner", "error_pattern"),
+    (
+        (True, False, "R4 outer"),
+        (False, True, "R1.6 inner"),
+    ),
+)
+def test_validator_rejects_tangent_endpoint_chord_profiles(
+    chord_outer: bool, chord_inner: bool, error_pattern: str
+) -> None:
+    source = base.load_canonical_source(SOURCE_ROOT)
+    chorded = build_profile_variant(
+        source, chord_outer=chord_outer, chord_inner=chord_inner
+    )
+
+    with pytest.raises(ValueError, match=error_pattern):
+        base.validate_base(chorded, source)
+
+
+def test_validator_rejects_inscribed_diamond_rear_wire_hole() -> None:
+    source = base.load_canonical_source(SOURCE_ROOT)
+    mesh = base.generate_base(source)
+    hole_fill = base.box_from_bounds(
+        np.array([27.7, 72.3, 2.8]), np.array([32.1, 74.8, 7.2])
+    )
+    filled_hole = macro.union_meshes([mesh, hole_fill])
+    diamond_cutter = trimesh.creation.cylinder(
+        radius=base.WIRE_HOLE_DIAMETER / 2.0,
+        height=base.WALL + 2.0,
+        sections=4,
+    )
+    diamond_cutter.apply_transform(
+        trimesh.transformations.rotation_matrix(np.pi / 2.0, [1.0, 0.0, 0.0])
+    )
+    diamond_cutter.apply_translation([base.CENTER_X, base.OUTER_LENGTH - 1.2, 5.0])
+    diamond_hole = base.subtract_meshes(filled_hole, [diamond_cutter])
+
+    with pytest.raises(ValueError, match="rear wire hole profile"):
+        base.validate_base(diamond_hole, source)
