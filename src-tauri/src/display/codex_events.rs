@@ -1,5 +1,6 @@
 use std::{collections::BTreeSet, path::PathBuf};
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -144,6 +145,14 @@ struct CodexSession {
     cwd: PathBuf,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CodexRolloutCursorState {
+    pub thread_id: String,
+    pub cwd: PathBuf,
+    pub open_turn_ids: BTreeSet<String>,
+    pub open_call_ids: BTreeSet<String>,
+}
+
 impl CodexRolloutIndex {
     pub fn apply_line(&mut self, line: &str) -> Result<(), CodexRolloutParseError> {
         if let Some(event) = parse_rollout_line(line)? {
@@ -181,6 +190,27 @@ impl CodexRolloutIndex {
             terminal_sequence: self.terminal_sequence,
             event: self.event,
         }]
+    }
+
+    pub fn cursor_state(&self) -> Option<CodexRolloutCursorState> {
+        let session = self.session.as_ref()?;
+        Some(CodexRolloutCursorState {
+            thread_id: session.thread_id.clone(),
+            cwd: session.cwd.clone(),
+            open_turn_ids: self.open_turn_ids.clone(),
+            open_call_ids: self.user_input_call_ids.clone(),
+        })
+    }
+
+    pub fn restore_cursor_state(&mut self, state: CodexRolloutCursorState) {
+        self.session = Some(CodexSession {
+            thread_id: state.thread_id,
+            cwd: state.cwd,
+        });
+        self.open_turn_ids = state.open_turn_ids;
+        self.user_input_call_ids = state.open_call_ids;
+        self.terminal_sequence = 0;
+        self.event = None;
     }
 
     fn apply_event(&mut self, event: CodexRolloutEvent, emit_terminal_event: bool) {

@@ -36,6 +36,13 @@ impl ProviderRegistry {
     ) -> impl Iterator<Item = &mut (dyn DisplayProvider + 'static)> + '_ {
         self.providers.iter_mut().map(Box::as_mut)
     }
+
+    pub fn source_ids(&self) -> Vec<&'static str> {
+        self.providers
+            .iter()
+            .map(|provider| provider.source_id())
+            .collect()
+    }
 }
 
 #[cfg(test)]
