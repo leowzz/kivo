@@ -7,6 +7,7 @@ import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Mapping
 
 TAG_VERSION_RE = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 TRACKED_VERSION_FILES = (
@@ -53,6 +54,17 @@ def read_env_version(path: Path) -> str:
     if len(lines) != 1 or not lines[0].startswith("version="):
         raise VersionError(f"{path} must contain exactly one version=vX.Y.Z line")
     return validate_tag_version(lines[0].removeprefix("version="))
+
+
+def resolve_firmware_build_id(root: Path, environ: Mapping[str, str]) -> str:
+    explicit = environ.get("KIVO_FIRMWARE_BUILD_ID")
+    if explicit is not None:
+        if not explicit or re.fullmatch(r"\S+", explicit) is None:
+            raise VersionError(
+                "KIVO_FIRMWARE_BUILD_ID must be one non-whitespace token"
+            )
+        return explicit
+    return read_env_version(root / ".env")
 
 
 def _section_bounds(lines: list[str], header: str, path: Path) -> tuple[int, int]:

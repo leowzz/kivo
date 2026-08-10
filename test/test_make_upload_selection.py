@@ -12,6 +12,8 @@ def run_make(
     tmp_path: Path,
     target: str,
     *,
+    build_id: str | None = "test-build",
+    env_file: Path | None = None,
     serial: str | None = None,
     selected_serial: str = "SELECTED-SERIAL",
     runtime_serial: str | None = None,
@@ -22,7 +24,7 @@ def run_make(
     fake_uv.write_text(
         """#!/bin/sh
 set -eu
-printf '%s\\n' "$*" >> "$KIVO_TEST_LOG"
+printf '%s|%s\\n' "${KIVO_FIRMWARE_BUILD_ID-}" "$*" >> "$KIVO_TEST_LOG"
 case " $* " in
   *" scripts/select_firmware_target.py "*)
     if [ "$KIVO_SELECTOR_EXIT" -ne 0 ]; then
@@ -46,7 +48,11 @@ esac
         "KIVO_RUNTIME_SERIAL": runtime_serial or selected_serial,
         "KIVO_SELECTOR_EXIT": str(selector_exit),
     }
-    command = ["make", target, f"UV={fake_uv}", "BUILD_ID=test-build"]
+    command = ["make", target, f"UV={fake_uv}"]
+    if build_id is not None:
+        command.append(f"BUILD_ID={build_id}")
+    if env_file is not None:
+        command.append(f"ENV_FILE={env_file}")
     if serial is not None:
         command.append(f"SERIAL={serial}")
 
@@ -60,6 +66,29 @@ esac
     )
     invocations = log_path.read_text().splitlines() if log_path.exists() else []
     return result, invocations
+
+
+def test_make_uses_env_version_as_default_build_id(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("version=v1.2.3\n")
+    result, invocations = run_make(
+        tmp_path, "build-rp2040", build_id=None, env_file=env_file
+    )
+    assert result.returncode == 0, result.stderr
+    assert any(line.startswith("v1.2.3|") for line in invocations)
+    assert all("+dev" not in line for line in invocations)
+
+
+def test_make_firmware_target_explains_missing_env(tmp_path: Path) -> None:
+    result, invocations = run_make(
+        tmp_path,
+        "build-rp2040",
+        build_id=None,
+        env_file=tmp_path / "missing.env",
+    )
+    assert result.returncode != 0
+    assert "cp .env.example .env" in result.stderr
+    assert invocations == []
 
 
 def test_explicit_serial_bypasses_selector_and_reaches_rp2040_tools(

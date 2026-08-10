@@ -1,9 +1,15 @@
 import os
-import re
+from pathlib import Path
+import sys
 
 Import("env")  # type: ignore[name-defined]  # PlatformIO provides this symbol.
 
-build_id = os.environ.get("KIVO_FIRMWARE_BUILD_ID", "0.1.0+dev")
-if not re.fullmatch(r"\S+", build_id):
-    raise ValueError("KIVO_FIRMWARE_BUILD_ID must be one non-whitespace token")
-env.Append(CPPDEFINES=[("KIVO_FIRMWARE_BUILD_ID", env.StringifyMacro(build_id))])
+ROOT = Path(env.subst("$PROJECT_DIR")).resolve()  # type: ignore[name-defined]
+sys.path.insert(0, str(ROOT))
+
+from scripts.repo_version import resolve_firmware_build_id  # noqa: E402
+
+build_id = resolve_firmware_build_id(ROOT, os.environ)
+env.Append(  # type: ignore[name-defined]
+    CPPDEFINES=[("KIVO_FIRMWARE_BUILD_ID", env.StringifyMacro(build_id))]
+)
