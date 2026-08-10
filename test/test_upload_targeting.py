@@ -104,14 +104,14 @@ def test_select_download_port_rejects_malformed_or_different_hex_serial(observed
 
 def test_runtime_verifier_retries_until_protocol_is_ready() -> None:
     runtime = FakeRuntimeSerial(
-        [b"", b"HELLO 6 esp32s3 luatos-esp32s3-aio acceptance\n"]
+        [b"", b"HELLO 7 esp32s3 luatos-esp32s3-aio acceptance\n"]
     )
     opened: list[str] = []
     times = iter([0.0, 0.0, 0.1])
 
     wait_for_expected_hello(
         "/dev/target",
-        ["HELLO", "6", "esp32s3", "luatos-esp32s3-aio", "acceptance"],
+        ["HELLO", "7", "esp32s3", "luatos-esp32s3-aio", "acceptance"],
         timeout=1,
         serial_factory=lambda port, *_args, **_kwargs: opened.append(port) or runtime,
         monotonic=lambda: next(times),
@@ -121,7 +121,7 @@ def test_runtime_verifier_retries_until_protocol_is_ready() -> None:
     assert runtime.write_count == 2
 
 
-def test_runtime_verifier_requires_protocol_v6(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_runtime_verifier_requires_protocol_v7(monkeypatch: pytest.MonkeyPatch) -> None:
     observed: list[tuple[str, list[str]]] = []
     monkeypatch.setattr(
         "scripts.verify_runtime_firmware.wait_for_runtime_port",
@@ -143,7 +143,7 @@ def test_runtime_verifier_requires_protocol_v6(monkeypatch: pytest.MonkeyPatch) 
     assert observed == [
         (
             "/dev/target",
-            ["HELLO", "6", "rp2040", "vccgnd-yd-rp2040", "v0.6.1"],
+            ["HELLO", "7", "rp2040", "vccgnd-yd-rp2040", "v0.6.1"],
         )
     ]
 
@@ -155,7 +155,7 @@ def test_runtime_verifier_bounds_timeout_and_reports_expected_and_observed() -> 
     with pytest.raises(TargetError) as captured:
         wait_for_expected_hello(
             "/dev/target",
-            ["HELLO", "6", "esp32s3", "luatos-esp32s3-aio", "acceptance"],
+            ["HELLO", "7", "esp32s3", "luatos-esp32s3-aio", "acceptance"],
             timeout=1,
             serial_factory=lambda *_args, **_kwargs: runtime,
             monotonic=lambda: next(times),
@@ -164,7 +164,7 @@ def test_runtime_verifier_bounds_timeout_and_reports_expected_and_observed() -> 
 
     assert runtime.write_count == 2
     assert "timed out" in str(captured.value)
-    assert "HELLO 6 esp32s3 luatos-esp32s3-aio acceptance" in str(captured.value)
+    assert "HELLO 7 esp32s3 luatos-esp32s3-aio acceptance" in str(captured.value)
     assert "WRONG 3 response" in str(captured.value)
 
 

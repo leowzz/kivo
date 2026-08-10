@@ -12,6 +12,7 @@
 #include "Handshake.h"
 #include "InputTopology.h"
 #include "KeyActivityIndicator.h"
+#include "RemoteDisplay.h"
 #include "StandaloneDebugTopology.h"
 #include "TriggerProtocol.h"
 #include "platform/HidReportTransport.h"
@@ -43,6 +44,332 @@ std::vector<platform::KeyboardReport> captureKeyboardReports(
       []() {});
   TEST_ASSERT_TRUE(sent);
   return reports;
+}
+
+void commitFullScene(RemoteDisplay &display, std::uint32_t revision) {
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(revision, 0, DisplayMode::Full));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 64, 16}));
+  TEST_ASSERT_TRUE(display.clear(0));
+  TEST_ASSERT_TRUE(display.text(0, 0, 12, 0, "BASE"));
+  TEST_ASSERT_TRUE(display.commit(revision).has_value());
+}
+
+void test_display_transaction_commits_atomically() {
+  RemoteDisplay display;
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(2, 0, DisplayMode::Full));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 64, 16}));
+  TEST_ASSERT_TRUE(display.clear(0));
+  TEST_ASSERT_TRUE(display.text(0, 0, 12, 0, "KIVO"));
+  TEST_ASSERT_FALSE(display.committed().has_value());
+
+  const auto commit = display.commit(2);
+
+  TEST_ASSERT_TRUE(commit.has_value());
+  TEST_ASSERT_EQUAL_UINT32(2, display.revision());
+  TEST_ASSERT_TRUE(display.committed().has_value());
+  TEST_ASSERT_EQUAL_UINT32(1, display.committed()->regionCount);
+  TEST_ASSERT_EQUAL_STRING(
+      "KIVO", display.committed()->regions[0].textOps[0].text.c_str());
+}
+
+void test_display_revision_rules_request_resync_without_mutation() {
+  RemoteDisplay display;
+  commitFullScene(display, 4);
+
+  TEST_ASSERT_EQUAL(DisplayResult::Resync,
+                    display.begin(5, 3, DisplayMode::Delta));
+  TEST_ASSERT_EQUAL_UINT32(4, display.revision());
+  TEST_ASSERT_EQUAL_STRING(
+      "BASE", display.committed()->regions[0].textOps[0].text.c_str());
+  TEST_ASSERT_EQUAL(DisplayResult::Rejected,
+                    display.begin(5, 4, DisplayMode::Full));
+  TEST_ASSERT_EQUAL(DisplayResult::Rejected,
+                    display.begin(5, 0, DisplayMode::Delta));
+  TEST_ASSERT_EQUAL(DisplayResult::Rejected,
+                    display.begin(0, 0, DisplayMode::Full));
+  TEST_ASSERT_EQUAL(DisplayResult::Rejected,
+                    display.begin(4, 4, DisplayMode::Delta));
+}
+
+void test_new_begin_discards_uncommitted_transaction() {
+  RemoteDisplay display;
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(1, 0, DisplayMode::Full));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 64, 16}));
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(2, 0, DisplayMode::Full));
+  TEST_ASSERT_FALSE(display.commit(1).has_value());
+}
+
+void test_display_invalid_operation_discards_staging_without_mutation() {
+  RemoteDisplay display;
+  commitFullScene(display, 4);
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(5, 4, DisplayMode::Delta));
+  TEST_ASSERT_TRUE(display.region(0, {64, 0, 64, 16}));
+
+  TEST_ASSERT_FALSE(display.text(0, 63, 12, 0, "OUTSIDE"));
+
+  TEST_ASSERT_FALSE(display.commit(5).has_value());
+  TEST_ASSERT_EQUAL_UINT32(4, display.revision());
+  TEST_ASSERT_EQUAL_STRING(
+      "BASE", display.committed()->regions[0].textOps[0].text.c_str());
+}
+
+void test_display_regions_are_bounded_aligned_unique_and_fixed_capacity() {
+  RemoteDisplay display;
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(1, 0, DisplayMode::Full));
+  TEST_ASSERT_FALSE(display.region(0, {0, 0, 0, 8}));
+  TEST_ASSERT_FALSE(display.commit(1).has_value());
+
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(1, 0, DisplayMode::Full));
+  TEST_ASSERT_FALSE(display.region(0, {4, 0, 8, 8}));
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(1, 0, DisplayMode::Full));
+  TEST_ASSERT_FALSE(display.region(0, {0, 4, 8, 8}));
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(1, 0, DisplayMode::Full));
+  TEST_ASSERT_FALSE(display.region(0, {120, 24, 16, 8}));
+
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(1, 0, DisplayMode::Full));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 8, 8}));
+  TEST_ASSERT_FALSE(display.region(0, {8, 0, 8, 8}));
+
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(1, 0, DisplayMode::Full));
+  for (std::uint8_t slot = 0; slot < kMaxDisplayRegions; ++slot) {
+    TEST_ASSERT_TRUE(display.region(slot, {0, 0, 8, 8}));
+  }
+  TEST_ASSERT_FALSE(display.region(8, {0, 0, 8, 8}));
+}
+
+void test_display_operations_require_regions_and_enforce_total_limit() {
+  RemoteDisplay display;
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(1, 0, DisplayMode::Full));
+  TEST_ASSERT_FALSE(display.clear(0));
+
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(1, 0, DisplayMode::Full));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 32}));
+  for (std::size_t index = 0; index < kMaxDisplayOps; ++index) {
+    TEST_ASSERT_TRUE(display.clear(0));
+  }
+  TEST_ASSERT_FALSE(display.clear(0));
+  TEST_ASSERT_FALSE(display.commit(1).has_value());
+}
+
+void test_display_text_rejects_invalid_font_charset_and_length() {
+  RemoteDisplay display;
+  const std::string longest(kMaxDisplayTextBytes, 'A');
+  const std::string oversized(kMaxDisplayTextBytes + 1, 'A');
+  const std::string control("BAD\nTEXT");
+  const std::string nonAscii(1, static_cast<char>(0x80));
+
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(1, 0, DisplayMode::Full));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 32}));
+  TEST_ASSERT_TRUE(display.text(0, 0, 0, 0, longest));
+  TEST_ASSERT_FALSE(display.text(0, 0, 0, 0, oversized));
+
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(1, 0, DisplayMode::Full));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 32}));
+  TEST_ASSERT_FALSE(display.text(0, 0, 0, 1, "FONT"));
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(1, 0, DisplayMode::Full));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 32}));
+  TEST_ASSERT_FALSE(display.text(0, 0, 0, 0, control));
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(1, 0, DisplayMode::Full));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 32}));
+  TEST_ASSERT_FALSE(display.text(0, 0, 0, 0, nonAscii));
+}
+
+void test_display_delta_replaces_only_declared_slots_and_unions_dirty_bounds() {
+  RemoteDisplay display;
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(1, 0, DisplayMode::Full));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 64, 16}));
+  TEST_ASSERT_TRUE(display.text(0, 0, 12, 0, "LEFT"));
+  TEST_ASSERT_TRUE(display.region(1, {64, 0, 64, 16}));
+  TEST_ASSERT_TRUE(display.text(1, 64, 12, 0, "RIGHT"));
+  TEST_ASSERT_TRUE(display.commit(1).has_value());
+
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(2, 1, DisplayMode::Delta));
+  TEST_ASSERT_TRUE(display.region(0, {0, 16, 64, 16}));
+  TEST_ASSERT_TRUE(display.text(0, 0, 28, 0, "MOVED"));
+  const auto commit = display.commit(2);
+
+  TEST_ASSERT_TRUE(commit.has_value());
+  TEST_ASSERT_EQUAL_UINT32(2, commit->regionCount);
+  TEST_ASSERT_EQUAL_STRING("MOVED", commit->regions[0].textOps[0].text.c_str());
+  TEST_ASSERT_EQUAL_STRING("RIGHT", commit->regions[1].textOps[0].text.c_str());
+  TEST_ASSERT_EQUAL_UINT32(1, commit->dirtyCount);
+  TEST_ASSERT_EQUAL_UINT16(0, commit->dirtyBounds[0].x);
+  TEST_ASSERT_EQUAL_UINT16(0, commit->dirtyBounds[0].y);
+  TEST_ASSERT_EQUAL_UINT16(64, commit->dirtyBounds[0].width);
+  TEST_ASSERT_EQUAL_UINT16(32, commit->dirtyBounds[0].height);
+}
+
+void test_display_full_commit_dirties_old_and_new_slot_union() {
+  RemoteDisplay display;
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(1, 0, DisplayMode::Full));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 64, 16}));
+  auto first = display.commit(1);
+  TEST_ASSERT_TRUE(first.has_value());
+  TEST_ASSERT_EQUAL_UINT32(1, first->dirtyCount);
+  TEST_ASSERT_EQUAL_UINT16(64, first->dirtyBounds[0].width);
+  TEST_ASSERT_EQUAL_UINT16(16, first->dirtyBounds[0].height);
+
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(2, 0, DisplayMode::Full));
+  TEST_ASSERT_TRUE(display.region(0, {0, 16, 64, 16}));
+  const auto second = display.commit(2);
+
+  TEST_ASSERT_TRUE(second.has_value());
+  TEST_ASSERT_EQUAL_UINT32(1, second->dirtyCount);
+  TEST_ASSERT_EQUAL_UINT16(0, second->dirtyBounds[0].x);
+  TEST_ASSERT_EQUAL_UINT16(0, second->dirtyBounds[0].y);
+  TEST_ASSERT_EQUAL_UINT16(64, second->dirtyBounds[0].width);
+  TEST_ASSERT_EQUAL_UINT16(32, second->dirtyBounds[0].height);
+}
+
+void test_parses_display_commands_and_decodes_ascii_base64() {
+  const auto begin = parseHelperCommand("DISPLAY_BEGIN 2 1 delta\n");
+  TEST_ASSERT_TRUE(begin.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::DisplayBegin, begin->kind);
+  TEST_ASSERT_EQUAL_UINT32(2, begin->revision);
+  TEST_ASSERT_EQUAL_UINT32(1, begin->baseRevision);
+  TEST_ASSERT_FALSE(begin->displayFull);
+
+  const auto full = parseHelperCommand("DISPLAY_BEGIN 1 0 full\n");
+  TEST_ASSERT_TRUE(full.has_value());
+  TEST_ASSERT_TRUE(full->displayFull);
+
+  const auto region =
+      parseHelperCommand("DISPLAY_REGION 1 64 0 64 16\n");
+  TEST_ASSERT_TRUE(region.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::DisplayRegion, region->kind);
+  TEST_ASSERT_EQUAL_UINT8(1, region->displaySlot);
+  TEST_ASSERT_EQUAL_UINT16(64, region->displayX);
+  TEST_ASSERT_EQUAL_UINT16(0, region->displayY);
+  TEST_ASSERT_EQUAL_UINT16(64, region->displayWidth);
+  TEST_ASSERT_EQUAL_UINT16(16, region->displayHeight);
+
+  const auto clear = parseHelperCommand("DISPLAY_CLEAR 1\n");
+  TEST_ASSERT_TRUE(clear.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::DisplayClear, clear->kind);
+  TEST_ASSERT_EQUAL_UINT8(1, clear->displaySlot);
+
+  const auto text = parseHelperCommand("DISPLAY_TEXT 1 64 12 0 S0lWTw==\n");
+  TEST_ASSERT_TRUE(text.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::DisplayText, text->kind);
+  TEST_ASSERT_EQUAL_UINT8(1, text->displaySlot);
+  TEST_ASSERT_EQUAL_UINT16(64, text->displayX);
+  TEST_ASSERT_EQUAL_UINT16(12, text->displayY);
+  TEST_ASSERT_EQUAL_UINT8(0, text->displayFontId);
+  TEST_ASSERT_EQUAL_STRING("KIVO", text->displayText.c_str());
+
+  const auto commit = parseHelperCommand("DISPLAY_COMMIT 2\n");
+  TEST_ASSERT_TRUE(commit.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::DisplayCommit, commit->kind);
+  TEST_ASSERT_EQUAL_UINT32(2, commit->revision);
+}
+
+void test_rejects_malformed_display_command_tokens_numbers_and_base64() {
+  const char *invalid[] = {
+      "DISPLAY_BEGIN 2 1 Delta\n",
+      "DISPLAY_BEGIN 2 1 delta trailing\n",
+      "DISPLAY_BEGIN -2 0 full\n",
+      "DISPLAY_REGION 1 0 0 64\n",
+      "DISPLAY_REGION 256 0 0 64 16\n",
+      "DISPLAY_REGION 1 65536 0 64 16\n",
+      "DISPLAY_CLEAR 1 trailing\n",
+      "DISPLAY_TEXT 1 0 12 0\n",
+      "DISPLAY_TEXT 1 0 12 0 A===\n",
+      "DISPLAY_TEXT 1 0 12 0 S0l*Tw==\n",
+      "DISPLAY_TEXT 1 0 12 0 S0lWTw=\n",
+      "DISPLAY_TEXT 1 0 12 0 S0lWTw==trailing\n",
+      "DISPLAY_TEXT 1 0 12 0 QkFEClRFWFQ=\n",
+      "DISPLAY_TEXT 1 0 12 0 AEFC\n",
+      "DISPLAY_TEXT 1 0 12 0 gA==\n",
+      "DISPLAY_COMMIT 2 trailing\n",
+  };
+  for (const auto line : invalid) {
+    TEST_ASSERT_FALSE_MESSAGE(parseHelperCommand(line).has_value(), line);
+  }
+
+  const std::string oversizedDecoded(68, 'Q');
+  TEST_ASSERT_FALSE(parseHelperCommand("DISPLAY_TEXT 1 0 12 0 " +
+                                       oversizedDecoded + "\n")
+                        .has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand(std::string(255, 'x')).has_value());
+}
+
+void test_display_dispatch_formats_exact_replies_and_clears_bad_staging() {
+  RemoteDisplay display;
+  const auto begin = *parseHelperCommand("DISPLAY_BEGIN 2 0 full\n");
+  TEST_ASSERT_FALSE(dispatchDisplayCommand(display, begin, true).has_value());
+  TEST_ASSERT_EQUAL_UINT32(2, display.stagedRevision().value_or(0));
+
+  const auto malformed =
+      discardMalformedDisplayCommand(display, "DISPLAY_TEXT 0 0 12 0 A===\n");
+  TEST_ASSERT_TRUE(malformed.has_value());
+  TEST_ASSERT_EQUAL_STRING("DISPLAY_ERROR 2 invalid_text\n",
+                           malformed->c_str());
+  TEST_ASSERT_FALSE(display.stagedRevision().has_value());
+  TEST_ASSERT_FALSE(discardMalformedDisplayCommand(display, "UNKNOWN\n")
+                        .has_value());
+  TEST_ASSERT_EQUAL_STRING(
+      "DISPLAY_ERROR 9 invalid_begin\n",
+      discardMalformedDisplayCommand(display, "DISPLAY_BEGIN 9 nope full\n")
+          ->c_str());
+  TEST_ASSERT_EQUAL_STRING(
+      "DISPLAY_ERROR 0 invalid_begin\n",
+      discardMalformedDisplayCommand(display, "DISPLAY_BEGIN nope\n")
+          ->c_str());
+}
+
+void test_display_dispatch_replies_for_resync_commit_and_unsupported_panel() {
+  RemoteDisplay display;
+  commitFullScene(display, 4);
+  const auto mismatch = *parseHelperCommand("DISPLAY_BEGIN 5 3 delta\n");
+  TEST_ASSERT_EQUAL_STRING(
+      "DISPLAY_RESYNC 4\n",
+      dispatchDisplayCommand(display, mismatch, true)->c_str());
+
+  const auto begin = *parseHelperCommand("DISPLAY_BEGIN 5 4 delta\n");
+  TEST_ASSERT_FALSE(dispatchDisplayCommand(display, begin, true).has_value());
+  const auto region = *parseHelperCommand("DISPLAY_REGION 0 0 0 64 16\n");
+  TEST_ASSERT_FALSE(dispatchDisplayCommand(display, region, true).has_value());
+  const auto text = *parseHelperCommand("DISPLAY_TEXT 0 0 12 0 TkVX\n");
+  TEST_ASSERT_FALSE(dispatchDisplayCommand(display, text, true).has_value());
+  const auto commit = *parseHelperCommand("DISPLAY_COMMIT 5\n");
+  TEST_ASSERT_EQUAL_STRING("DISPLAY_OK 5\n",
+                           dispatchDisplayCommand(display, commit, true)
+                               ->c_str());
+
+  RemoteDisplay unsupported;
+  const auto unsupportedReply = dispatchDisplayCommand(
+      unsupported, *parseHelperCommand("DISPLAY_BEGIN 1 0 full\n"), false);
+  TEST_ASSERT_EQUAL_STRING("DISPLAY_ERROR 1 unsupported_display\n",
+                           unsupportedReply->c_str());
+}
+
+void test_formats_display_protocol_replies_exactly() {
+  TEST_ASSERT_EQUAL_STRING("DISPLAY_OK 7\n", formatDisplayOk(7).c_str());
+  TEST_ASSERT_EQUAL_STRING("DISPLAY_RESYNC 4\n",
+                           formatDisplayResync(4).c_str());
+  TEST_ASSERT_EQUAL_STRING("DISPLAY_ERROR 9 invalid_commit\n",
+                           formatDisplayError(9, "invalid_commit").c_str());
 }
 
 void test_commits_complete_matrix_topology_atomically() {
@@ -134,9 +461,9 @@ void test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins() {
                     platform::selectRp2040OledBus(5, 6));
 }
 
-void test_formats_protocol_v6_hello_with_board_and_build() {
+void test_formats_protocol_v7_hello_with_board_and_build() {
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 6 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 27 "
+      "HELLO 7 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 27 "
       "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 26 "
       "27 28 29\n",
       formatHello(kVccGndYdRp2040, "0.1.0+gabc1234").c_str());
@@ -906,6 +1233,20 @@ void test_hid_consumer_control_waits_for_press_and_release_report_slots() {
 
 int main(int, char **) {
   UNITY_BEGIN();
+  RUN_TEST(test_display_transaction_commits_atomically);
+  RUN_TEST(test_display_revision_rules_request_resync_without_mutation);
+  RUN_TEST(test_new_begin_discards_uncommitted_transaction);
+  RUN_TEST(test_display_invalid_operation_discards_staging_without_mutation);
+  RUN_TEST(test_display_regions_are_bounded_aligned_unique_and_fixed_capacity);
+  RUN_TEST(test_display_operations_require_regions_and_enforce_total_limit);
+  RUN_TEST(test_display_text_rejects_invalid_font_charset_and_length);
+  RUN_TEST(test_display_delta_replaces_only_declared_slots_and_unions_dirty_bounds);
+  RUN_TEST(test_display_full_commit_dirties_old_and_new_slot_union);
+  RUN_TEST(test_parses_display_commands_and_decodes_ascii_base64);
+  RUN_TEST(test_rejects_malformed_display_command_tokens_numbers_and_base64);
+  RUN_TEST(test_display_dispatch_formats_exact_replies_and_clears_bad_staging);
+  RUN_TEST(test_display_dispatch_replies_for_resync_commit_and_unsupported_panel);
+  RUN_TEST(test_formats_display_protocol_replies_exactly);
   RUN_TEST(test_commits_complete_matrix_topology_atomically);
   RUN_TEST(test_runtime_topology_counts_direct_and_matrix_keys);
   RUN_TEST(test_board_profiles_enforce_exact_safe_pins);
@@ -913,7 +1254,7 @@ int main(int, char **) {
   RUN_TEST(test_rp2040_standalone_debug_topology_matches_keyboard_wiring);
   RUN_TEST(test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match);
   RUN_TEST(test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins);
-  RUN_TEST(test_formats_protocol_v6_hello_with_board_and_build);
+  RUN_TEST(test_formats_protocol_v7_hello_with_board_and_build);
   RUN_TEST(test_rejects_empty_firmware_build_id);
   RUN_TEST(test_rejects_whitespace_in_firmware_build_id);
   RUN_TEST(test_contact_edge_reports_unordered_pair_once_after_debounce);

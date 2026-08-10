@@ -10,6 +10,7 @@
 #include "GpioTriggerController.h"
 #include "Handshake.h"
 #include "KeyActivityIndicator.h"
+#include "RemoteDisplay.h"
 #include "StandaloneDebugTopology.h"
 #include "TriggerProtocol.h"
 #include "platform/Platform.h"
@@ -25,6 +26,7 @@ KeyActivityIndicator keyIndicator;
 ResponseLineBuffer responseLines(kMaxResponseLineLength);
 TopologyBuilder topologyBuilder(platform::boardProfile());
 DisplayStatusModel displayStatus;
+RemoteDisplay remoteDisplay;
 bool helperConnected = false;
 bool standaloneDisplayPending = false;
 std::uint32_t standaloneDisplayStartedMs = 0;
@@ -134,6 +136,9 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
   const auto command = parseHelperCommand(line);
   if (!command.has_value()) {
     topologyBuilder.cancel();
+    const auto displayError =
+        discardMalformedDisplayCommand(remoteDisplay, line);
+    if (displayError.has_value()) writeLine(*displayError);
     return;
   }
   switch (command->kind) {
@@ -177,6 +182,16 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
       }
       activateTopology(*topology, nowMs);
       writeLine("CONFIG_OK " + std::to_string(command->revision) + "\n");
+      return;
+    }
+    case HelperCommandKind::DisplayBegin:
+    case HelperCommandKind::DisplayRegion:
+    case HelperCommandKind::DisplayClear:
+    case HelperCommandKind::DisplayText:
+    case HelperCommandKind::DisplayCommit: {
+      const auto reply = dispatchDisplayCommand(
+          remoteDisplay, *command, controller.topology().oled.has_value());
+      if (reply.has_value()) writeLine(*reply);
       return;
     }
     case HelperCommandKind::LearnBegin:
@@ -367,6 +382,7 @@ void loop() {
   if (connected != helperConnected) {
     pendingDelay.reset();
     actionRuns.reset();
+    remoteDisplay.cancel();
     displayStatus.setUsbConnected(connected);
     renderStatus();
     if (connected) writeLine(helloLine);

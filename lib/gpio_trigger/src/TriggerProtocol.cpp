@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <limits>
 
+#include "RemoteDisplay.h"
+
 namespace {
 constexpr std::size_t kMaxProtocolPinCount = 23;
 constexpr std::size_t kMaxChordKeyCount = 6;
@@ -243,6 +245,94 @@ std::optional<HelperCommand> parseHelperCommand(std::string_view line) {
     if (!takePins(line, *count, command.pins) || takeToken(line).has_value()) {
       return std::nullopt;
     }
+    return command;
+  }
+
+  if (*kind == "DISPLAY_BEGIN") {
+    const auto revision = takeNumber(line);
+    const auto baseRevision = takeNumber(line);
+    const auto mode = takeToken(line);
+    if (!revision.has_value() || !baseRevision.has_value() ||
+        !mode.has_value() || (*mode != "full" && *mode != "delta") ||
+        takeToken(line).has_value()) {
+      return std::nullopt;
+    }
+    HelperCommand command{HelperCommandKind::DisplayBegin};
+    command.revision = *revision;
+    command.baseRevision = *baseRevision;
+    command.displayFull = *mode == "full";
+    return command;
+  }
+
+  if (*kind == "DISPLAY_REGION") {
+    const auto slot = takeNumber(line);
+    const auto x = takeNumber(line);
+    const auto y = takeNumber(line);
+    const auto width = takeNumber(line);
+    const auto height = takeNumber(line);
+    if (!slot.has_value() || *slot > std::numeric_limits<std::uint8_t>::max() ||
+        !x.has_value() || *x > std::numeric_limits<std::uint16_t>::max() ||
+        !y.has_value() || *y > std::numeric_limits<std::uint16_t>::max() ||
+        !width.has_value() ||
+        *width > std::numeric_limits<std::uint16_t>::max() ||
+        !height.has_value() ||
+        *height > std::numeric_limits<std::uint16_t>::max() ||
+        takeToken(line).has_value()) {
+      return std::nullopt;
+    }
+    HelperCommand command{HelperCommandKind::DisplayRegion};
+    command.displaySlot = static_cast<std::uint8_t>(*slot);
+    command.displayX = static_cast<std::uint16_t>(*x);
+    command.displayY = static_cast<std::uint16_t>(*y);
+    command.displayWidth = static_cast<std::uint16_t>(*width);
+    command.displayHeight = static_cast<std::uint16_t>(*height);
+    return command;
+  }
+
+  if (*kind == "DISPLAY_CLEAR") {
+    const auto slot = takeNumber(line);
+    if (!slot.has_value() || *slot > std::numeric_limits<std::uint8_t>::max() ||
+        takeToken(line).has_value()) {
+      return std::nullopt;
+    }
+    HelperCommand command{HelperCommandKind::DisplayClear};
+    command.displaySlot = static_cast<std::uint8_t>(*slot);
+    return command;
+  }
+
+  if (*kind == "DISPLAY_TEXT") {
+    const auto slot = takeNumber(line);
+    const auto x = takeNumber(line);
+    const auto baselineY = takeNumber(line);
+    const auto fontId = takeNumber(line);
+    const auto encoded = takeToken(line);
+    if (!slot.has_value() || *slot > std::numeric_limits<std::uint8_t>::max() ||
+        !x.has_value() || *x > std::numeric_limits<std::uint16_t>::max() ||
+        !baselineY.has_value() ||
+        *baselineY > std::numeric_limits<std::uint16_t>::max() ||
+        !fontId.has_value() ||
+        *fontId > std::numeric_limits<std::uint8_t>::max() ||
+        !encoded.has_value() || takeToken(line).has_value()) {
+      return std::nullopt;
+    }
+    const auto decoded = decodeDisplayText(*encoded);
+    if (!decoded.has_value()) return std::nullopt;
+    HelperCommand command{HelperCommandKind::DisplayText};
+    command.displaySlot = static_cast<std::uint8_t>(*slot);
+    command.displayX = static_cast<std::uint16_t>(*x);
+    command.displayY = static_cast<std::uint16_t>(*baselineY);
+    command.displayFontId = static_cast<std::uint8_t>(*fontId);
+    command.displayText = *decoded;
+    return command;
+  }
+
+  if (*kind == "DISPLAY_COMMIT") {
+    const auto revision = takeNumber(line);
+    if (!revision.has_value() || takeToken(line).has_value()) {
+      return std::nullopt;
+    }
+    HelperCommand command{HelperCommandKind::DisplayCommit};
+    command.revision = *revision;
     return command;
   }
 

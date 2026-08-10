@@ -16,6 +16,11 @@ enum class HelperCommandKind {
   ConfigMatrix,
   ConfigOled,
   ConfigCommit,
+  DisplayBegin,
+  DisplayRegion,
+  DisplayClear,
+  DisplayText,
+  DisplayCommit,
   LearnBegin,
   LearnEnd,
   Paste,
@@ -30,6 +35,7 @@ enum class HelperCommandKind {
 struct HelperCommand {
   HelperCommandKind kind;
   std::uint32_t revision = 0;
+  std::uint32_t baseRevision = 0;
   std::uint32_t runId = 0;
   std::uint16_t debounceMs = 0;
   std::uint16_t step = 0;
@@ -42,6 +48,14 @@ struct HelperCommand {
   std::uint32_t durationMs = 0;
   std::uint8_t oledSda = 0;
   std::uint8_t oledScl = 0;
+  bool displayFull = false;
+  std::uint8_t displaySlot = 0;
+  std::uint16_t displayX = 0;
+  std::uint16_t displayY = 0;
+  std::uint16_t displayWidth = 0;
+  std::uint16_t displayHeight = 0;
+  std::uint8_t displayFontId = 0;
+  std::string displayText;
   std::vector<std::uint8_t> pins;
   std::vector<std::uint8_t> rows;
   std::vector<std::uint8_t> columns;
