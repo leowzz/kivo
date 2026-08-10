@@ -1,10 +1,13 @@
 import hashlib
+import json
+import warnings
 from pathlib import Path
 
 import manifold3d
 import numpy as np
 import pytest
 import trimesh
+from PIL import Image
 
 from scripts import macro_pad_variants as macro
 from scripts import telephone_handset_switch_base as base
@@ -514,3 +517,66 @@ def test_validator_rejects_inscribed_diamond_rear_wire_hole() -> None:
 
     with pytest.raises(ValueError, match="rear wire hole profile"):
         base.validate_base(diamond_hole, source)
+
+
+def test_export_is_deterministic_and_reload_validates(tmp_path: Path) -> None:
+    source = base.load_canonical_source(SOURCE_ROOT)
+    first = tmp_path / "first.stl"
+    second = tmp_path / "second.stl"
+
+    base.export_base(base.generate_base(source), first)
+    base.export_base(base.generate_base(source), second)
+
+    assert first.read_bytes() == second.read_bytes()
+    reloaded = trimesh.load_mesh(first, file_type="stl", process=False)
+    assert isinstance(reloaded, trimesh.Trimesh)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        base.validate_base(reloaded, source)
+
+
+def test_main_exports_stl_json_and_four_nonblank_previews(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output_root = tmp_path / "output"
+    preview_root = tmp_path / "previews"
+
+    result = base.main(
+        [
+            "--source-root",
+            str(SOURCE_ROOT),
+            "--output-root",
+            str(output_root),
+            "--preview-root",
+            str(preview_root),
+        ]
+    )
+
+    assert result == 0
+    target = output_root / base.OUTPUT_FILENAME
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["stl_path"] == str(target)
+    assert payload["stl_sha256"] == hashlib.sha256(target.read_bytes()).hexdigest()
+    assert payload["protected_mismatch_volume"] <= base.PROTECTED_VOLUME_TOLERANCE
+
+    expected_previews = {
+        "isometric.png",
+        "top.png",
+        "side-section.png",
+        "bottom.png",
+    }
+    assert {path.name for path in preview_root.iterdir()} == expected_previews
+    for path in preview_root.iterdir():
+        with Image.open(path) as image:
+            assert image.size == (1200, 900)
+            pixels = np.asarray(image.convert("RGB"))
+        ink = np.any(pixels != 255, axis=2)
+        nonblank = np.count_nonzero(ink)
+        assert nonblank >= pixels.shape[0] * pixels.shape[1] * 0.05
+        if path.name == "side-section.png":
+            rows, columns = np.nonzero(ink)
+            framed = ink[
+                rows.min() : rows.max() + 1,
+                columns.min() : columns.max() + 1,
+            ]
+            assert np.count_nonzero(~framed) >= framed.size * 0.15

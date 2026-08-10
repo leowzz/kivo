@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import manifold3d
@@ -108,6 +108,19 @@ SUPPORT_TOP_PROBES = (
 DEFAULT_SOURCE_ROOT = Path("models/3d-print/3x3keypad")
 DEFAULT_OUTPUT_ROOT = Path("models/3d-print/telephone-handset-switch-base")
 DEFAULT_PREVIEW_ROOT = Path("/tmp/kivo-handset-switch-base-previews")
+OUTPUT_FILENAME = "telephone_handset_switch_base.stl"
+VIEW_ROTATIONS = {
+    "top": np.eye(3),
+    "bottom": np.diag([1.0, -1.0, -1.0]),
+    "side-section": np.array([[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [-1.0, 0.0, 0.0]]),
+    "isometric": np.array(
+        [
+            [0.70710678, -0.70710678, 0.0],
+            [0.40824829, 0.40824829, -0.81649658],
+            [0.57735027, 0.57735027, 0.57735027],
+        ]
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -194,7 +207,18 @@ def subtract_meshes(
 
 def region_volume(mesh: trimesh.Trimesh, lower: np.ndarray, upper: np.ndarray) -> float:
     region = macro.boolean_meshes([mesh, box_from_bounds(lower, upper)], "intersection")
-    return 0.0 if region.is_empty else float(region.volume)
+    if region.is_empty:
+        return 0.0
+    triangles = region.triangles
+    signed_volume = (
+        np.einsum(
+            "ij,ij->i",
+            triangles[:, 0],
+            np.cross(triangles[:, 1], triangles[:, 2]),
+        ).sum()
+        / 6.0
+    )
+    return abs(float(signed_volume))
 
 
 def load_canonical_source(source_root: Path) -> trimesh.Trimesh:
@@ -729,6 +753,10 @@ def required_feature_references() -> list[tuple[str, trimesh.Trimesh]]:
 
 
 def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationReport:
+    if not mesh.is_watertight:
+        mesh = mesh.copy()
+        mesh.merge_vertices()
+        mesh.remove_unreferenced_vertices()
     macro.assert_closed_manifold(mesh, "telephone handset switch base")
     if not np.allclose(mesh.bounds[0], (0.0, 0.0, 0.0), atol=0.003):
         raise ValueError(f"outer origin drifted: {mesh.bounds[0].tolist()}")
@@ -821,3 +849,148 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
         open_underside=True,
         rear_wire_path=True,
     )
+
+
+def export_base(mesh: trimesh.Trimesh, target: Path) -> None:
+    macro.export_stl(mesh, target)
+
+
+def mesh_for_preview(mesh: trimesh.Trimesh, view: str) -> trimesh.Trimesh:
+    if view == "side-section":
+        return macro.clip_slab(mesh, 0, CENTER_X, OUTER_WIDTH + 1.0)
+    return mesh
+
+
+def render_side_section_preview(mesh: trimesh.Trimesh, target: Path) -> None:
+    from PIL import Image, ImageDraw
+
+    section = mesh_to_manifold(mesh).rotate((0.0, -90.0, 0.0)).slice(CENTER_X)
+    contours = [np.asarray(polygon) for polygon in section.to_polygons()]
+    if not contours:
+        raise ValueError("empty side-section preview")
+
+    projected = [
+        np.column_stack((contour[:, 1], -contour[:, 0])) for contour in contours
+    ]
+    stacked = np.vstack(projected)
+    lower = stacked.min(axis=0)
+    upper = stacked.max(axis=0)
+    canvas = np.array([1200.0, 900.0])
+    scale = float(np.min((canvas - 96.0) / (upper - lower)))
+    rendered_size = (upper - lower) * scale
+    offset = (canvas - rendered_size) / 2.0
+
+    image = Image.new("RGB", (1200, 900), "white")
+    draw = ImageDraw.Draw(image)
+    ordered = sorted(
+        projected,
+        key=lambda contour: abs(
+            float(
+                np.sum(
+                    contour[:, 0] * np.roll(contour[:, 1], -1)
+                    - contour[:, 1] * np.roll(contour[:, 0], -1)
+                )
+            )
+        ),
+        reverse=True,
+    )
+    for contour in ordered:
+        signed_area = float(
+            np.sum(
+                contour[:, 0] * np.roll(contour[:, 1], -1)
+                - contour[:, 1] * np.roll(contour[:, 0], -1)
+            )
+        )
+        points = (contour - lower) * scale + offset
+        points[:, 1] = canvas[1] - points[:, 1]
+        fill = (165, 165, 165) if signed_area > 0.0 else (255, 255, 255)
+        polygon = [tuple(value) for value in points.tolist()]
+        draw.polygon(
+            polygon,
+            fill=fill,
+        )
+        draw.line(
+            polygon + [polygon[0]],
+            fill=(70, 70, 70),
+            width=14,
+            joint="curve",
+        )
+    save_nonblank_preview(image, target)
+
+
+def save_nonblank_preview(image: object, target: Path) -> None:
+    pixels = np.asarray(image)
+    nonblank = np.count_nonzero(np.any(pixels != 255, axis=2))
+    if nonblank < pixels.shape[0] * pixels.shape[1] * 0.05:
+        raise ValueError(f"blank preview for {target}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    image.save(target)
+
+
+def render_preview(mesh: trimesh.Trimesh, target: Path, view: str) -> None:
+    from PIL import Image, ImageDraw
+
+    if view not in VIEW_ROTATIONS:
+        raise ValueError(f"unsupported preview view: {view}")
+    if view == "side-section":
+        render_side_section_preview(mesh, target)
+        return
+    rendered_mesh = mesh_for_preview(mesh, view)
+    triangles = rendered_mesh.triangles
+    triangles = triangles @ VIEW_ROTATIONS[view].T
+    projected = triangles[:, :, :2]
+    lower = projected.reshape(-1, 2).min(axis=0)
+    upper = projected.reshape(-1, 2).max(axis=0)
+    canvas = np.array([1200.0, 900.0])
+    scale = float(np.min((canvas - 96.0) / (upper - lower)))
+    rendered_size = (upper - lower) * scale
+    offset = (canvas - rendered_size) / 2.0
+    points = (projected - lower) * scale + offset
+    points[:, :, 1] = canvas[1] - points[:, :, 1]
+
+    normals = np.cross(
+        triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0]
+    )
+    lengths = np.linalg.norm(normals, axis=1)
+    normals = normals / np.maximum(lengths[:, None], 1e-12)
+    light = np.array([0.3, -0.4, 0.85])
+    light /= np.linalg.norm(light)
+    shade = np.clip(0.55 + 0.35 * np.abs(normals @ light), 0.0, 1.0)
+    depth = triangles[:, :, 2].mean(axis=1)
+
+    image = Image.new("RGB", (1200, 900), "white")
+    draw = ImageDraw.Draw(image)
+    for index in np.argsort(depth):
+        level = int(235 - 105 * shade[index])
+        polygon = [tuple(value) for value in points[index].tolist()]
+        draw.polygon(polygon, fill=(level, level, level))
+    save_nonblank_preview(image, target)
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import json
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--source-root", type=Path, default=DEFAULT_SOURCE_ROOT)
+    parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--preview-root", type=Path, default=DEFAULT_PREVIEW_ROOT)
+    arguments = parser.parse_args(argv)
+
+    source = load_canonical_source(arguments.source_root)
+    mesh = generate_base(source)
+    report = validate_base(mesh, source)
+    target = arguments.output_root / OUTPUT_FILENAME
+    export_base(mesh, target)
+    for view in ("isometric", "top", "side-section", "bottom"):
+        render_preview(mesh, arguments.preview_root / f"{view}.png", view)
+
+    payload = asdict(report)
+    payload["stl_path"] = str(target)
+    payload["stl_sha256"] = hashlib.sha256(target.read_bytes()).hexdigest()
+    print(json.dumps(payload, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
