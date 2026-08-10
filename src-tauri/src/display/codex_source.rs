@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
     fs::{self, File},
+    hash::{DefaultHasher, Hash, Hasher},
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
@@ -29,6 +30,8 @@ const RECENT_ROLLOUT_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const RECOVERY_CHUNK_SIZE: usize = 64 * 1024;
 const CURSOR_VERSION: u32 = 1;
 const APP_SERVER_RESPONSE_DEADLINE: Duration = Duration::from_secs(1);
+const MAX_METADATA_PAGES: usize = 100;
+const CONFIRMED_WINDOW_SIZE: u64 = 4096;
 
 #[derive(Clone, Debug)]
 pub struct CodexSourceSnapshot {
@@ -95,6 +98,100 @@ pub enum ActiveFlag {
     WaitingOnUserInput,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MetadataFingerprint {
+    name: Option<String>,
+    cwd: PathBuf,
+    rollout_path: Option<PathBuf>,
+    status: AppServerStatus,
+}
+
+impl From<&CodexThreadMetadata> for MetadataFingerprint {
+    fn from(thread: &CodexThreadMetadata) -> Self {
+        Self {
+            name: thread.name.clone(),
+            cwd: thread.cwd.clone(),
+            rollout_path: thread.rollout_path.clone(),
+            status: thread.status.clone(),
+        }
+    }
+}
+
+#[derive(Default)]
+struct MetadataWatermark {
+    timestamp: Option<u64>,
+    fingerprints: BTreeMap<String, MetadataFingerprint>,
+}
+
+impl MetadataWatermark {
+    fn select_page(
+        &self,
+        last_seen: Option<u64>,
+        threads: Vec<CodexThreadMetadata>,
+        seen_thread_ids: &mut BTreeSet<String>,
+    ) -> (Vec<CodexThreadMetadata>, bool) {
+        let mut selected = Vec::new();
+        let mut reached_older = false;
+        for thread in threads {
+            if !seen_thread_ids.insert(thread.thread_id.clone()) {
+                continue;
+            }
+            let include = match last_seen {
+                None => true,
+                Some(last_seen) if thread.server_updated_at > last_seen => true,
+                Some(last_seen) if thread.server_updated_at == last_seen => {
+                    self.timestamp != Some(last_seen)
+                        || self.fingerprints.get(&thread.thread_id)
+                            != Some(&MetadataFingerprint::from(&thread))
+                }
+                Some(_) => {
+                    reached_older = true;
+                    false
+                }
+            };
+            if include {
+                selected.push(thread);
+            }
+        }
+        (selected, reached_older)
+    }
+
+    fn commit(&mut self, threads: &[CodexThreadMetadata]) {
+        let Some(timestamp) = threads.iter().map(|thread| thread.server_updated_at).max() else {
+            return;
+        };
+        if self.timestamp.is_none_or(|current| timestamp > current) {
+            self.timestamp = Some(timestamp);
+            self.fingerprints.clear();
+        }
+        if self.timestamp == Some(timestamp) {
+            self.fingerprints.extend(
+                threads
+                    .iter()
+                    .filter(|thread| thread.server_updated_at == timestamp)
+                    .map(|thread| (thread.thread_id.clone(), MetadataFingerprint::from(thread))),
+            );
+        }
+    }
+}
+
+fn advance_pagination(
+    next_cursor: Option<String>,
+    seen_cursors: &mut BTreeSet<String>,
+    page_count: usize,
+) -> Result<Option<String>, &'static str> {
+    let Some(cursor) = next_cursor else {
+        return Ok(None);
+    };
+    if page_count >= MAX_METADATA_PAGES {
+        return Err("codex_app_server_page_limit");
+    }
+    if !seen_cursors.insert(cursor.clone()) {
+        return Err("codex_app_server_pagination_loop");
+    }
+    Ok(Some(cursor))
+}
+
 pub trait CodexMetadataClient: Send {
     fn codex_home(&self) -> &std::path::Path;
     fn poll_updated(&mut self, last_seen: Option<u64>) -> Result<Vec<CodexThreadMetadata>, String>;
@@ -104,6 +201,7 @@ pub struct SystemCodexMetadataClient {
     codex_home: PathBuf,
     connection: Option<AppServerConnection>,
     next_request_id: u64,
+    watermark: MetadataWatermark,
 }
 
 impl SystemCodexMetadataClient {
@@ -112,6 +210,7 @@ impl SystemCodexMetadataClient {
             codex_home: codex_home_fallback.into(),
             connection: None,
             next_request_id: 1,
+            watermark: MetadataWatermark::default(),
         }
     }
 
@@ -170,7 +269,11 @@ impl CodexMetadataClient for SystemCodexMetadataClient {
         }
         let mut cursor = None;
         let mut threads = Vec::new();
+        let mut seen_cursors = BTreeSet::new();
+        let mut seen_thread_ids = BTreeSet::new();
+        let mut page_count = 0;
         loop {
+            page_count += 1;
             let request_id = self.take_request_id();
             let response = match self
                 .connection
@@ -194,19 +297,22 @@ impl CodexMetadataClient for SystemCodexMetadataClient {
                     return Err(code.into());
                 }
             };
-            let reached_seen = last_seen.is_some_and(|last_seen| {
-                page.threads
-                    .iter()
-                    .any(|thread| thread.server_updated_at <= last_seen)
-            });
-            threads.extend(page.threads.into_iter().filter(|thread| {
-                last_seen.is_none_or(|last_seen| thread.server_updated_at > last_seen)
-            }));
-            if reached_seen || page.next_cursor.is_none() {
+            let (selected, reached_older) =
+                self.watermark
+                    .select_page(last_seen, page.threads, &mut seen_thread_ids);
+            threads.extend(selected);
+            cursor = match advance_pagination(page.next_cursor, &mut seen_cursors, page_count) {
+                Ok(cursor) => cursor,
+                Err(code) => {
+                    self.disconnect();
+                    return Err(code.into());
+                }
+            };
+            if reached_older || cursor.is_none() {
                 break;
             }
-            cursor = page.next_cursor;
         }
+        self.watermark.commit(&threads);
         Ok(threads)
     }
 }
@@ -481,6 +587,31 @@ fn merge_codex_sources(
     metadata_health: ChannelHealth,
     rollout_health: ChannelHealth,
 ) -> CodexSourceSnapshot {
+    merge_timed_codex_sources(
+        metadata,
+        rollout
+            .into_iter()
+            .map(|task| TimedRolloutTask {
+                task,
+                updated_at: now,
+            })
+            .collect(),
+        metadata_health,
+        rollout_health,
+    )
+}
+
+struct TimedRolloutTask {
+    task: CodexTaskSnapshot,
+    updated_at: Instant,
+}
+
+fn merge_timed_codex_sources(
+    metadata: Vec<CodexThreadMetadata>,
+    rollout: Vec<TimedRolloutTask>,
+    metadata_health: ChannelHealth,
+    rollout_health: ChannelHealth,
+) -> CodexSourceSnapshot {
     let mut tasks = BTreeMap::new();
     for thread in metadata {
         let (running, input_need, system_error) = match &thread.status {
@@ -513,26 +644,33 @@ fn merge_codex_sources(
         );
     }
 
-    for rollout_task in rollout {
+    for timed_rollout in rollout {
+        let rollout_task = timed_rollout.task;
         let task = tasks
             .entry(rollout_task.thread_id.clone())
             .or_insert_with(|| MergedCodexTask {
                 thread_id: rollout_task.thread_id.clone(),
                 name: None,
                 cwd: rollout_task.cwd.clone(),
-                updated_at: now,
+                updated_at: timed_rollout.updated_at,
                 running: false,
                 input_need: None,
                 system_error: false,
                 terminal_event: None,
                 terminal_sequence: 0,
             });
+        let rollout_contributes_running = rollout_task.running && !task.running;
         task.running |= rollout_task.running;
         if task.input_need.is_none() {
             task.input_need = rollout_task.input_need;
+            if rollout_task.input_need.is_some() {
+                task.updated_at = task.updated_at.max(timed_rollout.updated_at);
+            }
+        } else if rollout_contributes_running && !task.system_error {
+            task.updated_at = task.updated_at.max(timed_rollout.updated_at);
         }
         if rollout_task.terminal_sequence > task.terminal_sequence {
-            task.updated_at = now;
+            task.updated_at = timed_rollout.updated_at;
             task.terminal_event = rollout_task.event;
             task.terminal_sequence = rollout_task.terminal_sequence;
         }
@@ -572,6 +710,7 @@ pub struct CodexTaskSource {
 struct RolloutFileState {
     identity: FileIdentity,
     modified: Option<SystemTime>,
+    confirmed: FileWindowFingerprint,
     offset: u64,
     trailing: Vec<u8>,
     index: CodexRolloutIndex,
@@ -582,6 +721,13 @@ struct RolloutFileState {
 struct FileIdentity {
     device: u64,
     inode: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FileWindowFingerprint {
+    start: u64,
+    length: u64,
+    hash: u64,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -741,13 +887,6 @@ impl CodexTaskSource {
         }
         self.last_filesystem_poll = Some(now);
         let sessions_available = self.sessions_path.is_dir();
-        if sessions_available {
-            let empty = BTreeMap::new();
-            if self.discover_rollouts(now, &empty).is_err() {
-                self.rollout_health = ChannelHealth::Unavailable;
-                return;
-            }
-        }
         let paths = self.files.keys().cloned().collect::<Vec<_>>();
         let mut readable_file = false;
         for path in paths {
@@ -782,6 +921,7 @@ impl CodexTaskSource {
             });
             state.identity != identity
                 || metadata.len() < physical_offset
+                || !file_window_matches(path, state.confirmed)
                 || (metadata.len() == physical_offset && metadata.modified().ok() != state.modified)
                 || session_changed
         });
@@ -819,6 +959,8 @@ impl CodexTaskSource {
         if state.index.current_tasks() != before {
             state.updated_at = now;
         }
+        state.confirmed =
+            file_window_fingerprint(path, state.offset + state.trailing.len() as u64)?;
         Ok(())
     }
 
@@ -866,31 +1008,22 @@ impl CodexTaskSource {
         }
     }
 
-    fn build_snapshot(&self, now: Instant) -> CodexSourceSnapshot {
+    fn build_snapshot(&self) -> CodexSourceSnapshot {
         let mut rollout = Vec::new();
-        let mut rollout_times = BTreeMap::new();
         for state in self.files.values() {
             for task in state.index.current_tasks() {
-                rollout_times
-                    .entry(task.thread_id.clone())
-                    .and_modify(|time: &mut Instant| *time = (*time).max(state.updated_at))
-                    .or_insert(state.updated_at);
-                rollout.push(task);
+                rollout.push(TimedRolloutTask {
+                    task,
+                    updated_at: state.updated_at,
+                });
             }
         }
-        let mut snapshot = merge_codex_sources(
-            now,
+        merge_timed_codex_sources(
             self.metadata_tasks.values().cloned().collect(),
             rollout,
             self.metadata_health,
             self.rollout_health,
-        );
-        for task in &mut snapshot.tasks {
-            if let Some(rollout_time) = rollout_times.get(&task.thread_id) {
-                task.updated_at = task.updated_at.max(*rollout_time);
-            }
-        }
-        snapshot
+        )
     }
 
     fn track_app_server_rollout(&mut self, path: &Path, now: Instant) -> Result<(), &'static str> {
@@ -959,7 +1092,7 @@ impl CodexTaskReader for CodexTaskSource {
         {
             return Err("codex_channels_unavailable");
         }
-        let snapshot = self.build_snapshot(now);
+        let snapshot = self.build_snapshot();
         self.last_publish = Some(now);
         self.cached_snapshot = Some(snapshot.clone());
         Ok(snapshot)
@@ -1021,12 +1154,14 @@ fn recover_rollout_file(
         let mut state = RolloutFileState {
             identity,
             modified: metadata.modified().ok(),
+            confirmed: file_window_fingerprint(path, persisted.byte_offset)?,
             offset: persisted.byte_offset,
             trailing: Vec::new(),
             index,
             updated_at: file_time_as_instant(&metadata, now),
         };
         apply_initial_tail(path, &mut state)?;
+        state.confirmed = file_window_fingerprint(path, state.offset)?;
         return Ok(state);
     }
 
@@ -1044,6 +1179,7 @@ fn recover_rollout_file(
     Ok(RolloutFileState {
         identity,
         modified: metadata.modified().ok(),
+        confirmed: file_window_fingerprint(path, complete_end)?,
         offset: complete_end,
         trailing: Vec::new(),
         index,
@@ -1106,21 +1242,21 @@ fn first_session_identity(path: &Path) -> Result<Option<(String, PathBuf)>, &'st
 }
 
 fn last_complete_offset(path: &Path, length: u64) -> Result<u64, &'static str> {
-    if length == 0 {
-        return Ok(0);
-    }
-    let start = length.saturating_sub(RECOVERY_CHUNK_SIZE as u64);
     let mut file = File::open(path).map_err(|_| "codex_rollout_read_failed")?;
-    file.seek(SeekFrom::Start(start))
-        .map_err(|_| "codex_rollout_read_failed")?;
-    let mut tail = Vec::new();
-    file.read_to_end(&mut tail)
-        .map_err(|_| "codex_rollout_read_failed")?;
-    Ok(tail
-        .iter()
-        .rposition(|byte| *byte == b'\n')
-        .map(|position| start + position as u64 + 1)
-        .unwrap_or(0))
+    let mut end = length;
+    while end > 0 {
+        let start = end.saturating_sub(RECOVERY_CHUNK_SIZE as u64);
+        file.seek(SeekFrom::Start(start))
+            .map_err(|_| "codex_rollout_read_failed")?;
+        let mut chunk = vec![0; (end - start) as usize];
+        file.read_exact(&mut chunk)
+            .map_err(|_| "codex_rollout_read_failed")?;
+        if let Some(position) = chunk.iter().rposition(|byte| *byte == b'\n') {
+            return Ok(start + position as u64 + 1);
+        }
+        end = start;
+    }
+    Ok(0)
 }
 
 fn latest_turn_boundary_offset(
@@ -1185,6 +1321,32 @@ fn file_time_as_instant(metadata: &fs::Metadata, now: Instant) -> Instant {
         .unwrap_or(now)
 }
 
+fn file_window_fingerprint(
+    path: &Path,
+    confirmed_end: u64,
+) -> Result<FileWindowFingerprint, &'static str> {
+    let start = confirmed_end.saturating_sub(CONFIRMED_WINDOW_SIZE);
+    let length = confirmed_end - start;
+    let mut file = File::open(path).map_err(|_| "codex_rollout_read_failed")?;
+    file.seek(SeekFrom::Start(start))
+        .map_err(|_| "codex_rollout_read_failed")?;
+    let mut bytes = vec![0; length as usize];
+    file.read_exact(&mut bytes)
+        .map_err(|_| "codex_rollout_read_failed")?;
+    let mut hasher = DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    Ok(FileWindowFingerprint {
+        start,
+        length,
+        hash: hasher.finish(),
+    })
+}
+
+fn file_window_matches(path: &Path, expected: FileWindowFingerprint) -> bool {
+    file_window_fingerprint(path, expected.start + expected.length)
+        .is_ok_and(|actual| actual == expected)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1196,7 +1358,10 @@ mod tests {
     };
 
     use super::*;
-    use crate::display::{CodexInputNeed, CodexTaskSnapshot, SourceHealth};
+    use crate::display::{
+        CodexInputNeed, CodexTaskSnapshot, DisplayProvider, SourceHealth,
+        codex_provider::CodexDisplayProvider,
+    };
     use tempfile::TempDir;
 
     struct FakeMetadataClient {
@@ -1603,5 +1768,210 @@ mod tests {
 
         let snapshot = source.poll_tasks(Instant::now()).unwrap();
         assert!(snapshot.task("thread-old").unwrap().running);
+    }
+
+    #[test]
+    fn repeated_source_and_provider_polls_do_not_extend_terminal_expiry() {
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-a\",\"cwd\":\"/work/kivo\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-a\"}}\n",
+            ),
+        )
+        .unwrap();
+        let metadata = FakeMetadataClient::healthy(temp.path().join(".codex"));
+        let source = source_for(&temp, metadata);
+        let mut provider = CodexDisplayProvider::new(source);
+        let now = Instant::now();
+        provider.poll(now).unwrap();
+
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(
+            b"{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"turn-a\"}}\n",
+        )
+        .unwrap();
+        file.flush().unwrap();
+
+        let first = provider.poll(now + Duration::from_secs(1)).unwrap();
+        let first_expiry = first
+            .items
+            .iter()
+            .find(|item| item.id == "codex.task.thread-a")
+            .unwrap()
+            .expires_at;
+        let repeated = provider.poll(now + Duration::from_secs(5)).unwrap();
+        let repeated_expiry = repeated
+            .items
+            .iter()
+            .find(|item| item.id == "codex.task.thread-a")
+            .unwrap()
+            .expires_at;
+
+        assert_eq!(first_expiry, Some(now + Duration::from_secs(9)));
+        assert_eq!(repeated_expiry, first_expiry);
+    }
+
+    #[test]
+    fn recovery_reverse_scans_past_a_large_incomplete_tail() {
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        let complete = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-a\",\"cwd\":\"/work/kivo\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-a\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"turn-a\"}}\n",
+        );
+        let mut payload = complete.as_bytes().to_vec();
+        payload.extend(std::iter::repeat_n(b'x', RECOVERY_CHUNK_SIZE + 4096));
+        fs::write(&path, payload).unwrap();
+
+        assert_eq!(
+            last_complete_offset(&path, fs::metadata(&path).unwrap().len()).unwrap(),
+            complete.len() as u64
+        );
+        let recovered = recover_rollout_file(&path, Instant::now(), None).unwrap();
+        assert_eq!(recovered.offset, complete.len() as u64);
+        let task = &recovered.index.current_tasks()[0];
+        assert_eq!(task.event, None);
+        assert_eq!(task.terminal_sequence, 0);
+    }
+
+    #[test]
+    fn equal_timestamp_boundary_keeps_new_and_changed_threads_across_pages() {
+        let now = Instant::now();
+        let baseline = thread(now, "thread-a", "/work/a", AppServerStatus::Idle);
+        let mut watermark = MetadataWatermark::default();
+        watermark.commit(&[baseline]);
+
+        let changed = thread(
+            now,
+            "thread-a",
+            "/work/a",
+            AppServerStatus::Active {
+                active_flags: BTreeSet::new(),
+            },
+        );
+        let new_b = thread(now, "thread-b", "/work/b", AppServerStatus::Idle);
+        let new_c = thread(now, "thread-c", "/work/c", AppServerStatus::Idle);
+        let mut older = thread(now, "thread-old", "/work/old", AppServerStatus::Idle);
+        older.server_updated_at = 9;
+        let mut seen_ids = BTreeSet::new();
+
+        let (first, reached_older_first) =
+            watermark.select_page(Some(10), vec![changed, new_b], &mut seen_ids);
+        let (second, reached_older_second) =
+            watermark.select_page(Some(10), vec![new_c, older], &mut seen_ids);
+
+        assert!(!reached_older_first);
+        assert!(reached_older_second);
+        assert_eq!(
+            first
+                .iter()
+                .chain(&second)
+                .map(|thread| thread.thread_id.as_str())
+                .collect::<Vec<_>>(),
+            ["thread-a", "thread-b", "thread-c"]
+        );
+    }
+
+    #[test]
+    fn repeated_pagination_cursor_is_rejected() {
+        let mut seen = BTreeSet::new();
+        assert_eq!(
+            advance_pagination(Some("same".into()), &mut seen, 1).unwrap(),
+            Some("same".into())
+        );
+        assert_eq!(
+            advance_pagination(Some("same".into()), &mut seen, 2).unwrap_err(),
+            "codex_app_server_pagination_loop"
+        );
+    }
+
+    #[test]
+    fn same_inode_rewrite_regrown_past_old_offset_rebuilds_state() {
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        let initial = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-a\",\"cwd\":\"/work/kivo\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-a\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"request_user_input\",\"call_id\":\"call-a\"}}\n",
+        );
+        fs::write(&path, initial).unwrap();
+        let metadata = FakeMetadataClient::healthy(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        let now = Instant::now();
+        assert_eq!(
+            source
+                .poll_tasks(now)
+                .unwrap()
+                .task("thread-a")
+                .unwrap()
+                .input_need,
+            Some(CodexInputNeed::UserInput)
+        );
+
+        let mut replacement = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-a\",\"cwd\":\"/work/kivo\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-b\"}}\n",
+        )
+        .to_owned();
+        for _ in 0..12 {
+            replacement.push_str(
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"content\":\"ignored\"}}\n",
+            );
+        }
+        assert!(replacement.len() > initial.len());
+        fs::write(&path, replacement).unwrap();
+
+        let rebuilt = source.poll_tasks(now + Duration::from_secs(1)).unwrap();
+        let task = rebuilt.task("thread-a").unwrap();
+        assert!(task.running);
+        assert_eq!(task.input_need, None);
+    }
+
+    #[test]
+    fn runtime_stat_poll_updates_known_files_without_recursive_discovery() {
+        let temp = TempDir::new().unwrap();
+        let known = rollout_path(&temp);
+        fs::write(
+            &known,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-known\",\"cwd\":\"/work/kivo\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-known\"}}\n",
+            ),
+        )
+        .unwrap();
+        let metadata = FakeMetadataClient::healthy(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        source.watcher.take();
+        while source.notify_rx.try_recv().is_ok() {}
+
+        let unknown = known.with_file_name("rollout-unknown.jsonl");
+        fs::write(
+            &unknown,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-unknown\",\"cwd\":\"/work/other\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-unknown\"}}\n",
+            ),
+        )
+        .unwrap();
+        let mut known_file = OpenOptions::new().append(true).open(&known).unwrap();
+        known_file
+            .write_all(
+                b"{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"request_user_input\",\"call_id\":\"call-known\"}}\n",
+            )
+            .unwrap();
+        known_file.flush().unwrap();
+
+        let snapshot = source
+            .poll_tasks(Instant::now() + Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            snapshot.task("thread-known").unwrap().input_need,
+            Some(CodexInputNeed::UserInput)
+        );
+        assert!(snapshot.task("thread-unknown").is_none());
     }
 }
