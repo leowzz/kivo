@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import re
 import sys
-from typing import Sequence
-
+from collections.abc import Sequence
+from pathlib import Path
 
 TAG_VERSION_RE = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 TRACKED_VERSION_FILES = (

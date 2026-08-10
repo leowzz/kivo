@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from version_fixtures import seed_version_repo
 
 from scripts.repo_version import (
     TRACKED_VERSION_FILES,
@@ -10,7 +11,6 @@ from scripts.repo_version import (
     read_env_version,
     set_repo_version,
 )
-from version_fixtures import seed_version_repo
 
 
 def test_set_repo_version_updates_kivo_fields_only(tmp_path: Path) -> None:
