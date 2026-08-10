@@ -1229,9 +1229,20 @@ impl CodexTaskSource {
     }
 
     fn track_app_server_rollout(&mut self, path: &Path, now: Instant) -> Result<(), &'static str> {
+        let canonical_sessions = self
+            .sessions_path
+            .canonicalize()
+            .map_err(|_| "codex_rollout_read_failed")?;
         let canonical = path
             .canonicalize()
             .map_err(|_| "codex_rollout_read_failed")?;
+        if !canonical.starts_with(&canonical_sessions) {
+            return Err("codex_rollout_read_failed");
+        }
+        let metadata = fs::metadata(&canonical).map_err(|_| "codex_rollout_read_failed")?;
+        if !metadata.is_file() {
+            return Err("codex_rollout_read_failed");
+        }
         if let std::collections::btree_map::Entry::Vacant(entry) =
             self.files.entry(canonical.clone())
         {
@@ -1241,7 +1252,6 @@ impl CodexTaskSource {
         if let Some(watcher) = &mut self.watcher {
             let _ = watcher.watch(&canonical, RecursiveMode::NonRecursive);
         }
-        self.rollout_health = ChannelHealth::Healthy;
         Ok(())
     }
 
@@ -1680,6 +1690,36 @@ mod tests {
         .unwrap()
     }
 
+    fn assert_app_server_rollout_rejected(temp: &TempDir, path: PathBuf) {
+        let now = Instant::now();
+        let metadata_thread = CodexThreadMetadata {
+            thread_id: "thread-metadata".into(),
+            name: None,
+            cwd: PathBuf::from("/work/kivo"),
+            rollout_path: Some(path),
+            server_updated_at: 10,
+            updated_at: now,
+            status: AppServerStatus::NotLoaded,
+        };
+        let metadata = FakeMetadataClient {
+            codex_home: temp.path().join(".codex"),
+            polls: VecDeque::from([Ok(vec![metadata_thread])]),
+        };
+        let mut source = source_for(temp, metadata);
+        source.notify_authority_lost = true;
+        source.rollout_health = ChannelHealth::Unavailable;
+
+        let snapshot = source.poll_tasks(now).unwrap();
+
+        assert_eq!(snapshot.health, SourceHealth::Degraded);
+        assert!(snapshot.task("thread-metadata").is_some());
+        assert!(source.read_cursor_store().is_empty());
+        assert!(source.files.is_empty());
+        assert!(snapshot.task("thread-external").is_none());
+        assert!(source.notify_authority_lost);
+        assert_eq!(source.rollout_health, ChannelHealth::Unavailable);
+    }
+
     fn thread(
         now: Instant,
         thread_id: &str,
@@ -2067,6 +2107,144 @@ mod tests {
 
         let snapshot = source.poll_tasks(Instant::now()).unwrap();
         assert!(snapshot.task("thread-old").unwrap().running);
+    }
+
+    #[test]
+    fn app_server_rejects_direct_external_rollout_path() {
+        let temp = TempDir::new().unwrap();
+        rollout_path(&temp);
+        let external = temp.path().join("external-rollout.jsonl");
+        fs::write(
+            &external,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-external\",\"cwd\":\"/private/external\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-external\"}}\n",
+            ),
+        )
+        .unwrap();
+
+        assert_app_server_rollout_rejected(&temp, external);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn app_server_rejects_in_root_rollout_symlink_to_external_file() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let linked = rollout_path(&temp);
+        let external = temp.path().join("external-rollout.jsonl");
+        fs::write(
+            &external,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-external\",\"cwd\":\"/private/external\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-external\"}}\n",
+            ),
+        )
+        .unwrap();
+        symlink(&external, &linked).unwrap();
+
+        assert_app_server_rollout_rejected(&temp, linked);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn app_server_rejects_rollout_below_symlinked_external_parent() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        let parent = path.parent().unwrap();
+        fs::remove_dir(parent).unwrap();
+        let external_parent = temp.path().join("external-rollouts");
+        fs::create_dir(&external_parent).unwrap();
+        fs::write(
+            external_parent.join("rollout-test.jsonl"),
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-external\",\"cwd\":\"/private/external\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-external\"}}\n",
+            ),
+        )
+        .unwrap();
+        symlink(&external_parent, parent).unwrap();
+
+        assert_app_server_rollout_rejected(&temp, path);
+    }
+
+    #[test]
+    fn app_server_rollout_does_not_clear_notify_authority_between_filesystem_polls() {
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-a\",\"cwd\":\"/work/kivo\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-a\"}}\n",
+            ),
+        )
+        .unwrap();
+        let now = Instant::now();
+        let metadata_thread = CodexThreadMetadata {
+            thread_id: "thread-a".into(),
+            name: None,
+            cwd: PathBuf::from("/work/kivo"),
+            rollout_path: Some(path),
+            server_updated_at: 10,
+            updated_at: now,
+            status: AppServerStatus::NotLoaded,
+        };
+        let metadata = FakeMetadataClient {
+            codex_home: temp.path().join(".codex"),
+            polls: VecDeque::from([Ok(vec![metadata_thread])]),
+        };
+        let mut source = source_for(&temp, metadata);
+        source.notify_authority_lost = true;
+        source.rollout_health = ChannelHealth::Unavailable;
+        source.last_filesystem_poll = Some(now);
+
+        let snapshot = source.poll_tasks(now + Duration::from_millis(250)).unwrap();
+
+        assert_eq!(snapshot.health, SourceHealth::Degraded);
+        assert!(source.notify_authority_lost);
+        assert_eq!(source.rollout_health, ChannelHealth::Unavailable);
+    }
+
+    #[test]
+    fn app_server_rollout_does_not_clear_overflow_between_filesystem_polls() {
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-a\",\"cwd\":\"/work/kivo\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-a\"}}\n",
+            ),
+        )
+        .unwrap();
+        let now = Instant::now();
+        let metadata_thread = CodexThreadMetadata {
+            thread_id: "thread-a".into(),
+            name: None,
+            cwd: PathBuf::from("/work/kivo"),
+            rollout_path: Some(path),
+            server_updated_at: 10,
+            updated_at: now,
+            status: AppServerStatus::NotLoaded,
+        };
+        let metadata = FakeMetadataClient {
+            codex_home: temp.path().join(".codex"),
+            polls: VecDeque::from([Ok(vec![metadata_thread])]),
+        };
+        let mut source = source_for(&temp, metadata);
+        source.notify_overflowed = true;
+        source.rollout_health = ChannelHealth::Unavailable;
+        source.last_filesystem_poll = Some(now);
+
+        let snapshot = source.poll_tasks(now + Duration::from_millis(250)).unwrap();
+
+        assert_eq!(snapshot.health, SourceHealth::Degraded);
+        assert!(source.notify_overflowed);
+        assert_eq!(source.rollout_health, ChannelHealth::Unavailable);
     }
 
     #[test]

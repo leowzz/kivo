@@ -299,3 +299,43 @@ Fresh expected-deletion follow-up gate results:
 - ESP32-S3 build: PASS; 35,644/327,680 bytes RAM (10.9%),
   348,169/3,342,336 bytes flash (10.4%).
 - `git diff --check`: PASS.
+
+## App Server Rollout Follow-up
+
+The final App Server rollout-path fix was implemented on top of `b4353ec`.
+
+- RED: direct external rollout paths, an in-sessions file symlink to an
+  external rollout, and a rollout below an in-sessions symlinked parent all
+  parsed and merged `thread-external` into the snapshot. The external rollout
+  state also remained in the tracked file map and persisted cursor store after
+  the due filesystem check marked the rollout channel unavailable.
+- GREEN: an App Server rollout candidate must canonicalize below the canonical
+  sessions root before any metadata access. Its canonical target must then be a
+  regular file before recovery, insertion, or watch registration. All three
+  escape forms now leave the external task, tracked file map, and cursor store
+  empty while retaining the pre-existing unavailable/degraded state.
+- RED: on a non-due filesystem cycle, a valid App Server rollout path promoted
+  rollout health to Healthy while `notify_authority_lost` or notification
+  overflow remained latched. Both regressions returned Healthy instead of the
+  required Degraded snapshot.
+- GREEN: App Server path tracking no longer mutates rollout health. Only
+  authoritative configuration and a due filesystem health pass can promote the
+  channel. Authority loss and overflow remain unavailable between those
+  authorization points.
+- Valid in-root App Server rollout paths still bypass the 24-hour fallback age
+  bound. Existing path alias, outage, pending retry, overflow, and no-recursive
+  runtime discovery regressions remain GREEN. Focused `display::codex`: 69
+  passed. Rustfmt and Clippy with all targets and features passed.
+
+Fresh App Server rollout follow-up gate results:
+
+- Exact pinned `make test`: PASS.
+- Python suites: 33 + 32 + 32 passed.
+- PlatformIO native: 89/89 passed.
+- Rust: 406 passed, 1 intentional ignore, plus 2 integration tests passed.
+- Frontend: 211/211 passed; production build passed.
+- RP2040 build: PASS; 22,912/262,144 bytes RAM (8.7%),
+  133,176/16,773,120 bytes flash (0.8%).
+- ESP32-S3 build: PASS; 35,644/327,680 bytes RAM (10.9%),
+  348,169/3,342,336 bytes flash (10.4%).
+- `git diff --check`: PASS.
