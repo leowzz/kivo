@@ -75,7 +75,7 @@ fn task_item(task: &MergedCodexTask) -> Result<DisplayItem, &'static str> {
         .map(|name| name.to_string_lossy().into_owned())
         .filter(|name| !name.is_empty())
         .or_else(|| task.name.clone())
-        .unwrap_or_else(|| task.thread_id.clone());
+        .unwrap_or_default();
     let mut item = DisplayItem::new(
         format!("codex.task.{}", task.thread_id),
         SOURCE_ID,
@@ -142,14 +142,15 @@ fn task_semantics(
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::BTreeMap,
         path::PathBuf,
         time::{Duration, Instant},
     };
 
     use super::*;
     use crate::display::{
-        CodexInputNeed, CodexSourceSnapshot, CodexTerminalEvent, DisplayProvider, DisplayState,
-        MergedCodexTask, SourceHealth,
+        CodexInputNeed, CodexSourceSnapshot, CodexTerminalEvent, DisplayProvider, DisplayRenderer,
+        DisplaySnapshot, DisplayState, MergedCodexTask, MonoText128x32Renderer, SourceHealth,
     };
 
     struct FakeCodexTaskReader {
@@ -293,5 +294,35 @@ mod tests {
                 .title,
             "中文项目"
         );
+    }
+
+    #[test]
+    fn missing_cwd_and_name_flow_to_the_renderer_thread_id_fallback() {
+        let now = Instant::now();
+        let mut source_task = task(now, "a3f2-rest", false, None);
+        source_task.cwd = PathBuf::from("/");
+        source_task.system_error = true;
+        let source = FakeCodexTaskReader::once(CodexSourceSnapshot {
+            health: SourceHealth::Healthy,
+            tasks: vec![source_task],
+        });
+        let mut provider = CodexDisplayProvider::new(source);
+
+        let update = provider.poll(now).unwrap();
+        let task = update
+            .items
+            .iter()
+            .find(|item| item.id == "codex.task.a3f2-rest")
+            .unwrap();
+        assert_eq!(task.title, "");
+        let scene = MonoText128x32Renderer
+            .render(&DisplaySnapshot {
+                items: update.items,
+                health: BTreeMap::from([("codex".to_owned(), update.health)]),
+            })
+            .unwrap();
+
+        assert_eq!(scene.text("row0_left"), "TASK A3F");
+        assert_eq!(scene.text("row0_right"), "2");
     }
 }

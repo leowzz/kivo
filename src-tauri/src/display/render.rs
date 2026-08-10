@@ -616,6 +616,70 @@ mod tests {
         }
     }
 
+    #[test]
+    fn error_outranks_a_newer_success() {
+        let now = Instant::now();
+        let error = DisplayItem::new(
+            "codex.task.error",
+            "codex",
+            DisplayPriority::Critical,
+            DisplayState::Error,
+            "error",
+        )
+        .unwrap()
+        .with_updated_at(now);
+        let success = DisplayItem::new(
+            "codex.task.success",
+            "codex",
+            DisplayPriority::Attention,
+            DisplayState::Success,
+            "success",
+        )
+        .unwrap()
+        .with_updated_at(now + Duration::from_secs(1));
+
+        let scene = MonoText128x32Renderer
+            .render(&DisplaySnapshot {
+                items: vec![error, success],
+                health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
+            })
+            .unwrap();
+
+        assert_eq!(scene.text("row1"), "CODEX ERROR");
+    }
+
+    #[test]
+    fn success_outranks_a_newer_warning() {
+        let now = Instant::now();
+        let success = DisplayItem::new(
+            "codex.task.success",
+            "codex",
+            DisplayPriority::Attention,
+            DisplayState::Success,
+            "success",
+        )
+        .unwrap()
+        .with_updated_at(now);
+        let warning = DisplayItem::new(
+            "codex.task.warning",
+            "codex",
+            DisplayPriority::Attention,
+            DisplayState::Warning,
+            "warning",
+        )
+        .unwrap()
+        .with_updated_at(now + Duration::from_secs(1));
+
+        let scene = MonoText128x32Renderer
+            .render(&DisplaySnapshot {
+                items: vec![success, warning],
+                health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
+            })
+            .unwrap();
+
+        assert_eq!(scene.text("row1"), "RESPONSE READY");
+    }
+
     fn text_position(scene: &RenderedScene, id: &str) -> Option<(u16, u16)> {
         scene
             .regions

@@ -44,7 +44,10 @@ impl SceneTracker {
     }
 
     pub(crate) fn ack(&mut self, revision: u32) -> Result<Option<SceneUpdate>, &'static str> {
-        let pending = self.pending.take().ok_or("display_scene_ack_mismatch")?;
+        let Some(pending) = self.pending.take() else {
+            self.acked = None;
+            return Err("display_scene_ack_mismatch");
+        };
         if pending.revision != revision {
             self.acked = None;
             return Err("display_scene_ack_mismatch");
@@ -244,6 +247,22 @@ mod tests {
         assert_eq!(recovered.mode, SceneMode::Full);
         assert_eq!(recovered.base_revision, 0);
         assert_eq!(recovered.regions, scene("THREE").regions);
+    }
+
+    #[test]
+    fn duplicate_ack_without_pending_discards_the_acknowledged_base() {
+        let mut tracker = SceneTracker::default();
+        let first = tracker.prepare(scene("ONE")).unwrap();
+        tracker.ack(first.new_revision).unwrap();
+
+        assert_eq!(
+            tracker.ack(first.new_revision).unwrap_err(),
+            "display_scene_ack_mismatch"
+        );
+        let recovered = tracker.prepare(scene("TWO")).unwrap();
+
+        assert_eq!(recovered.mode, SceneMode::Full);
+        assert_eq!(recovered.base_revision, 0);
     }
 
     #[test]
