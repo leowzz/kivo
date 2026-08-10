@@ -739,6 +739,8 @@ pub struct CodexTaskSource {
     sessions_path: PathBuf,
     watcher: Option<RecommendedWatcher>,
     watch_registration: fn(&mut Option<RecommendedWatcher>, &Path) -> bool,
+    #[cfg(test)]
+    before_discovery_read: Option<BeforeDiscoveryRead>,
     notify_rx: Receiver<notify::Result<Event>>,
     pending_notify_paths: BTreeSet<PathBuf>,
     notify_overflowed: bool,
@@ -754,6 +756,9 @@ pub struct CodexTaskSource {
     last_seen_server_update: Option<u64>,
     cached_snapshot: Option<CodexSourceSnapshot>,
 }
+
+#[cfg(test)]
+type BeforeDiscoveryRead = Box<dyn FnMut(&Path) + Send>;
 
 struct RolloutFileState {
     identity: FileIdentity,
@@ -816,6 +821,8 @@ impl CodexTaskSource {
             sessions_path,
             watcher,
             watch_registration: register_rollout_watch,
+            #[cfg(test)]
+            before_discovery_read: None,
             notify_rx,
             pending_notify_paths: BTreeSet::new(),
             notify_overflowed: false,
@@ -890,6 +897,16 @@ impl CodexTaskSource {
             .map_err(|_| "codex_rollout_scan_failed")?;
         let mut pending = vec![canonical_sessions.clone()];
         while let Some(directory) = pending.pop() {
+            #[cfg(test)]
+            if let Some(before_read) = &mut self.before_discovery_read {
+                before_read(&directory);
+            }
+            let directory = directory
+                .canonicalize()
+                .map_err(|_| "codex_rollout_scan_failed")?;
+            if !directory.starts_with(&canonical_sessions) {
+                return Err("codex_rollout_scan_failed");
+            }
             let entries = fs::read_dir(directory).map_err(|_| "codex_rollout_scan_failed")?;
             for entry in entries {
                 let entry = entry.map_err(|_| "codex_rollout_scan_failed")?;
@@ -1066,7 +1083,7 @@ impl CodexTaskSource {
             .canonicalize()
             .map_err(|_| "codex_rollout_read_failed")?;
         match path.canonicalize() {
-            Ok(canonical) if canonical.starts_with(canonical_sessions) => {}
+            Ok(canonical) if canonical.starts_with(&canonical_sessions) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             _ => return Err("codex_rollout_read_failed"),
         }
@@ -1075,7 +1092,14 @@ impl CodexTaskSource {
             Err(error)
                 if error.kind() == std::io::ErrorKind::NotFound
                     && allow_file_deletion
-                    && path.parent().is_some_and(directory_is_readable) =>
+                    && fs::symlink_metadata(path)
+                        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+                    && path.parent().is_some_and(|parent| {
+                        parent.canonicalize().is_ok_and(|canonical_parent| {
+                            canonical_parent.starts_with(&canonical_sessions)
+                                && directory_is_readable(&canonical_parent)
+                        })
+                    }) =>
             {
                 self.files.remove(path);
                 return Ok(());
@@ -2473,6 +2497,220 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn pending_dangling_rollout_symlink_retains_cursor_until_file_recovers() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        let rollout = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-a\",\"cwd\":\"/work/kivo\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-a\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"request_user_input\",\"call_id\":\"call-a\"}}\n",
+        );
+        fs::write(&path, rollout).unwrap();
+        let metadata = FakeMetadataClient::unavailable(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        source.watcher.take();
+        let (notify_tx, notify_rx) = mpsc::channel();
+        source.notify_rx = notify_rx;
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+        let persisted_before = fs::read(&source.cursor_store_path).unwrap();
+
+        fs::remove_file(&path).unwrap();
+        notify_tx
+            .send(Ok(notify::Event::new(notify::EventKind::Remove(
+                notify::event::RemoveKind::File,
+            ))
+            .add_path(path.clone())))
+            .unwrap();
+        source.poll_tasks(now + Duration::from_millis(250)).unwrap();
+        assert_eq!(source.pending_notify_paths.len(), 1);
+
+        let missing_target = temp.path().join("external-missing.jsonl");
+        symlink(&missing_target, &path).unwrap();
+        assert_eq!(
+            source
+                .poll_tasks(now + FILESYSTEM_POLL_INTERVAL)
+                .unwrap_err(),
+            "codex_channels_unavailable"
+        );
+        assert_eq!(source.files.len(), 1);
+        assert_eq!(source.pending_notify_paths.len(), 1);
+        assert_eq!(
+            fs::read(&source.cursor_store_path).unwrap(),
+            persisted_before
+        );
+
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, rollout).unwrap();
+        let recovered = source.poll_tasks(now + Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            recovered.task("thread-a").unwrap().input_need,
+            Some(CodexInputNeed::UserInput)
+        );
+        assert!(source.pending_notify_paths.is_empty());
+        assert_eq!(source.files.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tracked_dangling_rollout_symlink_retains_cursor_until_file_recovers() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        let rollout = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-a\",\"cwd\":\"/work/kivo\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-a\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"request_user_input\",\"call_id\":\"call-a\"}}\n",
+        );
+        fs::write(&path, rollout).unwrap();
+        let metadata = FakeMetadataClient::unavailable(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+        let persisted_before = fs::read(&source.cursor_store_path).unwrap();
+
+        fs::remove_file(&path).unwrap();
+        let missing_target = temp.path().join("external-missing.jsonl");
+        symlink(&missing_target, &path).unwrap();
+        assert_eq!(
+            source
+                .poll_tasks(now + FILESYSTEM_POLL_INTERVAL)
+                .unwrap_err(),
+            "codex_channels_unavailable"
+        );
+        assert_eq!(source.files.len(), 1);
+        assert!(source.pending_notify_paths.is_empty());
+        assert_eq!(
+            fs::read(&source.cursor_store_path).unwrap(),
+            persisted_before
+        );
+
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, rollout).unwrap();
+        let recovered = source.poll_tasks(now + Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            recovered.task("thread-a").unwrap().input_need,
+            Some(CodexInputNeed::UserInput)
+        );
+        assert_eq!(source.files.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pending_rollout_below_external_parent_retains_cursor_until_parent_recovers() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        let rollout = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-a\",\"cwd\":\"/work/kivo\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-a\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"request_user_input\",\"call_id\":\"call-a\"}}\n",
+        );
+        fs::write(&path, rollout).unwrap();
+        let metadata = FakeMetadataClient::unavailable(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        source.watcher.take();
+        let (notify_tx, notify_rx) = mpsc::channel();
+        source.notify_rx = notify_rx;
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+        let persisted_before = fs::read(&source.cursor_store_path).unwrap();
+
+        fs::remove_file(&path).unwrap();
+        notify_tx
+            .send(Ok(notify::Event::new(notify::EventKind::Remove(
+                notify::event::RemoveKind::File,
+            ))
+            .add_path(path.clone())))
+            .unwrap();
+        source.poll_tasks(now + Duration::from_millis(250)).unwrap();
+        assert_eq!(source.pending_notify_paths.len(), 1);
+
+        let parent = path.parent().unwrap();
+        let internal_parent = parent.with_file_name("10-internal");
+        let external_parent = temp.path().join("external-parent");
+        fs::rename(parent, &internal_parent).unwrap();
+        fs::create_dir(&external_parent).unwrap();
+        symlink(&external_parent, parent).unwrap();
+        assert_eq!(
+            source
+                .poll_tasks(now + FILESYSTEM_POLL_INTERVAL)
+                .unwrap_err(),
+            "codex_channels_unavailable"
+        );
+        assert_eq!(source.files.len(), 1);
+        assert_eq!(source.pending_notify_paths.len(), 1);
+        assert_eq!(
+            fs::read(&source.cursor_store_path).unwrap(),
+            persisted_before
+        );
+
+        fs::remove_file(parent).unwrap();
+        fs::rename(&internal_parent, parent).unwrap();
+        fs::write(&path, rollout).unwrap();
+        let recovered = source.poll_tasks(now + Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            recovered.task("thread-a").unwrap().input_need,
+            Some(CodexInputNeed::UserInput)
+        );
+        assert!(source.pending_notify_paths.is_empty());
+        assert_eq!(source.files.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tracked_rollout_below_external_parent_retains_cursor_until_parent_recovers() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        let rollout = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-a\",\"cwd\":\"/work/kivo\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-a\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"request_user_input\",\"call_id\":\"call-a\"}}\n",
+        );
+        fs::write(&path, rollout).unwrap();
+        let metadata = FakeMetadataClient::unavailable(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+        let persisted_before = fs::read(&source.cursor_store_path).unwrap();
+
+        let parent = path.parent().unwrap();
+        let internal_parent = parent.with_file_name("10-internal");
+        let external_parent = temp.path().join("external-parent");
+        fs::rename(parent, &internal_parent).unwrap();
+        fs::create_dir(&external_parent).unwrap();
+        symlink(&external_parent, parent).unwrap();
+        assert_eq!(
+            source
+                .poll_tasks(now + FILESYSTEM_POLL_INTERVAL)
+                .unwrap_err(),
+            "codex_channels_unavailable"
+        );
+        assert_eq!(source.files.len(), 1);
+        assert!(source.pending_notify_paths.is_empty());
+        assert_eq!(
+            fs::read(&source.cursor_store_path).unwrap(),
+            persisted_before
+        );
+
+        fs::remove_file(parent).unwrap();
+        fs::rename(&internal_parent, parent).unwrap();
+        let recovered = source.poll_tasks(now + Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            recovered.task("thread-a").unwrap().input_need,
+            Some(CodexInputNeed::UserInput)
+        );
+        assert_eq!(source.files.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn authoritative_discovery_rejects_external_rollout_file_symlink() {
         use std::os::unix::fs::symlink;
 
@@ -2525,6 +2763,46 @@ mod tests {
         let snapshot = source.poll_tasks(Instant::now()).unwrap();
 
         assert!(snapshot.task("thread-external-directory").is_none());
+        assert!(source.files.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authoritative_discovery_fails_if_directory_is_replaced_before_read() {
+        use std::os::unix::fs::symlink;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        let directory = path.parent().unwrap().canonicalize().unwrap();
+        let internal_directory = directory.with_file_name("10-internal");
+        let external_directory = temp.path().join("external-rollouts");
+        fs::create_dir(&external_directory).unwrap();
+        fs::write(
+            external_directory.join("rollout-external.jsonl"),
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-external-directory\",\"cwd\":\"/private/external\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-external\"}}\n",
+            ),
+        )
+        .unwrap();
+
+        let metadata = FakeMetadataClient::healthy(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        let swapped = Arc::new(AtomicBool::new(false));
+        let swapped_by_hook = Arc::clone(&swapped);
+        let hook_directory = directory.clone();
+        source.before_discovery_read = Some(Box::new(move |candidate| {
+            if candidate == hook_directory && !swapped_by_hook.swap(true, Ordering::SeqCst) {
+                fs::rename(&hook_directory, &internal_directory).unwrap();
+                symlink(&external_directory, &hook_directory).unwrap();
+            }
+        }));
+
+        let result = source.discover_rollouts(Instant::now(), &BTreeMap::new());
+        assert!(swapped.load(Ordering::SeqCst));
+        assert_eq!(result.unwrap_err(), "codex_rollout_scan_failed");
         assert!(source.files.is_empty());
     }
 

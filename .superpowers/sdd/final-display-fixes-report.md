@@ -254,3 +254,48 @@ Fresh containment follow-up gate results:
 - ESP32-S3 build: PASS; 35,644/327,680 bytes RAM (10.9%),
   348,169/3,342,336 bytes flash (10.4%).
 - `git diff --check`: PASS.
+
+## Expected Deletion Containment Follow-up
+
+The final expected-deletion and discovery-race fix was implemented on top of
+`7a23787` without adding runtime discovery.
+
+- RED: both a queued missing rollout and an ordinary tracked rollout were
+  replaced by dangling leaf symlinks before a due health poll. Each expected
+  `codex_channels_unavailable` but returned an empty `Ok(Degraded)` snapshot,
+  proving the pending path and persisted/in-memory cursor had been erased.
+- RED: the same pending and tracked cases failed identically when their
+  immediate parent was replaced by a symlink to a readable external directory
+  whose rollout leaf was absent.
+- GREEN: expected deletion now additionally requires `symlink_metadata` to
+  report genuine NotFound. It canonicalizes the immediate parent, requires the
+  parent to remain below the canonical sessions root, and requires complete
+  parent enumeration. Dangling leaf and external-parent cases keep rollout
+  health unavailable and retain byte-identical persisted cursors, tracked
+  state, and pending notifications. Restoring the real path recovers the task
+  and user-input state without another notification.
+- RED: a deterministic test-only seam replaced an already queued internal
+  directory immediately before its authoritative `read_dir`; discovery still
+  returned `Ok(())` after the confirmed swap.
+- GREEN: every queued discovery directory is canonicalized and checked below
+  the canonical sessions root immediately before enumeration. A moved,
+  replaced, or escaped directory fails authoritative discovery without an
+  out-of-root scan. Periodic polling remains limited to pending and tracked
+  paths and does not recursively discover files.
+- Existing genuine deletion, macOS `/var` alias, root/nested-parent outage,
+  symlink escape, notification retry/overflow, and no-recursive-runtime
+  regressions remain GREEN. Focused `display::codex`: 64 passed. Rustfmt and
+  Clippy with all targets and features passed.
+
+Fresh expected-deletion follow-up gate results:
+
+- Exact pinned `make test`: PASS.
+- Python suites: 33 + 32 + 32 passed.
+- PlatformIO native: 89/89 passed.
+- Rust: 401 passed, 1 intentional ignore, plus 2 integration tests passed.
+- Frontend: 211/211 passed; production build passed.
+- RP2040 build: PASS; 22,912/262,144 bytes RAM (8.7%),
+  133,176/16,773,120 bytes flash (0.8%).
+- ESP32-S3 build: PASS; 35,644/327,680 bytes RAM (10.9%),
+  348,169/3,342,336 bytes flash (10.4%).
+- `git diff --check`: PASS.
