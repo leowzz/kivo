@@ -6,6 +6,7 @@ import { HardwareMapping } from "./HardwareMapping";
 import { LayoutEditor } from "./LayoutEditor";
 import {
   candidateDisplayLabel,
+  compareDeviceAvailability,
   compatibleHardwareProfiles,
   matchesDeviceFilter,
   primaryDeviceLabel,
@@ -221,17 +222,19 @@ export function DeviceManagement({
       ),
     [candidates, language],
   );
-  const visibleDevices = devices.filter((device) =>
-    matchesDeviceFilter(device, filter, "") &&
-    matches([
-      device.name,
-      device.hardwareSerial,
-      device.deviceId,
-      device.boardProfileId,
-      boards.get(device.boardProfileId)?.displayName ?? "",
-      device.port ?? "",
-    ], query),
-  );
+  const visibleDevices = devices
+    .filter((device) =>
+      matchesDeviceFilter(device, filter, "") &&
+      matches([
+        device.name,
+        device.hardwareSerial,
+        device.deviceId,
+        device.boardProfileId,
+        boards.get(device.boardProfileId)?.displayName ?? "",
+        device.port ?? "",
+      ], query),
+    )
+    .sort(compareDeviceAvailability);
   const visibleCandidates =
     filter === "all" || filter === "attention"
       ? candidates.filter((candidate) =>
@@ -870,7 +873,6 @@ export function DeviceManagement({
                     <button className="secondary-button" type="button" onClick={() => void onDuplicateProfileForDevice?.({ deviceId: selectedDevice.deviceId, sourceProfile: editingProfile, name: `${editingProfile.profile.name} (${selectedDevice.name})` })}>{t(language, "devices.duplicateForDevice")}</button>
                   </div>
                 )}
-                {workspaceTab === "overview" && <p className="form-hint">{t(language, "devices.sharedWarning", { name: editingProfile.profile.name, count: sharedDeviceCount || 1 })}</p>}
                 {workspaceTab === "io" && <div role="tabpanel" aria-label={t(language, "devices.workspaceIo")}>
                   <h3>{t(language, "hardware.title")}</h3>
                   <HardwareMapping language={language} layout={editingProfile.profile} hardwareProfiles={editingProfile.hardware_profiles} boardProfiles={boardProfiles} devices={devices} learning={selectedDevice.learning} initialHardwareProfileId={assignmentDraft.hardwareProfileId || selectedDevice.runtimeAssignment?.hardware_profile_id} initialDeviceId={selectedDevice.deviceId} selectedButtonId={selectedButtonId} onSelectButton={setSelectedButtonId} onChange={(hardwareProfiles) => updateEditingProfile({ ...editingProfile, hardware_profiles: hardwareProfiles })} onSelectionChange={handleWorkspaceSelection} onBeginLearning={handleBeginLearning} onEndLearning={handleEndLearning} />
@@ -878,64 +880,72 @@ export function DeviceManagement({
                 {workspaceTab === "layout" && <div role="tabpanel" aria-label={t(language, "devices.workspaceLayout")}><LayoutEditor language={language} layout={editingProfile.profile} onChange={(layout) => updateEditingProfile({ ...editingProfile, profile: layout })} /></div>}
               </section>
             )}
-            <details className="device-technical-details">
-              <summary>{t(language, "setup.technicalDetails")}</summary>
-              <dl>
-                <TechnicalDetail
-                  label={t(language, "devices.id")}
-                  value={selectedDevice.deviceId}
-                  valueClassName="device-id-value"
-                />
-                <TechnicalDetail
-                  label={t(language, "devices.controller")}
-                  value={selectedDevice.controllerFamilyId}
-                />
-                <TechnicalDetail
-                  label={t(language, "devices.mode")}
-                  value={selectedDevice.mode ?? "-"}
-                />
-                <TechnicalDetail
-                  label={t(language, "setup.systemPort")}
-                  value={selectedDevice.port ?? "-"}
-                />
-                <TechnicalDetail
-                  label={t(language, "devices.firmware")}
-                  value={selectedDevice.firmwareBuildId ?? "-"}
-                />
-                <TechnicalDetail
-                  label={t(language, "devices.pins")}
-                  value={selectedDevice.capabilities.join(", ") || "-"}
-                />
-                <TechnicalDetail
-                  label={t(language, "devices.error")}
-                  value={selectedDevice.latestError?.detail ?? "-"}
-                />
-              </dl>
-            </details>
-            {selectedMetrics && (
-              <>
-                <section className="device-metrics" aria-label={t(language, "devices.metricsSummary")}>
-                  <div><span>{t(language, "home.todayPresses")}</span><strong>{selectedMetrics.todayPresses}</strong></div>
-                  <div><span>{t(language, "home.totalPresses")}</span><strong>{selectedMetrics.totalPresses}</strong></div>
-                  <div><span>{t(language, "home.activeButtons")}</span><strong>{selectedMetrics.activeButtonCount}</strong></div>
-                  <div><span>{t(language, "home.topButton")}</span><strong>{selectedMetrics.topButton?.buttonId ?? "-"}</strong></div>
-                </section>
-                <div className="device-activity-wrap">
-                  <table className="device-activity" aria-label={t(language, "devices.activity")}>
-                    <tbody>
-                      {selectedMetrics.logs.map((log) => (
-                        <tr key={`${log.timestampMs}:${log.deviceId}:${log.deviceProfileId}:${log.hardwareProfileId}:${log.message}`}>
-                          <td><time>{new Date(log.timestampMs).toLocaleTimeString()}</time></td>
-                          <td>{log.deviceName}</td>
-                          <td>{log.deviceProfileId}</td>
-                          <td>{log.hardwareProfileId}</td>
-                          <td>{log.message}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </>
+            {(!editingProfile || workspaceTab === "overview") && (
+              <div
+                role={editingProfile ? "tabpanel" : undefined}
+                aria-label={editingProfile ? t(language, "devices.workspaceOverview") : undefined}
+              >
+                {editingProfile && <p className="form-hint">{t(language, "devices.sharedWarning", { name: editingProfile.profile.name, count: sharedDeviceCount || 1 })}</p>}
+                <details className="device-technical-details" open>
+                  <summary>{t(language, "setup.technicalDetails")}</summary>
+                  <dl>
+                    <TechnicalDetail
+                      label={t(language, "devices.id")}
+                      value={selectedDevice.deviceId}
+                      valueClassName="device-id-value"
+                    />
+                    <TechnicalDetail
+                      label={t(language, "devices.controller")}
+                      value={selectedDevice.controllerFamilyId}
+                    />
+                    <TechnicalDetail
+                      label={t(language, "devices.mode")}
+                      value={selectedDevice.mode ?? "-"}
+                    />
+                    <TechnicalDetail
+                      label={t(language, "setup.systemPort")}
+                      value={selectedDevice.port ?? "-"}
+                    />
+                    <TechnicalDetail
+                      label={t(language, "devices.firmware")}
+                      value={selectedDevice.firmwareBuildId ?? "-"}
+                    />
+                    <TechnicalDetail
+                      label={t(language, "devices.pins")}
+                      value={selectedDevice.capabilities.join(", ") || "-"}
+                    />
+                    <TechnicalDetail
+                      label={t(language, "devices.error")}
+                      value={selectedDevice.latestError?.detail ?? "-"}
+                    />
+                  </dl>
+                </details>
+                {selectedMetrics && (
+                  <>
+                    <section className="device-metrics" aria-label={t(language, "devices.metricsSummary")}>
+                      <div><span>{t(language, "home.todayPresses")}</span><strong>{selectedMetrics.todayPresses}</strong></div>
+                      <div><span>{t(language, "home.totalPresses")}</span><strong>{selectedMetrics.totalPresses}</strong></div>
+                      <div><span>{t(language, "home.activeButtons")}</span><strong>{selectedMetrics.activeButtonCount}</strong></div>
+                      <div><span>{t(language, "home.topButton")}</span><strong>{selectedMetrics.topButton?.buttonId ?? "-"}</strong></div>
+                    </section>
+                    <div className="device-activity-wrap">
+                      <table className="device-activity" aria-label={t(language, "devices.activity")}>
+                        <tbody>
+                          {selectedMetrics.logs.map((log) => (
+                            <tr key={`${log.timestampMs}:${log.deviceId}:${log.deviceProfileId}:${log.hardwareProfileId}:${log.message}`}>
+                              <td><time>{new Date(log.timestampMs).toLocaleTimeString()}</time></td>
+                              <td>{log.deviceName}</td>
+                              <td>{log.deviceProfileId}</td>
+                              <td>{log.hardwareProfileId}</td>
+                              <td>{log.message}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </div>
             )}
             {selectedError && (
               <p className="field-error" role="alert">

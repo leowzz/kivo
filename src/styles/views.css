@@ -460,7 +460,7 @@
 .layout-editor-footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 58px; padding: 10px 14px; border-top: 1px solid var(--border-subtle); }
 .layout-editor-footer > button { min-height: 34px; border: 1px solid var(--border-strong); border-radius: var(--radius-8); padding: 0 12px; background: var(--bg-surface); }
 .layout-editor-error { margin: 0 auto 0 0; color: var(--red-text); font-size: var(--text-12); }
-.embedded-layout-editor { width: 100%; border: 0; border-radius: 0; box-shadow: none; background: var(--bg-raised); }
+.embedded-layout-editor { width: 100%; max-height: none; border: 0; border-radius: 0; box-shadow: none; background: var(--bg-raised); }
 .embedded-layout-editor .layout-editor-body { max-height: none; }
 .device-workspace { margin-top: var(--space-16); border-top: 1px solid var(--border-subtle); padding-top: var(--space-12); }
 .device-workspace-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-8); flex-wrap: wrap; }
