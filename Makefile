@@ -2,7 +2,9 @@
 
 ENV_FILE ?= .env
 -include $(ENV_FILE)
+ifeq ($(origin version),file)
 BUILD_ID ?= $(version)
+endif
 UV ?= uv
 UV_CMD = "$(UV)"
 ESP32S3_BUILD = KIVO_FIRMWARE_BUILD_ID="$(BUILD_ID)" $(UV_CMD) run pio run -e esp32s3

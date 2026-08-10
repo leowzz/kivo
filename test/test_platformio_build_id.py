@@ -1,11 +1,10 @@
 import os
-from pathlib import Path
 import runpy
+from pathlib import Path
 
 import pytest
 
 from scripts.repo_version import VersionError, resolve_firmware_build_id
-
 
 ROOT = Path(__file__).resolve().parents[1]
 

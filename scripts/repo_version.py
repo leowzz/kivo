@@ -5,9 +5,8 @@ import argparse
 import json
 import re
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Mapping
 
 TAG_VERSION_RE = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 TRACKED_VERSION_FILES = (

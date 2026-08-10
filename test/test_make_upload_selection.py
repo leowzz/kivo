@@ -1,9 +1,8 @@
 import os
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 import pytest
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -14,6 +13,7 @@ def run_make(
     *,
     build_id: str | None = "test-build",
     env_file: Path | None = None,
+    extra_environment: dict[str, str] | None = None,
     serial: str | None = None,
     selected_serial: str = "SELECTED-SERIAL",
     runtime_serial: str | None = None,
@@ -48,6 +48,7 @@ esac
         "KIVO_RUNTIME_SERIAL": runtime_serial or selected_serial,
         "KIVO_SELECTOR_EXIT": str(selector_exit),
     }
+    environment.update(extra_environment or {})
     command = ["make", target, f"UV={fake_uv}"]
     if build_id is not None:
         command.append(f"BUILD_ID={build_id}")
@@ -85,6 +86,21 @@ def test_make_firmware_target_explains_missing_env(tmp_path: Path) -> None:
         "build-rp2040",
         build_id=None,
         env_file=tmp_path / "missing.env",
+    )
+    assert result.returncode != 0
+    assert "cp .env.example .env" in result.stderr
+    assert invocations == []
+
+
+def test_make_ignores_ambient_version_when_env_file_is_missing(
+    tmp_path: Path,
+) -> None:
+    result, invocations = run_make(
+        tmp_path,
+        "build-rp2040",
+        build_id=None,
+        env_file=tmp_path / "missing.env",
+        extra_environment={"version": "v9.9.9"},
     )
     assert result.returncode != 0
     assert "cp .env.example .env" in result.stderr
