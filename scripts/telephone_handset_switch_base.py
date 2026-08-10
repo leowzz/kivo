@@ -141,3 +141,196 @@ def load_canonical_source(source_root: Path) -> trimesh.Trimesh:
 def extract_source_cell(source: trimesh.Trimesh) -> trimesh.Trimesh:
     cell = macro.clip_slab(source, 0, CELL_START, CELL_END)
     return macro.clip_slab(cell, 1, CELL_START, CELL_END)
+
+
+JOIN_OVERLAP = 0.02
+
+
+def inner_chamfer_cutter() -> trimesh.Trimesh:
+    lower_section = rounded_rectangle_section(
+        INNER_WIDTH, INNER_LENGTH, INNER_RADIUS, (CENTER_X, CENTER_Y)
+    )
+    upper_section = lower_section.offset(
+        CHAMFER,
+        join_type=manifold3d.JoinType.Round,
+        circular_segments=32,
+    )
+    slice_height = 0.01
+    lower = lower_section.extrude(slice_height).translate(
+        (0.0, 0.0, OUTER_HEIGHT - CHAMFER)
+    )
+    upper = upper_section.extrude(slice_height).translate(
+        (0.0, 0.0, OUTER_HEIGHT - slice_height)
+    )
+    return manifold_to_mesh(manifold3d.Manifold.batch_hull([lower, upper]))
+
+
+def build_outer_ring() -> trimesh.Trimesh:
+    outer = rounded_prism(
+        OUTER_WIDTH,
+        OUTER_LENGTH,
+        OUTER_RADIUS,
+        z_min=0.0,
+        height=OUTER_HEIGHT,
+        center=(CENTER_X, CENTER_Y),
+    )
+    inner = rounded_prism(
+        INNER_WIDTH,
+        INNER_LENGTH,
+        INNER_RADIUS,
+        z_min=-1.0,
+        height=OUTER_HEIGHT + 2.0,
+        center=(CENTER_X, CENTER_Y),
+    )
+    return subtract_meshes(outer, [inner, inner_chamfer_cutter()])
+
+
+def place_source_cell(source: trimesh.Trimesh) -> trimesh.Trimesh:
+    cell = extract_source_cell(source).copy()
+    target_lower = np.array(
+        [
+            CENTER_X - CELL_SIZE / 2.0,
+            CENTER_Y - CELL_SIZE / 2.0,
+            PLATFORM_BOTTOM,
+        ]
+    )
+    cell.apply_translation(target_lower - cell.bounds[0])
+    return cell
+
+
+def build_switch_platform(source: trimesh.Trimesh) -> trimesh.Trimesh:
+    platform = box_from_bounds(
+        np.array(
+            [
+                CENTER_X - PLATFORM_SIZE / 2.0,
+                CENTER_Y - PLATFORM_SIZE / 2.0,
+                PLATFORM_BOTTOM,
+            ]
+        ),
+        np.array(
+            [
+                CENTER_X + PLATFORM_SIZE / 2.0,
+                CENTER_Y + PLATFORM_SIZE / 2.0,
+                PLATFORM_TOP,
+            ]
+        ),
+    )
+    protected_cutter = box_from_bounds(
+        np.array(
+            [
+                CENTER_X - CELL_SIZE / 2.0,
+                CENTER_Y - CELL_SIZE / 2.0,
+                PLATFORM_BOTTOM - 1.0,
+            ]
+        ),
+        np.array(
+            [
+                CENTER_X + CELL_SIZE / 2.0,
+                CENTER_Y + CELL_SIZE / 2.0,
+                PLATFORM_TOP + 1.0,
+            ]
+        ),
+    )
+    border = subtract_meshes(platform, [protected_cutter])
+    return macro.union_meshes([border, place_source_cell(source)])
+
+
+def build_tower_and_ribs() -> trimesh.Trimesh:
+    x0 = CENTER_X - PLATFORM_SIZE / 2.0
+    x1 = CENTER_X + PLATFORM_SIZE / 2.0
+    y0 = CENTER_Y - PLATFORM_SIZE / 2.0
+    y1 = CENTER_Y + PLATFORM_SIZE / 2.0
+    inner_rear = OUTER_LENGTH - WALL
+    z1 = PLATFORM_BOTTOM + JOIN_OVERLAP
+
+    parts = [
+        box_from_bounds(np.array([x0, y0, 0.0]), np.array([x0 + WALL, y1, z1])),
+        box_from_bounds(np.array([x1 - WALL, y0, 0.0]), np.array([x1, y1, z1])),
+        box_from_bounds(
+            np.array([x0 + WALL, y0, 0.0]),
+            np.array([x1 - WALL, y0 + WALL, z1]),
+        ),
+        box_from_bounds(
+            np.array([x0, y1 - JOIN_OVERLAP, 0.0]),
+            np.array([x0 + WALL, inner_rear + JOIN_OVERLAP, z1]),
+        ),
+        box_from_bounds(
+            np.array([x1 - WALL, y1 - JOIN_OVERLAP, 0.0]),
+            np.array([x1, inner_rear + JOIN_OVERLAP, z1]),
+        ),
+    ]
+    return macro.union_meshes(parts)
+
+
+def hull_points(points: list[list[float]]) -> trimesh.Trimesh:
+    return manifold_to_mesh(manifold3d.Manifold.hull_points(points))
+
+
+def side_bounds(
+    side: int, inner_min: float, inner_max: float
+) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
+    if side < 0:
+        pad = (inner_min - JOIN_OVERLAP, inner_min + PAD_SIZE)
+        exposed = (inner_min, inner_min + PAD_SIZE)
+        foot = (inner_min, inner_min + WALL)
+    else:
+        pad = (inner_max - PAD_SIZE, inner_max + JOIN_OVERLAP)
+        exposed = (inner_max - PAD_SIZE, inner_max)
+        foot = (inner_max - WALL, inner_max)
+    return pad, exposed, foot
+
+
+def build_safety_pad(x_side: int, y_side: int) -> trimesh.Trimesh:
+    x_pad, x_exposed, x_foot = side_bounds(x_side, WALL, OUTER_WIDTH - WALL)
+    y_pad, y_exposed, y_foot = side_bounds(y_side, WALL, OUTER_LENGTH - WALL)
+    pad_bottom = PLATFORM_TOP - PAD_THICKNESS
+    gusset_bottom = pad_bottom - (PAD_SIZE - WALL)
+
+    pad = box_from_bounds(
+        np.array([x_pad[0], y_pad[0], pad_bottom]),
+        np.array([x_pad[1], y_pad[1], PLATFORM_TOP]),
+    )
+    foot = box_from_bounds(
+        np.array([x_foot[0], y_foot[0], 0.0]),
+        np.array([x_foot[1], y_foot[1], gusset_bottom]),
+    )
+    points = [
+        [x, y, z]
+        for z, x_bounds, y_bounds in (
+            (gusset_bottom, x_foot, y_foot),
+            (pad_bottom, x_exposed, y_exposed),
+        )
+        for x in x_bounds
+        for y in y_bounds
+    ]
+    gusset = hull_points(points)
+    return macro.union_meshes([pad, foot, gusset])
+
+
+def rear_hole_cutter() -> trimesh.Trimesh:
+    cutter = trimesh.creation.cylinder(
+        radius=WIRE_HOLE_DIAMETER / 2.0,
+        height=WALL + 2.0,
+        sections=32,
+    )
+    cutter.apply_transform(
+        trimesh.transformations.rotation_matrix(np.pi / 2.0, [1.0, 0.0, 0.0])
+    )
+    cutter.apply_translation([CENTER_X, OUTER_LENGTH - WALL / 2.0, 5.0])
+    return cutter
+
+
+def generate_base(source: trimesh.Trimesh) -> trimesh.Trimesh:
+    parts = [
+        build_outer_ring(),
+        build_switch_platform(source),
+        build_tower_and_ribs(),
+    ]
+    parts.extend(
+        build_safety_pad(x_side, y_side) for x_side in (-1, 1) for y_side in (-1, 1)
+    )
+    joined = macro.union_meshes(parts)
+    result = subtract_meshes(joined, [rear_hole_cutter()])
+    result.merge_vertices()
+    result.remove_unreferenced_vertices()
+    return result
