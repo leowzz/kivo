@@ -13,7 +13,6 @@ from version_fixtures import seed_version_repo
 
 from scripts.repo_version import TRACKED_VERSION_FILES, check_repo_version
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -62,6 +61,7 @@ def run_release(
         text=True,
         capture_output=True,
         env=env,
+        check=False,
     )
 
 
