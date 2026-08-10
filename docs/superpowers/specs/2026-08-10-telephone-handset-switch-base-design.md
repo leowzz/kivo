@@ -66,8 +66,10 @@ Z: 0.0 .. 28.4
 
 ## Handset Pocket
 
-The usable pocket is a clear `55 x 70 x 15` volume. These are internal clear
-dimensions, not outer dimensions.
+The usable pocket has `55 x 70` wall-to-wall section extents and `15` depth.
+These are internal dimensions, not outer dimensions. The `R1.6` inner corners
+round the four section corners, so `55 x 70` describes the section bounding
+box rather than a sharp-cornered rectangular prism.
 
 - Outer perimeter wall: `2.4` thick.
 - Outer footprint: `59.8 x 74.8`.
@@ -138,16 +140,17 @@ tilt, impact, or unexpected switch overtravel.
 
 ## Switch Travel And Handset Height
 
-Use the dimensions supplied for the physical arrangement:
+Use this nominal dimension chain for the physical arrangement:
 
 - switch body above mounting datum: `5`;
 - unpressed trigger region above body: `4`;
-- switch full travel: `4`;
+- assumed switch full travel: `4`;
 - handset center recess relative to its adjacent bearing surface: `2`.
 
-At full switch travel, the trigger top is `5` above the platform. The handset
-center contacts that trigger top, so its adjacent bearing surface is `3` above
-the platform and safety pads:
+The `4`-mm full-travel value assumes the stated `4`-mm trigger protrusion can be
+fully consumed. At that nominal full travel, the trigger top is `5` above the
+platform. The handset center contacts that trigger top, so its adjacent bearing
+surface is nominally `3` above the platform and safety pads:
 
 ```text
 5 mm bottomed trigger height - 2 mm handset recess = 3 mm safety-pad gap
@@ -155,6 +158,9 @@ the platform and safety pads:
 
 Do not add a support ledge that prevents the switch from reaching full travel.
 No keycap or separate actuator extension is part of this design.
+The safety-pad datum does not depend on the assumed travel value. If the actual
+switch retains trigger height at bottom-out, the physical pad gap will be more
+than `3`; acceptance is based on full bottom-out without normal pad contact.
 
 ## Rear Wire Exit
 
