@@ -8,6 +8,7 @@ mod model;
 mod provider;
 mod render;
 mod scene;
+mod service;
 
 pub(crate) use codex_events::{CodexInputNeed, CodexTaskSnapshot, CodexTerminalEvent};
 #[allow(unused_imports)]
@@ -26,32 +27,66 @@ pub(crate) use render::{
 };
 #[allow(unused_imports)]
 pub(crate) use scene::{SceneMode, SceneTracker, SceneUpdate};
+pub(crate) use service::{DisplayService, UnavailableDisplayProvider};
 
 pub(crate) fn built_in_provider_registry(
-    app_home_fallback: &Path,
+    codex_home_fallback: &Path,
     cursor_store_path: &Path,
-) -> Result<ProviderRegistry, &'static str> {
-    let metadata = codex_source::SystemCodexMetadataClient::new(app_home_fallback.join(".codex"));
-    let source = codex_source::CodexTaskSource::new(
+) -> ProviderRegistry {
+    let metadata = codex_source::SystemCodexMetadataClient::new(codex_home_fallback.to_path_buf());
+    let source_home_fallback = if codex_home_fallback
+        .file_name()
+        .is_some_and(|name| name == ".codex")
+    {
+        codex_home_fallback.parent().unwrap_or(codex_home_fallback)
+    } else {
+        codex_home_fallback
+    };
+    let provider = codex_source::CodexTaskSource::new(
         Box::new(metadata),
-        app_home_fallback,
+        source_home_fallback,
         cursor_store_path,
-    )?;
+    )
+    .map(|source| {
+        Box::new(codex_provider::CodexDisplayProvider::new(source)) as Box<dyn DisplayProvider>
+    });
+    registry_with_codex_provider(provider)
+}
+
+fn registry_with_codex_provider(
+    provider: Result<Box<dyn DisplayProvider>, &'static str>,
+) -> ProviderRegistry {
     let mut registry = ProviderRegistry::default();
-    registry.register(Box::new(codex_provider::CodexDisplayProvider::new(source)))?;
-    Ok(registry)
+    registry
+        .register(provider.unwrap_or_else(|_| {
+            Box::new(UnavailableDisplayProvider::new(
+                "codex",
+                "codex_source_init",
+            ))
+        }))
+        .expect("the built-in provider source ID is unique");
+    registry
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, time::Instant};
+    use std::{
+        collections::BTreeMap,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        },
+        time::{Duration, Instant},
+    };
 
     use tempfile::TempDir;
 
     use super::{
-        DisplayItem, DisplayPriority, DisplayRenderer, DisplaySnapshot, DisplayState,
-        MonoText128x32Renderer, Rect, SceneMode, SceneTracker, SourceHealth, ascii_project_title,
-        built_in_provider_registry, built_in_renderer_registry,
+        DisplayItem, DisplayPriority, DisplayProvider, DisplayRenderer, DisplaySnapshot,
+        DisplayService, DisplayState, MonoText128x32Renderer, Rect, SceneMode, SceneTracker,
+        SourceHealth, ascii_project_title, built_in_provider_registry, built_in_renderer_registry,
+        registry_with_codex_provider,
     };
 
     fn snapshot(running: u32, needs_input: u32) -> DisplaySnapshot {
@@ -77,12 +112,48 @@ mod tests {
     fn built_in_registry_contains_exactly_the_codex_provider() {
         let temp = TempDir::new().unwrap();
         let registry = built_in_provider_registry(
-            temp.path(),
+            &temp.path().join(".codex"),
             &temp.path().join("display/codex-cursors-v1.json"),
-        )
-        .unwrap();
+        );
 
         assert_eq!(registry.source_ids(), ["codex"]);
+    }
+
+    #[test]
+    fn built_in_registry_uses_unavailable_codex_when_source_initialization_fails() {
+        let mut registry = registry_with_codex_provider(Err::<
+            Box<dyn DisplayProvider>,
+            &'static str,
+        >("forced_source_failure"));
+
+        assert_eq!(registry.source_ids(), ["codex"]);
+        assert!(matches!(
+            registry
+                .providers_mut()
+                .next()
+                .unwrap()
+                .poll(Instant::now()),
+            Err("codex_source_init")
+        ));
+    }
+
+    #[test]
+    fn source_initialization_failure_reaches_the_offline_screen_without_stopping_runtime() {
+        let providers = registry_with_codex_provider(Err::<
+            Box<dyn DisplayProvider>,
+            &'static str,
+        >("forced_source_failure"));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (sender, snapshots) = mpsc::channel();
+        let service = DisplayService::spawn(providers, Arc::clone(&stop), sender).unwrap();
+
+        let snapshot = snapshots.recv_timeout(Duration::from_secs(1)).unwrap();
+        let scene = MonoText128x32Renderer.render(&snapshot).unwrap();
+
+        assert_eq!(scene.text("row0_left"), "CODEX");
+        assert_eq!(scene.text("row0_right"), "OFFLINE");
+        stop.store(true, Ordering::Relaxed);
+        service.join().unwrap();
     }
 
     #[test]

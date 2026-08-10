@@ -82,6 +82,14 @@ YD-RP2040 的 UF2 bootloader USB 标识为 `2e8a:0003`。Kivo 会先校验 USB �
 
 YD-RP2040 的 Hardware Profile 还可以启用固定为 `128x32`、地址为 `0x3C` 的 SSD1306 OLED，并分别选择 SDA 与 SCL 引脚。OLED 占用的两个 GPIO 不会再出现在按键输入或学习模式中；运行时配置成功后屏幕才会开始显示状态。
 
+## Codex 状态屏
+
+启用 OLED 的设备会显示本机 Codex 任务的低干扰状态：汇总画面为 `CODEX <N> RUN`，需要操作时显示 `NEEDS INPUT` 或 `APPROVAL NEEDED`，响应生成后短暂显示 `RESPONSE READY`，数据源不可用时显示 `CODEX OFFLINE`。Codex 数据源异常不会停止 Kivo 的按键 Runtime。
+
+Kivo 只消费任务身份、工作目录和状态/生命周期信号；对话正文、推理、工具内容和最终回复不会显示或保留。固件协议 3-6 不接收显示命令，继续显示原有本地调试画面。V1 面板固定为 rotation 0 的 SSD1306 128x32 单色屏，现有 Device Profile YAML 无需迁移。
+
+刷入协议 7 固件后仍需在实体 OLED 上检查文字、状态切换和持续按键输入。自动测试和固件构建不能替代物理屏幕与输入验收。
+
 ![小黑同时给 ESP32-S3 和 YD-RP2040 两台设备上弦](assets/readme-illustrations/03-parallel-devices.png)
 
 两种控制器共享按键扫描、去抖、协议和运行状态机，各自只保留很薄的 USB/HID 平台适配。多台 ESP32-S3 与 YD-RP2040 可以同时在线，每台设备继续使用自己的 Runtime Assignment。

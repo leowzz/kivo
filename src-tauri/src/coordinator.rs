@@ -552,15 +552,57 @@ impl RuntimeCoordinator {
         workspace: Arc<RwLock<Workspace>>,
         paste: Option<PasteHandle>,
     ) -> Self {
-        Self::with_registry_and_paste(enumerator, launcher, workspace, paste, compiled_registry())
+        Self::with_paste_and_renderers(
+            enumerator,
+            launcher,
+            workspace,
+            paste,
+            Arc::new(built_in_renderer_registry()),
+        )
     }
 
+    pub(crate) fn with_paste_and_renderers(
+        enumerator: Arc<dyn UsbEnumerator>,
+        launcher: Arc<dyn WorkerLauncher>,
+        workspace: Arc<RwLock<Workspace>>,
+        paste: Option<PasteHandle>,
+        renderers: Arc<RendererRegistry>,
+    ) -> Self {
+        Self::with_registry_paste_and_renderers(
+            enumerator,
+            launcher,
+            workspace,
+            paste,
+            compiled_registry(),
+            renderers,
+        )
+    }
+
+    #[cfg(test)]
     fn with_registry_and_paste(
         enumerator: Arc<dyn UsbEnumerator>,
         launcher: Arc<dyn WorkerLauncher>,
         workspace: Arc<RwLock<Workspace>>,
         paste: Option<PasteHandle>,
         registry: HardwareRegistry<'static>,
+    ) -> Self {
+        Self::with_registry_paste_and_renderers(
+            enumerator,
+            launcher,
+            workspace,
+            paste,
+            registry,
+            Arc::new(built_in_renderer_registry()),
+        )
+    }
+
+    fn with_registry_paste_and_renderers(
+        enumerator: Arc<dyn UsbEnumerator>,
+        launcher: Arc<dyn WorkerLauncher>,
+        workspace: Arc<RwLock<Workspace>>,
+        paste: Option<PasteHandle>,
+        registry: HardwareRegistry<'static>,
+        renderers: Arc<RendererRegistry>,
     ) -> Self {
         let (event_sender, event_receiver) = mpsc::channel();
         let workspace_revision = {
@@ -576,7 +618,7 @@ impl RuntimeCoordinator {
             workspace,
             workspace_revision,
             paste,
-            renderers: Arc::new(built_in_renderer_registry()),
+            renderers,
             workers: BTreeMap::new(),
             devices: BTreeMap::new(),
             candidates: Vec::new(),
@@ -2029,6 +2071,7 @@ mod tests {
         hellos: Mutex<BTreeMap<String, HelloCapabilities>>,
         stopped: Arc<Mutex<Vec<DeviceId>>>,
         commands: Arc<Mutex<BTreeMap<DeviceId, Vec<WorkerCommand>>>>,
+        renderers: Mutex<Option<Arc<RendererRegistry>>>,
     }
 
     impl FakeLauncher {
@@ -2080,6 +2123,10 @@ mod tests {
                 .get(device_id)
                 .cloned()
                 .unwrap_or_default()
+        }
+
+        fn renderers(&self) -> Option<Arc<RendererRegistry>> {
+            self.renderers.lock().unwrap().clone()
         }
     }
 
@@ -2142,6 +2189,16 @@ mod tests {
                 commands: Arc::clone(&self.commands),
                 update_port_failures: Arc::clone(&self.update_port_failures),
             }))
+        }
+
+        fn start_with_renderers(
+            &self,
+            start: WorkerStart,
+            events: Sender<WorkerEvent>,
+            renderers: WorkerRendererRegistry,
+        ) -> Result<Box<dyn DeviceWorker>, String> {
+            *self.renderers.lock().unwrap() = Some(renderers.into_inner());
+            self.start(start, events)
         }
     }
 
@@ -2447,6 +2504,30 @@ mod tests {
                 .collect::<BTreeMap<_, _>>(),
             revisions
         );
+    }
+
+    #[test]
+    fn injected_renderer_registry_is_shared_with_spawned_workers() {
+        let directory = TestDirectory::new();
+        let workspace = Workspace::create(&directory.0, vec![profile()]).unwrap();
+        let enumerator = Arc::new(FakeEnumerator::default());
+        let launcher = Arc::new(FakeLauncher::default());
+        let renderers = Arc::new(built_in_renderer_registry());
+        let mut coordinator = RuntimeCoordinator::with_paste_and_renderers(
+            enumerator.clone(),
+            launcher.clone(),
+            Arc::new(RwLock::new(workspace)),
+            None,
+            Arc::clone(&renderers),
+        );
+        enumerator.set(
+            vec![serial("/dev/rp", 0x2e8a, 0x102e, Some("DISPLAY"))],
+            Vec::new(),
+        );
+
+        scan(&mut coordinator);
+
+        assert!(Arc::ptr_eq(&launcher.renderers().unwrap(), &renderers));
     }
 
     #[test]

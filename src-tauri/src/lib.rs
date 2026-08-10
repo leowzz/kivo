@@ -20,6 +20,9 @@ use coordinator::{
     CandidateStatus, DeviceScan, DeviceStatus, IdentityDimension, RuntimeCoordinator, RuntimeEvent,
     UsbEnumerator, WorkspaceRevision, enumerate_devices,
 };
+use display::{
+    DisplayService, DisplaySnapshot, built_in_provider_registry, built_in_renderer_registry,
+};
 use hardware::{BOARD_PROFILES, BoardProfile};
 use metrics::{HomeMetricsSnapshot, MetricsStore};
 use paste::PasteCoordinator;
@@ -31,6 +34,7 @@ use std::{
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -126,6 +130,12 @@ fn poll_runtime_coordinator(
     }
 }
 
+fn newest_display_snapshot(
+    snapshots: &std::sync::mpsc::Receiver<Arc<DisplaySnapshot>>,
+) -> Option<Arc<DisplaySnapshot>> {
+    snapshots.try_iter().last()
+}
+
 struct RuntimeScanSnapshot {
     devices: Vec<DeviceStatus>,
     candidates: Vec<CandidateStatus>,
@@ -174,6 +184,7 @@ struct AppState {
     paste: Option<Arc<PasteCoordinator>>,
     stop: Arc<AtomicBool>,
     scan_requested: Arc<AtomicBool>,
+    display_thread: Mutex<Option<JoinHandle<()>>>,
     coordinator_thread: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -1082,6 +1093,11 @@ pub fn run() {
             app.manage(StartupState::default());
             let result: SetupResult = (|| {
                 let config_directory = app.path().app_config_dir()?;
+                let codex_home_fallback = app.path().home_dir()?.join(".codex");
+                let codex_cursor_store = app
+                    .path()
+                    .app_data_dir()?
+                    .join("display/codex-cursors-v1.json");
                 fs::create_dir_all(&config_directory)?;
                 if let Err(error) = runtime_log::install(app.handle(), &config_directory) {
                     eprintln!("failed to install runtime logger: {error}");
@@ -1130,15 +1146,24 @@ pub fn run() {
                     metrics.clone(),
                     Arc::clone(&operation_barrier),
                 ));
+                let providers =
+                    built_in_provider_registry(&codex_home_fallback, &codex_cursor_store);
+                let renderers = Arc::new(built_in_renderer_registry());
+                let (display_snapshot_sender, display_snapshots) =
+                    mpsc::channel::<Arc<DisplaySnapshot>>();
                 let enumerator: Arc<dyn UsbEnumerator> = Arc::new(coordinator::SystemUsbEnumerator);
-                let coordinator = Arc::new(Mutex::new(RuntimeCoordinator::with_paste(
-                    Arc::clone(&enumerator),
-                    launcher,
-                    Arc::clone(&workspace),
-                    Some(paste.handle()),
-                )));
+                let coordinator =
+                    Arc::new(Mutex::new(RuntimeCoordinator::with_paste_and_renderers(
+                        Arc::clone(&enumerator),
+                        launcher,
+                        Arc::clone(&workspace),
+                        Some(paste.handle()),
+                        Arc::clone(&renderers),
+                    )));
                 let stop = Arc::new(AtomicBool::new(false));
                 let scan_requested = Arc::new(AtomicBool::new(false));
+                let display_thread =
+                    DisplayService::spawn(providers, Arc::clone(&stop), display_snapshot_sender)?;
                 let coordinator_thread = {
                     let coordinator = Arc::clone(&coordinator);
                     let workspace = Arc::clone(&workspace);
@@ -1188,6 +1213,12 @@ pub fn run() {
                                 runtime_log::emit_runtime_event(&payload);
                                 let _ = app_handle.emit("runtime-event", payload);
                             }
+                            if let Some(snapshot) = newest_display_snapshot(&display_snapshots) {
+                                coordinator
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                    .update_display(snapshot);
+                            }
                             thread::sleep(RUNTIME_EVENT_POLL_INTERVAL);
                         }
                         coordinator
@@ -1204,6 +1235,7 @@ pub fn run() {
                     paste: Some(paste),
                     stop,
                     scan_requested,
+                    display_thread: Mutex::new(Some(display_thread)),
                     coordinator_thread: Mutex::new(Some(coordinator_thread)),
                 });
                 runtime_log::emit_lifecycle(runtime_log::RuntimeLogEntry::new(
@@ -1279,6 +1311,14 @@ pub fn run() {
         tauri::RunEvent::Exit => {
             if let Some(state) = app_handle.try_state::<AppState>() {
                 state.stop.store(true, Ordering::Relaxed);
+                if let Some(display) = state
+                    .display_thread
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take()
+                {
+                    let _ = display.join();
+                }
                 if let Some(coordinator) = state
                     .coordinator_thread
                     .lock()
@@ -1310,6 +1350,7 @@ mod tests {
             BootloaderObservation, DeviceWorker, SerialObservation, UsbEnumerator, WorkerCommand,
             WorkerEvent, WorkerLauncher, WorkerStart,
         },
+        display::DisplaySnapshot,
         metrics::MetricAttribution,
         profile::{
             ButtonAction, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION, TriggerActions,
@@ -1466,6 +1507,26 @@ mod tests {
             RUNTIME_EVENT_POLL_INTERVAL + crate::device::SERIAL_COMMAND_POLL_INTERVAL
                 <= Duration::from_millis(20)
         );
+    }
+
+    #[test]
+    fn display_snapshot_drain_returns_only_the_newest_queued_value() {
+        let (sender, snapshots) = mpsc::channel();
+        let first = Arc::new(DisplaySnapshot {
+            items: Vec::new(),
+            health: BTreeMap::new(),
+        });
+        let newest = Arc::new(DisplaySnapshot {
+            items: Vec::new(),
+            health: BTreeMap::new(),
+        });
+        sender.send(first).unwrap();
+        sender.send(Arc::clone(&newest)).unwrap();
+
+        let drained = newest_display_snapshot(&snapshots).unwrap();
+
+        assert!(Arc::ptr_eq(&drained, &newest));
+        assert!(newest_display_snapshot(&snapshots).is_none());
     }
 
     #[test]
@@ -1664,6 +1725,7 @@ mod tests {
             paste: None,
             stop: Arc::new(AtomicBool::new(false)),
             scan_requested: Arc::new(AtomicBool::new(false)),
+            display_thread: Mutex::new(None),
             coordinator_thread: Mutex::new(None),
         }
     }
