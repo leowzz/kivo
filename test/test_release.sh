@@ -7,7 +7,10 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 MAKEFILE="$ROOT/Makefile"
 FIRMWARE_MAIN="$ROOT/src/main.cpp"
+PLATFORM_HEADER="$ROOT/src/platform/Platform.h"
 RP2040_PLATFORM="$ROOT/src/platform/rp2040.cpp"
+ESP32S3_PLATFORM="$ROOT/src/platform/esp32s3.cpp"
+DISPLAY_CONTROLLER="$ROOT/lib/gpio_trigger/src/DisplayController.h"
 PLATFORMIO_CONFIG="$ROOT/platformio.ini"
 ESP32S3_MERGE_SCRIPT="$ROOT/scripts/merge_esp32s3_firmware.py"
 RELEASE_WORKFLOW="$ROOT/.github/workflows/release-windows.yml"
@@ -62,7 +65,30 @@ grep -Fq 'https://espressif.github.io/esptool-js/' "$README"
 grep -Fq '地址填写 `0x0`' "$README"
 grep -Fq '点击 **Program**' "$README"
 
+grep -Fq 'void renderLocalDisplay(const DisplayFrame &frame);' "$PLATFORM_HEADER"
+grep -Fq 'void renderRemoteDisplay(const RemoteDisplayCommit &scene,' "$PLATFORM_HEADER"
+grep -Fq 'void resetRemoteDisplay();' "$PLATFORM_HEADER"
+grep -Fq 'void serviceDisplay();' "$PLATFORM_HEADER"
+grep -Fq 'void renderLocalDisplay(const DisplayFrame &frame)' "$RP2040_PLATFORM"
+grep -Fq 'void renderRemoteDisplay(const RemoteDisplayCommit &scene,' "$RP2040_PLATFORM"
+grep -Fq 'operation.fontId != kRemoteDisplayFontId' "$RP2040_PLATFORM"
 grep -Fq 'display->setFont(u8g2_font_6x13_tf);' "$RP2040_PLATFORM"
+grep -Fq 'display->drawBox(bounds.x, bounds.y, bounds.width, bounds.height);' \
+  "$RP2040_PLATFORM"
+grep -Fq 'display->sendBuffer();' "$RP2040_PLATFORM"
+grep -Fq 'void renderRemoteDisplay(const RemoteDisplayCommit &, bool) {}' \
+  "$ESP32S3_PLATFORM"
+grep -Fq 'DisplayUpdate commitRemote(const RemoteDisplayCommit &scene);' \
+  "$DISPLAY_CONTROLLER"
+grep -Fq 'DisplayController displayController;' "$FIRMWARE_MAIN"
+grep -Fq 'platform::renderLocalDisplay(*update.local);' "$FIRMWARE_MAIN"
+grep -Fq 'platform::renderRemoteDisplay(*update.remote, update.fullRedraw);' \
+  "$FIRMWARE_MAIN"
+grep -Fq 'platform::resetRemoteDisplay();' "$FIRMWARE_MAIN"
+grep -Fq 'remoteDisplay.emplace();' "$FIRMWARE_MAIN"
+! grep -Fq 'remoteDisplay = RemoteDisplay{};' "$FIRMWARE_MAIN"
+grep -Fq 'platform::serviceDisplay();' "$FIRMWARE_MAIN"
+! grep -Fq 'renderDisplay(' "$FIRMWARE_MAIN"
 grep -Fq 'makeRp2040StandaloneDebugTopology(platform::boardProfile())' \
   "$FIRMWARE_MAIN"
 grep -Fq 'initializeStandaloneDisplay(nowMs);' "$FIRMWARE_MAIN"
@@ -77,6 +103,7 @@ configure_display_line="$(grep -n 'platform::configureDisplay(topology.oled);' \
   <<<"$activate_topology_body" | cut -d: -f1)"
 apply_topology_line="$(grep -n 'applyTopologyState(topology, nowMs);' \
   <<<"$activate_topology_body" | cut -d: -f1)"
+grep -Fq 'displayController.clearLocalOverride()' <<<"$activate_topology_body"
 test "$configure_display_line" -lt "$apply_topology_line"
 
 target_body() {

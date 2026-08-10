@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "BoardProfile.h"
+#include "DisplayController.h"
 #include "DisplayStatus.h"
 #include "ActionRunDispatcher.h"
 #include "ActionRunController.h"
@@ -65,6 +66,175 @@ const DisplayOperation *displayTextOperation(const RemoteDisplayScene &scene,
     }
   }
   return nullptr;
+}
+
+DisplayFrame localFrame(const char *status) {
+  return DisplayFrame{{"KIVO", status, ""}};
+}
+
+RemoteDisplayCommit remoteScene(std::uint32_t revision, const char *first,
+                                const char *second, bool full = true) {
+  RemoteDisplayCommit scene;
+  scene.revision = revision;
+  scene.full = full;
+  scene.regions[0] = {0, {0, 0, 128, 16}};
+  scene.regions[1] = {1, {0, 16, 128, 16}};
+  scene.regionCount = 2;
+  scene.operations[0] = {"", 0, 0, 0, 0, DisplayOperationKind::Clear};
+  scene.operations[1] = {first, 0, 12, 0, 0,
+                         DisplayOperationKind::Text};
+  scene.operations[2] = {"", 0, 0, 1, 0, DisplayOperationKind::Clear};
+  scene.operations[3] = {second, 0, 28, 1, 0,
+                         DisplayOperationKind::Text};
+  scene.operationCount = 4;
+  scene.dirtyBounds[0] = {0, 0, 128, 32};
+  scene.dirtyCount = 1;
+  return scene;
+}
+
+void test_startup_stays_local_until_first_full_remote_scene() {
+  DisplayController controller;
+
+  const auto startup =
+      controller.showLocal(localFrame("WAITING CONFIG"),
+                           LocalDisplayPriority::Startup);
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::Local, startup.kind);
+  TEST_ASSERT_EQUAL(DisplaySource::Local, controller.source());
+
+  const auto ignoredDelta =
+      controller.commitRemote(remoteScene(1, "CODEX", "1 RUN", false));
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::None, ignoredDelta.kind);
+  TEST_ASSERT_FALSE(controller.hasRemote());
+  TEST_ASSERT_EQUAL(DisplaySource::Local, controller.source());
+
+  const auto firstFull =
+      controller.commitRemote(remoteScene(2, "CODEX", "1 RUN"));
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::Remote, firstFull.kind);
+  TEST_ASSERT_TRUE(firstFull.fullRedraw);
+  TEST_ASSERT_NOT_NULL(firstFull.remote);
+  TEST_ASSERT_EQUAL_UINT32(2, firstFull.remote->revision);
+  TEST_ASSERT_EQUAL(DisplaySource::Remote, controller.source());
+}
+
+void test_startup_refresh_does_not_demote_remote_or_critical_content() {
+  DisplayController controller;
+  controller.commitRemote(remoteScene(1, "CODEX", "RUNNING"));
+
+  const auto remoteRefresh = controller.showLocal(
+      localFrame("WAITING CONFIG"), LocalDisplayPriority::Startup);
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::Remote, remoteRefresh.kind);
+  TEST_ASSERT_TRUE(remoteRefresh.fullRedraw);
+  TEST_ASSERT_EQUAL(DisplaySource::Remote, controller.source());
+
+  controller.showLocal(localFrame("CONFIG ERROR"),
+                       LocalDisplayPriority::Critical);
+  const auto criticalRefresh = controller.showLocal(
+      localFrame("CONFIG ERROR"), LocalDisplayPriority::Startup);
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::Local, criticalRefresh.kind);
+  TEST_ASSERT_EQUAL(DisplaySource::Local, controller.source());
+  const auto hiddenDelta =
+      controller.commitRemote(remoteScene(2, "CODEX", "READY", false));
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::None, hiddenDelta.kind);
+}
+
+void test_local_critical_overrides_and_then_restores_latest_remote_scene() {
+  DisplayController controller;
+  const auto remote1 = remoteScene(1, "CODEX", "1 RUN");
+  const auto remote2 = remoteScene(2, "KIVO", "NEEDS INPUT", false);
+  controller.commitRemote(remote1);
+  TEST_ASSERT_EQUAL(DisplaySource::Remote, controller.source());
+
+  const auto critical = controller.showLocal(
+      localFrame("CONFIG ERROR"), LocalDisplayPriority::Critical);
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::Local, critical.kind);
+  TEST_ASSERT_EQUAL(DisplaySource::Local, controller.source());
+
+  const auto hiddenRemote = controller.commitRemote(remote2);
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::None, hiddenRemote.kind);
+  TEST_ASSERT_EQUAL(DisplaySource::Local, controller.source());
+
+  const auto restored = controller.clearLocalOverride();
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::Remote, restored.kind);
+  TEST_ASSERT_TRUE(restored.fullRedraw);
+  TEST_ASSERT_NOT_NULL(restored.remote);
+  TEST_ASSERT_EQUAL_UINT32(2, restored.remote->revision);
+  TEST_ASSERT_EQUAL(DisplaySource::Remote, controller.source());
+  TEST_ASSERT_EQUAL_UINT32(2, controller.remoteRevision());
+}
+
+void test_learning_override_retains_remote_and_restores_on_runtime_return() {
+  DisplayController controller;
+  controller.commitRemote(remoteScene(7, "CODEX", "IDLE"));
+
+  controller.showLocal(localFrame("LEARNING 4 PINS"),
+                       LocalDisplayPriority::Critical);
+  controller.showLocal(localFrame("LEARNING GPIO 6"),
+                       LocalDisplayPriority::Critical);
+  controller.commitRemote(remoteScene(8, "KIVO", "TASK STOPPED", false));
+
+  TEST_ASSERT_EQUAL(DisplaySource::Local, controller.source());
+  const auto restored = controller.clearLocalOverride();
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::Remote, restored.kind);
+  TEST_ASSERT_TRUE(restored.fullRedraw);
+  TEST_ASSERT_EQUAL_UINT32(8, restored.remote->revision);
+}
+
+void test_normal_input_debug_does_not_overwrite_active_remote_scene() {
+  DisplayController controller;
+  controller.commitRemote(remoteScene(3, "CODEX", "2 RUN"));
+
+  const auto inputUpdate =
+      controller.showLocal(DisplayFrame{{"KIVO", "READY 9 KEYS", "6 D"}},
+                           LocalDisplayPriority::Normal);
+
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::None, inputUpdate.kind);
+  TEST_ASSERT_EQUAL(DisplaySource::Remote, controller.source());
+  TEST_ASSERT_EQUAL_UINT32(3, controller.remoteRevision());
+}
+
+void test_disconnect_discards_remote_and_reconnect_requires_new_full_scene() {
+  DisplayController controller;
+  controller.commitRemote(remoteScene(4, "CODEX", "2 RUN"));
+
+  const auto disconnected =
+      controller.helperDisconnected(localFrame("HELPER OFFLINE"));
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::Local, disconnected.kind);
+  TEST_ASSERT_EQUAL(DisplaySource::Local, controller.source());
+  TEST_ASSERT_FALSE(controller.hasRemote());
+  TEST_ASSERT_EQUAL_UINT32(0, controller.remoteRevision());
+
+  controller.showLocal(localFrame("READY 9 KEYS"),
+                       LocalDisplayPriority::Startup);
+  const auto reconnectDelta =
+      controller.commitRemote(remoteScene(5, "CODEX", "STALE", false));
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::None, reconnectDelta.kind);
+  TEST_ASSERT_FALSE(controller.hasRemote());
+  TEST_ASSERT_EQUAL(DisplaySource::Local, controller.source());
+
+  const auto reconnectFull =
+      controller.commitRemote(remoteScene(6, "CODEX", "READY"));
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::Remote, reconnectFull.kind);
+  TEST_ASSERT_TRUE(controller.hasRemote());
+  TEST_ASSERT_EQUAL_UINT32(6, controller.remoteRevision());
+}
+
+void test_reconnect_preserves_the_critical_override_from_before_disconnect() {
+  DisplayController controller;
+  controller.commitRemote(remoteScene(1, "CODEX", "RUNNING"));
+  controller.showLocal(localFrame("LEARNING 4 PINS"),
+                       LocalDisplayPriority::Critical);
+  controller.helperDisconnected(localFrame("HELPER OFFLINE"));
+
+  controller.showLocal(localFrame("LEARNING 4 PINS"),
+                       LocalDisplayPriority::Startup);
+  const auto hiddenFull =
+      controller.commitRemote(remoteScene(2, "CODEX", "READY"));
+
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::None, hiddenFull.kind);
+  TEST_ASSERT_EQUAL(DisplaySource::Local, controller.source());
+  const auto restored = controller.clearLocalOverride();
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::Remote, restored.kind);
+  TEST_ASSERT_EQUAL_UINT32(2, restored.remote->revision);
 }
 
 void commitFullScene(RemoteDisplay &display, std::uint32_t revision) {
@@ -1330,6 +1500,13 @@ void test_hid_consumer_control_waits_for_press_and_release_report_slots() {
 
 int main(int, char **) {
   UNITY_BEGIN();
+  RUN_TEST(test_startup_stays_local_until_first_full_remote_scene);
+  RUN_TEST(test_startup_refresh_does_not_demote_remote_or_critical_content);
+  RUN_TEST(test_local_critical_overrides_and_then_restores_latest_remote_scene);
+  RUN_TEST(test_learning_override_retains_remote_and_restores_on_runtime_return);
+  RUN_TEST(test_normal_input_debug_does_not_overwrite_active_remote_scene);
+  RUN_TEST(test_disconnect_discards_remote_and_reconnect_requires_new_full_scene);
+  RUN_TEST(test_reconnect_preserves_the_critical_override_from_before_disconnect);
   RUN_TEST(test_display_transaction_commits_atomically);
   RUN_TEST(test_display_revision_rules_request_resync_without_mutation);
   RUN_TEST(test_new_begin_discards_uncommitted_transaction);

@@ -6,6 +6,7 @@
 
 #include "ActionRunController.h"
 #include "ActionRunDispatcher.h"
+#include "DisplayController.h"
 #include "DisplayStatus.h"
 #include "GpioTriggerController.h"
 #include "Handshake.h"
@@ -26,7 +27,8 @@ KeyActivityIndicator keyIndicator;
 ResponseLineBuffer responseLines(kMaxResponseLineLength);
 TopologyBuilder topologyBuilder(platform::boardProfile());
 DisplayStatusModel displayStatus;
-RemoteDisplay remoteDisplay;
+DisplayController displayController;
+std::optional<RemoteDisplay> remoteDisplay{std::in_place};
 bool helperConnected = false;
 bool standaloneDisplayPending = false;
 std::uint32_t standaloneDisplayStartedMs = 0;
@@ -50,7 +52,26 @@ bool pasteClipboard() {
   return platform::sendHotkey(0x08, 0x19);
 }
 
-void renderStatus() { platform::renderDisplay(displayStatus.frame()); }
+void applyDisplayUpdate(const DisplayUpdate &update) {
+  if (update.kind == DisplayUpdateKind::Local && update.local != nullptr) {
+    platform::renderLocalDisplay(*update.local);
+  } else if (update.kind == DisplayUpdateKind::Remote &&
+             update.remote != nullptr) {
+    platform::renderRemoteDisplay(*update.remote, update.fullRedraw);
+  }
+}
+
+void showStatus(LocalDisplayPriority priority) {
+  applyDisplayUpdate(displayController.showLocal(displayStatus.frame(),
+                                                 priority));
+}
+
+DisplayFrame helperOfflineFrame() {
+  auto frame = displayStatus.frame();
+  frame.lines[1] = "HELPER OFFLINE  ";
+  frame.lines[2].clear();
+  return frame;
+}
 
 bool isActiveOledPin(std::uint8_t pin) {
   const auto &oled = controller.topology().oled;
@@ -85,7 +106,7 @@ void applyLearningPinModes() {
 
 void configError(std::uint32_t revision, const char *code) {
   displayStatus.setConfigError();
-  renderStatus();
+  showStatus(LocalDisplayPriority::Critical);
   writeLine("CONFIG_ERROR " + std::to_string(revision) + " " + code + "\n");
 }
 
@@ -110,7 +131,9 @@ void activateTopology(const RuntimeTopology &topology, std::uint32_t nowMs) {
   // Release the old display before its I2C pins are reassigned by the topology.
   platform::configureDisplay(topology.oled);
   applyTopologyState(topology, nowMs);
-  renderStatus();
+  applyDisplayUpdate(displayController.showLocal(
+      displayStatus.frame(), LocalDisplayPriority::Normal));
+  applyDisplayUpdate(displayController.clearLocalOverride());
 }
 
 void activateStandaloneTopology(const RuntimeTopology &topology,
@@ -129,7 +152,7 @@ void initializeStandaloneDisplay(std::uint32_t nowMs) {
   standaloneDisplayPending = false;
   // Let TinyUSB service its first cycles and the OLED power stabilize first.
   platform::configureDisplay(controller.topology().oled);
-  renderStatus();
+  showStatus(LocalDisplayPriority::Startup);
 }
 
 void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
@@ -137,7 +160,7 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
   if (!command.has_value()) {
     topologyBuilder.cancel();
     const auto displayError =
-        discardMalformedDisplayCommand(remoteDisplay, line);
+        discardMalformedDisplayCommand(*remoteDisplay, line);
     if (displayError.has_value()) writeLine(*displayError);
     return;
   }
@@ -190,7 +213,13 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
     case HelperCommandKind::DisplayText:
     case HelperCommandKind::DisplayCommit: {
       const auto reply = dispatchDisplayCommand(
-          remoteDisplay, *command, controller.topology().oled.has_value());
+          *remoteDisplay, *command, controller.topology().oled.has_value());
+      if (command->kind == HelperCommandKind::DisplayCommit &&
+          reply == formatDisplayOk(command->revision) &&
+          remoteDisplay->lastCommit().has_value()) {
+        applyDisplayUpdate(
+            displayController.commitRemote(*remoteDisplay->lastCommit()));
+      }
       if (reply.has_value()) writeLine(*reply);
       return;
     }
@@ -205,7 +234,7 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
       resetKeyIndicator();
       applyLearningPinModes();
       displayStatus.setLearning(command->pins.size());
-      renderStatus();
+      showStatus(LocalDisplayPriority::Critical);
       writeLine("LEARN_OK " + std::to_string(command->revision) + "\n");
       return;
     case HelperCommandKind::LearnEnd:
@@ -219,7 +248,9 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
       applyRuntimePinModes();
       displayStatus.setReady(controller.topology().keyCount());
       displayStatus.clearLastInput();
-      renderStatus();
+      displayController.showLocal(displayStatus.frame(),
+                                  LocalDisplayPriority::Normal);
+      applyDisplayUpdate(displayController.clearLocalOverride());
       writeLine("LEARN_OK " + std::to_string(command->revision) + "\n");
       return;
     case HelperCommandKind::Skip:
@@ -296,7 +327,7 @@ void readHelperResponses(std::uint32_t nowMs) {
     if (!line.has_value()) continue;
     if (line->overflow) {
       const auto displayError =
-          discardMalformedDisplayCommand(remoteDisplay, line->line);
+          discardMalformedDisplayCommand(*remoteDisplay, line->line);
       if (displayError.has_value()) writeLine(*displayError);
       continue;
     }
@@ -307,7 +338,8 @@ void readHelperResponses(std::uint32_t nowMs) {
 void emitInput(const std::optional<InputEvent> &event, bool learning) {
   if (event.has_value()) {
     displayStatus.recordInput(*event);
-    renderStatus();
+    showStatus(learning ? LocalDisplayPriority::Critical
+                        : LocalDisplayPriority::Normal);
     switch (keyIndicator.handle(event->state)) {
       case KeyIndicatorAction::ShowRandomColor:
         platform::showRandomKeyColor();
@@ -389,10 +421,16 @@ void loop() {
   if (connected != helperConnected) {
     pendingDelay.reset();
     actionRuns.reset();
-    remoteDisplay.cancel();
+    remoteDisplay.emplace();
+    platform::resetRemoteDisplay();
     displayStatus.setUsbConnected(connected);
-    renderStatus();
-    if (connected) writeLine(helloLine);
+    if (connected) {
+      showStatus(LocalDisplayPriority::Startup);
+      writeLine(helloLine);
+    } else {
+      applyDisplayUpdate(
+          displayController.helperDisconnected(helperOfflineFrame()));
+    }
   }
   helperConnected = connected;
   servicePendingDelay(nowMs);
@@ -403,5 +441,6 @@ void loop() {
   } else {
     scanRuntimeInputs(nowMs);
   }
+  platform::serviceDisplay();
   platform::delayMs(1);
 }

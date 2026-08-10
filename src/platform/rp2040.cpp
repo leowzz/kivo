@@ -35,6 +35,8 @@ std::unique_ptr<U8G2_SSD1306_128X32_UNIVISION_F_SW_I2C> softwareDisplay;
 U8G2 *display = nullptr;
 TwoWire *displayWire = nullptr;
 std::optional<DisplayFrame> lastDisplayFrame;
+enum class DisplayBufferSource { None, Local, Remote };
+DisplayBufferSource displayBufferSource = DisplayBufferSource::None;
 
 void stopDisplay() {
   if (display) {
@@ -48,6 +50,8 @@ void stopDisplay() {
   softwareDisplay.reset();
   if (displayWire) displayWire->end();
   displayWire = nullptr;
+  lastDisplayFrame.reset();
+  displayBufferSource = DisplayBufferSource::None;
 }
 
 void startHardwareI2c(TwoWire &wire, std::uint8_t sda, std::uint8_t scl) {
@@ -123,7 +127,6 @@ bool sendConsumerControl(std::uint16_t usage) {
 
 void configureDisplay(const std::optional<OledConfig> &config) {
   stopDisplay();
-  lastDisplayFrame.reset();
   if (!config.has_value()) return;
 
   switch (selectRp2040OledBus(config->sda, config->scl)) {
@@ -156,11 +159,13 @@ void configureDisplay(const std::optional<OledConfig> &config) {
   display->sendBuffer();
 }
 
-void renderDisplay(const DisplayFrame &frame) {
-  if (!display || (lastDisplayFrame.has_value() &&
+void renderLocalDisplay(const DisplayFrame &frame) {
+  if (!display || (displayBufferSource == DisplayBufferSource::Local &&
+                   lastDisplayFrame.has_value() &&
                    *lastDisplayFrame == frame)) {
     return;
   }
+  display->setFont(u8g2_font_6x13_tf);
   display->clearBuffer();
   for (std::size_t index = 0; index < kStatusBaselines.size(); ++index) {
     display->drawStr(0, kStatusBaselines[index], frame.lines[index].c_str());
@@ -174,7 +179,44 @@ void renderDisplay(const DisplayFrame &frame) {
   }
   display->sendBuffer();
   lastDisplayFrame = frame;
+  displayBufferSource = DisplayBufferSource::Local;
 }
+
+void renderRemoteDisplay(const RemoteDisplayCommit &scene,
+                         bool fullRedraw) {
+  if (!display) return;
+  lastDisplayFrame.reset();
+  if (fullRedraw || displayBufferSource != DisplayBufferSource::Remote) {
+    display->clearBuffer();
+  } else {
+    display->setDrawColor(0);
+    for (std::size_t index = 0; index < scene.dirtyCount; ++index) {
+      const auto &bounds = scene.dirtyBounds[index];
+      display->drawBox(bounds.x, bounds.y, bounds.width, bounds.height);
+    }
+    display->setDrawColor(1);
+  }
+
+  for (std::size_t index = 0; index < scene.operationCount; ++index) {
+    const auto &operation = scene.operations[index];
+    if (operation.kind != DisplayOperationKind::Text ||
+        operation.fontId != kRemoteDisplayFontId) {
+      continue;
+    }
+    display->setFont(u8g2_font_6x13_tf);
+    display->drawStr(operation.x, operation.baselineY,
+                     operation.text.c_str());
+  }
+  display->sendBuffer();
+  displayBufferSource = DisplayBufferSource::Remote;
+}
+
+void resetRemoteDisplay() {
+  lastDisplayFrame.reset();
+  displayBufferSource = DisplayBufferSource::None;
+}
+
+void serviceDisplay() {}
 
 void showRandomKeyColor() {
   const auto hue = static_cast<std::uint16_t>(random(0x10000L));

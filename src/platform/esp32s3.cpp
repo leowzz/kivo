@@ -78,7 +78,13 @@ bool sendConsumerControl(std::uint16_t usage) {
 
 void configureDisplay(const std::optional<OledConfig> &) {}
 
-void renderDisplay(const DisplayFrame &) {}
+void renderLocalDisplay(const DisplayFrame &) {}
+
+void renderRemoteDisplay(const RemoteDisplayCommit &, bool) {}
+
+void resetRemoteDisplay() {}
+
+void serviceDisplay() {}
 
 void showRandomKeyColor() {}
 
