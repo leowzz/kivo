@@ -119,3 +119,46 @@ Fresh follow-up gate results:
 - Rust: 380 passed, 1 intentional ignore, plus 2 integration tests passed.
 - Frontend: 211/211 passed; production build passed.
 - RP2040 and ESP32-S3 firmware builds passed with the same size figures above.
+
+## Pending Notification Follow-up
+
+The final notification retry fix was implemented on top of `b445c27` without
+adding recursive runtime discovery.
+
+- RED: a newly notified rollout containing valid session/task records followed
+  by a malformed complete record was drained after its first failed sync. At the
+  next due health poll the source incorrectly returned `Ok(Degraded)` with no
+  tasks instead of `codex_channels_unavailable`; correcting the file without a
+  second notification could therefore never recover it.
+- GREEN: notify paths enter a bounded 256-path pending set. Failed syncs remain
+  pending, and every pending result contributes to the next due health check.
+  Paths leave the set only after a successful sync or an expected deletion whose
+  sessions root and immediate parent are confirmed readable. Correcting the
+  malformed file without another notification recovers its task, cursor, and
+  `NeedsInput` state on the following health cycle.
+- Queue overflow is sticky and keeps rollout health unavailable until a
+  successful authoritative rollout-home configuration/discovery. The 257th-path
+  regression proves a dropped overflow notification cannot be hidden by a later
+  Healthy result. Periodic polling still stats only pending and tracked paths;
+  the existing no-recursive-discovery regression remains GREEN.
+- An actual queued deletion during the sub-second window retains the in-memory
+  and byte-identical persisted cursor until the due health check, then removes it
+  under the existing readable-root/readable-parent rule. A nested immediate
+  parent rename outage retains the cursor and pending path, reports rollout
+  unavailable, and restores the same task and input state after the parent is
+  restored.
+- Focused `display::codex`: 47 passed. Rustfmt and Clippy with all targets and
+  features passed.
+
+Fresh final gate results:
+
+- Exact pinned `make test`: PASS.
+- Python suites: 33 + 32 + 32 passed.
+- PlatformIO native: 89/89 passed.
+- Rust: 384 passed, 1 intentional ignore, plus 2 integration tests passed.
+- Frontend: 211/211 passed; production build passed.
+- RP2040 build: PASS; 22,912/262,144 bytes RAM (8.7%),
+  133,176/16,773,120 bytes flash (0.8%).
+- ESP32-S3 build: PASS; 35,644/327,680 bytes RAM (10.9%),
+  348,169/3,342,336 bytes flash (10.4%).
+- `git diff --check`: PASS.

@@ -31,6 +31,7 @@ const RECOVERY_CHUNK_SIZE: usize = 64 * 1024;
 const CURSOR_VERSION: u32 = 1;
 const APP_SERVER_RESPONSE_DEADLINE: Duration = Duration::from_secs(1);
 const MAX_METADATA_PAGES: usize = 100;
+const MAX_PENDING_NOTIFY_PATHS: usize = 256;
 const CONFIRMED_WINDOW_SIZE: u64 = 4096;
 
 #[derive(Clone, Debug)]
@@ -738,6 +739,8 @@ pub struct CodexTaskSource {
     sessions_path: PathBuf,
     watcher: Option<RecommendedWatcher>,
     notify_rx: Receiver<notify::Result<Event>>,
+    pending_notify_paths: BTreeSet<PathBuf>,
+    notify_overflowed: bool,
     files: BTreeMap<PathBuf, RolloutFileState>,
     metadata_tasks: BTreeMap<String, CodexThreadMetadata>,
     metadata_anchors: MetadataTimeAnchors,
@@ -811,6 +814,8 @@ impl CodexTaskSource {
             sessions_path,
             watcher,
             notify_rx,
+            pending_notify_paths: BTreeSet::new(),
+            notify_overflowed: false,
             files: BTreeMap::new(),
             metadata_tasks: BTreeMap::new(),
             metadata_anchors: MetadataTimeAnchors::default(),
@@ -830,6 +835,7 @@ impl CodexTaskSource {
         if let Some(watcher) = &mut self.watcher {
             let _ = watcher.unwatch(&self.sessions_path);
         }
+        self.pending_notify_paths.clear();
         self.files.clear();
         self.sessions_path = self.codex_home.join("sessions");
         if !self.sessions_path.is_dir() {
@@ -853,6 +859,7 @@ impl CodexTaskSource {
         if self.discover_rollouts(now, &persisted).is_err() {
             self.rollout_health = ChannelHealth::Unavailable;
         } else {
+            self.notify_overflowed = false;
             self.rollout_health = ChannelHealth::Healthy;
         }
         let _ = self.persist_cursors();
@@ -906,26 +913,47 @@ impl CodexTaskSource {
         Ok(())
     }
 
-    fn consume_notify_events(&mut self, now: Instant, allow_file_deletion: bool) {
-        let mut paths = BTreeSet::new();
+    fn collect_notify_events(&mut self) {
         while let Ok(event) = self.notify_rx.try_recv() {
             if let Ok(event) = event {
-                paths.extend(event.paths);
-            }
-        }
-        for path in paths {
-            if let Ok(canonical) = path.canonicalize() {
-                let _ = self.sync_file(&canonical, now, allow_file_deletion);
+                for path in event.paths {
+                    if self.pending_notify_paths.len() == MAX_PENDING_NOTIFY_PATHS
+                        && !self.pending_notify_paths.contains(&path)
+                    {
+                        self.notify_overflowed = true;
+                    } else {
+                        self.pending_notify_paths.insert(path);
+                    }
+                }
             }
         }
     }
 
+    fn sync_pending_notify_paths(&mut self, now: Instant, allow_file_deletion: bool) -> bool {
+        let mut all_readable = true;
+        let paths = self
+            .pending_notify_paths
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        for queued_path in paths {
+            let path = canonicalize_notify_path(&queued_path);
+            if self.sync_file(&path, now, allow_file_deletion).is_ok() {
+                self.pending_notify_paths.remove(&queued_path);
+            } else {
+                all_readable = false;
+            }
+        }
+        all_readable
+    }
+
     fn poll_filesystem(&mut self, now: Instant) {
+        self.collect_notify_events();
         let health_check_due = self
             .last_filesystem_poll
             .is_none_or(|last| now.saturating_duration_since(last) >= FILESYSTEM_POLL_INTERVAL);
         if !health_check_due {
-            self.consume_notify_events(now, false);
+            let _ = self.sync_pending_notify_paths(now, false);
             return;
         }
         self.last_filesystem_poll = Some(now);
@@ -934,8 +962,8 @@ impl CodexTaskSource {
             return;
         }
 
-        self.consume_notify_events(now, true);
-        let mut all_readable = true;
+        let mut all_readable = !self.notify_overflowed;
+        all_readable &= self.sync_pending_notify_paths(now, true);
         let paths = self.files.keys().cloned().collect::<Vec<_>>();
         for path in paths {
             if self.sync_file(&path, now, true).is_err() {
@@ -1182,6 +1210,15 @@ fn is_recent_rollout(path: &Path, metadata: &fs::Metadata) -> bool {
 
 fn directory_is_readable(path: &Path) -> bool {
     fs::read_dir(path).is_ok_and(|mut entries| entries.all(|entry| entry.is_ok()))
+}
+
+fn canonicalize_notify_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| {
+        path.parent()
+            .and_then(|parent| parent.canonicalize().ok())
+            .and_then(|parent| path.file_name().map(|name| parent.join(name)))
+            .unwrap_or_else(|| path.to_path_buf())
+    })
 }
 
 #[cfg(unix)]
@@ -2304,6 +2341,205 @@ mod tests {
 
         source.sync_file(&tracked_path, now, true).unwrap();
         assert!(source.files.is_empty());
+    }
+
+    #[test]
+    fn failed_new_rollout_notification_is_retried_without_another_event() {
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        let metadata = FakeMetadataClient {
+            codex_home: temp.path().join(".codex"),
+            polls: VecDeque::from([
+                Err("metadata_unavailable".into()),
+                Err("metadata_unavailable".into()),
+                Err("metadata_unavailable".into()),
+            ]),
+        };
+        let mut source = source_for(&temp, metadata);
+        source.watcher.take();
+        let (notify_tx, notify_rx) = mpsc::channel();
+        source.notify_rx = notify_rx;
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-new\",\"cwd\":\"/work/kivo\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-new\"}}\n",
+                "{not valid json}\n",
+            ),
+        )
+        .unwrap();
+        notify_tx
+            .send(Ok(
+                notify::Event::new(notify::EventKind::Any).add_path(path.clone())
+            ))
+            .unwrap();
+
+        source.poll_tasks(now + Duration::from_millis(250)).unwrap();
+        assert_eq!(
+            source
+                .poll_tasks(now + FILESYSTEM_POLL_INTERVAL)
+                .unwrap_err(),
+            "codex_channels_unavailable"
+        );
+        assert_eq!(source.pending_notify_paths.len(), 1);
+
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-new\",\"cwd\":\"/work/kivo\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-new\"}}\n",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"request_user_input\",\"call_id\":\"call-new\"}}\n",
+            ),
+        )
+        .unwrap();
+
+        let recovered = source.poll_tasks(now + Duration::from_secs(2)).unwrap();
+        let task = recovered.task("thread-new").unwrap();
+        assert!(task.running);
+        assert_eq!(task.input_need, Some(CodexInputNeed::UserInput));
+        assert_eq!(source.files.len(), 1);
+        assert!(source.pending_notify_paths.is_empty());
+    }
+
+    #[test]
+    fn queued_subsecond_deletion_waits_for_the_health_check() {
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-a\",\"cwd\":\"/work/kivo\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-a\"}}\n",
+            ),
+        )
+        .unwrap();
+        let metadata = FakeMetadataClient::unavailable(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        source.watcher.take();
+        let (notify_tx, notify_rx) = mpsc::channel();
+        source.notify_rx = notify_rx;
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+        let persisted_before = fs::read(&source.cursor_store_path).unwrap();
+
+        fs::remove_file(&path).unwrap();
+        notify_tx
+            .send(Ok(notify::Event::new(notify::EventKind::Remove(
+                notify::event::RemoveKind::File,
+            ))
+            .add_path(path)))
+            .unwrap();
+
+        let early = source.poll_tasks(now + Duration::from_millis(250)).unwrap();
+        assert!(early.task("thread-a").is_some());
+        assert_eq!(source.files.len(), 1);
+        assert_eq!(source.pending_notify_paths.len(), 1);
+        assert_eq!(
+            fs::read(&source.cursor_store_path).unwrap(),
+            persisted_before
+        );
+
+        let checked = source.poll_tasks(now + FILESYSTEM_POLL_INTERVAL).unwrap();
+        assert!(checked.task("thread-a").is_none());
+        assert!(source.files.is_empty());
+        assert!(source.pending_notify_paths.is_empty());
+    }
+
+    #[test]
+    fn nested_parent_outage_retains_cursor_and_pending_notification() {
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-a\",\"cwd\":\"/work/kivo\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-a\"}}\n",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"request_user_input\",\"call_id\":\"call-a\"}}\n",
+            ),
+        )
+        .unwrap();
+        let metadata = FakeMetadataClient::unavailable(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        source.watcher.take();
+        let (notify_tx, notify_rx) = mpsc::channel();
+        source.notify_rx = notify_rx;
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+        let persisted_before = fs::read(&source.cursor_store_path).unwrap();
+
+        let parent = path.parent().unwrap();
+        let unavailable_parent = parent.with_file_name("10-unavailable");
+        fs::rename(parent, &unavailable_parent).unwrap();
+        notify_tx
+            .send(Ok(
+                notify::Event::new(notify::EventKind::Any).add_path(path.clone())
+            ))
+            .unwrap();
+        source.poll_tasks(now + Duration::from_millis(250)).unwrap();
+
+        assert_eq!(source.pending_notify_paths.len(), 1);
+        assert_eq!(source.files.len(), 1);
+        assert_eq!(
+            source
+                .poll_tasks(now + FILESYSTEM_POLL_INTERVAL)
+                .unwrap_err(),
+            "codex_channels_unavailable"
+        );
+        assert_eq!(source.pending_notify_paths.len(), 1);
+        assert_eq!(source.files.len(), 1);
+        assert_eq!(
+            fs::read(&source.cursor_store_path).unwrap(),
+            persisted_before
+        );
+
+        fs::rename(&unavailable_parent, parent).unwrap();
+        let restored = source.poll_tasks(now + Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            restored.task("thread-a").unwrap().input_need,
+            Some(CodexInputNeed::UserInput)
+        );
+        assert!(source.pending_notify_paths.is_empty());
+        assert_eq!(source.files.len(), 1);
+    }
+
+    #[test]
+    fn notification_overflow_cannot_report_rollout_healthy() {
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        let metadata = FakeMetadataClient::unavailable(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        source.watcher.take();
+        let (notify_tx, notify_rx) = mpsc::channel();
+        source.notify_rx = notify_rx;
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+
+        let parent = path.parent().unwrap();
+        for index in 0..=MAX_PENDING_NOTIFY_PATHS {
+            notify_tx
+                .send(Ok(notify::Event::new(notify::EventKind::Any)
+                    .add_path(parent.join(format!("rollout-{index}.jsonl")))))
+                .unwrap();
+        }
+
+        source.poll_tasks(now + Duration::from_millis(250)).unwrap();
+        assert_eq!(source.pending_notify_paths.len(), MAX_PENDING_NOTIFY_PATHS);
+        assert!(source.notify_overflowed);
+        assert_eq!(
+            source
+                .poll_tasks(now + FILESYSTEM_POLL_INTERVAL)
+                .unwrap_err(),
+            "codex_channels_unavailable"
+        );
+        assert_eq!(source.rollout_health, ChannelHealth::Unavailable);
+        assert!(source.notify_overflowed);
+
+        source.poll_tasks(now + Duration::from_secs(2)).unwrap();
+        assert_eq!(source.rollout_health, ChannelHealth::Unavailable);
+        assert!(source.notify_overflowed);
     }
 
     #[test]
