@@ -906,7 +906,7 @@ impl CodexTaskSource {
         Ok(())
     }
 
-    fn consume_notify_events(&mut self, now: Instant) {
+    fn consume_notify_events(&mut self, now: Instant, allow_file_deletion: bool) {
         let mut paths = BTreeSet::new();
         while let Ok(event) = self.notify_rx.try_recv() {
             if let Ok(event) = event {
@@ -915,24 +915,30 @@ impl CodexTaskSource {
         }
         for path in paths {
             if let Ok(canonical) = path.canonicalize() {
-                let _ = self.sync_file(&canonical, now);
+                let _ = self.sync_file(&canonical, now, allow_file_deletion);
             }
         }
     }
 
     fn poll_filesystem(&mut self, now: Instant) {
-        self.consume_notify_events(now);
-        if self
+        let health_check_due = self
             .last_filesystem_poll
-            .is_some_and(|last| now.saturating_duration_since(last) < FILESYSTEM_POLL_INTERVAL)
-        {
+            .is_none_or(|last| now.saturating_duration_since(last) >= FILESYSTEM_POLL_INTERVAL);
+        if !health_check_due {
+            self.consume_notify_events(now, false);
             return;
         }
         self.last_filesystem_poll = Some(now);
-        let mut all_readable = directory_is_readable(&self.sessions_path);
+        if !directory_is_readable(&self.sessions_path) {
+            self.rollout_health = ChannelHealth::Unavailable;
+            return;
+        }
+
+        self.consume_notify_events(now, true);
+        let mut all_readable = true;
         let paths = self.files.keys().cloned().collect::<Vec<_>>();
         for path in paths {
-            if self.sync_file(&path, now).is_err() {
+            if self.sync_file(&path, now, true).is_err() {
                 all_readable = false;
             }
         }
@@ -944,10 +950,19 @@ impl CodexTaskSource {
         let _ = self.persist_cursors();
     }
 
-    fn sync_file(&mut self, path: &Path, now: Instant) -> Result<(), &'static str> {
+    fn sync_file(
+        &mut self,
+        path: &Path,
+        now: Instant,
+        allow_file_deletion: bool,
+    ) -> Result<(), &'static str> {
         let metadata = match fs::metadata(path) {
             Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && allow_file_deletion
+                    && path.parent().is_some_and(directory_is_readable) =>
+            {
                 self.files.remove(path);
                 return Ok(());
             }
@@ -2194,6 +2209,101 @@ mod tests {
         let persisted = fs::read_to_string(&source.cursor_store_path).unwrap();
         assert!(persisted.contains("thread-retained"));
         assert!(!persisted.contains("thread-deleted"));
+    }
+
+    #[test]
+    fn sessions_tree_outage_retains_cursors_and_resumes_after_restore() {
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-a\",\"cwd\":\"/work/kivo\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-a\"}}\n",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"request_user_input\",\"call_id\":\"call-a\"}}\n",
+            ),
+        )
+        .unwrap();
+        let metadata = FakeMetadataClient {
+            codex_home: temp.path().join(".codex"),
+            polls: VecDeque::from([
+                Err("metadata_unavailable".into()),
+                Err("metadata_unavailable".into()),
+                Err("metadata_unavailable".into()),
+            ]),
+        };
+        let mut source = source_for(&temp, metadata);
+        let now = Instant::now();
+        let initial = source.poll_tasks(now).unwrap();
+        assert!(initial.task("thread-a").unwrap().running);
+        assert_eq!(
+            initial.task("thread-a").unwrap().input_need,
+            Some(CodexInputNeed::UserInput)
+        );
+        let persisted_before = fs::read(&source.cursor_store_path).unwrap();
+
+        let sessions = temp.path().join(".codex/sessions");
+        let unavailable_sessions = temp.path().join(".codex/sessions-unavailable");
+        fs::rename(&sessions, &unavailable_sessions).unwrap();
+        assert_eq!(
+            source
+                .poll_tasks(now + FILESYSTEM_POLL_INTERVAL)
+                .unwrap_err(),
+            "codex_channels_unavailable"
+        );
+        assert_eq!(source.rollout_health, ChannelHealth::Unavailable);
+        assert_eq!(source.files.len(), 1);
+        assert_eq!(
+            fs::read(&source.cursor_store_path).unwrap(),
+            persisted_before
+        );
+
+        fs::rename(&unavailable_sessions, &sessions).unwrap();
+        let restored = source.poll_tasks(now + Duration::from_secs(2)).unwrap();
+        assert!(restored.task("thread-a").unwrap().running);
+        assert_eq!(
+            restored.task("thread-a").unwrap().input_need,
+            Some(CodexInputNeed::UserInput)
+        );
+
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(
+            b"{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call-a\"}}\n",
+        )
+        .unwrap();
+        file.flush().unwrap();
+        let continued = source.poll_tasks(now + Duration::from_secs(3)).unwrap();
+        assert!(continued.task("thread-a").unwrap().running);
+        assert_eq!(continued.task("thread-a").unwrap().input_need, None);
+    }
+
+    #[test]
+    fn tracked_file_not_found_requires_a_confirmed_readable_tree() {
+        let temp = TempDir::new().unwrap();
+        let path = rollout_path(&temp);
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-a\",\"cwd\":\"/work/kivo\"}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-a\"}}\n",
+            ),
+        )
+        .unwrap();
+        let metadata = FakeMetadataClient::healthy(temp.path().join(".codex"));
+        let mut source = source_for(&temp, metadata);
+        let now = Instant::now();
+        source.poll_tasks(now).unwrap();
+        let tracked_path = source.files.keys().next().unwrap().clone();
+
+        fs::remove_file(&path).unwrap();
+        assert_eq!(
+            source.sync_file(&tracked_path, now, false).unwrap_err(),
+            "codex_rollout_read_failed"
+        );
+        assert_eq!(source.files.len(), 1);
+
+        source.sync_file(&tracked_path, now, true).unwrap();
+        assert!(source.files.is_empty());
     }
 
     #[test]

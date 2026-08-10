@@ -10,9 +10,11 @@ Base: `1c942b4668fb091f8b3ba9a84d05a857a3152835`
   after the turn is terminal.
 - Rollout health now requires a readable sessions directory and successful
   continuation of every tracked file cursor. A missing file is treated as an
-  expected deletion and removes its cursor; directory enumeration, permission,
-  file read, rewrite recovery, complete-record UTF-8, and JSON failures make the
-  rollout channel unavailable. Incomplete final records remain pending.
+  expected deletion only after root enumeration and that file's parent directory
+  are readable. A root or parent-tree outage retains in-memory and persisted
+  cursors; directory enumeration, permission, file read, rewrite recovery,
+  complete-record UTF-8, and JSON failures make the rollout channel unavailable.
+  Incomplete final records remain pending.
 - One absolute one-second App Server response deadline is created at metadata
   poll entry and shared by initialization and every `thread/list` page. A later
   page receives only the remaining budget. Timeout, EOF, response error, or
@@ -86,3 +88,34 @@ Not run: firmware upload, attached OLED visual inspection, USB reconnect test,
 logic-analyzer/I2C timing capture, and sustained physical key-scan latency test.
 The automated gate and firmware builds prove host logic, native firmware logic,
 compilation, and linking, not physical acceptance of the display or input timing.
+
+## Final Re-review Follow-up
+
+The follow-up was implemented on top of `17a26ce` without adding a recursive
+runtime discovery walk.
+
+- RED: renaming the complete sessions root away made rollout health unavailable,
+  but the poll also reduced the tracked cursor set from 1 to 0. This proved that
+  child `NotFound` handling erased recovery state and the next persistence pass
+  could replace the cursor store with an empty set.
+- GREEN: the one-second health cycle enumerates only the sessions root. It returns
+  before notify consumption, child sync, or cursor persistence when that fails.
+  A tracked child `NotFound` is deletion only when the cycle has confirmed the
+  root and the child's immediate parent directory is readable. Non-interval
+  notify sync can advance existing files but cannot delete missing cursors.
+- The rename-away regression proves unavailable health during the outage,
+  byte-identical persisted cursor retention, restoration of the same running and
+  user-input state, and continued parsing of a later `function_call_output`.
+- The individual-file deletion, mixed corrupt cursor, corrupt complete append,
+  unreadable root, and `runtime_stat_poll_updates_known_files_without_recursive_discovery`
+  regressions remain GREEN.
+- Focused `display::codex` verification: 43 passed. Rustfmt and Clippy passed.
+
+Fresh follow-up gate results:
+
+- Exact pinned `make test`: PASS.
+- Python suites: 33 + 32 + 32 passed.
+- PlatformIO native: 89/89 passed.
+- Rust: 380 passed, 1 intentional ignore, plus 2 integration tests passed.
+- Frontend: 211/211 passed; production build passed.
+- RP2040 and ESP32-S3 firmware builds passed with the same size figures above.
