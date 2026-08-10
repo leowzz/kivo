@@ -192,6 +192,18 @@ fn advance_pagination(
     Ok(Some(cursor))
 }
 
+fn next_cursor_after_page(
+    reached_older: bool,
+    next_cursor: Option<String>,
+    seen_cursors: &mut BTreeSet<String>,
+    page_count: usize,
+) -> Result<Option<String>, &'static str> {
+    if reached_older {
+        return Ok(None);
+    }
+    advance_pagination(next_cursor, seen_cursors, page_count)
+}
+
 pub trait CodexMetadataClient: Send {
     fn codex_home(&self) -> &std::path::Path;
     fn poll_updated(&mut self, last_seen: Option<u64>) -> Result<Vec<CodexThreadMetadata>, String>;
@@ -301,14 +313,19 @@ impl CodexMetadataClient for SystemCodexMetadataClient {
                 self.watermark
                     .select_page(last_seen, page.threads, &mut seen_thread_ids);
             threads.extend(selected);
-            cursor = match advance_pagination(page.next_cursor, &mut seen_cursors, page_count) {
+            cursor = match next_cursor_after_page(
+                reached_older,
+                page.next_cursor,
+                &mut seen_cursors,
+                page_count,
+            ) {
                 Ok(cursor) => cursor,
                 Err(code) => {
                     self.disconnect();
                     return Err(code.into());
                 }
             };
-            if reached_older || cursor.is_none() {
+            if cursor.is_none() {
                 break;
             }
         }
@@ -564,16 +581,24 @@ fn thread_list_params(cursor: Option<&str>) -> Value {
 
 #[derive(Default)]
 struct MetadataTimeAnchors {
-    anchors: BTreeMap<String, (u64, Instant)>,
+    anchors: BTreeMap<String, (u64, MetadataFingerprint, Instant)>,
 }
 
 impl MetadataTimeAnchors {
-    fn resolve(&mut self, thread_id: &str, server_updated_at: u64, now: Instant) -> Instant {
-        match self.anchors.get(thread_id) {
-            Some((previous, instant)) if *previous == server_updated_at => *instant,
+    fn resolve(&mut self, thread: &CodexThreadMetadata, now: Instant) -> Instant {
+        let fingerprint = MetadataFingerprint::from(thread);
+        match self.anchors.get(&thread.thread_id) {
+            Some((previous_timestamp, previous_fingerprint, instant))
+                if *previous_timestamp == thread.server_updated_at
+                    && *previous_fingerprint == fingerprint =>
+            {
+                *instant
+            }
             _ => {
-                self.anchors
-                    .insert(thread_id.to_owned(), (server_updated_at, now));
+                self.anchors.insert(
+                    thread.thread_id.clone(),
+                    (thread.server_updated_at, fingerprint, now),
+                );
                 now
             }
         }
@@ -659,20 +684,27 @@ fn merge_timed_codex_sources(
                 terminal_event: None,
                 terminal_sequence: 0,
             });
-        let rollout_contributes_running = rollout_task.running && !task.running;
+        let metadata_input = task.input_need;
         task.running |= rollout_task.running;
         if task.input_need.is_none() {
             task.input_need = rollout_task.input_need;
-            if rollout_task.input_need.is_some() {
-                task.updated_at = task.updated_at.max(timed_rollout.updated_at);
-            }
-        } else if rollout_contributes_running && !task.system_error {
-            task.updated_at = task.updated_at.max(timed_rollout.updated_at);
         }
-        if rollout_task.terminal_sequence > task.terminal_sequence {
-            task.updated_at = timed_rollout.updated_at;
+        let terminal_advanced = rollout_task.terminal_sequence > task.terminal_sequence;
+        if terminal_advanced {
             task.terminal_event = rollout_task.event;
             task.terminal_sequence = rollout_task.terminal_sequence;
+        }
+        if metadata_input.is_some() {
+            continue;
+        }
+        if rollout_task.input_need.is_some() {
+            task.updated_at = timed_rollout.updated_at;
+        } else if task.system_error {
+            continue;
+        } else if terminal_advanced && rollout_task.event.is_some() {
+            task.updated_at = timed_rollout.updated_at;
+        } else if rollout_task.running {
+            task.updated_at = task.updated_at.max(timed_rollout.updated_at);
         }
     }
 
@@ -981,11 +1013,7 @@ impl CodexTaskSource {
                     self.configure_rollout_home(now);
                 }
                 for thread in &mut threads {
-                    thread.updated_at = self.metadata_anchors.resolve(
-                        &thread.thread_id,
-                        thread.server_updated_at,
-                        now,
-                    );
+                    thread.updated_at = self.metadata_anchors.resolve(thread, now);
                     self.last_seen_server_update = Some(
                         self.last_seen_server_update
                             .unwrap_or_default()
@@ -1359,7 +1387,7 @@ mod tests {
 
     use super::*;
     use crate::display::{
-        CodexInputNeed, CodexTaskSnapshot, DisplayProvider, SourceHealth,
+        CodexInputNeed, CodexTaskSnapshot, DisplayProvider, DisplayState, SourceHealth,
         codex_provider::CodexDisplayProvider,
     };
     use tempfile::TempDir;
@@ -1395,6 +1423,16 @@ mod tests {
             _last_seen: Option<u64>,
         ) -> Result<Vec<CodexThreadMetadata>, String> {
             self.polls.pop_front().unwrap_or_else(|| Ok(Vec::new()))
+        }
+    }
+
+    struct FakeTaskReader {
+        snapshot: Option<CodexSourceSnapshot>,
+    }
+
+    impl CodexTaskReader for FakeTaskReader {
+        fn poll_tasks(&mut self, _now: Instant) -> Result<CodexSourceSnapshot, &'static str> {
+            self.snapshot.take().ok_or("fake_exhausted")
         }
     }
 
@@ -1566,13 +1604,15 @@ mod tests {
     fn stable_server_timestamp_keeps_metadata_event_time_stable() {
         let now = Instant::now();
         let mut anchors = MetadataTimeAnchors::default();
-        assert_eq!(anchors.resolve("thread-a", 10, now), now);
+        let mut metadata = thread(now, "thread-a", "/work/kivo", AppServerStatus::Idle);
+        assert_eq!(anchors.resolve(&metadata, now), now);
         assert_eq!(
-            anchors.resolve("thread-a", 10, now + Duration::from_secs(3)),
+            anchors.resolve(&metadata, now + Duration::from_secs(3)),
             now
         );
+        metadata.server_updated_at = 11;
         assert_eq!(
-            anchors.resolve("thread-a", 11, now + Duration::from_secs(3)),
+            anchors.resolve(&metadata, now + Duration::from_secs(3)),
             now + Duration::from_secs(3)
         );
     }
@@ -1973,5 +2013,110 @@ mod tests {
             Some(CodexInputNeed::UserInput)
         );
         assert!(snapshot.task("thread-unknown").is_none());
+    }
+
+    #[test]
+    fn newer_system_error_time_wins_over_older_rollout_terminal_time() {
+        let rollout_time = Instant::now();
+        let metadata_time = rollout_time + Duration::from_secs(10);
+        let metadata = vec![thread(
+            metadata_time,
+            "thread-a",
+            "/work/kivo",
+            AppServerStatus::SystemError,
+        )];
+        let mut rollout = task("thread-a", "/work/kivo", false, false);
+        rollout.event = Some(CodexTerminalEvent::ResponseReady);
+        rollout.terminal_sequence = 1;
+        let snapshot = merge_timed_codex_sources(
+            metadata,
+            vec![TimedRolloutTask {
+                task: rollout,
+                updated_at: rollout_time,
+            }],
+            ChannelHealth::Healthy,
+            ChannelHealth::Healthy,
+        );
+
+        let merged = snapshot.task("thread-a").unwrap();
+        assert!(merged.system_error);
+        assert_eq!(merged.updated_at, metadata_time);
+
+        let mut provider = CodexDisplayProvider::new(FakeTaskReader {
+            snapshot: Some(snapshot),
+        });
+        let update = provider.poll(metadata_time).unwrap();
+        let item = update
+            .items
+            .iter()
+            .find(|item| item.id == "codex.task.thread-a")
+            .unwrap();
+        assert_eq!(item.state, DisplayState::Error);
+        assert_eq!(
+            item.expires_at,
+            Some(metadata_time + Duration::from_secs(15))
+        );
+    }
+
+    #[test]
+    fn rollout_running_time_wins_over_idle_or_not_loaded_metadata_time() {
+        let metadata_time = Instant::now();
+        let rollout_time = metadata_time + Duration::from_secs(3);
+        for status in [AppServerStatus::Idle, AppServerStatus::NotLoaded] {
+            let snapshot = merge_timed_codex_sources(
+                vec![thread(metadata_time, "thread-a", "/work/kivo", status)],
+                vec![TimedRolloutTask {
+                    task: task("thread-a", "/work/kivo", true, false),
+                    updated_at: rollout_time,
+                }],
+                ChannelHealth::Healthy,
+                ChannelHealth::Healthy,
+            );
+
+            let merged = snapshot.task("thread-a").unwrap();
+            assert!(merged.running);
+            assert_eq!(merged.updated_at, rollout_time);
+        }
+    }
+
+    #[test]
+    fn poll_metadata_reanchors_same_timestamp_normalized_state_change() {
+        let temp = TempDir::new().unwrap();
+        let initial = thread(
+            Instant::now(),
+            "thread-a",
+            "/work/kivo",
+            AppServerStatus::Idle,
+        );
+        let changed = thread(
+            Instant::now(),
+            "thread-a",
+            "/work/kivo",
+            AppServerStatus::SystemError,
+        );
+        let metadata = FakeMetadataClient {
+            codex_home: temp.path().join(".codex"),
+            polls: VecDeque::from([Ok(vec![initial]), Ok(vec![changed])]),
+        };
+        let mut source = source_for(&temp, metadata);
+        let now = Instant::now();
+
+        let first = source.poll_tasks(now).unwrap();
+        assert_eq!(first.task("thread-a").unwrap().updated_at, now);
+        let second = source.poll_tasks(now + Duration::from_secs(2)).unwrap();
+        let changed = second.task("thread-a").unwrap();
+        assert!(changed.system_error);
+        assert_eq!(changed.updated_at, now + Duration::from_secs(2));
+    }
+
+    #[test]
+    fn older_timestamp_boundary_ignores_irrelevant_next_cursor_validation() {
+        let mut seen = BTreeSet::from(["same".to_owned()]);
+
+        assert_eq!(
+            next_cursor_after_page(true, Some("same".to_owned()), &mut seen, MAX_METADATA_PAGES,)
+                .unwrap(),
+            None
+        );
     }
 }
