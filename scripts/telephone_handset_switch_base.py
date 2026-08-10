@@ -53,8 +53,6 @@ CENTER_Y = OUTER_LENGTH / 2.0
 BOOLEAN_TOLERANCE = 5e-5
 PROTECTED_VOLUME_TOLERANCE = 0.02
 RING_SECTION_LEVEL = 20.0
-RING_SECTION_THICKNESS = 0.02
-RING_SECTION_VOLUME_TOLERANCE = 0.02
 REQUIRED_SOLID_VOLUME_TOLERANCE = 0.01
 
 OPEN_UNDERSIDE_PROBES = (
@@ -395,9 +393,9 @@ def generate_base(source: trimesh.Trimesh) -> trimesh.Trimesh:
     return result
 
 
-def measured_section_loop_sizes(
+def measured_section_loops(
     mesh: trimesh.Trimesh, axis: int, level: float
-) -> np.ndarray:
+) -> list[np.ndarray]:
     origin = np.zeros(3)
     normal = np.zeros(3)
     origin[axis] = level
@@ -406,14 +404,71 @@ def measured_section_loop_sizes(
     if section is None:
         raise ValueError(f"missing section on axis {axis} at {level}")
     dimensions = [index for index in range(3) if index != axis]
-    sizes: list[np.ndarray] = []
+    loops: list[np.ndarray] = []
     for entity in section.entities:
         if not entity.closed:
             continue
         points = entity.discrete(section.vertices)
-        projected = points[:, dimensions]
-        sizes.append(projected.max(axis=0) - projected.min(axis=0))
-    return np.array(sizes)
+        loops.append(points[:, dimensions])
+    return loops
+
+
+def measured_section_loop_sizes(
+    mesh: trimesh.Trimesh, axis: int, level: float
+) -> np.ndarray:
+    return np.array(
+        [np.ptp(points, axis=0) for points in measured_section_loops(mesh, axis, level)]
+    )
+
+
+def turning_vertices(points: np.ndarray) -> np.ndarray:
+    if np.allclose(points[0], points[-1], rtol=0.0, atol=BOOLEAN_TOLERANCE):
+        points = points[:-1]
+    incoming = points - np.roll(points, 1, axis=0)
+    outgoing = np.roll(points, -1, axis=0) - points
+    cross = np.abs(incoming[:, 0] * outgoing[:, 1] - incoming[:, 1] * outgoing[:, 0])
+    scale = np.linalg.norm(incoming, axis=1) * np.linalg.norm(outgoing, axis=1)
+    return points[cross > BOOLEAN_TOLERANCE * scale]
+
+
+def require_rounded_rectangle_loop(
+    loops: list[np.ndarray],
+    expected_bounds: np.ndarray,
+    radius: float,
+    label: str,
+    tolerance: float,
+) -> np.ndarray:
+    for points in loops:
+        vertices = turning_vertices(points)
+        bounds = np.array([vertices.min(axis=0), vertices.max(axis=0)])
+        if not np.allclose(bounds, expected_bounds, rtol=0.0, atol=tolerance):
+            continue
+        core_lower = expected_bounds[0] + radius
+        core_upper = expected_bounds[1] - radius
+        nearest_core = np.clip(vertices, core_lower, core_upper)
+        radii = np.linalg.norm(vertices - nearest_core, axis=1)
+        if np.allclose(radii, radius, rtol=0.0, atol=tolerance):
+            return bounds[1] - bounds[0]
+    raise ValueError(f"{label} drifted")
+
+
+def require_circular_loop(
+    loops: list[np.ndarray],
+    center: np.ndarray,
+    radius: float,
+    label: str,
+    tolerance: float,
+) -> None:
+    expected_bounds = np.array([center - radius, center + radius])
+    for points in loops:
+        vertices = turning_vertices(points)
+        bounds = np.array([vertices.min(axis=0), vertices.max(axis=0)])
+        if not np.allclose(bounds, expected_bounds, rtol=0.0, atol=tolerance):
+            continue
+        radii = np.linalg.norm(vertices - center, axis=1)
+        if np.allclose(radii, radius, rtol=0.0, atol=tolerance):
+            return
+    raise ValueError(f"{label} drifted")
 
 
 def require_loop_size(
@@ -446,39 +501,6 @@ def protected_cell_mismatch(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> f
             ]
         ),
     )
-
-
-def ring_section_mismatch(mesh: trimesh.Trimesh) -> float:
-    section_min = RING_SECTION_LEVEL - RING_SECTION_THICKNESS / 2.0
-    section_max = RING_SECTION_LEVEL + RING_SECTION_THICKNESS / 2.0
-    section_probe = box_from_bounds(
-        np.array([-0.1, -0.1, section_min]),
-        np.array([OUTER_WIDTH + 0.1, OUTER_LENGTH + 0.1, section_max]),
-    )
-    measured = macro.boolean_meshes([mesh, section_probe], "intersection")
-    if measured.is_empty:
-        raise ValueError("R4 outer corner ring section is missing")
-
-    expected_outer = rounded_prism(
-        OUTER_WIDTH,
-        OUTER_LENGTH,
-        OUTER_RADIUS,
-        z_min=section_min,
-        height=RING_SECTION_THICKNESS,
-        center=(CENTER_X, CENTER_Y),
-    )
-    expected_inner = rounded_prism(
-        INNER_WIDTH,
-        INNER_LENGTH,
-        INNER_RADIUS,
-        z_min=section_min - 0.1,
-        height=RING_SECTION_THICKNESS + 0.2,
-        center=(CENTER_X, CENTER_Y),
-    )
-    expected = subtract_meshes(expected_outer, [expected_inner])
-    shared = macro.boolean_meshes([measured, expected], "intersection")
-    mismatch = measured.volume + expected.volume - 2.0 * shared.volume
-    return max(0.0, float(mismatch))
 
 
 def probe_volume(
@@ -517,6 +539,122 @@ def measured_pocket_floor_top(mesh: trimesh.Trimesh) -> float:
     return float(interior.bounds[1, 2])
 
 
+def required_feature_references() -> list[tuple[str, trimesh.Trimesh]]:
+    x0 = CENTER_X - PLATFORM_SIZE / 2.0
+    x1 = CENTER_X + PLATFORM_SIZE / 2.0
+    y0 = CENTER_Y - PLATFORM_SIZE / 2.0
+    y1 = CENTER_Y + PLATFORM_SIZE / 2.0
+    z1 = PLATFORM_BOTTOM + JOIN_OVERLAP
+    rear = OUTER_LENGTH - WALL
+
+    platform = box_from_bounds(
+        np.array([x0, y0, PLATFORM_BOTTOM]),
+        np.array([x1, y1, PLATFORM_TOP]),
+    )
+    protected_cell = box_from_bounds(
+        np.array(
+            [
+                CENTER_X - CELL_SIZE / 2.0,
+                CENTER_Y - CELL_SIZE / 2.0,
+                PLATFORM_BOTTOM - 0.1,
+            ]
+        ),
+        np.array(
+            [
+                CENTER_X + CELL_SIZE / 2.0,
+                CENTER_Y + CELL_SIZE / 2.0,
+                PLATFORM_TOP + 0.1,
+            ]
+        ),
+    )
+    references = [
+        ("switch platform", subtract_meshes(platform, [protected_cell])),
+        (
+            "left tower",
+            box_from_bounds(np.array([x0, y0, 0.0]), np.array([x0 + WALL, y1, z1])),
+        ),
+        (
+            "right tower",
+            box_from_bounds(np.array([x1 - WALL, y0, 0.0]), np.array([x1, y1, z1])),
+        ),
+        (
+            "front wall",
+            box_from_bounds(
+                np.array([x0 + WALL, y0, 0.0]),
+                np.array([x1 - WALL, y0 + WALL, z1]),
+            ),
+        ),
+        (
+            "left rear rib",
+            box_from_bounds(
+                np.array([x0, y1 - JOIN_OVERLAP, 0.0]),
+                np.array([x0 + WALL, rear + JOIN_OVERLAP, z1]),
+            ),
+        ),
+        (
+            "right rear rib",
+            box_from_bounds(
+                np.array([x1 - WALL, y1 - JOIN_OVERLAP, 0.0]),
+                np.array([x1, rear + JOIN_OVERLAP, z1]),
+            ),
+        ),
+    ]
+
+    def reference_ranges(
+        side: int, lower: float, upper: float
+    ) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
+        if side < 0:
+            return (
+                (lower - JOIN_OVERLAP, lower + PAD_SIZE),
+                (lower, lower + PAD_SIZE),
+                (lower, lower + WALL),
+            )
+        return (
+            (upper - PAD_SIZE, upper + JOIN_OVERLAP),
+            (upper - PAD_SIZE, upper),
+            (upper - WALL, upper),
+        )
+
+    pad_bottom = PLATFORM_TOP - PAD_THICKNESS
+    gusset_bottom = pad_bottom - (PAD_SIZE - WALL)
+    for x_side in (-1, 1):
+        x_pad, x_exposed, x_foot = reference_ranges(x_side, WALL, OUTER_WIDTH - WALL)
+        for y_side in (-1, 1):
+            y_pad, y_exposed, y_foot = reference_ranges(
+                y_side, WALL, OUTER_LENGTH - WALL
+            )
+            suffix = f"{x_side},{y_side}"
+            references.append(
+                (
+                    f"safety pad {suffix}",
+                    box_from_bounds(
+                        np.array([x_pad[0], y_pad[0], pad_bottom]),
+                        np.array([x_pad[1], y_pad[1], PLATFORM_TOP]),
+                    ),
+                )
+            )
+            references.append(
+                (
+                    f"safety foot {suffix}",
+                    box_from_bounds(
+                        np.array([x_foot[0], y_foot[0], 0.0]),
+                        np.array([x_foot[1], y_foot[1], gusset_bottom]),
+                    ),
+                )
+            )
+            points = [
+                [x, y, z]
+                for z, x_bounds, y_bounds in (
+                    (gusset_bottom, x_foot, y_foot),
+                    (pad_bottom, x_exposed, y_exposed),
+                )
+                for x in x_bounds
+                for y in y_bounds
+            ]
+            references.append((f"safety gusset {suffix}", hull_points(points)))
+    return references
+
+
 def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationReport:
     macro.assert_closed_manifold(mesh, "telephone handset switch base")
     if not np.allclose(mesh.bounds[0], (0.0, 0.0, 0.0), atol=0.003):
@@ -529,14 +667,21 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
     if mismatch > PROTECTED_VOLUME_TOLERANCE:
         raise ValueError(f"source switch cell drifted: mismatch={mismatch}")
 
-    pocket_loops = measured_section_loop_sizes(mesh, axis=2, level=RING_SECTION_LEVEL)
-    require_loop_size(pocket_loops, (59.8, 74.8), "outer pocket section", 0.003)
-    measured_pocket_bounds = require_loop_size(
-        pocket_loops, (55.0, 70.0), "inner pocket section", 0.003
+    pocket_loops = measured_section_loops(mesh, axis=2, level=RING_SECTION_LEVEL)
+    require_rounded_rectangle_loop(
+        pocket_loops,
+        np.array([[0.0, 0.0], [OUTER_WIDTH, OUTER_LENGTH]]),
+        OUTER_RADIUS,
+        "R4 outer corner ring profile",
+        0.003,
     )
-    ring_mismatch = ring_section_mismatch(mesh)
-    if ring_mismatch > RING_SECTION_VOLUME_TOLERANCE:
-        raise ValueError(f"R4 outer corner ring profile drifted: {ring_mismatch}")
+    measured_pocket_bounds = require_rounded_rectangle_loop(
+        pocket_loops,
+        np.array([[WALL, WALL], [OUTER_WIDTH - WALL, OUTER_LENGTH - WALL]]),
+        INNER_RADIUS,
+        "R1.6 inner pocket ring profile",
+        0.003,
+    )
     platform_loops = measured_section_loop_sizes(mesh, axis=2, level=12.7)
     require_loop_size(platform_loops, (24.0, 24.0), "switch platform", 0.003)
 
@@ -563,8 +708,14 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
     if not np.allclose(upper.sizes, [[14.0, 14.0]], atol=0.003):
         raise ValueError("upper switch aperture drifted")
 
-    rear_loops = measured_section_loop_sizes(mesh, axis=1, level=73.6)
-    require_loop_size(rear_loops, (4.0, 4.0), "rear wire hole", 0.01)
+    rear_loops = measured_section_loops(mesh, axis=1, level=73.6)
+    require_circular_loop(
+        rear_loops,
+        np.array([CENTER_X, 5.0]),
+        WIRE_HOLE_DIAMETER / 2.0,
+        "rear wire hole profile",
+        0.003,
+    )
 
     for probe in OPEN_UNDERSIDE_PROBES:
         if probe_volume(mesh, probe) >= 1e-6:
@@ -576,27 +727,13 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
     for probe in OUTER_CORNER_PROBES:
         if probe_volume(mesh, probe) >= 1e-6:
             raise ValueError(f"R4 outer corner is filled: {probe}")
-    for probe in REQUIRED_SOLID_PROBES:
-        lower_bound, upper_bound = (np.array(bound) for bound in probe)
-        expected_bounds = np.array([lower_bound, upper_bound])
-        try:
-            measured_bounds = probe_bounds(mesh, probe)
-        except ValueError as error:
+    for label, reference in required_feature_references():
+        shared = macro.boolean_meshes([mesh, reference], "intersection")
+        missing_volume = max(0.0, float(reference.volume - shared.volume))
+        if missing_volume > REQUIRED_SOLID_VOLUME_TOLERANCE:
             raise ValueError(
-                f"required platform, tower, rib, pad, or gusset is missing: {probe}"
-            ) from error
-        expected_volume = float(np.prod(upper_bound - lower_bound))
-        measured_volume = probe_volume(mesh, probe)
-        if not np.allclose(
-            measured_bounds, expected_bounds, rtol=0.0, atol=0.003
-        ) or not np.isclose(
-            measured_volume,
-            expected_volume,
-            rtol=0.0,
-            atol=REQUIRED_SOLID_VOLUME_TOLERANCE,
-        ):
-            raise ValueError(
-                f"required platform, tower, rib, pad, or gusset is missing: {probe}"
+                "required platform, tower, rib, pad, or gusset is missing: "
+                f"{label}, volume={missing_volume}"
             )
 
     incidence = np.bincount(mesh.edges_unique_inverse)

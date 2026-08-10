@@ -325,3 +325,77 @@ def test_validation_report_uses_measured_pocket_loop() -> None:
     report = base.validate_base(measured_variant, source)
 
     assert report.pocket_bounds == pytest.approx((54.9975, 70.0), abs=0.0002)
+
+
+def test_validator_rejects_r3_9_finished_ring_profile() -> None:
+    source = base.load_canonical_source(SOURCE_ROOT)
+    mesh = base.generate_base(source)
+    r3_9_outer = base.rounded_prism(
+        base.OUTER_WIDTH,
+        base.OUTER_LENGTH,
+        3.9,
+        z_min=0.0,
+        height=base.OUTER_HEIGHT,
+        center=(base.CENTER_X, base.CENTER_Y),
+    )
+    r4_outer = base.rounded_prism(
+        base.OUTER_WIDTH,
+        base.OUTER_LENGTH,
+        base.OUTER_RADIUS,
+        z_min=-0.1,
+        height=base.OUTER_HEIGHT + 0.2,
+        center=(base.CENTER_X, base.CENTER_Y),
+    )
+    corner_fill = base.subtract_meshes(r3_9_outer, [r4_outer])
+    r3_9_profile = macro.union_meshes([mesh, corner_fill])
+    for legacy_probe in base.OUTER_CORNER_PROBES:
+        assert base.probe_volume(r3_9_profile, legacy_probe) == pytest.approx(
+            0.0, abs=1e-6
+        )
+
+    with pytest.raises(ValueError, match="R4 outer corner"):
+        base.validate_base(r3_9_profile, source)
+
+
+def test_validator_rejects_missing_front_wall_side_strips() -> None:
+    source = base.load_canonical_source(SOURCE_ROOT)
+    mesh = base.generate_base(source)
+    left_strip_cutter = base.box_from_bounds(
+        np.array([20.29, 25.3, -0.1]), np.array([21.0, 27.9, 10.1])
+    )
+    right_strip_cutter = base.box_from_bounds(
+        np.array([38.8, 25.3, -0.1]), np.array([39.51, 27.9, 10.1])
+    )
+    stripped_front_wall = base.subtract_meshes(
+        mesh, [left_strip_cutter, right_strip_cutter]
+    )
+    front_probe = base.REQUIRED_SOLID_PROBES[2]
+    expected_probe_volume = float(np.prod(np.subtract(front_probe[1], front_probe[0])))
+    assert base.probe_volume(stripped_front_wall, front_probe) == pytest.approx(
+        expected_probe_volume, abs=0.01
+    )
+
+    with pytest.raises(
+        ValueError, match="required platform, tower, rib, pad, or gusset"
+    ):
+        base.validate_base(stripped_front_wall, source)
+
+
+def test_validator_rejects_square_rear_wire_hole() -> None:
+    source = base.load_canonical_source(SOURCE_ROOT)
+    mesh = base.generate_base(source)
+    hole_fill = base.box_from_bounds(
+        np.array([27.7, 72.3, 2.8]), np.array([32.1, 74.8, 7.2])
+    )
+    filled_hole = macro.union_meshes([mesh, hole_fill])
+    square_cutter = base.box_from_bounds(
+        np.array([27.9, 72.2, 3.0]), np.array([31.9, 74.9, 7.0])
+    )
+    square_hole = base.subtract_meshes(filled_hole, [square_cutter])
+    rear_loops = section_loop_sizes(square_hole, axis=1, level=73.6)
+    assert any(
+        np.allclose(size, (4.0, 4.0), rtol=0.0, atol=0.003) for size in rear_loops
+    )
+
+    with pytest.raises(ValueError, match="rear wire hole"):
+        base.validate_base(square_hole, source)
