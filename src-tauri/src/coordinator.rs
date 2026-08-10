@@ -477,6 +477,7 @@ pub struct RuntimeCoordinator {
     workspace_revision: WorkspaceRevision,
     paste: Option<PasteHandle>,
     renderers: Arc<RendererRegistry>,
+    display_snapshot: Option<Arc<DisplaySnapshot>>,
     workers: BTreeMap<DeviceId, WorkerSlot>,
     devices: BTreeMap<DeviceId, DeviceStatus>,
     candidates: Vec<CandidateStatus>,
@@ -619,6 +620,7 @@ impl RuntimeCoordinator {
             workspace_revision,
             paste,
             renderers,
+            display_snapshot: None,
             workers: BTreeMap::new(),
             devices: BTreeMap::new(),
             candidates: Vec::new(),
@@ -789,7 +791,25 @@ impl RuntimeCoordinator {
                         self.event_sender.clone(),
                         WorkerRendererRegistry::new(Arc::clone(&self.renderers)),
                     ) {
-                        Ok(worker) => {
+                        Ok(mut worker) => {
+                            if let Some(error) =
+                                self.display_snapshot.as_ref().and_then(|snapshot| {
+                                    worker
+                                        .send(WorkerCommand::UpdateDisplay(Arc::clone(snapshot)))
+                                        .err()
+                                })
+                            {
+                                worker.stop();
+                                worker.join();
+                                self.candidates.push(candidate_from_runtime(
+                                    board,
+                                    observation,
+                                    Some(device_id),
+                                    IdentityDimension::Validating,
+                                    Some(error),
+                                ));
+                                continue;
+                            }
                             self.workers.insert(
                                 device_id.clone(),
                                 WorkerSlot {
@@ -1151,6 +1171,7 @@ impl RuntimeCoordinator {
     }
 
     pub fn update_display(&mut self, snapshot: Arc<DisplaySnapshot>) {
+        self.display_snapshot = Some(Arc::clone(&snapshot));
         let failures = self
             .workers
             .iter()
@@ -1743,6 +1764,7 @@ mod tests {
     use super::*;
     use crate::{
         device::DeviceSession,
+        display::SourceHealth,
         hardware::{
             BOARD_PROFILES, BoardProfile, DeviceId, TEST_ESP32C3_BOARD_ID,
             TEST_SECOND_RP2040_BOARD_ID, test_registry,
@@ -2068,6 +2090,7 @@ mod tests {
         starts: Mutex<Vec<WorkerStart>>,
         failures: Mutex<BTreeMap<String, String>>,
         update_port_failures: Arc<Mutex<BTreeSet<String>>>,
+        display_failures: Arc<Mutex<BTreeSet<DeviceId>>>,
         hellos: Mutex<BTreeMap<String, HelloCapabilities>>,
         stopped: Arc<Mutex<Vec<DeviceId>>>,
         commands: Arc<Mutex<BTreeMap<DeviceId, Vec<WorkerCommand>>>>,
@@ -2087,6 +2110,13 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(port.into());
+        }
+
+        fn fail_display(&self, device_id: &DeviceId) {
+            self.display_failures
+                .lock()
+                .unwrap()
+                .insert(device_id.clone());
         }
 
         fn starts(&self) -> Vec<WorkerStart> {
@@ -2135,12 +2165,22 @@ mod tests {
         stopped: Arc<Mutex<Vec<DeviceId>>>,
         commands: Arc<Mutex<BTreeMap<DeviceId, Vec<WorkerCommand>>>>,
         update_port_failures: Arc<Mutex<BTreeSet<String>>>,
+        display_failures: Arc<Mutex<BTreeSet<DeviceId>>>,
     }
 
     impl DeviceWorker for FakeWorker {
         fn send(&self, command: WorkerCommand) -> Result<(), String> {
             if let WorkerCommand::UpdatePort(port) = &command
                 && self.update_port_failures.lock().unwrap().contains(port)
+            {
+                return Err("device_worker_stopped".into());
+            }
+            if matches!(command, WorkerCommand::UpdateDisplay(_))
+                && self
+                    .display_failures
+                    .lock()
+                    .unwrap()
+                    .contains(&self.device_id)
             {
                 return Err("device_worker_stopped".into());
             }
@@ -2188,6 +2228,7 @@ mod tests {
                 stopped: Arc::clone(&self.stopped),
                 commands: Arc::clone(&self.commands),
                 update_port_failures: Arc::clone(&self.update_port_failures),
+                display_failures: Arc::clone(&self.display_failures),
             }))
         }
 
@@ -2504,6 +2545,87 @@ mod tests {
                 .collect::<BTreeMap<_, _>>(),
             revisions
         );
+    }
+
+    #[test]
+    fn display_snapshot_received_before_hotplug_is_replayed_to_the_new_worker() {
+        let (_directory, enumerator, launcher, mut coordinator) = harness();
+        let snapshot = Arc::new(DisplaySnapshot {
+            items: Vec::new(),
+            health: BTreeMap::from([("codex".into(), SourceHealth::Offline)]),
+        });
+        coordinator.update_display(Arc::clone(&snapshot));
+        enumerator.set(
+            vec![serial("/dev/rp", 0x2e8a, 0x102e, Some("HOTPLUG"))],
+            Vec::new(),
+        );
+
+        scan(&mut coordinator);
+
+        let id = DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "HOTPLUG").unwrap();
+        assert!(matches!(
+            launcher.commands_for(&id).first(),
+            Some(WorkerCommand::UpdateDisplay(actual)) if Arc::ptr_eq(actual, &snapshot)
+        ));
+    }
+
+    #[test]
+    fn restarted_worker_receives_only_the_latest_retained_display_snapshot() {
+        let (_directory, enumerator, launcher, mut coordinator) = harness();
+        enumerator.set(
+            vec![serial("/dev/rp", 0x2e8a, 0x102e, Some("RESTART"))],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+        let stale = Arc::new(DisplaySnapshot {
+            items: Vec::new(),
+            health: BTreeMap::from([("codex".into(), SourceHealth::Healthy)]),
+        });
+        let latest = Arc::new(DisplaySnapshot {
+            items: Vec::new(),
+            health: BTreeMap::from([("codex".into(), SourceHealth::Offline)]),
+        });
+        coordinator.update_display(stale);
+        coordinator.update_display(Arc::clone(&latest));
+        enumerator.set(Vec::new(), Vec::new());
+        scan(&mut coordinator);
+        launcher.clear_commands();
+
+        enumerator.set(
+            vec![serial("/dev/rp", 0x2e8a, 0x102e, Some("RESTART"))],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+
+        let id = DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "RESTART").unwrap();
+        assert!(matches!(
+            launcher.commands_for(&id).first(),
+            Some(WorkerCommand::UpdateDisplay(actual)) if Arc::ptr_eq(actual, &latest)
+        ));
+    }
+
+    #[test]
+    fn failed_initial_display_replay_does_not_insert_the_worker() {
+        let (_directory, enumerator, launcher, mut coordinator) = harness();
+        let id = DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "DISPLAY-FAIL").unwrap();
+        coordinator.update_display(Arc::new(DisplaySnapshot {
+            items: Vec::new(),
+            health: BTreeMap::new(),
+        }));
+        launcher.fail_display(&id);
+        enumerator.set(
+            vec![serial("/dev/rp", 0x2e8a, 0x102e, Some("DISPLAY-FAIL"))],
+            Vec::new(),
+        );
+
+        scan(&mut coordinator);
+
+        assert!(!coordinator.workers.contains_key(&id));
+        assert!(launcher.stopped.lock().unwrap().contains(&id));
+        assert!(coordinator.candidates().iter().any(|candidate| {
+            candidate.device_id.as_ref() == Some(&id)
+                && candidate.latest_error.as_deref() == Some("device_worker_stopped")
+        }));
     }
 
     #[test]

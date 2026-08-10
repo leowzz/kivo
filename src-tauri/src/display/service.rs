@@ -148,7 +148,7 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::VecDeque,
+        collections::{BTreeMap, VecDeque},
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
@@ -163,16 +163,35 @@ mod tests {
         ProviderUpdate, SourceHealth,
     };
 
+    #[derive(Clone)]
+    struct FakeUpdate {
+        health: SourceHealth,
+        title: &'static str,
+        detail: Option<&'static str>,
+        include_task: bool,
+    }
+
+    impl FakeUpdate {
+        fn healthy() -> Self {
+            Self {
+                health: SourceHealth::Healthy,
+                title: "Codex",
+                detail: None,
+                include_task: false,
+            }
+        }
+    }
+
     struct FakeProvider {
-        updates: VecDeque<u32>,
-        last: u32,
+        updates: VecDeque<FakeUpdate>,
+        last: FakeUpdate,
     }
 
     impl FakeProvider {
-        fn from_updates(updates: Vec<u32>) -> Self {
+        fn from_updates(updates: Vec<FakeUpdate>) -> Self {
             Self {
                 updates: updates.into(),
-                last: 0,
+                last: FakeUpdate::healthy(),
             }
         }
     }
@@ -183,22 +202,39 @@ mod tests {
         }
 
         fn poll(&mut self, now: Instant) -> Result<ProviderUpdate, &'static str> {
-            self.last = self.updates.pop_front().unwrap_or(self.last);
-            Ok(ProviderUpdate {
-                source: self.source_id(),
-                health: SourceHealth::Healthy,
-                items: vec![
+            if let Some(update) = self.updates.pop_front() {
+                self.last = update;
+            }
+            let mut summary = DisplayItem::new(
+                "codex.summary",
+                self.source_id(),
+                DisplayPriority::Ambient,
+                DisplayState::Running,
+                self.last.title,
+            )
+            .unwrap()
+            .with_updated_at(now);
+            if let Some(detail) = self.last.detail {
+                summary = summary.with_detail(detail);
+            }
+            let mut items = vec![summary];
+            if self.last.include_task {
+                items.push(
                     DisplayItem::new(
-                        "codex.summary",
+                        "codex.task.review",
                         self.source_id(),
-                        DisplayPriority::Ambient,
-                        DisplayState::Running,
-                        "Codex",
+                        DisplayPriority::Attention,
+                        DisplayState::NeedsInput,
+                        "review",
                     )
                     .unwrap()
-                    .with_metric("running", self.last)
                     .with_updated_at(now),
-                ],
+                );
+            }
+            Ok(ProviderUpdate {
+                source: self.source_id(),
+                health: self.last.health,
+                items,
             })
         }
     }
@@ -266,18 +302,51 @@ mod tests {
 
     #[test]
     fn service_emits_only_semantically_changed_snapshots() {
+        let initial = FakeUpdate::healthy();
+        let degraded = FakeUpdate {
+            health: SourceHealth::Degraded,
+            ..initial.clone()
+        };
+        let renamed = FakeUpdate {
+            title: "Kivo",
+            ..degraded.clone()
+        };
+        let detailed = FakeUpdate {
+            detail: Some("status changed"),
+            ..renamed.clone()
+        };
+        let with_task = FakeUpdate {
+            include_task: true,
+            ..detailed.clone()
+        };
         let mut providers = ProviderRegistry::default();
         providers
-            .register(Box::new(FakeProvider::from_updates(vec![1, 1, 2])))
+            .register(Box::new(FakeProvider::from_updates(vec![
+                initial.clone(),
+                initial,
+                degraded,
+                renamed,
+                detailed,
+                with_task,
+            ])))
             .unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let (sender, snapshots) = mpsc::channel();
         let service = DisplayService::spawn(providers, Arc::clone(&stop), sender).unwrap();
 
-        let first = snapshots.recv_timeout(Duration::from_secs(1)).unwrap();
-        let second = snapshots.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert_eq!(first.items[0].metrics["running"], 1);
-        assert_eq!(second.items[0].metrics["running"], 2);
+        let emitted = (0..5)
+            .map(|_| snapshots.recv_timeout(Duration::from_secs(1)).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(emitted[0].health["codex"], SourceHealth::Healthy);
+        assert_eq!(emitted[1].health["codex"], SourceHealth::Degraded);
+        assert_eq!(emitted[2].items[0].title, "Kivo");
+        assert_eq!(
+            emitted[3].items[0].detail.as_deref(),
+            Some("status changed")
+        );
+        assert_eq!(emitted[4].items.len(), 2);
+        assert_eq!(emitted[4].items[0].id, "codex.task.review");
         assert!(snapshots.recv_timeout(Duration::from_millis(150)).is_err());
 
         stop.store(true, Ordering::Relaxed);
@@ -311,7 +380,10 @@ mod tests {
         }));
 
         assert!(snapshot.items.is_empty());
-        assert_eq!(snapshot.health("codex"), SourceHealth::Offline);
+        assert_eq!(
+            snapshot.health,
+            BTreeMap::from([("codex".to_owned(), SourceHealth::Offline)])
+        );
     }
 
     #[test]
@@ -322,8 +394,11 @@ mod tests {
         }));
 
         assert!(snapshot.items.is_empty());
-        assert_eq!(snapshot.health("codex"), SourceHealth::Offline);
-        assert_eq!(snapshot.health("other"), SourceHealth::Offline);
+        assert_eq!(
+            snapshot.health,
+            BTreeMap::from([("codex".to_owned(), SourceHealth::Offline)])
+        );
+        assert!(!snapshot.health.contains_key("other"));
     }
 
     #[test]
@@ -346,7 +421,7 @@ mod tests {
     }
 
     #[test]
-    fn disconnected_snapshot_consumer_stops_and_drops_providers() {
+    fn receiver_disconnected_before_first_snapshot_stops_and_drops_providers() {
         let dropped = Arc::new(AtomicBool::new(false));
         let mut providers = ProviderRegistry::default();
         providers

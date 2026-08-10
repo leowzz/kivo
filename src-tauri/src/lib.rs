@@ -136,6 +136,22 @@ fn newest_display_snapshot(
     snapshots.try_iter().last()
 }
 
+struct StopOnDrop {
+    stop: Arc<AtomicBool>,
+}
+
+impl StopOnDrop {
+    fn new(stop: Arc<AtomicBool>) -> Self {
+        Self { stop }
+    }
+}
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
 struct RuntimeScanSnapshot {
     devices: Vec<DeviceStatus>,
     candidates: Vec<CandidateStatus>,
@@ -1172,6 +1188,7 @@ pub fn run() {
                     let scan_requested = Arc::clone(&scan_requested);
                     let app_handle = app.handle().clone();
                     thread::spawn(move || {
+                        let _stop_on_drop = StopOnDrop::new(Arc::clone(&stop));
                         let mut scanner = BackgroundDeviceScanner::new(enumerator);
                         let mut log_inventory = runtime_log::DeviceLogInventory::default();
                         while !stop.load(Ordering::Relaxed) {
@@ -1527,6 +1544,31 @@ mod tests {
 
         assert!(Arc::ptr_eq(&drained, &newest));
         assert!(newest_display_snapshot(&snapshots).is_none());
+    }
+
+    #[test]
+    fn coordinator_exit_guard_sets_stop_on_normal_drop() {
+        let stop = Arc::new(AtomicBool::new(false));
+
+        {
+            let _guard = StopOnDrop::new(Arc::clone(&stop));
+            assert!(!stop.load(Ordering::Relaxed));
+        }
+
+        assert!(stop.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn coordinator_exit_guard_sets_stop_during_unwind() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let unwind_stop = Arc::clone(&stop);
+
+        let _ = std::panic::catch_unwind(move || {
+            let _guard = StopOnDrop::new(unwind_stop);
+            panic!("test coordinator unwind");
+        });
+
+        assert!(stop.load(Ordering::Relaxed));
     }
 
     #[test]

@@ -83,8 +83,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        DisplayItem, DisplayPriority, DisplayProvider, DisplayRenderer, DisplaySnapshot,
-        DisplayService, DisplayState, MonoText128x32Renderer, Rect, SceneMode, SceneTracker,
+        DisplayItem, DisplayPriority, DisplayProvider, DisplayRenderer, DisplayService,
+        DisplaySnapshot, DisplayState, MonoText128x32Renderer, Rect, SceneMode, SceneTracker,
         SourceHealth, ascii_project_title, built_in_provider_registry, built_in_renderer_registry,
         registry_with_codex_provider,
     };
@@ -139,10 +139,9 @@ mod tests {
 
     #[test]
     fn source_initialization_failure_reaches_the_offline_screen_without_stopping_runtime() {
-        let providers = registry_with_codex_provider(Err::<
-            Box<dyn DisplayProvider>,
-            &'static str,
-        >("forced_source_failure"));
+        let providers = registry_with_codex_provider(
+            Err::<Box<dyn DisplayProvider>, &'static str>("forced_source_failure"),
+        );
         let stop = Arc::new(AtomicBool::new(false));
         let (sender, snapshots) = mpsc::channel();
         let service = DisplayService::spawn(providers, Arc::clone(&stop), sender).unwrap();

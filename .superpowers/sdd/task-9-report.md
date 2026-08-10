@@ -26,7 +26,7 @@ their implementations:
 - `RuntimeCoordinator::with_paste_and_renderers` was absent;
 - `newest_display_snapshot` was absent.
 
-Final focused results:
+Initial focused results:
 
 ```text
 display::service                                      7 passed
@@ -40,7 +40,9 @@ tests::display_snapshot_drain                         1 passed
 
 - `DisplayService` polls every 100 ms, validates both update and item sources,
   updates `DisplayHub`, compares the complete semantic snapshot, and sends only
-  changes. Shared-stop and receiver-disconnect paths both drop providers.
+  changes. The shared stop flag always drops providers; a disconnected receiver
+  is detected only when a semantic change reaches `Sender::send`, including the
+  covered first-snapshot case.
 - Provider status logs are transition-only and contain only `providerId`,
   health, a static error code, and item count. No title, cwd, detail, task text,
   message text, or tool content reaches this log boundary.
@@ -54,9 +56,16 @@ tests::display_snapshot_drain                         1 passed
 - Tauri creates one shared renderer registry and injects the same `Arc` into the
   coordinator and every worker. The coordinator loop drains the semantic
   channel before its 5 ms sleep and fans out only the newest queued snapshot.
+- The coordinator retains the exact latest semantic snapshot even with no
+  workers. New and restarted workers receive that `Arc` before insertion; a
+  failed initial replay stops and joins the worker, then uses the normal
+  worker-start failure candidate path.
 - `AppState` owns the display JoinHandle. Exit sets the shared stop flag, joins
   display first, joins coordinator second, then shuts down paste and logging.
-  `Option::take` makes repeated exit delivery harmless.
+  `Option::take` makes repeated exit delivery harmless. A coordinator-thread
+  RAII guard also sets stop on normal return or panic unwinding, so a stable
+  deduped snapshot cannot leave the display service orphaned when its receiver
+  owner exits.
 - README documents screens, data minimization, protocol 3-6 behavior, the V1
   SSD1306 128x32 rotation-0 panel, unchanged profile YAML, and physical checks.
 
@@ -72,7 +81,7 @@ Evidence:
 
 - release/Python suites: 33 + 32 + 32 passed;
 - PlatformIO native: 89/89 passed;
-- Rust: 360 unit tests passed, 1 ignored by design, plus both integration tests;
+- Rust: 365 unit tests passed, 1 ignored by design, plus both integration tests;
 - Clippy: `--all-targets -- -D warnings` passed;
 - frontend: 211/211 passed;
 - production frontend build passed.
@@ -101,6 +110,28 @@ Firmware builds also passed:
 - Shutdown is bounded by the existing one-second App Server response deadline
   plus the 100 ms service interval; no detached display or coordinator thread
   remains after Exit joins.
+
+## Review Follow-Up
+
+Added discriminating tests before the review fixes. The three coordinator tests
+failed because pre-hotplug and restart snapshots were not replayed, and a replay
+send failure still left the worker inserted. The two lifecycle tests failed to
+compile because `StopOnDrop` did not exist.
+
+GREEN behavior:
+
+- `update_display` retains the latest `Arc<DisplaySnapshot>` before sending it
+  to all existing workers;
+- hot-plug and restart replay only that latest retained `Arc`;
+- replay occurs before worker insertion, and send failure stops/joins the new
+  worker while preserving the candidate error;
+- the coordinator thread owns a no-lock/no-join RAII guard that stores the
+  shared stop flag during both normal return and unwinding;
+- full semantic dedupe coverage now distinguishes health, title, detail, and
+  item membership, while source-mismatch coverage inspects the exact health map
+  and verifies that the claimed foreign source is absent;
+- the receiver-disconnect test is explicitly scoped to disconnection before
+  the first snapshot rather than claiming independent stable-state detection.
 
 ## Physical Acceptance
 
