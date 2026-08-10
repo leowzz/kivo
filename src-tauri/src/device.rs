@@ -8,8 +8,8 @@ use crate::{
         WorkerLauncher, WorkerRendererRegistry, WorkerStart,
     },
     display::{
-        DisplayRenderer, DisplaySnapshot, RendererRegistry, SceneTracker, SceneUpdate,
-        built_in_renderer_registry,
+        DisplayRenderer, DisplaySnapshot, RenderedScene, RendererRegistry, SceneTracker,
+        SceneUpdate, built_in_renderer_registry,
     },
     hardware::{BoardProfile, DeviceId},
     metrics::{HomeMetricsSnapshot, MetricAttribution, MetricsStore},
@@ -1630,7 +1630,9 @@ pub struct DeviceDisplayLink {
     renderer: Option<Arc<dyn DisplayRenderer>>,
     pending_since: Option<Instant>,
     queued_update: Option<SceneUpdate>,
+    desired_scene: Option<RenderedScene>,
     latest_snapshot: Option<Arc<DisplaySnapshot>>,
+    needs_resync: bool,
 }
 
 impl DeviceDisplayLink {
@@ -1668,6 +1670,8 @@ impl DeviceDisplayLink {
         self.tracker = SceneTracker::default();
         self.pending_since = None;
         self.queued_update = None;
+        self.desired_scene = None;
+        self.needs_resync = false;
         self.enabled = renderer.is_some();
         self.renderer = renderer;
         let _ = self.render_latest();
@@ -1684,6 +1688,8 @@ impl DeviceDisplayLink {
         self.renderer = None;
         self.pending_since = None;
         self.queued_update = None;
+        self.desired_scene = None;
+        self.needs_resync = false;
         self.configure(protocol, profile, registry);
     }
 
@@ -1696,17 +1702,18 @@ impl DeviceDisplayLink {
         let (Some(renderer), Some(snapshot)) =
             (self.renderer.as_ref(), self.latest_snapshot.as_ref())
         else {
+            self.desired_scene = None;
             return Ok(());
         };
-        let scene = renderer.render(snapshot).map_err(str::to_owned)?;
-        if let Some(update) = self.tracker.prepare(scene) {
-            self.queued_update = Some(update);
-        }
+        self.desired_scene = Some(renderer.render(snapshot).map_err(str::to_owned)?);
         Ok(())
     }
 
     pub(crate) fn next_lines(&mut self, now: Instant) -> Result<Vec<String>, String> {
         if !self.enabled {
+            return Ok(Vec::new());
+        }
+        if self.queued_update.is_some() {
             return Ok(Vec::new());
         }
         if self
@@ -1715,17 +1722,34 @@ impl DeviceDisplayLink {
         {
             eprintln!("display acknowledgement timeout; retrying latest full scene");
             self.pending_since = None;
-            self.queued_update = self.tracker.resync();
+            self.needs_resync = true;
         }
         if self.pending_since.is_some() {
             return Ok(Vec::new());
         }
-        let Some(update) = self.queued_update.take() else {
+        let update = if self.needs_resync {
+            self.needs_resync = false;
+            if let Some(scene) = self.desired_scene.clone() {
+                let _ = self.tracker.prepare(scene);
+            }
+            self.tracker.resync()
+        } else {
+            self.desired_scene
+                .clone()
+                .and_then(|scene| self.tracker.prepare(scene))
+        };
+        let Some(update) = update else {
             return Ok(Vec::new());
         };
         let lines = display_commands(&update)?;
-        self.pending_since = Some(now);
+        self.queued_update = Some(update);
         Ok(lines)
+    }
+
+    pub(crate) fn mark_transmitted(&mut self, now: Instant) {
+        if self.queued_update.take().is_some() {
+            self.pending_since = Some(now);
+        }
     }
 
     pub(crate) fn on_message(&mut self, message: &DeviceMessage) -> bool {
@@ -1735,15 +1759,13 @@ impl DeviceDisplayLink {
                     return true;
                 }
                 self.pending_since = None;
-                self.queued_update = match self.tracker.ack(*revision) {
-                    Ok(update) => update,
-                    Err(_) => self.tracker.resync(),
-                };
+                let _ = self.tracker.ack(*revision);
                 true
             }
             DeviceMessage::DisplayResync { .. } | DeviceMessage::DisplayError { .. } => {
                 self.pending_since = None;
-                self.queued_update = self.tracker.resync();
+                self.queued_update = None;
+                self.needs_resync = true;
                 true
             }
             _ => false,
@@ -1986,10 +2008,11 @@ fn run_isolated_worker_inner(
             )?;
         }
 
-        write_display_lines(
-            device.get_mut(),
-            display_link.next_lines(clock.monotonic_now())?,
-        )?;
+        let display_lines = display_link.next_lines(clock.monotonic_now())?;
+        if !display_lines.is_empty() {
+            write_display_lines(device.get_mut(), display_lines)?;
+            display_link.mark_transmitted(clock.monotonic_now());
+        }
 
         let monotonic_now_ms = monotonic_ms_since(monotonic_origin, clock.monotonic_now());
         let trigger_output = session
@@ -2618,6 +2641,18 @@ mod tests {
         text: &'static str,
     }
 
+    struct FlushFailingDisplayWriter;
+
+    impl std::io::Write for FlushFailingDisplayWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("flush failed"))
+        }
+    }
+
     impl DisplayRenderer for TestDisplayRenderer {
         fn panel_id(&self) -> &'static str {
             self.panel_id
@@ -2681,6 +2716,25 @@ mod tests {
     }
 
     #[test]
+    fn display_updates_coalesce_before_the_first_transaction_is_generated() {
+        let registry = built_in_renderer_registry();
+        let mut link = DeviceDisplayLink::default();
+        link.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+
+        link.update_desired(display_snapshot(3)).unwrap();
+        link.update_desired(display_snapshot(4)).unwrap();
+        let lines = link.next_lines(Instant::now()).unwrap();
+
+        assert_eq!(lines.first().unwrap(), "DISPLAY_BEGIN 1 0 full\n");
+        assert!(lines.iter().any(|line| line.contains("NCBSVU4=")));
+        assert!(!lines.iter().any(|line| line.contains("MyBSVU4=")));
+    }
+
+    #[test]
     fn each_display_link_uses_its_selected_renderer_for_the_same_snapshot() {
         let mut registry = RendererRegistry::default();
         registry
@@ -2727,6 +2781,7 @@ mod tests {
             link.next_lines(now).unwrap().first().unwrap(),
             "DISPLAY_BEGIN 1 0 full\n"
         );
+        link.mark_transmitted(now);
 
         link.update_desired(display_snapshot(4)).unwrap();
         assert!(link.next_lines(now).unwrap().is_empty());
@@ -2749,6 +2804,7 @@ mod tests {
         );
         link.update_desired(display_snapshot(3)).unwrap();
         link.next_lines(now).unwrap();
+        link.mark_transmitted(now);
         link.update_desired(display_snapshot(4)).unwrap();
 
         assert!(link.on_message(&DeviceMessage::DisplayOk { revision: 9 }));
@@ -2779,6 +2835,58 @@ mod tests {
     }
 
     #[test]
+    fn display_ack_after_generation_is_ignored_until_marked_transmitted() {
+        let registry = built_in_renderer_registry();
+        let now = Instant::now();
+        let mut link = DeviceDisplayLink::default();
+        link.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+        link.update_desired(display_snapshot(3)).unwrap();
+        assert_eq!(
+            link.next_lines(now).unwrap().first().unwrap(),
+            "DISPLAY_BEGIN 1 0 full\n"
+        );
+
+        assert!(link.on_message(&DeviceMessage::DisplayOk { revision: 1 }));
+        link.mark_transmitted(now);
+        link.update_desired(display_snapshot(4)).unwrap();
+        assert!(
+            link.next_lines(now + Duration::from_secs(1))
+                .unwrap()
+                .is_empty()
+        );
+
+        assert!(link.on_message(&DeviceMessage::DisplayOk { revision: 1 }));
+        let delta = link.next_lines(now + Duration::from_secs(1)).unwrap();
+        assert_eq!(delta.first().unwrap(), "DISPLAY_BEGIN 2 1 delta\n");
+        assert!(delta.iter().any(|line| line.contains("NCBSVU4=")));
+    }
+
+    #[test]
+    fn failed_display_flush_does_not_mark_or_acknowledge_the_generated_revision() {
+        let registry = built_in_renderer_registry();
+        let now = Instant::now();
+        let mut link = DeviceDisplayLink::default();
+        link.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+        link.update_desired(display_snapshot(3)).unwrap();
+        let lines = link.next_lines(now).unwrap();
+
+        let error = write_display_lines(&mut FlushFailingDisplayWriter, lines).unwrap_err();
+        assert!(error.starts_with("serial_write_failed:"));
+        assert!(link.on_message(&DeviceMessage::DisplayOk { revision: 1 }));
+
+        assert!(link.pending_since.is_none());
+        assert!(link.queued_update.is_some());
+    }
+
+    #[test]
     fn display_ack_timeout_retries_the_latest_scene_full_once_per_deadline() {
         let registry = built_in_renderer_registry();
         let now = Instant::now();
@@ -2790,6 +2898,7 @@ mod tests {
         );
         link.update_desired(display_snapshot(3)).unwrap();
         link.next_lines(now).unwrap();
+        link.mark_transmitted(now);
         link.update_desired(display_snapshot(4)).unwrap();
 
         assert!(
@@ -2828,6 +2937,7 @@ mod tests {
             );
             link.update_desired(display_snapshot(3)).unwrap();
             link.next_lines(now).unwrap();
+            link.mark_transmitted(now);
 
             assert!(link.on_message(&reply));
             assert_eq!(
@@ -2850,6 +2960,7 @@ mod tests {
         );
         original.update_desired(Arc::clone(&snapshot)).unwrap();
         original.next_lines(now).unwrap();
+        original.mark_transmitted(now);
         original.on_message(&DeviceMessage::DisplayOk { revision: 1 });
 
         let mut reconnected = DeviceDisplayLink::default();
