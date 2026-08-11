@@ -133,6 +133,10 @@ export function HotkeyPicker({ value, onChange, language, error, onRecordingChan
     !isModifierToken(token) &&
     (!normalizedSearch || hotkeyDisplayLabel(language, token).toLowerCase().includes(normalizedSearch))
   ), [activeCategory, language, normalizedSearch]);
+  const matchingPhysicalModifiers = useMemo(() => normalizedSearch
+    ? PHYSICAL_MODIFIERS.filter((token) => hotkeyDisplayLabel(language, token).toLowerCase().includes(normalizedSearch))
+    : [], [language, normalizedSearch]);
+  const visiblePhysicalModifiers = showPhysicalModifiers ? PHYSICAL_MODIFIERS : matchingPhysicalModifiers;
 
   const handleCategoryKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => {
     let nextIndex: number | null = null;
@@ -189,9 +193,9 @@ export function HotkeyPicker({ value, onChange, language, error, onRecordingChan
           <ChevronDown size={14} aria-hidden="true" />{t(language, "behavior.moreModifiers")}
         </button>
       </div>
-      {showPhysicalModifiers && (
+      {(showPhysicalModifiers || matchingPhysicalModifiers.length > 0) && (
         <div className="hotkey-physical-modifiers">
-          {PHYSICAL_MODIFIERS.map((token) => (
+          {visiblePhysicalModifiers.map((token) => (
             <label key={token}>
               <input type="checkbox" checked={hasUsage(value, token)} onChange={() => toggle(token)} aria-label={hotkeyDisplayLabel(language, token)} />
               <span>{hotkeyDisplayLabel(language, token)}</span>

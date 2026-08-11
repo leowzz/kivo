@@ -117,6 +117,32 @@ test("searches keys by their localized display label", async () => {
   expect(screen.queryByRole("checkbox", { name: "方向右" })).not.toBeInTheDocument();
 });
 
+test("searching a localized physical modifier expands its matching result without changing the value", async () => {
+  const user = userEvent.setup();
+  const onChange = vi.fn();
+  render(<HotkeyPicker value={["right_cmd"]} onChange={onChange} language="zh-CN" />);
+
+  await user.type(screen.getByRole("searchbox", { name: "搜索按键" }), "右cmd");
+
+  expect(screen.getByRole("checkbox", { name: "右cmd" })).toBeChecked();
+  expect(onChange).not.toHaveBeenCalled();
+});
+
+test("keeps physical modifiers collapsed until manually expanded or matched by a search", () => {
+  render(<HotkeyPicker value={[]} onChange={vi.fn()} language="en-US" />);
+
+  expect(screen.queryByRole("checkbox", { name: "Right Command" })).not.toBeInTheDocument();
+});
+
+test("changing the picker language does not write back the current value", () => {
+  const onChange = vi.fn();
+  const { rerender } = render(<HotkeyPicker value={["right_cmd", "left"]} onChange={onChange} language="en-US" />);
+
+  rerender(<HotkeyPicker value={["right_cmd", "left"]} onChange={onChange} language="zh-CN" />);
+
+  expect(onChange).not.toHaveBeenCalled();
+});
+
 test("shows one category panel and keeps recording above search", async () => {
   const user = userEvent.setup();
   render(<HotkeyPicker value={["enter"]} onChange={vi.fn()} language="zh-CN" />);

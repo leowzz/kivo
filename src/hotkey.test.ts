@@ -54,6 +54,10 @@ test("keeps current English and literal hotkey labels", () => {
   expect(formatHotkey(["backtick", "left_bracket"], "en-US")).toBe("` + [");
 });
 
+test("uses an uppercase fallback for unknown hotkey tokens", () => {
+  expect(hotkeyDisplayLabel("zh-CN", "custom_key")).toBe("CUSTOM_KEY");
+});
+
 test("formats named hotkeys in Chinese without changing their tokens", () => {
   expect(hotkeyDisplayLabel("zh-CN", "right_cmd")).toBe("右cmd");
   expect(hotkeyDisplayLabel("zh-CN", "left")).toBe("方向左");
