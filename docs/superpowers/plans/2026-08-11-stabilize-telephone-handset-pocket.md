@@ -189,8 +189,8 @@ def inner_funnel_cutter() -> trimesh.Trimesh:
     )
     mouth = lower.offset(
         FUNNEL_EXPANSION,
-        join_type=manifold3d.CrossSection.JoinType.Round,
-        circular_segments=CIRCULAR_SEGMENTS,
+        join_type=manifold3d.JoinType.Round,
+        circular_segments=ROUNDED_SECTION_SEGMENTS,
     )
     points = [
         [float(x), float(y), z]

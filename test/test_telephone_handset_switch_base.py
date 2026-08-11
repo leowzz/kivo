@@ -88,6 +88,24 @@ def section_loop_sizes(mesh: trimesh.Trimesh, axis: int, level: float) -> np.nda
     return np.array(sizes)
 
 
+def contour_with_points(
+    contours: list[np.ndarray], *expected_points: tuple[float, float]
+) -> np.ndarray:
+    for contour in contours:
+        if all(
+            np.any(np.all(np.isclose(contour, point, rtol=0.0, atol=0.003), axis=1))
+            for point in expected_points
+        ):
+            return contour
+    raise AssertionError(f"section is missing points: {expected_points}")
+
+
+def contour_point(contour: np.ndarray, expected: tuple[float, float]) -> np.ndarray:
+    matches = np.all(np.isclose(contour, expected, rtol=0.0, atol=0.003), axis=1)
+    assert np.any(matches)
+    return contour[np.flatnonzero(matches)[0]]
+
+
 def tangent_endpoint_section(
     width: float,
     length: float,
@@ -236,6 +254,57 @@ def test_bottomed_switch_and_four_pads_share_the_support_datum() -> None:
     assert report.pocket_depth == pytest.approx(15.0, abs=0.003)
     assert report.open_underside
     assert report.rear_wire_path
+
+
+def test_finished_mesh_locks_literal_safety_pad_geometry() -> None:
+    source = base.load_canonical_source(SOURCE_ROOT)
+    mesh = base.generate_base(source)
+
+    top = mesh.section(plane_origin=[0.0, 0.0, 12.0], plane_normal=[0.0, 0.0, 1.0])
+    assert top is not None
+    top_contours = [
+        np.asarray(entity.discrete(top.vertices))[:, :2]
+        for entity in top.entities
+        if entity.closed
+    ]
+    pad_contour = contour_with_points(
+        top_contours, (14.4, 14.4), (14.4, 4.4), (4.4, 14.4)
+    )
+    pad_corner = contour_point(pad_contour, (14.4, 14.4))
+    np.testing.assert_allclose(
+        pad_corner - contour_point(pad_contour, (14.4, 4.4)),
+        [0.0, 10.0],
+        rtol=0.0,
+        atol=0.003,
+    )
+    np.testing.assert_allclose(
+        pad_corner - contour_point(pad_contour, (4.4, 14.4)),
+        [10.0, 0.0],
+        rtol=0.0,
+        atol=0.003,
+    )
+
+    outer_face = base.vertical_section_contours(
+        mesh, np.array([0.0, 10.0, 0.0]), np.array([1.0, 0.0, 0.0])
+    )
+    face_contour = contour_with_points(outer_face, (14.4, 11.0), (14.4, 13.4))
+    np.testing.assert_allclose(
+        contour_point(face_contour, (14.4, 13.4))
+        - contour_point(face_contour, (14.4, 11.0)),
+        [0.0, 2.4],
+        rtol=0.0,
+        atol=0.003,
+    )
+
+    gusset = base.vertical_section_contours(
+        mesh, np.array([0.0, 5.6, 0.0]), np.array([1.0, 0.0, 0.0])
+    )
+    gusset_contour = contour_with_points(gusset, (6.8, 3.4), (14.4, 11.0))
+    gusset_run = contour_point(gusset_contour, (14.4, 11.0)) - contour_point(
+        gusset_contour, (6.8, 3.4)
+    )
+    np.testing.assert_allclose(gusset_run, [7.6, 7.6], rtol=0.0, atol=0.003)
+    assert gusset_run[1] / gusset_run[0] == pytest.approx(1.0, abs=0.0004)
 
 
 def test_open_bottom_wire_path_and_required_supports() -> None:
