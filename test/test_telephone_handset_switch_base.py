@@ -610,6 +610,26 @@ def test_export_is_deterministic_and_reload_validates(tmp_path: Path) -> None:
         base.validate_base(reloaded, source)
 
 
+def test_side_section_contours_expose_platform_and_pad_datums() -> None:
+    source = base.load_canonical_source(SOURCE_ROOT)
+    mesh = base.generate_base(source)
+
+    sections = base.side_section_contours(mesh)
+
+    assert set(sections) == {"centerline", "diagonal"}
+    for contours, datum in (
+        (sections["centerline"], base.PLATFORM_TOP),
+        (sections["diagonal"], base.PAD_TOP),
+    ):
+        assert any(
+            np.any(
+                np.isclose(contour[:-1, 1], datum, atol=0.003)
+                & np.isclose(contour[1:, 1], datum, atol=0.003)
+            )
+            for contour in contours
+        )
+
+
 def test_main_exports_stl_json_and_four_nonblank_previews(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

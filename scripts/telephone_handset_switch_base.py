@@ -1116,60 +1116,102 @@ def mesh_for_preview(mesh: trimesh.Trimesh, view: str) -> trimesh.Trimesh:
     return mesh
 
 
+def vertical_section_contours(
+    mesh: trimesh.Trimesh, origin: np.ndarray, horizontal: np.ndarray
+) -> list[np.ndarray]:
+    horizontal = np.asarray(horizontal, dtype=float)
+    horizontal /= np.linalg.norm(horizontal)
+    normal = np.cross(horizontal, np.array([0.0, 0.0, 1.0]))
+    section = mesh.section(plane_origin=origin, plane_normal=normal)
+    if section is None:
+        raise ValueError("empty vertical section preview")
+    contours = []
+    for entity in section.entities:
+        if not entity.closed:
+            continue
+        points = np.asarray(entity.discrete(section.vertices))
+        contours.append(np.column_stack((points @ horizontal, points[:, 2])))
+    if not contours:
+        raise ValueError("empty vertical section preview")
+    return contours
+
+
+def side_section_contours(mesh: trimesh.Trimesh) -> dict[str, list[np.ndarray]]:
+    center = np.array([CENTER_X, CENTER_Y, 0.0])
+    lower_pad_center = np.array(
+        [LOWER_INSET + PAD_SIZE / 2.0, LOWER_INSET + PAD_SIZE / 2.0, 0.0]
+    )
+    upper_pad_center = np.array(
+        [
+            OUTER_WIDTH - LOWER_INSET - PAD_SIZE / 2.0,
+            OUTER_LENGTH - LOWER_INSET - PAD_SIZE / 2.0,
+            0.0,
+        ]
+    )
+    return {
+        "centerline": vertical_section_contours(
+            mesh, center, np.array([0.0, 1.0, 0.0])
+        ),
+        "diagonal": vertical_section_contours(
+            mesh, center, upper_pad_center - lower_pad_center
+        ),
+    }
+
+
 def render_side_section_preview(mesh: trimesh.Trimesh, target: Path) -> None:
     from PIL import Image, ImageDraw
 
-    section = mesh_to_manifold(mesh).rotate((0.0, -90.0, 0.0)).slice(CENTER_X)
-    contours = [np.asarray(polygon) for polygon in section.to_polygons()]
-    if not contours:
-        raise ValueError("empty side-section preview")
-
-    projected = [
-        np.column_stack((contour[:, 1], -contour[:, 0])) for contour in contours
-    ]
-    stacked = np.vstack(projected)
-    lower = stacked.min(axis=0)
-    upper = stacked.max(axis=0)
+    panels = side_section_contours(mesh)
+    bounds = []
+    for contours in panels.values():
+        stacked = np.vstack(contours)
+        bounds.append((stacked.min(axis=0), stacked.max(axis=0)))
     canvas = np.array([1200.0, 900.0])
-    scale = float(np.min((canvas - 96.0) / (upper - lower)))
-    rendered_size = (upper - lower) * scale
-    offset = (canvas - rendered_size) / 2.0
+    margin = 48.0
+    panel_gap = 36.0
+    panel_height = (canvas[1] - 2.0 * margin - panel_gap) / 2.0
+    widest = max(float(upper[0] - lower[0]) for lower, upper in bounds)
+    tallest = max(float(upper[1] - lower[1]) for lower, upper in bounds)
+    scale = min((canvas[0] - 2.0 * margin) / widest, (panel_height - 32.0) / tallest)
 
     image = Image.new("RGB", (1200, 900), "white")
     draw = ImageDraw.Draw(image)
-    ordered = sorted(
-        projected,
-        key=lambda contour: abs(
-            float(
+    for index, ((lower, upper), contours) in enumerate(zip(bounds, panels.values())):
+        rendered_size = (upper - lower) * scale
+        offset_x = (canvas[0] - rendered_size[0]) / 2.0
+        panel_top = margin + index * (panel_height + panel_gap)
+        offset_y = panel_top + (panel_height - rendered_size[1]) / 2.0
+        ordered = sorted(
+            contours,
+            key=lambda contour: abs(
+                float(
+                    np.sum(
+                        contour[:, 0] * np.roll(contour[:, 1], -1)
+                        - contour[:, 1] * np.roll(contour[:, 0], -1)
+                    )
+                )
+            ),
+            reverse=True,
+        )
+        for contour in ordered:
+            signed_area = float(
                 np.sum(
                     contour[:, 0] * np.roll(contour[:, 1], -1)
                     - contour[:, 1] * np.roll(contour[:, 0], -1)
                 )
             )
-        ),
-        reverse=True,
-    )
-    for contour in ordered:
-        signed_area = float(
-            np.sum(
-                contour[:, 0] * np.roll(contour[:, 1], -1)
-                - contour[:, 1] * np.roll(contour[:, 0], -1)
+            points = (contour - lower) * scale
+            points[:, 0] += offset_x
+            points[:, 1] = offset_y + rendered_size[1] - points[:, 1]
+            fill = (165, 165, 165) if signed_area > 0.0 else (255, 255, 255)
+            polygon = [tuple(value) for value in points.tolist()]
+            draw.polygon(polygon, fill=fill)
+            draw.line(
+                polygon + [polygon[0]],
+                fill=(70, 70, 70),
+                width=14,
+                joint="curve",
             )
-        )
-        points = (contour - lower) * scale + offset
-        points[:, 1] = canvas[1] - points[:, 1]
-        fill = (165, 165, 165) if signed_area > 0.0 else (255, 255, 255)
-        polygon = [tuple(value) for value in points.tolist()]
-        draw.polygon(
-            polygon,
-            fill=fill,
-        )
-        draw.line(
-            polygon + [polygon[0]],
-            fill=(70, 70, 70),
-            width=14,
-            joint="curve",
-        )
     save_nonblank_preview(image, target)
 
 
