@@ -1,11 +1,21 @@
 /* ===== 壳层 ===== */
 .product-shell { height: 100dvh; min-height: 0; display: grid; grid-template-rows: 48px minmax(0, 1fr); background: var(--bg-app); }
 
+.startup-failure-shell { min-height: 100dvh; display: grid; grid-template-rows: 48px minmax(0, 1fr); background: var(--bg-app); }
+.startup-failure-brand { display: flex; align-items: center; gap: 9px; padding: 0 var(--space-16); border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); font-size: var(--text-17); font-weight: var(--weight-bold); }
+.startup-failure-brand img { width: 26px; height: 26px; border-radius: var(--radius-6); }
+.startup-failure-content { width: min(620px, calc(100% - 48px)); align-self: center; justify-self: center; display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: var(--space-16); padding: var(--space-24) 0; color: var(--gray-11); }
+.startup-failure-content > svg { margin-top: 2px; color: var(--red-text); }
+.startup-failure-content h1 { margin: 0 0 var(--space-12); font-size: 24px; letter-spacing: 0; }
+.startup-failure-content p { max-width: 560px; margin: 0 0 var(--space-8); color: var(--gray-10); font-size: var(--text-14); line-height: 1.6; }
+.startup-failure-content p[lang="en"] { margin-top: var(--space-12); color: var(--gray-9); }
+.startup-failure-content code { display: inline-block; margin-top: var(--space-12); padding: 4px 7px; border: 1px solid var(--border-default); border-radius: var(--radius-6); color: var(--red-text); background: var(--red-bg); font-size: var(--text-11); }
+
 /* ===== 顶栏 48px ===== */
 .topbar { display: grid; grid-template-columns: 200px 1fr auto; align-items: center; border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); }
 .brand { height: 48px; display: flex; align-items: center; gap: 9px; padding: 0 var(--space-16); }
 .brand img { width: 26px; height: 26px; border-radius: var(--radius-6); }
-.brand h1 { margin: 0; font-size: var(--text-17); font-weight: var(--weight-bold); letter-spacing: -.01em; }
+.brand h1 { margin: 0; font-size: var(--text-17); font-weight: var(--weight-bold); letter-spacing: 0; }
 
 /* 连接状态：胶囊徽章 + 状态点 */
 .connection { justify-self: start; display: flex; align-items: center; gap: 7px; min-width: 0; margin-left: var(--space-8); padding: 4px 12px; border: 1px solid var(--border-default); border-radius: 999px; color: var(--gray-10); background: var(--bg-app); font-size: var(--text-12); }
@@ -42,7 +52,7 @@
   content: ""; position: absolute; left: -10px; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--green-9);
 }
 .sidebar nav { display: grid; gap: 2px; margin-top: var(--space-12); padding-top: var(--space-12); border-top: 1px solid var(--border-subtle); }
-.sidebar nav > span { padding: 0 10px var(--space-4); color: var(--gray-9); font-size: var(--text-11); font-weight: var(--weight-semibold); letter-spacing: .04em; }
+.sidebar nav > span { padding: 0 10px var(--space-4); color: var(--gray-9); font-size: var(--text-11); font-weight: var(--weight-semibold); letter-spacing: 0; }
 /* 「配置文件」固定底部 */
 .data-nav-button { margin-top: auto; }
 
@@ -54,20 +64,21 @@
 /* 统一页面头：64px，标题 + 副标题 + 右侧操作区 */
 .content-heading { min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: var(--space-20); padding: 10px var(--space-24); border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); }
 .content-heading > div > span, .panel-title > div > span { display: block; margin-bottom: 2px; color: var(--gray-9); font-size: var(--text-11); }
-.content-heading h2, .panel-title h2, .action-panel > h2 { margin: 0; font-size: var(--text-17); font-weight: var(--weight-semibold); line-height: 1.3; letter-spacing: -.01em; }
+.content-heading h2, .panel-title h2, .action-panel > h2 { margin: 0; font-size: var(--text-17); font-weight: var(--weight-semibold); line-height: 1.3; letter-spacing: 0; }
 
 
 /* ===== 通用按钮 ===== */
-.add-actions button, .source-actions button, .primary-button, .confirm-actions button, .layout-add-button, .learning-button, .empty-workspace button, .candidate-actions button, .device-setup-actions button, .profile-create-actions button, .device-list-command, .setup-command {
+.add-actions button, .source-actions button, .primary-button, .secondary-button, .danger-button, .confirm-actions button, .layout-add-button, .learning-button, .empty-workspace button, .candidate-actions button, .device-setup-actions button, .profile-create-actions button, .device-list-command, .setup-command {
   min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   border: 1px solid var(--border-strong); border-radius: var(--radius-8); padding: 6px 12px;
   background: var(--bg-surface); font-size: var(--text-12); font-weight: var(--weight-medium);
   box-shadow: var(--shadow-1); transition: box-shadow .15s ease, border-color .15s ease, background .12s ease;
 }
-.add-actions button:hover, .source-actions button:hover, .confirm-actions button:hover, .layout-add-button:hover, .learning-button:hover, .empty-workspace button:hover, .candidate-actions button:hover, .device-setup-actions button:hover, .profile-create-actions button:hover, .device-list-command:hover, .setup-command:hover { border-color: var(--gray-7); box-shadow: var(--shadow-2); }
+.add-actions button:hover, .source-actions button:hover, .secondary-button:hover, .confirm-actions button:hover, .layout-add-button:hover, .learning-button:hover, .empty-workspace button:hover, .candidate-actions button:hover, .device-setup-actions button:hover, .profile-create-actions button:hover, .device-list-command:hover, .setup-command:hover { border-color: var(--gray-7); background: var(--gray-2); box-shadow: var(--shadow-2); }
 .primary-button { border-color: var(--green-9) !important; color: #fff; background: var(--green-9) !important; }
 .primary-button:hover { background: var(--green-10) !important; }
 .danger-button { border-color: var(--red-strong) !important; color: #fff; background: var(--red-strong) !important; }
+.danger-button:hover { background: var(--red-text) !important; }
 
 .icon-button { width: 30px; height: 30px; display: inline-grid; place-items: center; border: 1px solid transparent; border-radius: var(--radius-6); padding: 0; color: var(--gray-9); background: transparent; transition: background .12s ease, color .12s ease; }
 .icon-button:hover:not(:disabled) { color: var(--gray-11); background: var(--gray-3); }

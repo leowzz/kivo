@@ -5,7 +5,8 @@ use kivo_lib::{
         ConnectionDimension, DeviceMode, DeviceProfile, HardwareProfile, InputSource, ModelLayout,
         PROFILE_SCHEMA_VERSION, PasteCoordinator, RuntimeAssignment, RuntimeCoordinator,
         RuntimeDimension, SerialObservation, SerialTransport, SerialTransportFactory,
-        SystemWorkerLauncher, UsbEnumerator, Workspace, WorkspaceRevision, wait_for_paste_request,
+        SystemWorkerLauncher, TriggerActions, TriggerSettings, UsbEnumerator, Workspace,
+        WorkspaceRevision, wait_for_paste_request,
     },
 };
 use std::{
@@ -488,6 +489,7 @@ fn profile(
                 ],
             }],
         },
+        trigger_settings: TriggerSettings::default(),
         hardware_profiles: vec![HardwareProfile {
             id: hardware_id.into(),
             name: hardware_id.into(),
@@ -502,20 +504,20 @@ fn profile(
         actions: BTreeMap::from([
             (
                 "HOT".into(),
-                vec![
+                TriggerActions::press(vec![
                     ButtonAction::Hotkey {
                         keys: vec!["enter".into()],
                     },
                     ButtonAction::Hotkey {
                         keys: vec!["tab".into()],
                     },
-                ],
+                ]),
             ),
             (
                 "PASTE".into(),
-                vec![ButtonAction::Paste {
+                TriggerActions::press(vec![ButtonAction::Paste {
                     text: format!("paste-{id}"),
-                }],
+                }]),
             ),
         ]),
     }

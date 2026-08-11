@@ -17,6 +17,14 @@ export interface DeviceSummary {
 
 type DerivedState = Exclude<DeviceFilter, "all"> | "progress" | "inactive";
 
+const availabilityRank: Record<DerivedState, number> = {
+  ready: 0,
+  progress: 1,
+  attention: 2,
+  inactive: 3,
+  offline: 4,
+};
+
 function hasIdentityProblem(device: DeviceStatus) {
   return device.identity === "invalid_identity" || device.identity === "duplicate_identity";
 }
@@ -45,6 +53,13 @@ function derivedState(device: DeviceStatus): DerivedState {
     return "ready";
   }
   return "inactive";
+}
+
+export function compareDeviceAvailability(
+  left: DeviceStatus,
+  right: DeviceStatus,
+): number {
+  return availabilityRank[derivedState(left)] - availabilityRank[derivedState(right)];
 }
 
 export function primaryDeviceLabel(device: DeviceStatus): string {

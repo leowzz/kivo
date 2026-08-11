@@ -3,13 +3,13 @@ use crate::{
     metrics::{MetricsBackup, MetricsStore},
     profile::{
         ButtonAction, CreateDeviceProfileRequest, DeviceProfile, HardwareProfile, InputSource,
-        PROFILE_SCHEMA_VERSION, blank_device_profile,
+        PROFILE_SCHEMA_VERSION, TriggerActions, TriggerSettings, blank_device_profile,
     },
     storage::atomic_write,
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -17,6 +17,7 @@ use std::{
 pub const SETTINGS_SCHEMA_VERSION: u16 = 2;
 pub const BACKUP_SCHEMA_VERSION: u16 = 2;
 const LEGACY_SCHEMA_VERSION: u16 = 1;
+const PREVIOUS_PROFILE_SCHEMA_VERSION: u16 = 2;
 const MAX_IMPORT_BYTES: u64 = 10 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -75,6 +76,13 @@ pub struct RuntimeAssignment {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct DuplicateProfileForDeviceRequest {
+    pub device_id: DeviceId,
+    pub source_profile: DeviceProfile,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct DeviceRecord {
     pub device_id: DeviceId,
     pub name: String,
@@ -128,6 +136,21 @@ struct LegacyModelConfig {
     hardware: LegacyHardwareConfig,
     #[serde(default)]
     actions: BTreeMap<String, Vec<ButtonAction>>,
+}
+
+#[derive(Deserialize)]
+struct SchemaV2DeviceProfile {
+    schema_version: u16,
+    profile: crate::model::ModelLayout,
+    #[serde(default)]
+    hardware_profiles: Vec<HardwareProfile>,
+    #[serde(default)]
+    actions: BTreeMap<String, Vec<ButtonAction>>,
+}
+
+struct ReadProfile {
+    profile: DeviceProfile,
+    migrated_from_schema_v2: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -231,9 +254,48 @@ impl RestoreOperations for SystemRestoreOperations {
     }
 }
 
+trait DataGenerationOperations {
+    fn rename(&mut self, from: &Path, to: &Path) -> std::io::Result<()>;
+
+    fn remove_dir_all(&mut self, path: &Path) -> std::io::Result<()>;
+
+    fn close_metrics(&mut self, metrics: &MetricsStore);
+
+    fn reopen_metrics(
+        &mut self,
+        metrics: &MetricsStore,
+        path: &Path,
+    ) -> Result<(), rusqlite::Error>;
+}
+
+struct SystemDataGenerationOperations;
+
+impl DataGenerationOperations for SystemDataGenerationOperations {
+    fn rename(&mut self, from: &Path, to: &Path) -> std::io::Result<()> {
+        fs::rename(from, to)
+    }
+
+    fn remove_dir_all(&mut self, path: &Path) -> std::io::Result<()> {
+        fs::remove_dir_all(path)
+    }
+
+    fn close_metrics(&mut self, metrics: &MetricsStore) {
+        metrics.close();
+    }
+
+    fn reopen_metrics(
+        &mut self,
+        metrics: &MetricsStore,
+        path: &Path,
+    ) -> Result<(), rusqlite::Error> {
+        metrics.reopen(path)
+    }
+}
+
 impl Workspace {
     pub fn load(config_directory: &Path, bundled_profiles: &Path) -> Result<Self, AppError> {
         Self::recover_interrupted_schema_v1_migration(config_directory)?;
+        Self::recover_interrupted_data_generation(config_directory)?;
         let settings_path = config_directory.join("data/settings.yaml");
         if settings_path.exists() {
             if read_schema_header(&settings_path)?.schema_version == LEGACY_SCHEMA_VERSION {
@@ -261,6 +323,42 @@ impl Workspace {
         }
         fs::rename(&backup_directory, &data_directory)
             .map_err(|error| io_error("recover_schema_v1_data", &backup_directory, error))
+    }
+
+    fn recover_interrupted_data_generation(config_directory: &Path) -> Result<(), AppError> {
+        let data_directory = config_directory.join("data");
+        let next_directory = config_directory.join("data.next");
+        let previous_directory = config_directory.join("data.previous");
+        if data_directory.exists() {
+            remove_directory_if_exists(&next_directory)?;
+            remove_directory_if_exists(&previous_directory)?;
+            return Ok(());
+        }
+
+        match (previous_directory.exists(), next_directory.exists()) {
+            (false, false) => Ok(()),
+            (true, false) => fs::rename(&previous_directory, &data_directory)
+                .map_err(|error| io_error("recover_previous_data", &previous_directory, error)),
+            (false, true) => {
+                if Self::load_data_directory(config_directory, &next_directory).is_err() {
+                    return Err(AppError::new("recover_data_generation_failed"));
+                }
+                fs::rename(&next_directory, &data_directory)
+                    .map_err(|error| io_error("recover_next_data", &next_directory, error))
+            }
+            (true, true) => {
+                if Self::load_data_directory(config_directory, &next_directory).is_ok() {
+                    fs::rename(&next_directory, &data_directory)
+                        .map_err(|error| io_error("recover_next_data", &next_directory, error))?;
+                    remove_directory_if_exists(&previous_directory)
+                } else {
+                    fs::rename(&previous_directory, &data_directory).map_err(|error| {
+                        io_error("recover_previous_data", &previous_directory, error)
+                    })?;
+                    remove_directory_if_exists(&next_directory)
+                }
+            }
+        }
     }
 
     fn migrate_schema_v1(config_directory: &Path) -> Result<Self, AppError> {
@@ -333,16 +431,16 @@ impl Workspace {
             false,
         )?;
         let mut profiles = BTreeMap::new();
+        let mut migrated_profiles = Vec::new();
         let profile_directory = data_directory.join("profiles");
         for path in yaml_files(&profile_directory, "read_profiles")? {
-            let profile: DeviceProfile = read_versioned_yaml(
-                &path,
-                PROFILE_SCHEMA_VERSION,
-                "unsupported_profile_schema",
-                false,
-            )?;
+            let read = read_profile(&path, false, true)?;
+            let profile = read.profile;
             profile.validate()?;
             validate_profile_filename(&path, &profile)?;
+            if read.migrated_from_schema_v2 {
+                migrated_profiles.push((path, profile.profile.id.clone()));
+            }
             if profiles
                 .insert(profile.profile.id.clone(), profile)
                 .is_some()
@@ -351,6 +449,9 @@ impl Workspace {
             }
         }
         validate_settings(&settings, &profiles)?;
+        for (path, id) in migrated_profiles {
+            write_yaml(&path, &profiles[&id])?;
+        }
         Ok(Self {
             config_directory: config_directory.to_owned(),
             settings,
@@ -542,6 +643,103 @@ impl Workspace {
     ) -> Result<(), AppError> {
         self.validate_assignment(id, &value)?;
         self.update_device(id, |record| record.runtime_assignment = Some(value))
+    }
+
+    pub fn duplicate_profile_for_device(
+        &mut self,
+        request: DuplicateProfileForDeviceRequest,
+    ) -> Result<DeviceProfile, AppError> {
+        self.duplicate_profile_for_device_internal(request, None)
+    }
+
+    pub fn duplicate_profile_for_device_with_metrics(
+        &mut self,
+        request: DuplicateProfileForDeviceRequest,
+        metrics: &MetricsStore,
+    ) -> Result<DeviceProfile, AppError> {
+        self.duplicate_profile_for_device_internal(request, Some(metrics))
+    }
+
+    fn duplicate_profile_for_device_internal(
+        &mut self,
+        request: DuplicateProfileForDeviceRequest,
+        metrics: Option<&MetricsStore>,
+    ) -> Result<DeviceProfile, AppError> {
+        let name = request.name.trim().to_owned();
+        if name.is_empty() {
+            return Err(AppError::new("invalid_profile_name"));
+        }
+        let source_id = request.source_profile.profile.id.clone();
+        if !self.profiles.contains_key(&source_id) {
+            return Err(AppError::new("unknown_profile").with_param("profile", &source_id));
+        }
+        let device = self.device(&request.device_id)?;
+        let mut profile = request.source_profile;
+        profile.profile.name = name.clone();
+        profile.profile.id = next_profile_id(&self.profiles, &name, &source_id);
+
+        let current_assignment = device.runtime_assignment.clone();
+        let preserved_index = current_assignment.as_ref().and_then(|assignment| {
+            (assignment.device_profile_id == source_id).then(|| {
+                profile.hardware_profiles.iter().position(|hardware| {
+                    hardware.id == assignment.hardware_profile_id
+                        && hardware.board_profile_id == device.board_profile_id
+                })
+            })
+        });
+        let selected_index = preserved_index
+            .flatten()
+            .or_else(|| unique_compatible_hardware_index(&profile, &device.board_profile_id))
+            .ok_or_else(|| AppError::new("hardware_resolution_required"))?;
+
+        profile.validate()?;
+        let old_hardware_id = profile.hardware_profiles[selected_index].id.clone();
+        let mut used_hardware_ids = BTreeSet::new();
+        let mut selected_hardware_id = None;
+        for hardware in &mut profile.hardware_profiles {
+            let original_id = hardware.id.clone();
+            let cloned_id = next_hardware_id(&used_hardware_ids, &original_id);
+            hardware.id = cloned_id.clone();
+            used_hardware_ids.insert(cloned_id.clone());
+            if original_id == old_hardware_id {
+                selected_hardware_id = Some(cloned_id);
+            }
+        }
+        let selected_hardware_id = selected_hardware_id.expect("selected hardware was cloned");
+        let selected_hardware = &profile.hardware_profiles[selected_index];
+        if selected_hardware.board_profile_id != device.board_profile_id {
+            return Err(AppError::new("assignment_board_mismatch")
+                .with_param("device_board_profile", &device.board_profile_id)
+                .with_param(
+                    "hardware_board_profile",
+                    &selected_hardware.board_profile_id,
+                ));
+        }
+
+        profile.validate()?;
+        let profile_id = profile.profile.id.clone();
+        let profile_path = self.profile_directory().join(format!("{profile_id}.yaml"));
+        if profile_path.exists() || self.profiles.contains_key(&profile_id) {
+            return Err(AppError::new("profile_already_exists").with_param("profile", profile_id));
+        }
+        let mut settings = self.settings.clone();
+        settings
+            .devices
+            .get_mut(&request.device_id)
+            .expect("device was validated")
+            .runtime_assignment = Some(RuntimeAssignment {
+            device_profile_id: profile_id.clone(),
+            hardware_profile_id: selected_hardware_id,
+        });
+
+        let mut staged_profiles = self.profiles.clone();
+        staged_profiles.insert(profile_id.clone(), profile.clone());
+        validate_settings(&settings, &staged_profiles)?;
+        let next_directory = self.stage_data_generation(&settings, &staged_profiles)?;
+        self.activate_staged_data_generation(&next_directory, metrics)?;
+        self.profiles.insert(profile_id, profile.clone());
+        self.settings = settings;
+        Ok(profile)
     }
 
     fn validate_assignment(
@@ -782,6 +980,119 @@ impl Workspace {
         write_yaml(&self.data_directory().join("settings.yaml"), settings)
     }
 
+    fn stage_data_generation(
+        &self,
+        settings: &SettingsDocument,
+        profiles: &BTreeMap<String, DeviceProfile>,
+    ) -> Result<PathBuf, AppError> {
+        Self::recover_interrupted_data_generation(&self.config_directory)?;
+        let next_directory = self.config_directory.join("data.next");
+        remove_directory_if_exists(&next_directory)?;
+        if let Err(error) = write_data_directory(&next_directory, settings, profiles) {
+            let _ = fs::remove_dir_all(&next_directory);
+            return Err(error);
+        }
+
+        let source_metrics = self.data_directory().join("metrics.sqlite3");
+        if source_metrics.exists() {
+            let staged_metrics = next_directory.join("metrics.sqlite3");
+            if let Err(error) = fs::hard_link(&source_metrics, &staged_metrics) {
+                let _ = fs::remove_dir_all(&next_directory);
+                return Err(io_error("stage_metrics", &staged_metrics, error));
+            }
+        }
+        Ok(next_directory)
+    }
+
+    fn activate_staged_data_generation(
+        &self,
+        next_directory: &Path,
+        metrics: Option<&MetricsStore>,
+    ) -> Result<(), AppError> {
+        let mut operations = SystemDataGenerationOperations;
+        self.activate_staged_data_generation_with_operations(
+            next_directory,
+            metrics,
+            &mut operations,
+        )
+    }
+
+    fn activate_staged_data_generation_with_operations(
+        &self,
+        next_directory: &Path,
+        metrics: Option<&MetricsStore>,
+        operations: &mut impl DataGenerationOperations,
+    ) -> Result<(), AppError> {
+        let data_directory = self.data_directory();
+        let previous_directory = self.config_directory.join("data.previous");
+        match operations.remove_dir_all(&previous_directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(io_error(
+                    "remove_staging_directory",
+                    &previous_directory,
+                    error,
+                ));
+            }
+        }
+        if let Some(metrics) = metrics {
+            operations.close_metrics(metrics);
+        }
+        if let Err(error) = operations.rename(&data_directory, &previous_directory) {
+            let reopen = metrics.and_then(|metrics| {
+                operations
+                    .reopen_metrics(metrics, &data_directory.join("metrics.sqlite3"))
+                    .err()
+            });
+            let _ = operations.remove_dir_all(next_directory);
+            return match reopen {
+                Some(reopen) => Err(AppError::new("duplicate_profile_rollback_failed")
+                    .with_detail(format!(
+                        "stage duplicate data: {error}; reopen original metrics: {reopen}"
+                    ))),
+                None => Err(io_error("stage_duplicate_data", &data_directory, error)),
+            };
+        }
+        if let Err(error) = operations.rename(next_directory, &data_directory) {
+            let rollback = operations.rename(&previous_directory, &data_directory);
+            let reopen = metrics.and_then(|metrics| {
+                operations
+                    .reopen_metrics(metrics, &data_directory.join("metrics.sqlite3"))
+                    .err()
+            });
+            let _ = operations.remove_dir_all(next_directory);
+            return match (rollback, reopen) {
+                (Ok(()), None) => Err(io_error("activate_duplicate_data", next_directory, error)),
+                (rollback, reopen) => Err(AppError::new("duplicate_profile_rollback_failed")
+                    .with_detail(format!(
+                        "activate duplicate data: {error}; restore previous data: {rollback:?}; reopen original metrics: {reopen:?}"
+                    ))),
+            };
+        }
+        if let Some(metrics) = metrics
+            && let Err(error) =
+                operations.reopen_metrics(metrics, &data_directory.join("metrics.sqlite3"))
+        {
+            let rollback_new = operations.rename(&data_directory, next_directory);
+            let rollback_old = operations.rename(&previous_directory, &data_directory);
+            let reopen = operations
+                .reopen_metrics(metrics, &data_directory.join("metrics.sqlite3"))
+                .err();
+            let _ = operations.remove_dir_all(next_directory);
+            if rollback_new.is_err() || rollback_old.is_err() || reopen.is_some() {
+                return Err(AppError::new("duplicate_profile_rollback_failed").with_detail(
+                    format!(
+                        "reopen active metrics: {error}; restore new data: {rollback_new:?}; restore original data: {rollback_old:?}; reopen original metrics: {reopen:?}"
+                    ),
+                ));
+            }
+            return Err(metrics_error("reopen_metrics", error));
+        }
+        let _ = operations.remove_dir_all(&previous_directory);
+        Ok(())
+    }
+
     fn data_directory(&self) -> PathBuf {
         self.config_directory.join("data")
     }
@@ -826,6 +1137,36 @@ fn next_profile_id(
         .expect("profile ID suffix exhausted")
 }
 
+fn next_hardware_id(used: &BTreeSet<String>, original: &str) -> String {
+    let base = format!("{}-copy", ascii_slug(original));
+    let base = if base == "-copy" {
+        "hardware-copy".to_owned()
+    } else {
+        base
+    };
+    if !used.contains(&base) {
+        return base;
+    }
+    (2..)
+        .map(|suffix| format!("{base}-{suffix}"))
+        .find(|candidate| !used.contains(candidate))
+        .expect("hardware ID suffix exhausted")
+}
+
+fn unique_compatible_hardware_index(
+    profile: &DeviceProfile,
+    board_profile_id: &str,
+) -> Option<usize> {
+    let candidates = profile
+        .hardware_profiles
+        .iter()
+        .enumerate()
+        .filter(|(_, hardware)| hardware.board_profile_id == board_profile_id)
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    (candidates.len() == 1).then_some(candidates[0])
+}
+
 fn collect_profiles(
     values: Vec<DeviceProfile>,
 ) -> Result<BTreeMap<String, DeviceProfile>, AppError> {
@@ -845,12 +1186,7 @@ fn collect_profiles(
 fn load_bundled_profiles(directory: &Path) -> Result<Vec<DeviceProfile>, AppError> {
     let mut profiles = Vec::new();
     for path in yaml_files(directory, "read_bundled_profiles")? {
-        let profile: DeviceProfile = read_versioned_yaml(
-            &path,
-            PROFILE_SCHEMA_VERSION,
-            "unsupported_profile_schema",
-            true,
-        )?;
+        let profile = read_profile(&path, true, false)?.profile;
         profile.validate()?;
         validate_profile_filename(&path, &profile)?;
         profiles.push(profile);
@@ -956,7 +1292,11 @@ fn hardware_binding_count(profile: &DeviceProfile) -> usize {
 }
 
 fn action_count(profile: &DeviceProfile) -> usize {
-    profile.actions.values().map(Vec::len).sum()
+    profile
+        .actions
+        .values()
+        .map(TriggerActions::action_count)
+        .sum()
 }
 
 fn validate_profile_filename(path: &Path, profile: &DeviceProfile) -> Result<(), AppError> {
@@ -1210,6 +1550,7 @@ fn migrate_schema_v1_model(legacy: LegacyModelConfig) -> Result<DeviceProfile, A
     let profile = DeviceProfile {
         schema_version: PROFILE_SCHEMA_VERSION,
         profile: legacy.model,
+        trigger_settings: TriggerSettings::default(),
         hardware_profiles: vec![HardwareProfile {
             id: board.id.into(),
             name: board.display_name.into(),
@@ -1218,7 +1559,11 @@ fn migrate_schema_v1_model(legacy: LegacyModelConfig) -> Result<DeviceProfile, A
             ssd1306: None,
             inputs: legacy.hardware.inputs,
         }],
-        actions: legacy.actions,
+        actions: legacy
+            .actions
+            .into_iter()
+            .map(|(button, actions)| (button, TriggerActions::press(actions)))
+            .collect(),
     };
     profile.validate()?;
     Ok(profile)
@@ -1258,12 +1603,49 @@ fn activate_schema_v1_migration(
 }
 
 fn read_profile_limited(path: &Path) -> Result<DeviceProfile, AppError> {
-    read_versioned_yaml(
-        path,
-        PROFILE_SCHEMA_VERSION,
-        "unsupported_profile_schema",
-        true,
-    )
+    read_profile(path, true, true).map(|read| read.profile)
+}
+
+fn read_profile(
+    path: &Path,
+    limited: bool,
+    allow_schema_v2: bool,
+) -> Result<ReadProfile, AppError> {
+    let contents = read_yaml_contents(path, limited)?;
+    let header: SchemaHeader = serde_yaml_ng::from_str(&contents)
+        .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?;
+    match header.schema_version {
+        PROFILE_SCHEMA_VERSION => serde_yaml_ng::from_str(&contents)
+            .map(|profile| ReadProfile {
+                profile,
+                migrated_from_schema_v2: false,
+            })
+            .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string())),
+        PREVIOUS_PROFILE_SCHEMA_VERSION if allow_schema_v2 => {
+            let profile: SchemaV2DeviceProfile = serde_yaml_ng::from_str(&contents)
+                .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?;
+            Ok(ReadProfile {
+                profile: migrate_schema_v2_profile(profile),
+                migrated_from_schema_v2: true,
+            })
+        }
+        _ => Err(AppError::new("unsupported_profile_schema")),
+    }
+}
+
+fn migrate_schema_v2_profile(legacy: SchemaV2DeviceProfile) -> DeviceProfile {
+    debug_assert_eq!(legacy.schema_version, PREVIOUS_PROFILE_SCHEMA_VERSION);
+    DeviceProfile {
+        schema_version: PROFILE_SCHEMA_VERSION,
+        profile: legacy.profile,
+        trigger_settings: TriggerSettings::default(),
+        hardware_profiles: legacy.hardware_profiles,
+        actions: legacy
+            .actions
+            .into_iter()
+            .map(|(button, actions)| (button, TriggerActions::press(actions)))
+            .collect(),
+    }
 }
 
 fn read_versioned_yaml<T: for<'de> Deserialize<'de>>(
@@ -1272,6 +1654,17 @@ fn read_versioned_yaml<T: for<'de> Deserialize<'de>>(
     unsupported_code: &str,
     limited: bool,
 ) -> Result<T, AppError> {
+    let contents = read_yaml_contents(path, limited)?;
+    let header: SchemaHeader = serde_yaml_ng::from_str(&contents)
+        .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?;
+    if header.schema_version != expected {
+        return Err(AppError::new(unsupported_code));
+    }
+    serde_yaml_ng::from_str(&contents)
+        .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))
+}
+
+fn read_yaml_contents(path: &Path, limited: bool) -> Result<String, AppError> {
     if limited {
         let metadata = fs::metadata(path).map_err(|error| io_error("read_file", path, error))?;
         if metadata.len() > MAX_IMPORT_BYTES {
@@ -1280,14 +1673,7 @@ fn read_versioned_yaml<T: for<'de> Deserialize<'de>>(
             );
         }
     }
-    let contents = fs::read_to_string(path).map_err(|error| io_error("read_file", path, error))?;
-    let header: SchemaHeader = serde_yaml_ng::from_str(&contents)
-        .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?;
-    if header.schema_version != expected {
-        return Err(AppError::new(unsupported_code));
-    }
-    serde_yaml_ng::from_str(&contents)
-        .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))
+    fs::read_to_string(path).map_err(|error| io_error("read_file", path, error))
 }
 
 fn write_yaml(path: &Path, value: &impl Serialize) -> Result<(), AppError> {
@@ -1388,6 +1774,7 @@ mod tests {
         DeviceProfile {
             schema_version: PROFILE_SCHEMA_VERSION,
             profile: layout(),
+            trigger_settings: TriggerSettings::default(),
             hardware_profiles: vec![
                 hardware("esp-primary", crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID),
                 hardware(
@@ -1398,20 +1785,111 @@ mod tests {
             ],
             actions: BTreeMap::from([(
                 "A".into(),
-                vec![
+                TriggerActions::press(vec![
                     ButtonAction::Paste {
                         text: "你好\n".into(),
                     },
                     ButtonAction::Hotkey {
                         keys: vec!["enter".into()],
                     },
-                ],
+                ]),
             )]),
         }
     }
 
     fn workspace(directory: &TestDirectory) -> Workspace {
         Workspace::create(&directory.0, vec![device_profile()]).unwrap()
+    }
+
+    struct MetricsAwareGenerationOperations {
+        metrics_closed: bool,
+        reopened_paths: Vec<PathBuf>,
+    }
+
+    impl MetricsAwareGenerationOperations {
+        fn new() -> Self {
+            Self {
+                metrics_closed: false,
+                reopened_paths: Vec::new(),
+            }
+        }
+    }
+
+    impl DataGenerationOperations for MetricsAwareGenerationOperations {
+        fn rename(&mut self, from: &Path, to: &Path) -> std::io::Result<()> {
+            if from.file_name().and_then(|name| name.to_str()) == Some("data")
+                && !self.metrics_closed
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "open metrics blocks data generation rename",
+                ));
+            }
+            fs::rename(from, to)
+        }
+
+        fn remove_dir_all(&mut self, path: &Path) -> std::io::Result<()> {
+            fs::remove_dir_all(path)
+        }
+
+        fn close_metrics(&mut self, metrics: &MetricsStore) {
+            metrics.close();
+            self.metrics_closed = true;
+        }
+
+        fn reopen_metrics(
+            &mut self,
+            metrics: &MetricsStore,
+            path: &Path,
+        ) -> Result<(), rusqlite::Error> {
+            let result = metrics.reopen(path);
+            if result.is_ok() {
+                self.reopened_paths.push(path.to_owned());
+            }
+            result
+        }
+    }
+
+    #[test]
+    fn duplicate_generation_closes_metrics_before_swapping_and_reopens_active_path() {
+        let directory = TestDirectory::new();
+        let workspace = workspace(&directory);
+        let metrics_path = directory.path("data/metrics.sqlite3");
+        let metrics = MetricsStore::open(&metrics_path).unwrap();
+        let next_directory = workspace
+            .stage_data_generation(&workspace.settings, &workspace.profiles)
+            .unwrap();
+        let mut operations = MetricsAwareGenerationOperations::new();
+
+        workspace
+            .activate_staged_data_generation_with_operations(
+                &next_directory,
+                Some(&metrics),
+                &mut operations,
+            )
+            .unwrap();
+
+        assert!(operations.metrics_closed);
+        assert_eq!(
+            operations.reopened_paths,
+            vec![directory.path("data/metrics.sqlite3")]
+        );
+        metrics
+            .record_button_press(
+                &MetricAttribution {
+                    device_id: DeviceId::new(
+                        crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+                        "GENERATION",
+                    )
+                    .unwrap(),
+                    device_name: "Generation test".into(),
+                    device_profile_id: "red-phone-v1".into(),
+                    hardware_profile_id: "esp-primary".into(),
+                },
+                "A",
+                1_720_086_400_000,
+            )
+            .unwrap();
     }
 
     #[test]
@@ -1550,6 +2028,248 @@ mod tests {
         assert_eq!(
             fs::read(directory.path("data/settings.yaml")).unwrap(),
             disk_before
+        );
+    }
+
+    #[test]
+    fn duplicate_and_assign_is_atomic_and_generates_unique_ids() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let device_a =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SHARED-A").unwrap();
+        let device_b =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SHARED-B").unwrap();
+        workspace.enroll_device(device_a.clone()).unwrap();
+        workspace.enroll_device(device_b.clone()).unwrap();
+        let assignment = RuntimeAssignment {
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        workspace
+            .set_assignment(&device_a, assignment.clone())
+            .unwrap();
+        workspace
+            .set_assignment(&device_b, assignment.clone())
+            .unwrap();
+
+        let mut edited = workspace.profiles["red-phone-v1"].clone();
+        edited.trigger_settings.long_press_ms = 700;
+        let cloned = workspace
+            .duplicate_profile_for_device(DuplicateProfileForDeviceRequest {
+                device_id: device_a.clone(),
+                source_profile: edited,
+                name: "Phone copy".into(),
+            })
+            .unwrap();
+
+        assert_ne!(cloned.profile.id, "red-phone-v1");
+        assert_ne!(cloned.hardware_profiles[0].id, "esp-primary");
+        assert_eq!(cloned.trigger_settings.long_press_ms, 700);
+        assert_eq!(
+            workspace.settings.devices[&device_b]
+                .runtime_assignment
+                .as_ref()
+                .unwrap()
+                .device_profile_id,
+            "red-phone-v1"
+        );
+        assert_eq!(
+            workspace.settings.devices[&device_a]
+                .runtime_assignment
+                .as_ref()
+                .unwrap()
+                .device_profile_id,
+            cloned.profile.id
+        );
+        assert_eq!(
+            workspace.profiles["red-phone-v1"]
+                .trigger_settings
+                .long_press_ms,
+            500
+        );
+    }
+
+    #[test]
+    fn duplicate_generation_keeps_the_open_metrics_store_on_the_active_inode() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let device = DeviceId::new(
+            crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+            "METRICS-GENERATION",
+        )
+        .unwrap();
+        workspace.enroll_device(device.clone()).unwrap();
+        workspace
+            .set_assignment(
+                &device,
+                RuntimeAssignment {
+                    device_profile_id: "red-phone-v1".into(),
+                    hardware_profile_id: "esp-primary".into(),
+                },
+            )
+            .unwrap();
+        let metrics_path = directory.path("data/metrics.sqlite3");
+        let metrics = MetricsStore::open(&metrics_path).unwrap();
+        let attribution = MetricAttribution {
+            device_id: device.clone(),
+            device_name: "Metrics desk".into(),
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        metrics
+            .record_button_press(&attribution, "A", 1_720_086_400_000)
+            .unwrap();
+
+        workspace
+            .duplicate_profile_for_device_with_metrics(
+                DuplicateProfileForDeviceRequest {
+                    device_id: device,
+                    source_profile: workspace.profiles["red-phone-v1"].clone(),
+                    name: "Metrics copy".into(),
+                },
+                &metrics,
+            )
+            .unwrap();
+        metrics
+            .record_button_press(&attribution, "A", 1_720_086_400_001)
+            .unwrap();
+        drop(metrics);
+
+        let reopened = MetricsStore::open(&metrics_path).unwrap();
+        let backup = reopened.backup().unwrap();
+        assert_eq!(backup.button_metrics.len(), 1);
+        assert_eq!(backup.button_metrics[0].total_presses, 2);
+    }
+
+    #[test]
+    fn duplicate_and_assign_write_failure_rolls_back_profile_and_assignment() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let device =
+            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "FAILURE").unwrap();
+        workspace.enroll_device(device.clone()).unwrap();
+        let assignment = RuntimeAssignment {
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        workspace
+            .set_assignment(&device, assignment.clone())
+            .unwrap();
+        let profiles_before = workspace.profiles.clone();
+        let settings_before = workspace.settings.clone();
+        let settings_bytes_before = fs::read(directory.path("data/settings.yaml")).unwrap();
+        fs::write(
+            directory.path("data.next"),
+            b"staging generation is unavailable",
+        )
+        .unwrap();
+
+        let error = workspace
+            .duplicate_profile_for_device(DuplicateProfileForDeviceRequest {
+                device_id: device,
+                source_profile: workspace.profiles["red-phone-v1"].clone(),
+                name: "Failure copy".into(),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, "remove_staging_directory");
+        assert_eq!(workspace.profiles, profiles_before);
+        assert_eq!(workspace.settings, settings_before);
+        assert_eq!(
+            fs::read(directory.path("data/settings.yaml")).unwrap(),
+            settings_bytes_before
+        );
+        assert_eq!(
+            fs::read_dir(directory.path("data/profiles"))
+                .unwrap()
+                .count(),
+            profiles_before.len()
+        );
+    }
+
+    #[test]
+    fn duplicate_and_assign_does_not_guess_same_hardware_id_across_profiles() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let device = DeviceId::new(
+            crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+            "CROSS-PROFILE",
+        )
+        .unwrap();
+        workspace.enroll_device(device.clone()).unwrap();
+        let other = workspace
+            .create_profile(CreateDeviceProfileRequest::Clone {
+                name: "Other profile".into(),
+                source_profile_id: "red-phone-v1".into(),
+            })
+            .unwrap()
+            .profile
+            .id
+            .clone();
+        let assignment = RuntimeAssignment {
+            device_profile_id: other,
+            hardware_profile_id: "esp-primary".into(),
+        };
+        workspace
+            .set_assignment(&device, assignment.clone())
+            .unwrap();
+        let profiles_before = workspace.profiles.clone();
+
+        let error = workspace
+            .duplicate_profile_for_device(DuplicateProfileForDeviceRequest {
+                device_id: device.clone(),
+                source_profile: workspace.profiles["red-phone-v1"].clone(),
+                name: "No guessed mapping".into(),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, "hardware_resolution_required");
+        assert_eq!(workspace.profiles, profiles_before);
+        assert_eq!(
+            workspace.settings.devices[&device]
+                .runtime_assignment
+                .as_ref()
+                .unwrap(),
+            &assignment
+        );
+    }
+
+    #[test]
+    fn duplicate_and_assign_profile_write_failure_leaves_workspace_unchanged() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let device = DeviceId::new(
+            crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+            "PROFILE-FAILURE",
+        )
+        .unwrap();
+        workspace.enroll_device(device.clone()).unwrap();
+        let assignment = RuntimeAssignment {
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        workspace.set_assignment(&device, assignment).unwrap();
+        let profiles_before = workspace.profiles.clone();
+        let settings_before = fs::read(directory.path("data/settings.yaml")).unwrap();
+        fs::write(
+            directory.path("data.next"),
+            b"staging generation is unavailable",
+        )
+        .unwrap();
+
+        let error = workspace
+            .duplicate_profile_for_device(DuplicateProfileForDeviceRequest {
+                device_id: device,
+                source_profile: workspace.profiles["red-phone-v1"].clone(),
+                name: "Profile write failure".into(),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, "remove_staging_directory");
+        assert_eq!(workspace.profiles, profiles_before);
+        assert_eq!(
+            fs::read(directory.path("data/settings.yaml")).unwrap(),
+            settings_before
         );
     }
 
@@ -1845,6 +2565,91 @@ mod tests {
     }
 
     #[test]
+    fn load_migrates_schema_v2_actions_to_press_without_reordering() {
+        let directory = TestDirectory::new();
+        let config_directory = directory.path("config");
+        let data_directory = config_directory.join("data");
+        fs::create_dir_all(data_directory.join("profiles")).unwrap();
+        fs::write(
+            data_directory.join("settings.yaml"),
+            "schema_version: 2\neditor_profile: phone\nlanguage: en-US\ndevices: {}\n",
+        )
+        .unwrap();
+        fs::write(
+            data_directory.join("profiles/phone.yaml"),
+            r#"schema_version: 2
+profile:
+  id: phone
+  name: Phone
+  groups:
+    - id: keys
+      columns: 1
+      buttons:
+        - { id: HANDSET, label: HANDSET }
+hardware_profiles: []
+actions:
+  HANDSET:
+    - { type: open, target: Phone.app }
+    - { type: media, command: play_pause }
+"#,
+        )
+        .unwrap();
+
+        let workspace = Workspace::load_existing(&config_directory).unwrap();
+        let actions = &workspace.profiles["phone"].actions["HANDSET"];
+
+        assert_eq!(workspace.profiles["phone"].schema_version, 3);
+        assert!(matches!(actions.press[0], ButtonAction::Open { .. }));
+        assert!(matches!(actions.press[1], ButtonAction::Media { .. }));
+
+        let persisted = fs::read_to_string(data_directory.join("profiles/phone.yaml")).unwrap();
+        assert!(persisted.starts_with("schema_version: 3\n"));
+        let persisted: DeviceProfile = serde_yaml_ng::from_str(&persisted).unwrap();
+        assert!(matches!(
+            persisted.actions["HANDSET"].press[0],
+            ButtonAction::Open { .. }
+        ));
+        assert!(matches!(
+            persisted.actions["HANDSET"].press[1],
+            ButtonAction::Media { .. }
+        ));
+    }
+
+    #[test]
+    fn preview_and_import_migrate_schema_v2_profiles_without_changing_the_id() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let import_path = directory.path("phone.yaml");
+        fs::write(
+            &import_path,
+            r#"schema_version: 2
+profile:
+  id: phone
+  name: Phone
+  groups:
+    - id: keys
+      columns: 1
+      buttons:
+        - { id: HANDSET, label: HANDSET }
+hardware_profiles: []
+actions:
+  HANDSET:
+    - { type: delay, duration_ms: 10 }
+"#,
+        )
+        .unwrap();
+
+        let preview = workspace.preview_profile(&import_path).unwrap();
+        assert_eq!(preview.profile_id, "phone");
+        assert_eq!(preview.action_count, 1);
+
+        workspace.import_profile(&import_path).unwrap();
+        let profile = &workspace.profiles["phone"];
+        assert_eq!(profile.schema_version, PROFILE_SCHEMA_VERSION);
+        assert_eq!(profile.actions["HANDSET"].press.len(), 1);
+    }
+
+    #[test]
     fn load_migrates_schema_v1_workspace_without_losing_model_data() {
         let directory = TestDirectory::new();
         let config_directory = directory.path("config");
@@ -1894,7 +2699,7 @@ legacy:
         let profile = &workspace.profiles["pad_06"];
         assert_eq!(profile.schema_version, PROFILE_SCHEMA_VERSION);
         assert_eq!(
-            profile.actions["DIGIT_1"][0],
+            profile.actions["DIGIT_1"].press[0],
             ButtonAction::Paste {
                 text: "migrated".into(),
             }
@@ -1969,6 +2774,43 @@ actions: {}
                 .exists()
         );
         assert!(!config_directory.join("data.next").exists());
+    }
+
+    #[test]
+    fn load_recovers_valid_next_generation_when_active_data_is_missing() {
+        let directory = TestDirectory::new();
+        let config_directory = directory.path("config");
+        let workspace = Workspace::create(&config_directory, vec![device_profile()]).unwrap();
+        let mut next_settings = workspace.settings.clone();
+        next_settings.language = Language::EnUs;
+        let next_directory = config_directory.join("data.next");
+        write_data_directory(&next_directory, &next_settings, &workspace.profiles).unwrap();
+        fs::rename(
+            config_directory.join("data"),
+            config_directory.join("data.previous"),
+        )
+        .unwrap();
+
+        let recovered = Workspace::load(&config_directory, &directory.path("bundled")).unwrap();
+
+        assert_eq!(recovered.settings.language, Language::EnUs);
+        assert!(!config_directory.join("data.previous").exists());
+        assert!(!config_directory.join("data.next").exists());
+    }
+
+    #[test]
+    fn load_discards_stale_next_generation_when_active_data_exists() {
+        let directory = TestDirectory::new();
+        let config_directory = directory.path("config");
+        let workspace = Workspace::create(&config_directory, vec![device_profile()]).unwrap();
+        let next_directory = config_directory.join("data.next");
+        write_data_directory(&next_directory, &workspace.settings, &workspace.profiles).unwrap();
+
+        let recovered = Workspace::load(&config_directory, &directory.path("bundled")).unwrap();
+
+        assert_eq!(recovered.settings.language, Language::ZhCn);
+        assert!(!config_directory.join("data.next").exists());
+        assert!(!config_directory.join("data.previous").exists());
     }
 
     #[test]
@@ -2630,7 +3472,7 @@ actions: {}
     }
 
     #[test]
-    fn bundled_loader_accepts_only_yaml_v2_profiles() {
+    fn bundled_loader_accepts_only_yaml_v3_profiles() {
         let directory = TestDirectory::new();
         fs::write(directory.path("ignored.json"), "{}").unwrap();
         fs::write(
@@ -2645,7 +3487,7 @@ actions: {}
     }
 
     #[test]
-    fn bundled_product_profile_is_valid_v2_yaml() {
+    fn bundled_product_profile_is_valid_v3_yaml() {
         let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../models/prod");
         let profiles = load_bundled_profiles(&directory).unwrap();
         assert_eq!(profiles.len(), 1);

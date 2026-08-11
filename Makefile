@@ -1,6 +1,11 @@
-.PHONY: all build build-esp32s3 build-rp2040 download-mode upload upload-esp32s3 upload-rp2040 require-serial test helper helper-kill helper-build release
+.PHONY: all build build-esp32s3 build-rp2040 download-mode upload upload-esp32s3 upload-rp2040 require-build-id validate-env-build-id require-serial test helper helper-kill helper-build release
 
-BUILD_ID ?= 0.1.0+dev
+ENV_FILE ?= .env
+ifeq ($(origin BUILD_ID),undefined)
+BUILD_ID = $(shell $(PYTHON) scripts/repo_version.py get --env-file "$(ENV_FILE)")
+require-build-id: validate-env-build-id
+endif
+PYTHON ?= python3
 UV ?= uv
 UV_CMD = "$(UV)"
 ESP32S3_BUILD = KIVO_FIRMWARE_BUILD_ID="$(BUILD_ID)" $(UV_CMD) run pio run -e esp32s3
@@ -11,12 +16,23 @@ all: helper
 require-serial:
 	@test -n "$(SERIAL)" || { echo "SERIAL is required" >&2; exit 2; }
 
+validate-env-build-id:
+	@$(PYTHON) scripts/repo_version.py get --env-file "$(ENV_FILE)" >/dev/null
+
+require-build-id:
+	@case "$(BUILD_ID)" in \
+	  ""|*[[:space:]]*) \
+	    echo "BUILD_ID is required; run: cp .env.example .env (PowerShell: Copy-Item .env.example .env)" >&2; \
+	    exit 2; \
+	    ;; \
+	esac
+
 build: build-esp32s3
 
-build-esp32s3:
+build-esp32s3: require-build-id
 	$(ESP32S3_BUILD)
 
-build-rp2040:
+build-rp2040: require-build-id
 	$(RP2040_BUILD)
 
 download-mode: require-serial
@@ -26,7 +42,7 @@ upload:
 	@echo "Specify upload-esp32s3 or upload-rp2040" >&2
 	@exit 2
 
-upload-esp32s3:
+upload-esp32s3: require-build-id
 	@set -e; \
 	  serial="$(SERIAL)"; \
 	  if [ -z "$$serial" ]; then \
@@ -39,7 +55,7 @@ upload-esp32s3:
 	  $(UV_CMD) run pio pkg exec -p tool-esptoolpy -- esptool.py --chip esp32s3 --port "$$download_port" --after hard_reset run; \
 	  $(UV_CMD) run python scripts/verify_runtime_firmware.py --serial "$$serial" --vid 0x303a --pid 0x4002 --family esp32s3 --board luatos-esp32s3-aio --build "$(BUILD_ID)"
 
-upload-rp2040:
+upload-rp2040: require-build-id
 	@set -e; \
 	  serial="$(SERIAL)"; \
 	  if [ -z "$$serial" ]; then \
@@ -53,6 +69,7 @@ upload-rp2040:
 
 test:
 	bash test/test_release.sh
+	$(UV_CMD) run pytest test/test_repo_version.py test/test_release_transaction.py test/test_platformio_build_id.py
 	$(UV_CMD) run pytest test/test_upload_targeting.py test/test_rp2040_upload.py
 	$(UV_CMD) run pytest test/test_firmware_target_selector.py test/test_make_upload_selection.py
 	$(UV_CMD) run pio test -e native

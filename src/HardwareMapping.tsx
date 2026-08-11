@@ -185,6 +185,7 @@ export function HardwareMapping({
     device.boardProfileId === hardware?.board_profile_id
   );
   const selectedDevice = compatibleDevices.find(({ deviceId }) => deviceId === selectedDeviceId);
+  const activeLearning = selectedDevice ? selectedDevice.learning : learning;
   const editablePins = selectEditablePins(boardSafePins(board), selectedDevice?.capabilities ?? null);
   const invalid = useMemo(
     () => hardware ? invalidBoardPins(hardware, boardProfiles) : new Set<number>(),
@@ -660,7 +661,7 @@ export function HardwareMapping({
               <span>{t(language, "hardware.advanced")}</span>
               <small>{t(language, "hardware.advancedHint")}</small>
             </summary>
-            <div className={learning ? "learning-controls is-learning" : "learning-controls"}>
+            <div className={activeLearning ? "learning-controls is-learning" : "learning-controls"}>
               <label className="field-stack compact-field">
                 <span>{t(language, "hardware.onlineDevice")}</span>
                 <select aria-label={t(language, "hardware.onlineDevice")} value={selectedDevice?.deviceId ?? ""} onChange={(event) => setSelectedDeviceId(event.target.value)}>
@@ -680,7 +681,7 @@ export function HardwareMapping({
                   ))}
                 </div>
               </fieldset>
-              {learning && selectedDevice ? (
+              {activeLearning && selectedDevice ? (
                 <button type="button" className="learning-button" onClick={() => onEndLearning(selectedDevice.deviceId)}><SquareStop size={16} />{t(language, "hardware.stopLearning")}</button>
               ) : (
                 <button type="button" className="learning-button" disabled={!selectedDevice} onClick={(event) => {

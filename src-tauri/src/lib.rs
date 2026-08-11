@@ -1,5 +1,7 @@
 mod coordinator;
 mod device;
+#[allow(dead_code)]
+mod display;
 pub mod hardware;
 mod metrics;
 mod model;
@@ -10,11 +12,16 @@ mod runtime_log;
 mod storage;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod tray;
+#[allow(dead_code)]
+mod trigger;
 mod workspace;
 
 use coordinator::{
     CandidateStatus, DeviceScan, DeviceStatus, IdentityDimension, RuntimeCoordinator, RuntimeEvent,
     UsbEnumerator, WorkspaceRevision, enumerate_devices,
+};
+use display::{
+    DisplayService, DisplaySnapshot, built_in_provider_registry, built_in_renderer_registry,
 };
 use hardware::{BOARD_PROFILES, BoardProfile};
 use metrics::{HomeMetricsSnapshot, MetricsStore};
@@ -27,14 +34,15 @@ use std::{
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{Emitter, Manager};
 use workspace::{
-    AppError, AssignmentResolution, BackupPreview, EditorSettingsPatch, ImportPreview, Language,
-    RuntimeAssignment, Workspace,
+    AppError, AssignmentResolution, BackupPreview, DuplicateProfileForDeviceRequest,
+    EditorSettingsPatch, ImportPreview, Language, RuntimeAssignment, Workspace,
 };
 
 const DEVICE_SCAN_INTERVAL: Duration = Duration::from_millis(500);
@@ -122,6 +130,28 @@ fn poll_runtime_coordinator(
     }
 }
 
+fn newest_display_snapshot(
+    snapshots: &std::sync::mpsc::Receiver<Arc<DisplaySnapshot>>,
+) -> Option<Arc<DisplaySnapshot>> {
+    snapshots.try_iter().last()
+}
+
+struct StopOnDrop {
+    stop: Arc<AtomicBool>,
+}
+
+impl StopOnDrop {
+    fn new(stop: Arc<AtomicBool>) -> Self {
+        Self { stop }
+    }
+}
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
 struct RuntimeScanSnapshot {
     devices: Vec<DeviceStatus>,
     candidates: Vec<CandidateStatus>,
@@ -145,6 +175,7 @@ pub mod test_support {
         paste::{ClipboardWriter, Clock, PasteCoordinator},
         profile::{
             ButtonAction, DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION,
+            TriggerActions, TriggerSettings,
         },
         workspace::{RuntimeAssignment, Workspace},
     };
@@ -169,6 +200,7 @@ struct AppState {
     paste: Option<Arc<PasteCoordinator>>,
     stop: Arc<AtomicBool>,
     scan_requested: Arc<AtomicBool>,
+    display_thread: Mutex<Option<JoinHandle<()>>>,
     coordinator_thread: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -320,6 +352,38 @@ fn mutate_workspace(
     snapshot(state)
 }
 
+fn mutate_workspace_with_operation_barrier(
+    state: &AppState,
+    mutation: impl FnOnce(&mut Workspace, Option<&RuntimeCoordinator>) -> Result<(), AppError>,
+) -> Result<AppSnapshot, AppError> {
+    let mut coordinator = state
+        .coordinator
+        .as_ref()
+        .map(|coordinator| {
+            coordinator
+                .lock()
+                .map_err(|_| state_error("coordinator_unavailable"))
+        })
+        .transpose()?;
+    let operation = state
+        .operation_barrier
+        .write()
+        .map_err(|_| state_error("operation_barrier_unavailable"))?;
+    let mut workspace = state
+        .workspace
+        .write()
+        .map_err(|_| state_error("workspace_unavailable"))?;
+    mutation(&mut workspace, coordinator.as_deref())?;
+    let revision = WorkspaceRevision::capture(&workspace);
+    drop(workspace);
+    if let Some(coordinator) = coordinator.as_deref_mut() {
+        coordinator.apply_workspace_revision(revision);
+    }
+    drop(operation);
+    drop(coordinator);
+    snapshot(state)
+}
+
 fn require_addressable_identity(
     coordinator: Option<&RuntimeCoordinator>,
     device_id: &hardware::DeviceId,
@@ -413,8 +477,49 @@ fn save_runtime_assignment_inner(
 ) -> Result<AppSnapshot, AppError> {
     mutate_workspace(state, move |workspace, coordinator| {
         require_addressable_identity(coordinator, device_id)?;
+        validate_online_assignment_protocol(coordinator, workspace, device_id, &assignment)?;
         workspace.set_assignment(device_id, assignment)
     })
+}
+
+fn validate_online_assignment_protocol(
+    coordinator: Option<&RuntimeCoordinator>,
+    workspace: &Workspace,
+    device_id: &hardware::DeviceId,
+    assignment: &RuntimeAssignment,
+) -> Result<(), AppError> {
+    let profile = workspace
+        .profiles
+        .get(&assignment.device_profile_id)
+        .ok_or_else(|| AppError::new("unknown_profile"))?;
+    validate_online_firmware_protocol(coordinator, device_id, profile.minimum_protocol_version())
+}
+
+fn validate_online_firmware_protocol(
+    coordinator: Option<&RuntimeCoordinator>,
+    device_id: &hardware::DeviceId,
+    minimum: u16,
+) -> Result<(), AppError> {
+    let Some(status) = coordinator.and_then(|coordinator| {
+        coordinator
+            .devices()
+            .into_iter()
+            .find(|status| status.device_id == *device_id)
+    }) else {
+        return Ok(());
+    };
+    if status.connection != coordinator::ConnectionDimension::Online {
+        return Ok(());
+    }
+    let Some(actual) = status.firmware_protocol else {
+        return Ok(());
+    };
+    if actual < minimum {
+        return Err(AppError::new("firmware_update_required")
+            .with_param("expected", minimum.to_string())
+            .with_param("actual", actual.to_string()));
+    }
+    Ok(())
 }
 
 fn validate_setup_eligibility(
@@ -457,7 +562,29 @@ fn complete_device_setup_inner(
 ) -> Result<AppSnapshot, AppError> {
     mutate_workspace(state, move |workspace, coordinator| {
         require_setup_device(coordinator, device_id)?;
+        validate_online_assignment_protocol(coordinator, workspace, device_id, &assignment)?;
         workspace.complete_device_setup(device_id, name, assignment)
+    })
+}
+
+fn duplicate_profile_for_device_inner(
+    state: &AppState,
+    request: DuplicateProfileForDeviceRequest,
+) -> Result<AppSnapshot, AppError> {
+    let metrics = state.metrics.as_deref();
+    mutate_workspace_with_operation_barrier(state, move |workspace, coordinator| {
+        require_addressable_identity(coordinator, &request.device_id)?;
+        validate_online_firmware_protocol(
+            coordinator,
+            &request.device_id,
+            request.source_profile.minimum_protocol_version(),
+        )?;
+        if let Some(metrics) = metrics {
+            workspace.duplicate_profile_for_device_with_metrics(request, metrics)?;
+        } else {
+            workspace.duplicate_profile_for_device(request)?;
+        }
+        Ok(())
     })
 }
 
@@ -704,6 +831,17 @@ fn create_device_profile(
 }
 
 #[tauri::command]
+fn duplicate_profile_for_device(
+    state: tauri::State<'_, AppState>,
+    request: DuplicateProfileForDeviceRequest,
+) -> Result<AppSnapshot, AppError> {
+    let context = device_operation_context(&request.device_id);
+    runtime_log::operation(now_ms(), "profile_duplicated_for_device", context, || {
+        duplicate_profile_for_device_inner(&state, request)
+    })
+}
+
+#[tauri::command]
 fn save_settings(
     state: tauri::State<'_, AppState>,
     settings: EditorSettingsPatch,
@@ -897,146 +1035,244 @@ fn restore_backup(
     })
 }
 
+type SetupResult = Result<(), Box<dyn std::error::Error>>;
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartupFailure {
+    code: String,
+    detail: String,
+}
+
+impl StartupFailure {
+    fn from_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        let code = error
+            .downcast_ref::<AppError>()
+            .map_or_else(|| "startup_failed".into(), |error| error.code.clone());
+        Self {
+            code,
+            detail: error.to_string(),
+        }
+    }
+}
+
+#[derive(Default)]
+struct StartupState {
+    failure: RwLock<Option<StartupFailure>>,
+}
+
+fn settle_setup_result(
+    result: SetupResult,
+    report_failure: impl FnOnce(&(dyn std::error::Error + 'static)),
+) -> bool {
+    match result {
+        Ok(()) => true,
+        Err(error) => {
+            report_failure(error.as_ref());
+            false
+        }
+    }
+}
+
+fn report_startup_failure(app: &mut tauri::App, error: &(dyn std::error::Error + 'static)) {
+    eprintln!("failed to start Kivo: {error}");
+    runtime_log::emit_lifecycle(
+        runtime_log::RuntimeLogEntry::new(
+            now_ms(),
+            runtime_log::RuntimeLogLevel::Error,
+            "application_startup_failed",
+            serde_json::json!({}),
+        )
+        .with_detail(error.to_string()),
+    );
+    if let Some(state) = app.try_state::<StartupState>()
+        && let Ok(mut failure) = state.failure.write()
+    {
+        *failure = Some(StartupFailure::from_error(error));
+    }
+}
+
+#[tauri::command]
+fn get_startup_failure(state: tauri::State<'_, StartupState>) -> Option<StartupFailure> {
+    state
+        .failure
+        .read()
+        .map(|failure| failure.clone())
+        .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let config_directory = app.path().app_config_dir()?;
-            fs::create_dir_all(&config_directory)?;
-            let bundled_profiles = app.path().resource_dir()?.join("models");
-            let workspace = match Workspace::load(&config_directory, &bundled_profiles) {
-                Ok(workspace) => workspace,
-                Err(error) => {
-                    eprintln!("failed to load workspace: {error}");
-                    return Err(error.into());
+            app.manage(StartupState::default());
+            let result: SetupResult = (|| {
+                let config_directory = app.path().app_config_dir()?;
+                let codex_home_fallback = app.path().home_dir()?.join(".codex");
+                let codex_cursor_store = app
+                    .path()
+                    .app_data_dir()?
+                    .join("display/codex-cursors-v1.json");
+                fs::create_dir_all(&config_directory)?;
+                if let Err(error) = runtime_log::install(app.handle(), &config_directory) {
+                    eprintln!("failed to install runtime logger: {error}");
                 }
-            };
-            if let Err(error) = runtime_log::install(app.handle(), &config_directory) {
-                eprintln!("failed to install runtime logger: {error}");
-            }
-            runtime_log::emit_lifecycle(runtime_log::RuntimeLogEntry::new(
-                now_ms(),
-                runtime_log::RuntimeLogLevel::Info,
-                "application_started",
-                serde_json::json!({"version": env!("CARGO_PKG_VERSION")}),
-            ));
-            let metrics = match MetricsStore::open(&config_directory.join("data/metrics.sqlite3")) {
-                Ok(metrics) => Some(Arc::new(metrics)),
-                Err(error) => {
-                    runtime_log::emit(
-                        runtime_log::RuntimeLogEntry::new(
-                            now_ms(),
-                            runtime_log::RuntimeLogLevel::Error,
-                            "metrics_initialization_failed",
-                            serde_json::json!({}),
-                        )
-                        .with_detail(runtime_log::metrics_initialization_failure_detail(&error)),
-                    );
-                    None
+                runtime_log::emit_lifecycle(runtime_log::RuntimeLogEntry::new(
+                    now_ms(),
+                    runtime_log::RuntimeLogLevel::Info,
+                    "application_started",
+                    serde_json::json!({"version": env!("CARGO_PKG_VERSION")}),
+                ));
+                let bundled_profiles = app.path().resource_dir()?.join("models");
+                let workspace = match Workspace::load(&config_directory, &bundled_profiles) {
+                    Ok(workspace) => workspace,
+                    Err(error) => return Err(error.into()),
+                };
+                let metrics =
+                    match MetricsStore::open(&config_directory.join("data/metrics.sqlite3")) {
+                        Ok(metrics) => Some(Arc::new(metrics)),
+                        Err(error) => {
+                            runtime_log::emit(
+                                runtime_log::RuntimeLogEntry::new(
+                                    now_ms(),
+                                    runtime_log::RuntimeLogLevel::Error,
+                                    "metrics_initialization_failed",
+                                    serde_json::json!({}),
+                                )
+                                .with_detail(
+                                    runtime_log::metrics_initialization_failure_detail(&error),
+                                ),
+                            );
+                            None
+                        }
+                    };
+                let operation_barrier = Arc::new(RwLock::new(()));
+                let workspace = Arc::new(RwLock::new(workspace));
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                {
+                    let workspace_guard = workspace
+                        .read()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    tray::setup(app, &[], &workspace_guard)?;
                 }
-            };
-            let operation_barrier = Arc::new(RwLock::new(()));
-            let workspace = Arc::new(RwLock::new(workspace));
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            {
-                let workspace_guard = workspace
-                    .read()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                tray::setup(app, &[], &workspace_guard)?;
-            }
-            let paste = Arc::new(PasteCoordinator::system());
-            let launcher = Arc::new(device::SystemWorkerLauncher::new(
-                paste.handle(),
-                metrics.clone(),
-                Arc::clone(&operation_barrier),
-            ));
-            let enumerator: Arc<dyn UsbEnumerator> = Arc::new(coordinator::SystemUsbEnumerator);
-            let coordinator = Arc::new(Mutex::new(RuntimeCoordinator::with_paste(
-                Arc::clone(&enumerator),
-                launcher,
-                Arc::clone(&workspace),
-                Some(paste.handle()),
-            )));
-            let stop = Arc::new(AtomicBool::new(false));
-            let scan_requested = Arc::new(AtomicBool::new(false));
-            let coordinator_thread = {
-                let coordinator = Arc::clone(&coordinator);
-                let workspace = Arc::clone(&workspace);
-                let metrics = metrics.clone();
-                let stop = Arc::clone(&stop);
-                let scan_requested = Arc::clone(&scan_requested);
-                let app_handle = app.handle().clone();
-                thread::spawn(move || {
-                    let mut scanner = BackgroundDeviceScanner::new(enumerator);
-                    let mut log_inventory = runtime_log::DeviceLogInventory::default();
-                    while !stop.load(Ordering::Relaxed) {
-                        if scan_requested.swap(false, Ordering::Relaxed) {
-                            scanner.request_scan();
-                        }
-                        let RuntimePoll {
-                            scan,
-                            scan_error,
-                            events,
-                        } = poll_runtime_coordinator(&mut scanner, coordinator.as_ref());
-                        let timestamp_ms = now_ms();
-                        if let Some(error) = scan_error.as_deref() {
-                            for entry in log_inventory.observe_scan_error(timestamp_ms, Some(error))
-                            {
-                                runtime_log::emit(entry);
+                let paste = Arc::new(PasteCoordinator::system());
+                let launcher = Arc::new(device::SystemWorkerLauncher::new(
+                    paste.handle(),
+                    metrics.clone(),
+                    Arc::clone(&operation_barrier),
+                ));
+                let providers =
+                    built_in_provider_registry(&codex_home_fallback, &codex_cursor_store);
+                let renderers = Arc::new(built_in_renderer_registry());
+                let (display_snapshot_sender, display_snapshots) =
+                    mpsc::channel::<Arc<DisplaySnapshot>>();
+                let enumerator: Arc<dyn UsbEnumerator> = Arc::new(coordinator::SystemUsbEnumerator);
+                let coordinator =
+                    Arc::new(Mutex::new(RuntimeCoordinator::with_paste_and_renderers(
+                        Arc::clone(&enumerator),
+                        launcher,
+                        Arc::clone(&workspace),
+                        Some(paste.handle()),
+                        Arc::clone(&renderers),
+                    )));
+                let stop = Arc::new(AtomicBool::new(false));
+                let scan_requested = Arc::new(AtomicBool::new(false));
+                let display_thread =
+                    DisplayService::spawn(providers, Arc::clone(&stop), display_snapshot_sender)?;
+                let coordinator_thread = {
+                    let coordinator = Arc::clone(&coordinator);
+                    let workspace = Arc::clone(&workspace);
+                    let metrics = metrics.clone();
+                    let stop = Arc::clone(&stop);
+                    let scan_requested = Arc::clone(&scan_requested);
+                    let app_handle = app.handle().clone();
+                    thread::spawn(move || {
+                        let _stop_on_drop = StopOnDrop::new(Arc::clone(&stop));
+                        let mut scanner = BackgroundDeviceScanner::new(enumerator);
+                        let mut log_inventory = runtime_log::DeviceLogInventory::default();
+                        while !stop.load(Ordering::Relaxed) {
+                            if scan_requested.swap(false, Ordering::Relaxed) {
+                                scanner.request_scan();
                             }
-                        }
-                        if let Some(scan) = scan {
-                            for entry in log_inventory.observe_scan_error(timestamp_ms, None) {
-                                runtime_log::emit(entry);
+                            let RuntimePoll {
+                                scan,
+                                scan_error,
+                                events,
+                            } = poll_runtime_coordinator(&mut scanner, coordinator.as_ref());
+                            let timestamp_ms = now_ms();
+                            if let Some(error) = scan_error.as_deref() {
+                                for entry in
+                                    log_inventory.observe_scan_error(timestamp_ms, Some(error))
+                                {
+                                    runtime_log::emit(entry);
+                                }
                             }
-                            for entry in
-                                log_inventory.observe(timestamp_ms, &scan.devices, &scan.candidates)
-                            {
-                                runtime_log::emit(entry);
+                            if let Some(scan) = scan {
+                                for entry in log_inventory.observe_scan_error(timestamp_ms, None) {
+                                    runtime_log::emit(entry);
+                                }
+                                for entry in log_inventory.observe(
+                                    timestamp_ms,
+                                    &scan.devices,
+                                    &scan.candidates,
+                                ) {
+                                    runtime_log::emit(entry);
+                                }
+                                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                                if let Ok(workspace) = workspace.read() {
+                                    tray::update(&app_handle, &scan.devices, &workspace);
+                                }
                             }
-                            #[cfg(any(target_os = "macos", target_os = "windows"))]
-                            if let Ok(workspace) = workspace.read() {
-                                tray::update(&app_handle, &scan.devices, &workspace);
+                            for event in events {
+                                let payload =
+                                    enrich_runtime_event(&workspace, metrics.as_deref(), event);
+                                runtime_log::emit_runtime_event(&payload);
+                                let _ = app_handle.emit("runtime-event", payload);
                             }
+                            if let Some(snapshot) = newest_display_snapshot(&display_snapshots) {
+                                coordinator
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                    .update_display(snapshot);
+                            }
+                            thread::sleep(RUNTIME_EVENT_POLL_INTERVAL);
                         }
-                        for event in events {
-                            let payload =
-                                enrich_runtime_event(&workspace, metrics.as_deref(), event);
-                            runtime_log::emit_runtime_event(&payload);
-                            let _ = app_handle.emit("runtime-event", payload);
-                        }
-                        thread::sleep(RUNTIME_EVENT_POLL_INTERVAL);
-                    }
-                    coordinator
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .shutdown();
-                })
-            };
-            app.manage(AppState {
-                workspace,
-                operation_barrier,
-                metrics,
-                coordinator: Some(coordinator),
-                paste: Some(paste),
-                stop,
-                scan_requested,
-                coordinator_thread: Mutex::new(Some(coordinator_thread)),
-            });
-            runtime_log::emit_lifecycle(runtime_log::RuntimeLogEntry::new(
-                now_ms(),
-                runtime_log::RuntimeLogLevel::Info,
-                "application_ready",
-                serde_json::json!({}),
-            ));
+                        coordinator
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .shutdown();
+                    })
+                };
+                app.manage(AppState {
+                    workspace,
+                    operation_barrier,
+                    metrics,
+                    coordinator: Some(coordinator),
+                    paste: Some(paste),
+                    stop,
+                    scan_requested,
+                    display_thread: Mutex::new(Some(display_thread)),
+                    coordinator_thread: Mutex::new(Some(coordinator_thread)),
+                });
+                runtime_log::emit_lifecycle(runtime_log::RuntimeLogEntry::new(
+                    now_ms(),
+                    runtime_log::RuntimeLogLevel::Info,
+                    "application_ready",
+                    serde_json::json!({}),
+                ));
+                Ok(())
+            })();
+            settle_setup_result(result, |error| report_startup_failure(app, error));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_startup_failure,
             get_snapshot,
             retry_candidate,
             save_device_profile,
             create_device_profile,
+            duplicate_profile_for_device,
             save_settings,
             rename_device,
             save_runtime_assignment,
@@ -1085,24 +1321,32 @@ pub fn run() {
                 "application_exit_requested",
                 serde_json::json!({}),
             ));
-            app_handle
-                .state::<AppState>()
-                .stop
-                .store(true, Ordering::Relaxed);
+            if let Some(state) = app_handle.try_state::<AppState>() {
+                state.stop.store(true, Ordering::Relaxed);
+            }
         }
         tauri::RunEvent::Exit => {
-            let state = app_handle.state::<AppState>();
-            state.stop.store(true, Ordering::Relaxed);
-            if let Some(coordinator) = state
-                .coordinator_thread
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .take()
-            {
-                let _ = coordinator.join();
-            }
-            if let Some(paste) = &state.paste {
-                paste.shutdown();
+            if let Some(state) = app_handle.try_state::<AppState>() {
+                state.stop.store(true, Ordering::Relaxed);
+                if let Some(display) = state
+                    .display_thread
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take()
+                {
+                    let _ = display.join();
+                }
+                if let Some(coordinator) = state
+                    .coordinator_thread
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take()
+                {
+                    let _ = coordinator.join();
+                }
+                if let Some(paste) = &state.paste {
+                    paste.shutdown();
+                }
             }
             runtime_log::shutdown_with_entry(runtime_log::RuntimeLogEntry::new(
                 now_ms(),
@@ -1123,8 +1367,12 @@ mod tests {
             BootloaderObservation, DeviceWorker, SerialObservation, UsbEnumerator, WorkerCommand,
             WorkerEvent, WorkerLauncher, WorkerStart,
         },
+        display::DisplaySnapshot,
         metrics::MetricAttribution,
-        profile::{ButtonAction, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION},
+        profile::{
+            ButtonAction, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION, TriggerActions,
+            TriggerSettings,
+        },
     };
     use std::{
         collections::BTreeMap,
@@ -1137,6 +1385,22 @@ mod tests {
     };
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn startup_schema_failure_is_consumed_instead_of_reaching_tauri() {
+        let error = AppError::new("unsupported_profile_schema");
+        let failure = StartupFailure::from_error(&error);
+        let mut reported = None;
+        let ready = settle_setup_result(
+            Err::<(), Box<dyn std::error::Error>>(Box::new(error)),
+            |error| reported = Some(error.to_string()),
+        );
+
+        assert!(!ready);
+        assert_eq!(reported.as_deref(), Some("unsupported_profile_schema"));
+        assert_eq!(failure.code, "unsupported_profile_schema");
+        assert_eq!(failure.detail, "unsupported_profile_schema");
+    }
 
     #[test]
     fn repeated_operation_contexts_use_camel_case_identifiers() {
@@ -1260,6 +1524,51 @@ mod tests {
             RUNTIME_EVENT_POLL_INTERVAL + crate::device::SERIAL_COMMAND_POLL_INTERVAL
                 <= Duration::from_millis(20)
         );
+    }
+
+    #[test]
+    fn display_snapshot_drain_returns_only_the_newest_queued_value() {
+        let (sender, snapshots) = mpsc::channel();
+        let first = Arc::new(DisplaySnapshot {
+            items: Vec::new(),
+            health: BTreeMap::new(),
+        });
+        let newest = Arc::new(DisplaySnapshot {
+            items: Vec::new(),
+            health: BTreeMap::new(),
+        });
+        sender.send(first).unwrap();
+        sender.send(Arc::clone(&newest)).unwrap();
+
+        let drained = newest_display_snapshot(&snapshots).unwrap();
+
+        assert!(Arc::ptr_eq(&drained, &newest));
+        assert!(newest_display_snapshot(&snapshots).is_none());
+    }
+
+    #[test]
+    fn coordinator_exit_guard_sets_stop_on_normal_drop() {
+        let stop = Arc::new(AtomicBool::new(false));
+
+        {
+            let _guard = StopOnDrop::new(Arc::clone(&stop));
+            assert!(!stop.load(Ordering::Relaxed));
+        }
+
+        assert!(stop.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn coordinator_exit_guard_sets_stop_during_unwind() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let unwind_stop = Arc::clone(&stop);
+
+        let _ = std::panic::catch_unwind(move || {
+            let _guard = StopOnDrop::new(unwind_stop);
+            panic!("test coordinator unwind");
+        });
+
+        assert!(stop.load(Ordering::Relaxed));
     }
 
     #[test]
@@ -1430,6 +1739,7 @@ mod tests {
         DeviceProfile {
             schema_version: PROFILE_SCHEMA_VERSION,
             profile: profile::test_model_layout(),
+            trigger_settings: TriggerSettings::default(),
             hardware_profiles: vec![HardwareProfile {
                 id: "esp-primary".into(),
                 name: "ESP primary".into(),
@@ -1457,6 +1767,7 @@ mod tests {
             paste: None,
             stop: Arc::new(AtomicBool::new(false)),
             scan_requested: Arc::new(AtomicBool::new(false)),
+            display_thread: Mutex::new(None),
             coordinator_thread: Mutex::new(None),
         }
     }
@@ -1726,9 +2037,9 @@ mod tests {
         let mut updated = product_profile();
         updated.actions.insert(
             "UP".into(),
-            vec![ButtonAction::Paste {
+            TriggerActions::press(vec![ButtonAction::Paste {
                 text: "离线保存".into(),
-            }],
+            }]),
         );
 
         let snapshot = save_profile_inner(&state, updated.clone()).unwrap();
@@ -1876,6 +2187,159 @@ mod tests {
             .code,
             "invalid_device_identity"
         );
+    }
+
+    #[test]
+    fn online_assignment_rejects_profiles_that_need_newer_firmware() {
+        let directory = TestDirectory::new();
+        let mut state = product_state(&directory.0, vec![product_profile()]);
+        let mut gated_profile = product_profile();
+        gated_profile.actions.insert(
+            "UP".into(),
+            TriggerActions {
+                release: vec![ButtonAction::Paste {
+                    text: "release".into(),
+                }],
+                ..TriggerActions::default()
+            },
+        );
+        state
+            .workspace
+            .write()
+            .unwrap()
+            .save_profile(gated_profile)
+            .unwrap();
+
+        let launcher = Arc::new(SaveLauncher::default());
+        let mut coordinator = RuntimeCoordinator::new(
+            Arc::new(SaveEnumerator),
+            launcher,
+            Arc::clone(&state.workspace),
+        );
+        coordinator.scan_once().unwrap();
+        coordinator.drain_worker_events();
+        state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
+
+        let device =
+            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
+                .unwrap();
+        let assignment = RuntimeAssignment {
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        let error = save_runtime_assignment_inner(&state, &device, assignment).unwrap_err();
+        assert_eq!(error.code, "firmware_update_required");
+        assert_eq!(error.params.get("expected"), Some(&"6".to_owned()));
+        assert_eq!(
+            state.workspace.read().unwrap().settings.devices[&device].runtime_assignment,
+            None
+        );
+
+        let draft = state.workspace.read().unwrap().profiles["red-phone-v1"].clone();
+        let duplicate_error = duplicate_profile_for_device_inner(
+            &state,
+            DuplicateProfileForDeviceRequest {
+                device_id: device.clone(),
+                source_profile: draft,
+                name: "Upgrade copy".into(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(duplicate_error.code, "firmware_update_required");
+        assert_eq!(state.workspace.read().unwrap().profiles.len(), 1);
+    }
+
+    #[test]
+    fn duplicate_profile_for_device_waits_for_an_in_flight_metric_commit() {
+        let directory = TestDirectory::new();
+        let state = Arc::new(product_state(&directory.0, vec![product_profile()]));
+        let device =
+            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "DUPLICATE-A")
+                .unwrap();
+        {
+            let mut workspace = state.workspace.write().unwrap();
+            workspace.enroll_device(device.clone()).unwrap();
+            workspace
+                .set_assignment(
+                    &device,
+                    RuntimeAssignment {
+                        device_profile_id: "red-phone-v1".into(),
+                        hardware_profile_id: "esp-primary".into(),
+                    },
+                )
+                .unwrap();
+        }
+        let attribution = MetricAttribution {
+            device_id: device.clone(),
+            device_name: "Duplicate desk".into(),
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        let (press_started_tx, press_started_rx) = mpsc::channel();
+        let (release_press_tx, release_press_rx) = mpsc::channel();
+        let (press_committed_tx, press_committed_rx) = mpsc::channel();
+        let press_state = Arc::clone(&state);
+        let press = thread::spawn(move || {
+            let _operation = press_state.operation_barrier.read().unwrap();
+            press_started_tx.send(()).unwrap();
+            release_press_rx.recv().unwrap();
+            press_state
+                .metrics
+                .as_deref()
+                .unwrap()
+                .record_button_press(&attribution, "UP", 1_720_086_400_000)
+                .unwrap();
+            press_committed_tx.send(()).unwrap();
+        });
+        press_started_rx.recv().unwrap();
+
+        let draft = state.workspace.read().unwrap().profiles["red-phone-v1"].clone();
+        let duplicate_state = Arc::clone(&state);
+        let (duplicate_done_tx, duplicate_done_rx) = mpsc::channel();
+        let duplicate = thread::spawn(move || {
+            let result = duplicate_profile_for_device_inner(
+                &duplicate_state,
+                DuplicateProfileForDeviceRequest {
+                    device_id: device,
+                    source_profile: draft,
+                    name: "Metric copy".into(),
+                },
+            );
+            duplicate_done_tx.send(result.map(|_| ())).unwrap();
+        });
+
+        assert!(matches!(
+            duplicate_done_rx.recv_timeout(Duration::from_secs(1)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        release_press_tx.send(()).unwrap();
+        press_committed_rx.recv().unwrap();
+        press.join().unwrap();
+        duplicate_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        duplicate.join().unwrap();
+
+        state
+            .metrics
+            .as_deref()
+            .unwrap()
+            .record_button_press(
+                &MetricAttribution {
+                    device_id: hardware::DeviceId::new(
+                        crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+                        "DUPLICATE-A",
+                    )
+                    .unwrap(),
+                    device_name: "Duplicate desk".into(),
+                    device_profile_id: "red-phone-v1".into(),
+                    hardware_profile_id: "esp-primary".into(),
+                },
+                "UP",
+                1_720_086_400_001,
+            )
+            .unwrap();
     }
 
     #[test]
@@ -2251,9 +2715,9 @@ mod tests {
         let mut updated = product_profile();
         updated.actions.insert(
             "UP".into(),
-            vec![ButtonAction::Paste {
+            TriggerActions::press(vec![ButtonAction::Paste {
                 text: "online paste".into(),
-            }],
+            }]),
         );
 
         save_profile_inner(&state, updated).unwrap();
@@ -2265,11 +2729,68 @@ mod tests {
             panic!("expected one action-only snapshot update");
         };
         assert_eq!(
-            snapshot.profile.actions.get("UP"),
+            snapshot
+                .profile
+                .actions
+                .get("UP")
+                .map(|triggers| &triggers.press),
             Some(&vec![ButtonAction::Paste {
                 text: "online paste".into(),
             }])
         );
+    }
+
+    #[test]
+    fn live_update_reconfigures_when_an_action_requires_newer_firmware() {
+        let directory = TestDirectory::new();
+        let mut state = product_state(&directory.0, vec![product_profile()]);
+        let launcher = Arc::new(SaveLauncher::default());
+        let mut coordinator = RuntimeCoordinator::new(
+            Arc::new(SaveEnumerator),
+            launcher.clone(),
+            Arc::clone(&state.workspace),
+        );
+        coordinator.scan_once().unwrap();
+        coordinator.drain_worker_events();
+        let device_id =
+            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
+                .unwrap();
+        {
+            let mut workspace = state.workspace.write().unwrap();
+            workspace
+                .set_assignment(
+                    &device_id,
+                    RuntimeAssignment {
+                        device_profile_id: "red-phone-v1".into(),
+                        hardware_profile_id: "esp-primary".into(),
+                    },
+                )
+                .unwrap();
+        }
+        coordinator.sync_profiles();
+        launcher.commands.lock().unwrap().clear();
+        state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
+        let mut updated = product_profile();
+        updated.actions.insert(
+            "UP".into(),
+            TriggerActions {
+                release: vec![ButtonAction::Paste {
+                    text: "requires protocol 6".into(),
+                }],
+                ..TriggerActions::default()
+            },
+        );
+
+        save_profile_inner(&state, updated).unwrap();
+
+        let commands = launcher.commands.lock().unwrap();
+        assert!(matches!(
+            commands.get(&device_id).unwrap().as_slice(),
+            [WorkerCommand::Reconfigure {
+                snapshot: Some(snapshot),
+                revision: _,
+            }] if snapshot.profile.minimum_protocol_version() == crate::protocol::ACTION_RUN_PROTOCOL_VERSION
+        ));
     }
 
     #[test]

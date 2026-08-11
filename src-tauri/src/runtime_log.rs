@@ -540,6 +540,7 @@ fn stable_runtime_activity_code(code: &str) -> &'static str {
         "paste_coordinator_stopped" => "paste_coordinator_stopped",
         "paste_grant_mismatch" => "paste_grant_mismatch",
         "paste_submit_failed" => "paste_submit_failed",
+        "firmware_update_required" => "firmware_update_required",
         "protocol_mismatch" => "protocol_mismatch",
         "serial_handshake_failed" => "serial_handshake_failed",
         "serial_handshake_timeout" => "serial_handshake_timeout",
@@ -844,6 +845,7 @@ mod tests {
         DeviceLogInventory, DispatchOutcome, LogDispatcher, LogSink, QueuedLogEntry,
         RuntimeLogEntry, RuntimeLogLevel, log_directory, metrics_initialization_failure_detail,
         operation, operation_entry, runtime_event_entry, serialize_entry,
+        stable_runtime_activity_code,
     };
     use crate::{
         coordinator::{
@@ -864,6 +866,14 @@ mod tests {
         sync::{Arc, Mutex, mpsc},
         time::Duration,
     };
+
+    #[test]
+    fn stable_runtime_activity_code_preserves_firmware_update_required() {
+        assert_eq!(
+            stable_runtime_activity_code("firmware_update_required"),
+            "firmware_update_required"
+        );
+    }
 
     struct RecordingSink {
         entries: Arc<Mutex<Vec<QueuedLogEntry>>>,
@@ -940,6 +950,7 @@ mod tests {
             controller_family_id: ESP32S3_FAMILY_ID.into(),
             board_profile_id: LUATOS_ESP32S3_AIO_BOARD_ID.into(),
             firmware_build_id: None,
+            firmware_protocol: None,
             pins: Vec::new(),
             runtime_assignment: None,
             latest_error: None,

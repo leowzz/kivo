@@ -17,6 +17,18 @@ export type MediaCommand =
   | "volume_down"
   | "mute";
 
+export type ActionTrigger = "press" | "release" | "long_press" | "double_press";
+
+export const DEFAULT_LONG_PRESS_MS = 500;
+export const DEFAULT_DOUBLE_PRESS_MS = 300;
+
+export interface TriggerSettings {
+  long_press_ms: number;
+  double_press_ms: number;
+}
+
+export type TriggerActions = Record<ActionTrigger, ButtonAction[]>;
+
 export interface ModelButton {
   id: string;
   label: string;
@@ -62,10 +74,11 @@ export interface HardwareProfile {
 }
 
 export interface DeviceProfile {
-  schema_version: 2;
+  schema_version: 3;
   profile: ModelLayout;
+  trigger_settings: TriggerSettings;
   hardware_profiles: HardwareProfile[];
-  actions: Record<string, ButtonAction[]>;
+  actions: Record<string, TriggerActions>;
 }
 
 export interface RuntimeAssignment {
@@ -166,6 +179,7 @@ export interface DeviceStatus {
   controllerFamilyId: string;
   boardProfileId: string;
   firmwareBuildId: string | null;
+  firmwareProtocol?: number | null;
   capabilities: number[];
   runtimeAssignment: RuntimeAssignment | null;
   latestError: RuntimeActivity | null;
@@ -238,6 +252,11 @@ export interface AppSnapshot {
   candidates: CandidateStatus[];
   language: Language;
   homeMetrics: HomeMetricsSnapshot | null;
+}
+
+export interface StartupFailure {
+  code: string;
+  detail: string;
 }
 
 export interface ImportPreview {

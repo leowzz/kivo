@@ -36,3 +36,30 @@ test("sizes keypad groups by their row and column counts", () => {
   expect(groups[1].style.gridTemplateRows).toBe("repeat(4, minmax(0, 1fr))");
   expect(groups[1].style.flexGrow).toBe(String(4 / 3));
 });
+
+test("counts actions in every trigger group", () => {
+  const layout: ModelLayout = {
+    id: "test",
+    name: "Test",
+    groups: [{ id: "keys", columns: 1, buttons: [{ id: "A", label: "A" }] }],
+  };
+  const { getByRole } = render(
+    <Keypad
+      layout={layout}
+      actions={{
+        A: {
+          press: [{ type: "delay", duration_ms: 1 }],
+          release: [],
+          long_press: [{ type: "delay", duration_ms: 2 }],
+          double_press: [],
+        },
+      }}
+      selectedButtonId={null}
+      pressedButtonIds={new Set()}
+      actionCountLabel={(count) => `${count} actions`}
+      onSelect={vi.fn()}
+    />,
+  );
+
+  expect(getByRole("button", { name: "A，2 actions" })).toBeInTheDocument();
+});

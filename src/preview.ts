@@ -56,8 +56,9 @@ const esp32SafePins = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18]
 const rp2040SafePins = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 26, 27, 28, 29];
 
 const phoneProfile: DeviceProfile = {
-  schema_version: 2,
+  schema_version: 3,
   profile: telLayout,
+  trigger_settings: { long_press_ms: 500, double_press_ms: 300 },
   hardware_profiles: [
     {
       id: "phone-esp-front-desk",
@@ -89,13 +90,13 @@ const phoneProfile: DeviceProfile = {
     },
   ],
   actions: {
-    DIGIT_2: [{ type: "paste", text: "你好" }, { type: "hotkey", keys: ["enter"] }],
-    SPEAKER: [{ type: "hotkey", keys: ["cmd", "shift", "k"] }],
+    DIGIT_2: { press: [{ type: "paste", text: "你好" }, { type: "hotkey", keys: ["enter"] }], release: [], long_press: [], double_press: [] },
+    SPEAKER: { press: [{ type: "hotkey", keys: ["cmd", "shift", "k"] }], release: [], long_press: [], double_press: [] },
   },
 };
 
 const operatorProfile: DeviceProfile = {
-  schema_version: 2,
+  schema_version: 3,
   profile: {
     ...telLayout,
     id: "operator-console",
@@ -117,9 +118,10 @@ const operatorProfile: DeviceProfile = {
       inputs: [{ type: "direct", id: "operator-shortcuts", keys: { UP: 18, DOWN: 19, DEL: 20 } }],
     },
   ],
+  trigger_settings: { long_press_ms: 500, double_press_ms: 300 },
   actions: {
-    UP: [{ type: "hotkey", keys: ["cmd", "up"] }],
-    DOWN: [{ type: "hotkey", keys: ["cmd", "down"] }],
+    UP: { press: [{ type: "hotkey", keys: ["cmd", "up"] }], release: [], long_press: [], double_press: [] },
+    DOWN: { press: [{ type: "hotkey", keys: ["cmd", "down"] }], release: [], long_press: [], double_press: [] },
   },
 };
 
@@ -170,8 +172,9 @@ export function createPreviewDeviceProfile(
     }
     fallback = request.board_profile_id;
     profile = {
-      schema_version: 2,
+      schema_version: 3,
       profile: { id: "", name, groups: [] },
+      trigger_settings: { long_press_ms: 500, double_press_ms: 300 },
       hardware_profiles: [
         {
           id: "hardware",

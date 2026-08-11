@@ -4,10 +4,14 @@
 #include <optional>
 #include <vector>
 
+#include "ActionRunController.h"
+#include "ActionRunDispatcher.h"
+#include "DisplayController.h"
 #include "DisplayStatus.h"
 #include "GpioTriggerController.h"
 #include "Handshake.h"
 #include "KeyActivityIndicator.h"
+#include "RemoteDisplay.h"
 #include "StandaloneDebugTopology.h"
 #include "TriggerProtocol.h"
 #include "platform/Platform.h"
@@ -18,17 +22,21 @@ constexpr std::uint32_t kStandaloneDisplayStartupDelayMs = 500;
 std::string helloLine;
 
 GpioTriggerController controller(platform::boardProfile());
+ActionRunController actionRuns;
 KeyActivityIndicator keyIndicator;
 ResponseLineBuffer responseLines(kMaxResponseLineLength);
 TopologyBuilder topologyBuilder(platform::boardProfile());
 DisplayStatusModel displayStatus;
+DisplayController displayController;
+std::optional<RemoteDisplay> remoteDisplay{std::in_place};
 bool helperConnected = false;
 bool standaloneDisplayPending = false;
 std::uint32_t standaloneDisplayStartedMs = 0;
 
 struct PendingDelay {
-  std::uint32_t eventId;
+  std::uint32_t runId;
   std::uint16_t step;
+  std::uint16_t total;
   std::uint32_t startedMs;
   std::uint32_t durationMs;
 };
@@ -44,7 +52,45 @@ bool pasteClipboard() {
   return platform::sendHotkey(0x08, 0x19);
 }
 
-void renderStatus() { platform::renderDisplay(displayStatus.frame()); }
+DisplayFrame displayFailureFrame() {
+  auto frame = displayStatus.frame();
+  frame.lines[1] = "DISPLAY ERROR   ";
+  frame.lines[2].clear();
+  return frame;
+}
+
+bool applyDisplayUpdate(const DisplayUpdate &update) {
+  bool rendered = true;
+  if (update.kind == DisplayUpdateKind::Local && update.local != nullptr) {
+    rendered = platform::renderLocalDisplay(*update.local);
+  } else if (update.kind == DisplayUpdateKind::Remote &&
+             update.remote != nullptr) {
+    rendered =
+        platform::renderRemoteDisplay(*update.remote, update.fullRedraw);
+  } else if (update.kind != DisplayUpdateKind::None) {
+    rendered = false;
+  }
+  if (!rendered) {
+    const auto failure =
+        displayController.displayFailed(displayFailureFrame());
+    if (failure.local != nullptr) {
+      (void)platform::renderLocalDisplay(*failure.local);
+    }
+  }
+  return rendered;
+}
+
+void showStatus(LocalDisplayPriority priority) {
+  applyDisplayUpdate(displayController.showLocal(displayStatus.frame(),
+                                                 priority));
+}
+
+DisplayFrame helperOfflineFrame() {
+  auto frame = displayStatus.frame();
+  frame.lines[1] = "HELPER OFFLINE  ";
+  frame.lines[2].clear();
+  return frame;
+}
 
 bool isActiveOledPin(std::uint8_t pin) {
   const auto &oled = controller.topology().oled;
@@ -79,7 +125,7 @@ void applyLearningPinModes() {
 
 void configError(std::uint32_t revision, const char *code) {
   displayStatus.setConfigError();
-  renderStatus();
+  showStatus(LocalDisplayPriority::Critical);
   writeLine("CONFIG_ERROR " + std::to_string(revision) + " " + code + "\n");
 }
 
@@ -91,6 +137,7 @@ void resetKeyIndicator() {
 void applyTopologyState(const RuntimeTopology &topology, std::uint32_t nowMs) {
   resetKeyIndicator();
   pendingDelay.reset();
+  actionRuns.reset();
   controller.configure(topology, nowMs);
   applyRuntimePinModes();
   displayStatus.setReady(topology.keyCount());
@@ -101,9 +148,17 @@ void activateTopology(const RuntimeTopology &topology, std::uint32_t nowMs) {
   standaloneDisplayPending = false;
   displayStatus.setStandaloneDebug(false);
   // Release the old display before its I2C pins are reassigned by the topology.
-  platform::configureDisplay(topology.oled);
+  const bool displayReady = platform::configureDisplay(topology.oled);
   applyTopologyState(topology, nowMs);
-  renderStatus();
+  displayController.showLocal(displayStatus.frame(),
+                              LocalDisplayPriority::Normal);
+  if (!displayReady) {
+    applyDisplayUpdate(
+        displayController.displayFailed(displayFailureFrame()));
+    return;
+  }
+  displayController.clearLocalOverride();
+  applyDisplayUpdate(displayController.displayReconfigured());
 }
 
 void activateStandaloneTopology(const RuntimeTopology &topology,
@@ -121,14 +176,25 @@ void initializeStandaloneDisplay(std::uint32_t nowMs) {
   }
   standaloneDisplayPending = false;
   // Let TinyUSB service its first cycles and the OLED power stabilize first.
-  platform::configureDisplay(controller.topology().oled);
-  renderStatus();
+  const bool displayReady =
+      platform::configureDisplay(controller.topology().oled);
+  displayController.showLocal(displayStatus.frame(),
+                              LocalDisplayPriority::Startup);
+  if (!displayReady) {
+    applyDisplayUpdate(
+        displayController.displayFailed(displayFailureFrame()));
+    return;
+  }
+  applyDisplayUpdate(displayController.displayReconfigured());
 }
 
 void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
   const auto command = parseHelperCommand(line);
   if (!command.has_value()) {
     topologyBuilder.cancel();
+    const auto displayError =
+        discardMalformedDisplayCommand(*remoteDisplay, line);
+    if (displayError.has_value()) writeLine(*displayError);
     return;
   }
   switch (command->kind) {
@@ -136,6 +202,8 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
       writeLine(helloLine);
       return;
     case HelperCommandKind::ConfigBegin:
+      pendingDelay.reset();
+      actionRuns.reset();
       if (controller.isLearning() ||
           !topologyBuilder.begin(command->revision, command->debounceMs)) {
         configError(command->revision, "invalid_begin");
@@ -172,9 +240,26 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
       writeLine("CONFIG_OK " + std::to_string(command->revision) + "\n");
       return;
     }
+    case HelperCommandKind::DisplayBegin:
+    case HelperCommandKind::DisplayRegion:
+    case HelperCommandKind::DisplayClear:
+    case HelperCommandKind::DisplayText:
+    case HelperCommandKind::DisplayCommit: {
+      const auto reply = dispatchDisplayCommand(
+          *remoteDisplay, *command, controller.topology().oled.has_value());
+      if (command->kind == HelperCommandKind::DisplayCommit &&
+          reply == formatDisplayOk(command->revision) &&
+          remoteDisplay->lastCommit().has_value()) {
+        applyDisplayUpdate(
+            displayController.commitRemote(*remoteDisplay->lastCommit()));
+      }
+      if (reply.has_value()) writeLine(*reply);
+      return;
+    }
     case HelperCommandKind::LearnBegin:
       topologyBuilder.cancel();
       pendingDelay.reset();
+      actionRuns.reset();
       if (!controller.beginLearning(command->revision, command->pins, nowMs)) {
         configError(command->revision, "invalid_learning");
         return;
@@ -182,7 +267,7 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
       resetKeyIndicator();
       applyLearningPinModes();
       displayStatus.setLearning(command->pins.size());
-      renderStatus();
+      showStatus(LocalDisplayPriority::Critical);
       writeLine("LEARN_OK " + std::to_string(command->revision) + "\n");
       return;
     case HelperCommandKind::LearnEnd:
@@ -190,38 +275,52 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
         configError(command->revision, "invalid_learning_revision");
         return;
       }
+      pendingDelay.reset();
+      actionRuns.reset();
       resetKeyIndicator();
       applyRuntimePinModes();
       displayStatus.setReady(controller.topology().keyCount());
       displayStatus.clearLastInput();
-      renderStatus();
+      displayController.showLocal(displayStatus.frame(),
+                                  LocalDisplayPriority::Normal);
+      applyDisplayUpdate(displayController.clearLocalOverride());
       writeLine("LEARN_OK " + std::to_string(command->revision) + "\n");
       return;
     case HelperCommandKind::Skip:
       if (pendingDelay.has_value() &&
-          pendingDelay->eventId == command->eventId) {
+          pendingDelay->runId == command->runId) {
         pendingDelay.reset();
       }
-      controller.acceptStep(command->eventId, 0, 0, false, nowMs);
+      actionRuns.cancel(command->runId);
       return;
     case HelperCommandKind::Paste:
     case HelperCommandKind::Hotkey:
     case HelperCommandKind::Media:
     case HelperCommandKind::Host:
       break;
+    case HelperCommandKind::Chord:
+      executeKeyboardChord(
+          actionRuns, *command, nowMs,
+          [](std::uint8_t modifiers, const platform::KeyboardKeycodes &keys) {
+            return platform::sendKeyboardChord(modifiers, keys);
+          },
+          [](std::uint32_t runId, std::uint16_t step) {
+            writeLine(formatDone(runId, step));
+          });
+      return;
     case HelperCommandKind::Delay:
       if (pendingDelay.has_value() ||
-          controller.acceptStep(command->eventId, command->step, command->total,
-                                true, nowMs) != ResponseAction::Execute) {
+          actionRuns.acceptStep(command->runId, command->step, command->total,
+                                nowMs) != ResponseAction::Execute) {
         return;
       }
-      pendingDelay = PendingDelay{command->eventId, command->step, nowMs,
-                                  command->durationMs};
+      pendingDelay = PendingDelay{command->runId, command->step, command->total,
+                                  nowMs, command->durationMs};
       return;
   }
 
-  if (controller.acceptStep(command->eventId, command->step, command->total,
-                            true, nowMs) != ResponseAction::Execute) {
+  if (actionRuns.acceptStep(command->runId, command->step, command->total,
+                            nowMs) != ResponseAction::Execute) {
     return;
   }
   bool sent = true;
@@ -233,18 +332,21 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
     sent = platform::sendConsumerControl(command->consumerUsage);
   }
   if (!sent) return;
-  writeLine(formatDone(command->eventId, command->step));
+  writeLine(formatDone(command->runId, command->step));
 }
 
 void servicePendingDelay(std::uint32_t nowMs) {
   if (!pendingDelay.has_value()) return;
   const auto delay = *pendingDelay;
+  if (delay.step < delay.total && !actionRuns.keepAlive(delay.runId, nowMs)) {
+    pendingDelay.reset();
+    return;
+  }
   if (nowMs - delay.startedMs < delay.durationMs) {
-    controller.keepPendingEventAlive(delay.eventId, nowMs);
     return;
   }
   pendingDelay.reset();
-  writeLine(formatDone(delay.eventId, delay.step));
+  writeLine(formatDone(delay.runId, delay.step));
 }
 
 void readHelperResponses(std::uint32_t nowMs) {
@@ -255,14 +357,29 @@ void readHelperResponses(std::uint32_t nowMs) {
     }
 
     const auto line = responseLines.push(static_cast<char>(value));
-    if (line.has_value()) handleResponseLine(*line, nowMs);
+    if (!line.has_value()) continue;
+    if (line->overflow) {
+      const auto displayError =
+          discardMalformedDisplayCommand(*remoteDisplay, line->line);
+      if (displayError.has_value()) writeLine(*displayError);
+      continue;
+    }
+    handleResponseLine(line->line, nowMs);
+  }
+}
+
+void resetHelperInput() {
+  responseLines = ResponseLineBuffer(kMaxResponseLineLength);
+  while (platform::available() > 0) {
+    if (platform::read() < 0) return;
   }
 }
 
 void emitInput(const std::optional<InputEvent> &event, bool learning) {
   if (event.has_value()) {
     displayStatus.recordInput(*event);
-    renderStatus();
+    showStatus(learning ? LocalDisplayPriority::Critical
+                        : LocalDisplayPriority::Normal);
     switch (keyIndicator.handle(event->state)) {
       case KeyIndicatorAction::ShowRandomColor:
         platform::showRandomKeyColor();
@@ -342,18 +459,30 @@ void loop() {
   initializeStandaloneDisplay(nowMs);
   const bool connected = platform::connected();
   if (connected != helperConnected) {
+    pendingDelay.reset();
+    actionRuns.reset();
+    resetHelperInput();
+    remoteDisplay.emplace();
+    platform::resetRemoteDisplay();
     displayStatus.setUsbConnected(connected);
-    renderStatus();
-    if (connected) writeLine(helloLine);
+    if (connected) {
+      applyDisplayUpdate(
+          displayController.helperConnected(displayStatus.frame()));
+      writeLine(helloLine);
+    } else {
+      applyDisplayUpdate(
+          displayController.helperDisconnected(helperOfflineFrame()));
+    }
   }
   helperConnected = connected;
   servicePendingDelay(nowMs);
-  controller.expire(nowMs);
-  readHelperResponses(nowMs);
+  actionRuns.expire(nowMs);
+  if (helperConnected) readHelperResponses(nowMs);
   if (controller.isLearning()) {
     scanLearningInputs(nowMs);
   } else {
     scanRuntimeInputs(nowMs);
   }
+  platform::serviceDisplay();
   platform::delayMs(1);
 }

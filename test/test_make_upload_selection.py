@@ -1,9 +1,8 @@
 import os
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 import pytest
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -12,6 +11,9 @@ def run_make(
     tmp_path: Path,
     target: str,
     *,
+    build_id: str | None = "test-build",
+    env_file: Path | None = None,
+    extra_environment: dict[str, str] | None = None,
     serial: str | None = None,
     selected_serial: str = "SELECTED-SERIAL",
     runtime_serial: str | None = None,
@@ -22,7 +24,7 @@ def run_make(
     fake_uv.write_text(
         """#!/bin/sh
 set -eu
-printf '%s\\n' "$*" >> "$KIVO_TEST_LOG"
+printf '%s|%s\\n' "${KIVO_FIRMWARE_BUILD_ID-}" "$*" >> "$KIVO_TEST_LOG"
 case " $* " in
   *" scripts/select_firmware_target.py "*)
     if [ "$KIVO_SELECTOR_EXIT" -ne 0 ]; then
@@ -46,7 +48,12 @@ esac
         "KIVO_RUNTIME_SERIAL": runtime_serial or selected_serial,
         "KIVO_SELECTOR_EXIT": str(selector_exit),
     }
-    command = ["make", target, f"UV={fake_uv}", "BUILD_ID=test-build"]
+    environment.update(extra_environment or {})
+    command = ["make", target, f"UV={fake_uv}"]
+    if build_id is not None:
+        command.append(f"BUILD_ID={build_id}")
+    if env_file is not None:
+        command.append(f"ENV_FILE={env_file}")
     if serial is not None:
         command.append(f"SERIAL={serial}")
 
@@ -60,6 +67,92 @@ esac
     )
     invocations = log_path.read_text().splitlines() if log_path.exists() else []
     return result, invocations
+
+
+def test_make_uses_env_version_as_default_build_id(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("version=v1.2.3\n")
+    result, invocations = run_make(
+        tmp_path, "build-rp2040", build_id=None, env_file=env_file
+    )
+    assert result.returncode == 0, result.stderr
+    assert any(line.startswith("v1.2.3|") for line in invocations)
+    assert all("+dev" not in line for line in invocations)
+
+
+@pytest.mark.parametrize(
+    ("contents", "error"),
+    [
+        ("version=not-a-tag\n", "expected vX.Y.Z"),
+        (
+            "version=v1.2.3\nversion=v1.2.4\n",
+            "must contain exactly one version=vX.Y.Z line",
+        ),
+        (
+            "version=v1.2.3\nBUILD_ID=bypass\n",
+            "must contain exactly one version=vX.Y.Z line",
+        ),
+        (
+            "version=v1.2.3\nPYTHON=/usr/bin/true\n",
+            "must contain exactly one version=vX.Y.Z line",
+        ),
+    ],
+)
+def test_make_rejects_invalid_env_before_firmware_tools(
+    tmp_path: Path, contents: str, error: str
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(contents)
+
+    result, invocations = run_make(
+        tmp_path, "build-rp2040", build_id=None, env_file=env_file
+    )
+
+    assert result.returncode != 0
+    assert error in result.stderr
+    assert invocations == []
+
+
+def test_make_firmware_target_explains_missing_env(tmp_path: Path) -> None:
+    result, invocations = run_make(
+        tmp_path,
+        "build-rp2040",
+        build_id=None,
+        env_file=tmp_path / "missing.env",
+    )
+    assert result.returncode != 0
+    assert "cp .env.example .env" in result.stderr
+    assert invocations == []
+
+
+def test_make_ignores_ambient_version_when_env_file_is_missing(
+    tmp_path: Path,
+) -> None:
+    result, invocations = run_make(
+        tmp_path,
+        "build-rp2040",
+        build_id=None,
+        env_file=tmp_path / "missing.env",
+        extra_environment={"version": "v9.9.9"},
+    )
+    assert result.returncode != 0
+    assert "cp .env.example .env" in result.stderr
+    assert invocations == []
+
+
+def test_explicit_environment_build_id_does_not_require_env_file(
+    tmp_path: Path,
+) -> None:
+    result, invocations = run_make(
+        tmp_path,
+        "build-rp2040",
+        build_id=None,
+        env_file=tmp_path / "missing.env",
+        extra_environment={"BUILD_ID": "feature/custom+1"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert any(line.startswith("feature/custom+1|") for line in invocations)
 
 
 def test_explicit_serial_bypasses_selector_and_reaches_rp2040_tools(

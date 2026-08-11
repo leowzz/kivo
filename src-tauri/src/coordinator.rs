@@ -1,5 +1,8 @@
+#[cfg(test)]
+use crate::profile::{TriggerActions, TriggerSettings};
 use crate::{
     device::{LearningTarget, RuntimeActivity, RuntimeProfileSnapshot},
+    display::{DisplaySnapshot, RendererRegistry, built_in_renderer_registry},
     hardware::{BoardProfile, DeviceId, HardwareRegistry, compiled_registry},
     metrics::{HomeMetricsSnapshot, MetricAttribution},
     paste::PasteHandle,
@@ -165,6 +168,8 @@ pub struct DeviceStatus {
     pub controller_family_id: String,
     pub board_profile_id: String,
     pub firmware_build_id: Option<String>,
+    #[serde(rename = "firmwareProtocol")]
+    pub firmware_protocol: Option<u16>,
     #[serde(rename = "capabilities")]
     pub pins: Vec<u8>,
     pub runtime_assignment: Option<RuntimeAssignment>,
@@ -284,6 +289,7 @@ impl RuntimeEventContext {
 pub struct CapturedInput {
     pub(crate) context: RuntimeEventContext,
     pub(crate) runtime_profile: Option<Arc<RuntimeProfileSnapshot>>,
+    pub(crate) monotonic_ms: u64,
     pub(crate) event_id: u64,
     pub(crate) input: PhysicalInput,
     pub(crate) state: InputState,
@@ -314,6 +320,7 @@ pub enum WorkerCommand {
         receive_sequence: u64,
         captured: CapturedInput,
     },
+    UpdateDisplay(Arc<DisplaySnapshot>),
     Shutdown,
 }
 
@@ -360,6 +367,28 @@ pub trait WorkerLauncher: Send + Sync {
         start: WorkerStart,
         events: mpsc::Sender<WorkerEvent>,
     ) -> Result<Box<dyn DeviceWorker>, String>;
+
+    fn start_with_renderers(
+        &self,
+        start: WorkerStart,
+        events: mpsc::Sender<WorkerEvent>,
+        _renderers: WorkerRendererRegistry,
+    ) -> Result<Box<dyn DeviceWorker>, String> {
+        self.start(start, events)
+    }
+}
+
+/// Opaque carrier that keeps the renderer registry internal across the public launcher boundary.
+pub struct WorkerRendererRegistry(Arc<RendererRegistry>);
+
+impl WorkerRendererRegistry {
+    pub(crate) fn new(registry: Arc<RendererRegistry>) -> Self {
+        Self(registry)
+    }
+
+    pub(crate) fn into_inner(self) -> Arc<RendererRegistry> {
+        self.0
+    }
 }
 
 struct WorkerSlot {
@@ -447,6 +476,8 @@ pub struct RuntimeCoordinator {
     workspace: Arc<RwLock<Workspace>>,
     workspace_revision: WorkspaceRevision,
     paste: Option<PasteHandle>,
+    renderers: Arc<RendererRegistry>,
+    display_snapshot: Option<Arc<DisplaySnapshot>>,
     workers: BTreeMap<DeviceId, WorkerSlot>,
     devices: BTreeMap<DeviceId, DeviceStatus>,
     candidates: Vec<CandidateStatus>,
@@ -522,15 +553,57 @@ impl RuntimeCoordinator {
         workspace: Arc<RwLock<Workspace>>,
         paste: Option<PasteHandle>,
     ) -> Self {
-        Self::with_registry_and_paste(enumerator, launcher, workspace, paste, compiled_registry())
+        Self::with_paste_and_renderers(
+            enumerator,
+            launcher,
+            workspace,
+            paste,
+            Arc::new(built_in_renderer_registry()),
+        )
     }
 
+    pub(crate) fn with_paste_and_renderers(
+        enumerator: Arc<dyn UsbEnumerator>,
+        launcher: Arc<dyn WorkerLauncher>,
+        workspace: Arc<RwLock<Workspace>>,
+        paste: Option<PasteHandle>,
+        renderers: Arc<RendererRegistry>,
+    ) -> Self {
+        Self::with_registry_paste_and_renderers(
+            enumerator,
+            launcher,
+            workspace,
+            paste,
+            compiled_registry(),
+            renderers,
+        )
+    }
+
+    #[cfg(test)]
     fn with_registry_and_paste(
         enumerator: Arc<dyn UsbEnumerator>,
         launcher: Arc<dyn WorkerLauncher>,
         workspace: Arc<RwLock<Workspace>>,
         paste: Option<PasteHandle>,
         registry: HardwareRegistry<'static>,
+    ) -> Self {
+        Self::with_registry_paste_and_renderers(
+            enumerator,
+            launcher,
+            workspace,
+            paste,
+            registry,
+            Arc::new(built_in_renderer_registry()),
+        )
+    }
+
+    fn with_registry_paste_and_renderers(
+        enumerator: Arc<dyn UsbEnumerator>,
+        launcher: Arc<dyn WorkerLauncher>,
+        workspace: Arc<RwLock<Workspace>>,
+        paste: Option<PasteHandle>,
+        registry: HardwareRegistry<'static>,
+        renderers: Arc<RendererRegistry>,
     ) -> Self {
         let (event_sender, event_receiver) = mpsc::channel();
         let workspace_revision = {
@@ -546,6 +619,8 @@ impl RuntimeCoordinator {
             workspace,
             workspace_revision,
             paste,
+            renderers,
+            display_snapshot: None,
             workers: BTreeMap::new(),
             devices: BTreeMap::new(),
             candidates: Vec::new(),
@@ -629,6 +704,7 @@ impl RuntimeCoordinator {
                     status.latest_error = Some(RuntimeActivity::new("duplicate_identity"));
                     status.port = None;
                     status.firmware_build_id = None;
+                    status.firmware_protocol = None;
                     status.pins.clear();
                     status.learning = None;
                 }
@@ -675,6 +751,7 @@ impl RuntimeCoordinator {
                                 status.runtime = RuntimeDimension::Inactive;
                                 status.port = None;
                                 status.firmware_build_id = None;
+                                status.firmware_protocol = None;
                                 status.pins.clear();
                                 status.learning = None;
                                 status.latest_error = Some(runtime_error(error));
@@ -709,8 +786,30 @@ impl RuntimeCoordinator {
                         port: observation.port.clone(),
                         board_profile_id: board.id.into(),
                     };
-                    match self.launcher.start(start, self.event_sender.clone()) {
-                        Ok(worker) => {
+                    match self.launcher.start_with_renderers(
+                        start,
+                        self.event_sender.clone(),
+                        WorkerRendererRegistry::new(Arc::clone(&self.renderers)),
+                    ) {
+                        Ok(mut worker) => {
+                            if let Some(error) =
+                                self.display_snapshot.as_ref().and_then(|snapshot| {
+                                    worker
+                                        .send(WorkerCommand::UpdateDisplay(Arc::clone(snapshot)))
+                                        .err()
+                                })
+                            {
+                                worker.stop();
+                                worker.join();
+                                self.candidates.push(candidate_from_runtime(
+                                    board,
+                                    observation,
+                                    Some(device_id),
+                                    IdentityDimension::Validating,
+                                    Some(error),
+                                ));
+                                continue;
+                            }
                             self.workers.insert(
                                 device_id.clone(),
                                 WorkerSlot {
@@ -762,6 +861,7 @@ impl RuntimeCoordinator {
                 status.runtime = RuntimeDimension::Inactive;
                 status.port = None;
                 status.firmware_build_id = None;
+                status.firmware_protocol = None;
                 status.pins.clear();
                 status.latest_error = None;
                 status.learning = None;
@@ -859,6 +959,7 @@ impl RuntimeCoordinator {
                         status.runtime = RuntimeDimension::Inactive;
                         status.latest_error = None;
                     } else if activity.code == "topology_rejected"
+                        || activity.code == "firmware_update_required"
                         || activity.code.ends_with("failed")
                         || activity.code.ends_with("mismatch")
                         || activity.code.ends_with("timeout")
@@ -883,6 +984,7 @@ impl RuntimeCoordinator {
                     status.mode = None;
                     status.runtime = RuntimeDimension::Inactive;
                     status.firmware_build_id = None;
+                    status.firmware_protocol = None;
                     status.pins.clear();
                     status.port = None;
                     status.learning = None;
@@ -966,6 +1068,7 @@ impl RuntimeCoordinator {
             status.mode = Some(DeviceMode::Runtime);
             status.identity = IdentityDimension::Valid;
             status.firmware_build_id = Some(capabilities.firmware_build_id.clone());
+            status.firmware_protocol = Some(capabilities.protocol);
             status.pins = capabilities.pins;
             status.port = self.workers.get(&device_id).map(|slot| slot.port.clone());
             status.runtime = if profile.is_some() {
@@ -1065,6 +1168,26 @@ impl RuntimeCoordinator {
         slot.worker
             .send(WorkerCommand::Reconfigure { snapshot, revision })?;
         Ok(revision)
+    }
+
+    pub fn update_display(&mut self, snapshot: Arc<DisplaySnapshot>) {
+        self.display_snapshot = Some(Arc::clone(&snapshot));
+        let failures = self
+            .workers
+            .iter()
+            .filter_map(|(id, slot)| {
+                slot.worker
+                    .send(WorkerCommand::UpdateDisplay(Arc::clone(&snapshot)))
+                    .err()
+                    .map(|error| (id.clone(), error))
+            })
+            .collect::<Vec<_>>();
+        for (id, error) in failures {
+            if let Some(status) = self.devices.get_mut(&id) {
+                status.runtime = RuntimeDimension::RuntimeError;
+                status.latest_error = Some(runtime_error(error));
+            }
+        }
     }
 
     pub fn apply_workspace_revision(&mut self, next: WorkspaceRevision) {
@@ -1451,6 +1574,7 @@ fn set_observed(
     status.board_profile_id = observation.board().id.into();
     if observation.mode() == DeviceMode::Bootloader {
         status.firmware_build_id = None;
+        status.firmware_protocol = None;
         status.pins.clear();
         status.learning = None;
         status.latest_error = None;
@@ -1498,6 +1622,7 @@ fn candidate_issue(
                 }
                 Some(
                     "protocol_mismatch"
+                    | "firmware_update_required"
                     | "controller_family_mismatch"
                     | "board_profile_mismatch"
                     | "capability_mismatch",
@@ -1537,6 +1662,11 @@ fn workspace_worker_update(
     let new_profile = new.profiles.get(&assignment.device_profile_id);
     if old_profile == new_profile {
         return None;
+    }
+    if old_profile.map(DeviceProfile::minimum_protocol_version)
+        != new_profile.map(DeviceProfile::minimum_protocol_version)
+    {
+        return Some(WorkspaceWorkerUpdate::Reconfigure);
     }
     let change = match (old_profile, new_profile) {
         (None, None) => return None,
@@ -1599,6 +1729,7 @@ fn offline_status(
         controller_family_id: board.family_id.into(),
         board_profile_id: board.id.into(),
         firmware_build_id: None,
+        firmware_protocol: None,
         pins: Vec::new(),
         runtime_assignment,
         latest_error: None,
@@ -1633,6 +1764,7 @@ mod tests {
     use super::*;
     use crate::{
         device::DeviceSession,
+        display::SourceHealth,
         hardware::{
             BOARD_PROFILES, BoardProfile, DeviceId, TEST_ESP32C3_BOARD_ID,
             TEST_SECOND_RP2040_BOARD_ID, test_registry,
@@ -1958,9 +2090,12 @@ mod tests {
         starts: Mutex<Vec<WorkerStart>>,
         failures: Mutex<BTreeMap<String, String>>,
         update_port_failures: Arc<Mutex<BTreeSet<String>>>,
+        display_failures: Arc<Mutex<BTreeSet<DeviceId>>>,
         hellos: Mutex<BTreeMap<String, HelloCapabilities>>,
         stopped: Arc<Mutex<Vec<DeviceId>>>,
+        joined: Arc<Mutex<Vec<DeviceId>>>,
         commands: Arc<Mutex<BTreeMap<DeviceId, Vec<WorkerCommand>>>>,
+        renderers: Mutex<Option<Arc<RendererRegistry>>>,
     }
 
     impl FakeLauncher {
@@ -1976,6 +2111,13 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(port.into());
+        }
+
+        fn fail_display(&self, device_id: &DeviceId) {
+            self.display_failures
+                .lock()
+                .unwrap()
+                .insert(device_id.clone());
         }
 
         fn starts(&self) -> Vec<WorkerStart> {
@@ -2013,19 +2155,34 @@ mod tests {
                 .cloned()
                 .unwrap_or_default()
         }
+
+        fn renderers(&self) -> Option<Arc<RendererRegistry>> {
+            self.renderers.lock().unwrap().clone()
+        }
     }
 
     struct FakeWorker {
         device_id: DeviceId,
         stopped: Arc<Mutex<Vec<DeviceId>>>,
+        joined: Arc<Mutex<Vec<DeviceId>>>,
         commands: Arc<Mutex<BTreeMap<DeviceId, Vec<WorkerCommand>>>>,
         update_port_failures: Arc<Mutex<BTreeSet<String>>>,
+        display_failures: Arc<Mutex<BTreeSet<DeviceId>>>,
     }
 
     impl DeviceWorker for FakeWorker {
         fn send(&self, command: WorkerCommand) -> Result<(), String> {
             if let WorkerCommand::UpdatePort(port) = &command
                 && self.update_port_failures.lock().unwrap().contains(port)
+            {
+                return Err("device_worker_stopped".into());
+            }
+            if matches!(command, WorkerCommand::UpdateDisplay(_))
+                && self
+                    .display_failures
+                    .lock()
+                    .unwrap()
+                    .contains(&self.device_id)
             {
                 return Err("device_worker_stopped".into());
             }
@@ -2042,7 +2199,9 @@ mod tests {
             self.stopped.lock().unwrap().push(self.device_id.clone());
         }
 
-        fn join(&mut self) {}
+        fn join(&mut self) {
+            self.joined.lock().unwrap().push(self.device_id.clone());
+        }
     }
 
     impl WorkerLauncher for FakeLauncher {
@@ -2071,9 +2230,21 @@ mod tests {
             Ok(Box::new(FakeWorker {
                 device_id: start.device_id,
                 stopped: Arc::clone(&self.stopped),
+                joined: Arc::clone(&self.joined),
                 commands: Arc::clone(&self.commands),
                 update_port_failures: Arc::clone(&self.update_port_failures),
+                display_failures: Arc::clone(&self.display_failures),
             }))
+        }
+
+        fn start_with_renderers(
+            &self,
+            start: WorkerStart,
+            events: Sender<WorkerEvent>,
+            renderers: WorkerRendererRegistry,
+        ) -> Result<Box<dyn DeviceWorker>, String> {
+            *self.renderers.lock().unwrap() = Some(renderers.into_inner());
+            self.start(start, events)
         }
     }
 
@@ -2101,6 +2272,7 @@ mod tests {
         DeviceProfile {
             schema_version: PROFILE_SCHEMA_VERSION,
             profile: crate::profile::test_model_layout(),
+            trigger_settings: TriggerSettings::default(),
             hardware_profiles: vec![HardwareProfile {
                 id: "esp".into(),
                 name: "ESP".into(),
@@ -2296,6 +2468,7 @@ mod tests {
             captured: CapturedInput {
                 context: RuntimeEventContext::unassigned(timestamp_ms),
                 runtime_profile: None,
+                monotonic_ms: timestamp_ms,
                 event_id,
                 input: PhysicalInput::Direct { gpio: 6 },
                 state: InputState::Down,
@@ -2336,6 +2509,153 @@ mod tests {
                 && status.identity == IdentityDimension::Valid
                 && status.assignment == AssignmentDimension::Unassigned
         }));
+    }
+
+    #[test]
+    fn display_snapshot_fans_out_without_mutating_worker_profile_revisions() {
+        let (_directory, enumerator, launcher, mut coordinator) = harness();
+        enumerator.set(
+            vec![
+                serial("/dev/esp-a", 0x303a, 0x4002, Some("ESP-A")),
+                serial("/dev/esp-b", 0x303a, 0x4002, Some("ESP-B")),
+            ],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+        launcher.clear_commands();
+        let revisions = coordinator
+            .workers
+            .iter()
+            .map(|(id, slot)| (id.clone(), slot.firmware_revision))
+            .collect::<BTreeMap<_, _>>();
+        let snapshot = Arc::new(DisplaySnapshot {
+            items: Vec::new(),
+            health: BTreeMap::new(),
+        });
+
+        coordinator.update_display(Arc::clone(&snapshot));
+
+        assert_eq!(coordinator.workers.len(), 2);
+        for id in coordinator.workers.keys() {
+            assert!(matches!(
+                launcher.commands_for(id).as_slice(),
+                [WorkerCommand::UpdateDisplay(actual)] if Arc::ptr_eq(actual, &snapshot)
+            ));
+        }
+        assert_eq!(
+            coordinator
+                .workers
+                .iter()
+                .map(|(id, slot)| (id.clone(), slot.firmware_revision))
+                .collect::<BTreeMap<_, _>>(),
+            revisions
+        );
+    }
+
+    #[test]
+    fn display_snapshot_received_before_hotplug_is_replayed_to_the_new_worker() {
+        let (_directory, enumerator, launcher, mut coordinator) = harness();
+        let snapshot = Arc::new(DisplaySnapshot {
+            items: Vec::new(),
+            health: BTreeMap::from([("codex".into(), SourceHealth::Offline)]),
+        });
+        coordinator.update_display(Arc::clone(&snapshot));
+        enumerator.set(
+            vec![serial("/dev/rp", 0x2e8a, 0x102e, Some("HOTPLUG"))],
+            Vec::new(),
+        );
+
+        scan(&mut coordinator);
+
+        let id = DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "HOTPLUG").unwrap();
+        assert!(matches!(
+            launcher.commands_for(&id).first(),
+            Some(WorkerCommand::UpdateDisplay(actual)) if Arc::ptr_eq(actual, &snapshot)
+        ));
+    }
+
+    #[test]
+    fn restarted_worker_receives_only_the_latest_retained_display_snapshot() {
+        let (_directory, enumerator, launcher, mut coordinator) = harness();
+        enumerator.set(
+            vec![serial("/dev/rp", 0x2e8a, 0x102e, Some("RESTART"))],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+        let stale = Arc::new(DisplaySnapshot {
+            items: Vec::new(),
+            health: BTreeMap::from([("codex".into(), SourceHealth::Healthy)]),
+        });
+        let latest = Arc::new(DisplaySnapshot {
+            items: Vec::new(),
+            health: BTreeMap::from([("codex".into(), SourceHealth::Offline)]),
+        });
+        coordinator.update_display(stale);
+        coordinator.update_display(Arc::clone(&latest));
+        enumerator.set(Vec::new(), Vec::new());
+        scan(&mut coordinator);
+        launcher.clear_commands();
+
+        enumerator.set(
+            vec![serial("/dev/rp", 0x2e8a, 0x102e, Some("RESTART"))],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+
+        let id = DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "RESTART").unwrap();
+        assert!(matches!(
+            launcher.commands_for(&id).first(),
+            Some(WorkerCommand::UpdateDisplay(actual)) if Arc::ptr_eq(actual, &latest)
+        ));
+    }
+
+    #[test]
+    fn failed_initial_display_replay_does_not_insert_the_worker() {
+        let (_directory, enumerator, launcher, mut coordinator) = harness();
+        let id = DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "DISPLAY-FAIL").unwrap();
+        coordinator.update_display(Arc::new(DisplaySnapshot {
+            items: Vec::new(),
+            health: BTreeMap::new(),
+        }));
+        launcher.fail_display(&id);
+        enumerator.set(
+            vec![serial("/dev/rp", 0x2e8a, 0x102e, Some("DISPLAY-FAIL"))],
+            Vec::new(),
+        );
+
+        scan(&mut coordinator);
+
+        assert!(!coordinator.workers.contains_key(&id));
+        assert_eq!(*launcher.stopped.lock().unwrap(), vec![id.clone()]);
+        assert_eq!(*launcher.joined.lock().unwrap(), vec![id.clone()]);
+        assert!(coordinator.candidates().iter().any(|candidate| {
+            candidate.device_id.as_ref() == Some(&id)
+                && candidate.latest_error.as_deref() == Some("device_worker_stopped")
+        }));
+    }
+
+    #[test]
+    fn injected_renderer_registry_is_shared_with_spawned_workers() {
+        let directory = TestDirectory::new();
+        let workspace = Workspace::create(&directory.0, vec![profile()]).unwrap();
+        let enumerator = Arc::new(FakeEnumerator::default());
+        let launcher = Arc::new(FakeLauncher::default());
+        let renderers = Arc::new(built_in_renderer_registry());
+        let mut coordinator = RuntimeCoordinator::with_paste_and_renderers(
+            enumerator.clone(),
+            launcher.clone(),
+            Arc::new(RwLock::new(workspace)),
+            None,
+            Arc::clone(&renderers),
+        );
+        enumerator.set(
+            vec![serial("/dev/rp", 0x2e8a, 0x102e, Some("DISPLAY"))],
+            Vec::new(),
+        );
+
+        scan(&mut coordinator);
+
+        assert!(Arc::ptr_eq(&launcher.renderers().unwrap(), &renderers));
     }
 
     #[test]
@@ -2427,18 +2747,18 @@ mod tests {
         }];
         old_profile.actions.insert(
             "UP".into(),
-            vec![ButtonAction::Paste {
+            TriggerActions::press(vec![ButtonAction::Paste {
                 text: "old action".into(),
-            }],
+            }]),
         );
         let mut new_profile = old_profile.clone();
         new_profile.profile.id = "new-profile".into();
         new_profile.profile.name = "New profile".into();
         new_profile.actions.insert(
             "UP".into(),
-            vec![ButtonAction::Paste {
+            TriggerActions::press(vec![ButtonAction::Paste {
                 text: "new action".into(),
-            }],
+            }]),
         );
         {
             let mut workspace = coordinator.workspace.write().unwrap();
@@ -2528,7 +2848,7 @@ mod tests {
         assert_eq!(forwarded, &captured);
         assert_eq!(new_snapshot.profile.profile.id, "new-profile");
         assert_eq!(
-            forwarded.runtime_profile.as_ref().unwrap().profile.actions["UP"][0],
+            forwarded.runtime_profile.as_ref().unwrap().profile.actions["UP"].press[0],
             ButtonAction::Paste {
                 text: "old action".into()
             }
@@ -3181,9 +3501,9 @@ mod tests {
         let mut new = old.clone();
         new.actions.insert(
             "UP".into(),
-            vec![crate::profile::ButtonAction::Paste {
+            TriggerActions::press(vec![crate::profile::ButtonAction::Paste {
                 text: "updated".into(),
-            }],
+            }]),
         );
         coordinator
             .workspace

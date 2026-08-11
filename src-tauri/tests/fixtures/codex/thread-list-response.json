@@ -1,0 +1,6 @@
+{"id":2,"result":{"data":[
+  {"id":"thread-a","name":"OLED design","cwd":"/work/kivo","updatedAt":10,
+   "status":{"type":"active","activeFlags":["waitingOnUserInput"]}},
+  {"id":"thread-b","name":null,"cwd":"/work/mindcraft","updatedAt":9,
+   "status":{"type":"notLoaded"}}
+],"nextCursor":null}}

@@ -1,19 +1,26 @@
 #[cfg(test)]
 use crate::hardware::board_by_runtime_usb;
+#[cfg(test)]
+use crate::profile::{TriggerActions, TriggerSettings};
 use crate::{
     coordinator::{
         CapturedInput, DeviceWorker, RuntimeEventContext, WorkerCommand, WorkerEvent,
-        WorkerLauncher, WorkerStart,
+        WorkerLauncher, WorkerRendererRegistry, WorkerStart,
+    },
+    display::{
+        DisplayRenderer, DisplaySnapshot, RenderedScene, RendererRegistry, SceneTracker,
+        SceneUpdate, built_in_renderer_registry,
     },
     hardware::{BoardProfile, DeviceId},
     metrics::{HomeMetricsSnapshot, MetricAttribution, MetricsStore},
     paste::{Clock, PasteHandle, PasteReply, PasteRequest, SystemClock},
-    profile::DeviceProfile,
+    profile::{ActionTrigger, DeviceProfile},
     protocol::{
-        ADVANCED_ACTION_PROTOCOL_VERSION, ActionSequence, DeviceMessage, HelloCapabilities,
-        InputState, OLED_PROTOCOL_VERSION, PhysicalInput, format_paste_command, is_hello_line,
-        parse_device, topology_commands, validate_hello,
+        ACTION_RUN_PROTOCOL_VERSION, ActionSequence, DISPLAY_PROTOCOL_VERSION, DeviceMessage,
+        HelloCapabilities, InputState, OLED_PROTOCOL_VERSION, PhysicalInput, display_commands,
+        format_paste_command, is_hello_line, parse_device, topology_commands, validate_hello,
     },
+    trigger::{TriggerEdge, TriggerOccurrence, TriggerTracker},
 };
 use serde::Serialize;
 #[cfg(test)]
@@ -34,6 +41,8 @@ use std::{
 use std::process::Command;
 
 const ACTION_ACK_TIMEOUT: Duration = Duration::from_millis(1800);
+const DISPLAY_ACK_TIMEOUT: Duration = Duration::from_secs(2);
+const SSD1306_PANEL_ID: &str = "ssd1306_128x32_mono";
 const EMPTY_TOPOLOGY_DEBOUNCE_MS: u16 = 30;
 pub(crate) const SERIAL_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(10);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -117,7 +126,13 @@ pub struct DeviceSession {
     active: Option<ActionSequence>,
     active_snapshot: Option<Arc<RuntimeProfileSnapshot>>,
     active_context: Option<RuntimeEventContext>,
-    queue: VecDeque<QueuedInput>,
+    active_release_placeholder: Option<u64>,
+    queue: VecDeque<QueuedOccurrence>,
+    triggers: TriggerTracker,
+    next_run_id: u64,
+    pending_receive_sequences: BTreeMap<u64, usize>,
+    gesture_placeholders: BTreeMap<u64, usize>,
+    trigger_metadata: BTreeMap<(PhysicalInput, u64), TriggerMetadata>,
     active_receive_sequence: Option<u64>,
     pending_paste: Option<PendingPaste>,
     pending_reconfiguration: Option<PendingReconfiguration>,
@@ -146,12 +161,18 @@ pub struct RuntimeProfileSnapshot {
 }
 
 #[derive(Clone, Debug)]
-struct QueuedInput {
+struct TriggerMetadata {
     receive_sequence: u64,
     event_id: u64,
-    input: PhysicalInput,
-    snapshot: Arc<RuntimeProfileSnapshot>,
-    context: Option<RuntimeEventContext>,
+    placeholder_receive_sequence: Option<u64>,
+}
+
+#[derive(Clone, Debug)]
+struct QueuedOccurrence {
+    occurrence: TriggerOccurrence,
+    receive_sequence: u64,
+    event_id: u64,
+    release_placeholder: Option<u64>,
 }
 
 struct PendingReconfiguration {
@@ -192,7 +213,13 @@ impl DeviceSession {
             active: None,
             active_snapshot: None,
             active_context: None,
+            active_release_placeholder: None,
             queue: VecDeque::new(),
+            triggers: TriggerTracker::default(),
+            next_run_id: 1,
+            pending_receive_sequences: BTreeMap::new(),
+            gesture_placeholders: BTreeMap::new(),
+            trigger_metadata: BTreeMap::new(),
             active_receive_sequence: None,
             pending_paste: None,
             pending_reconfiguration: None,
@@ -213,7 +240,13 @@ impl DeviceSession {
             active: None,
             active_snapshot: None,
             active_context: None,
+            active_release_placeholder: None,
             queue: VecDeque::new(),
+            triggers: TriggerTracker::default(),
+            next_run_id: 1,
+            pending_receive_sequences: BTreeMap::new(),
+            gesture_placeholders: BTreeMap::new(),
+            trigger_metadata: BTreeMap::new(),
             active_receive_sequence: None,
             pending_paste: None,
             pending_reconfiguration: None,
@@ -243,6 +276,8 @@ impl DeviceSession {
         self.end_active_learning(&mut output);
         self.pending_learning = None;
         self.settle_queued(&mut output);
+        self.reset_gestures();
+        self.settle_placeholders(&mut output);
         self.ready = false;
         self.configuring = None;
         self.profile = snapshot.clone();
@@ -286,6 +321,8 @@ impl DeviceSession {
         self.configuring = None;
         self.ready = false;
         self.settle_queued(&mut output);
+        self.reset_gestures();
+        self.settle_placeholders(&mut output);
         self.pending_learning = Some(target);
         self.start_pending_control(&mut output);
         output
@@ -321,14 +358,14 @@ impl DeviceSession {
     pub fn fail_active_deferred(&mut self, code: &str, detail: Option<String>) -> SessionOutput {
         let mut output = SessionOutput::default();
         if let Some(mut sequence) = self.active.take() {
-            let event_id = sequence.event_id();
+            let run_id = sequence.run_id();
             let detail = if code == "action_step_failed" && sequence.is_awaiting_paste() {
                 Some("clipboard_write_failed".into())
             } else {
                 detail
             };
             sequence.abort();
-            output.lines.push(format!("SKIP {event_id}\n"));
+            output.lines.push(format!("SKIP {run_id}\n"));
             let mut activity = RuntimeActivity::new(code);
             activity.detail = detail;
             activity.context = self.active_context.clone();
@@ -337,7 +374,8 @@ impl DeviceSession {
             self.active_snapshot = None;
             self.active_context = None;
             if let Some(receive_sequence) = self.active_receive_sequence.take() {
-                output.completed_receive_sequences.push(receive_sequence);
+                let release_placeholder = self.active_release_placeholder.take();
+                self.finish_queued_occurrence(receive_sequence, release_placeholder, &mut output);
             }
             self.start_next(&mut output);
         }
@@ -423,13 +461,14 @@ impl DeviceSession {
                     state,
                     receive_sequence,
                     occurred_at_ms,
+                    occurred_at_ms,
                     snapshot,
                     action_snapshot,
                     None,
                     &mut output,
                 );
             }
-            DeviceMessage::Done { event_id, step } => self.handle_done(event_id, step, &mut output),
+            DeviceMessage::Done { run_id, step } => self.handle_done(run_id, step, &mut output),
             DeviceMessage::LearnOk { revision }
                 if self
                     .learning
@@ -480,11 +519,15 @@ impl DeviceSession {
             }
             DeviceMessage::ConfigOk { .. }
             | DeviceMessage::ConfigError { .. }
-            | DeviceMessage::LearnOk { .. } => {}
+            | DeviceMessage::LearnOk { .. }
+            | DeviceMessage::DisplayOk { .. }
+            | DeviceMessage::DisplayResync { .. }
+            | DeviceMessage::DisplayError { .. } => {}
         }
         output
     }
 
+    #[cfg(test)]
     pub(crate) fn capture_input(
         &self,
         current_context: &RuntimeEventContext,
@@ -493,9 +536,29 @@ impl DeviceSession {
         input: PhysicalInput,
         state: InputState,
     ) -> CapturedInput {
+        self.capture_input_with_monotonic(
+            current_context,
+            received_at_ms,
+            received_at_ms,
+            event_id,
+            input,
+            state,
+        )
+    }
+
+    pub(crate) fn capture_input_with_monotonic(
+        &self,
+        current_context: &RuntimeEventContext,
+        received_at_ms: u64,
+        monotonic_ms: u64,
+        event_id: u64,
+        input: PhysicalInput,
+        state: InputState,
+    ) -> CapturedInput {
         CapturedInput {
             context: current_context.with_timestamp(received_at_ms),
             runtime_profile: self.runtime_profile_for_input(),
+            monotonic_ms,
             event_id,
             input,
             state,
@@ -515,6 +578,7 @@ impl DeviceSession {
             captured.state,
             receive_sequence,
             captured.context.timestamp_ms,
+            captured.monotonic_ms,
             snapshot.clone(),
             snapshot,
             Some(captured.context.clone()),
@@ -531,6 +595,7 @@ impl DeviceSession {
         state: InputState,
         receive_sequence: u64,
         occurred_at_ms: u64,
+        monotonic_ms: u64,
         metric_snapshot: Option<Arc<RuntimeProfileSnapshot>>,
         action_snapshot: Option<Arc<RuntimeProfileSnapshot>>,
         context: Option<RuntimeEventContext>,
@@ -561,25 +626,232 @@ impl DeviceSession {
             activity.params.insert("button".into(), button);
         }
         output.activities.push(activity);
-        if state == InputState::Down {
-            if let Some(snapshot) = action_snapshot {
-                self.queue.push_back(QueuedInput {
-                    receive_sequence,
-                    event_id,
-                    input,
-                    snapshot,
-                    context: context.clone(),
-                });
-                self.start_next(output);
-            } else {
+        let Some(snapshot) = action_snapshot else {
+            if state == InputState::Down {
                 output.lines.push(format!("SKIP {event_id}\n"));
-                output.completed_receive_sequences.push(receive_sequence);
+            }
+            output.completed_receive_sequences.push(receive_sequence);
+            if state == InputState::Down {
                 output
                     .activities
                     .push(RuntimeActivity::new("input_before_configuration").with_context(context));
             }
+            return;
+        };
+
+        if self.is_v6() {
+            let mut metadata = TriggerMetadata {
+                receive_sequence,
+                event_id,
+                placeholder_receive_sequence: None,
+            };
+            let edge = TriggerEdge {
+                input,
+                state,
+                monotonic_ms,
+                snapshot,
+                context,
+            };
+            let occurrences = self.triggers.edge(edge);
+            if state == InputState::Down && !occurrences.is_empty() {
+                metadata.placeholder_receive_sequence = Some(receive_sequence);
+                *self
+                    .pending_receive_sequences
+                    .entry(receive_sequence)
+                    .or_default() += 1;
+                *self
+                    .gesture_placeholders
+                    .entry(receive_sequence)
+                    .or_default() += 1;
+                self.trigger_metadata.insert(
+                    (input, occurrences[0].origin_monotonic_ms),
+                    metadata.clone(),
+                );
+            }
+            let release_origins = occurrences
+                .iter()
+                .filter(|occurrence| occurrence.trigger == ActionTrigger::Release)
+                .map(|occurrence| occurrence.origin_monotonic_ms)
+                .collect::<Vec<_>>();
+            self.enqueue_occurrences(occurrences, metadata, state == InputState::Up, output);
+            for origin in release_origins {
+                self.trigger_metadata.remove(&(input, origin));
+            }
+            self.start_next(output);
+        } else if state == InputState::Down {
+            let occurrence = TriggerOccurrence {
+                sequence: 0,
+                input,
+                trigger: ActionTrigger::Press,
+                origin_monotonic_ms: monotonic_ms,
+                snapshot,
+                context,
+            };
+            self.queue.push_back(QueuedOccurrence {
+                occurrence,
+                receive_sequence,
+                event_id,
+                release_placeholder: None,
+            });
+            self.start_next(output);
         } else {
             output.completed_receive_sequences.push(receive_sequence);
+        }
+    }
+
+    fn is_v6(&self) -> bool {
+        self.hello
+            .as_ref()
+            .is_some_and(|hello| hello.protocol >= ACTION_RUN_PROTOCOL_VERSION)
+    }
+
+    fn enqueue_occurrences(
+        &mut self,
+        occurrences: Vec<TriggerOccurrence>,
+        fallback_metadata: TriggerMetadata,
+        prefer_fallback: bool,
+        output: &mut SessionOutput,
+    ) {
+        if occurrences.is_empty() {
+            if fallback_metadata.receive_sequence != 0 {
+                self.finish_receive_sequence(fallback_metadata.receive_sequence, output);
+            }
+            return;
+        }
+        for occurrence in occurrences {
+            let key = (occurrence.input, occurrence.origin_monotonic_ms);
+            let origin_metadata = self.trigger_metadata.get(&key).cloned();
+            let metadata = if prefer_fallback {
+                fallback_metadata.clone()
+            } else {
+                origin_metadata
+                    .clone()
+                    .unwrap_or_else(|| fallback_metadata.clone())
+            };
+            let release_placeholder = (occurrence.trigger == ActionTrigger::Release)
+                .then(|| origin_metadata.and_then(|metadata| metadata.placeholder_receive_sequence))
+                .flatten();
+            *self
+                .pending_receive_sequences
+                .entry(metadata.receive_sequence)
+                .or_default() += 1;
+            let mut activity = RuntimeActivity::new("trigger_occurred")
+                .with_param("trigger", trigger_name(occurrence.trigger))
+                .with_param(
+                    "originMonotonicMs",
+                    occurrence.origin_monotonic_ms.to_string(),
+                )
+                .with_context(occurrence.context.clone());
+            activity.input = Some(occurrence.input);
+            activity.pressed = Some(matches!(occurrence.trigger, ActionTrigger::Press));
+            if let Some(button) = occurrence
+                .snapshot
+                .profile
+                .button_for(&occurrence.snapshot.hardware_profile_id, &occurrence.input)
+            {
+                activity.params.insert("button".into(), button.into());
+            }
+            output.activities.push(activity);
+            self.queue.push_back(QueuedOccurrence {
+                occurrence,
+                receive_sequence: metadata.receive_sequence,
+                event_id: metadata.event_id,
+                release_placeholder,
+            });
+        }
+    }
+
+    fn finish_receive_sequence(&mut self, receive_sequence: u64, output: &mut SessionOutput) {
+        if let Some(pending) = self.pending_receive_sequences.get_mut(&receive_sequence) {
+            if *pending > 1 {
+                *pending -= 1;
+            } else {
+                self.pending_receive_sequences.remove(&receive_sequence);
+                output.completed_receive_sequences.push(receive_sequence);
+            }
+        } else {
+            output.completed_receive_sequences.push(receive_sequence);
+        }
+    }
+
+    fn finish_queued_occurrence(
+        &mut self,
+        receive_sequence: u64,
+        release_placeholder: Option<u64>,
+        output: &mut SessionOutput,
+    ) {
+        self.finish_receive_sequence(receive_sequence, output);
+        if let Some(placeholder) = release_placeholder {
+            self.finish_placeholder(placeholder, output);
+        }
+    }
+
+    fn finish_placeholder(&mut self, receive_sequence: u64, output: &mut SessionOutput) {
+        let present = if let Some(count) = self.gesture_placeholders.get_mut(&receive_sequence) {
+            if *count > 1 {
+                *count -= 1;
+            } else {
+                self.gesture_placeholders.remove(&receive_sequence);
+            }
+            true
+        } else {
+            false
+        };
+        if present {
+            self.finish_receive_sequence(receive_sequence, output);
+        }
+    }
+
+    fn settle_placeholders(&mut self, output: &mut SessionOutput) {
+        let placeholders = std::mem::take(&mut self.gesture_placeholders);
+        for (receive_sequence, count) in placeholders {
+            for _ in 0..count {
+                self.finish_receive_sequence(receive_sequence, output);
+            }
+        }
+    }
+
+    fn next_host_run_id(&mut self) -> u64 {
+        let run_id = self.next_run_id.max(1);
+        self.next_run_id = self.next_run_id.wrapping_add(1).max(1);
+        run_id
+    }
+
+    pub fn poll_triggers(&mut self, monotonic_ms: u64) -> SessionOutput {
+        let mut output = SessionOutput::default();
+        if !self.is_v6() {
+            return output;
+        }
+        let occurrences = self.triggers.poll(monotonic_ms);
+        self.enqueue_occurrences(
+            occurrences,
+            TriggerMetadata {
+                receive_sequence: 0,
+                event_id: 0,
+                placeholder_receive_sequence: None,
+            },
+            false,
+            &mut output,
+        );
+        self.start_next(&mut output);
+        output
+    }
+
+    pub fn next_trigger_deadline_ms(&self) -> Option<u64> {
+        self.is_v6()
+            .then(|| self.triggers.next_deadline_ms())
+            .flatten()
+    }
+
+    pub fn on_action_timeout(&mut self, run_id: u64, _monotonic_ms: u64) -> SessionOutput {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|active| active.run_id() == run_id)
+        {
+            self.fail_active_deferred("action_timeout", None)
+        } else {
+            SessionOutput::default()
         }
     }
 
@@ -609,6 +881,9 @@ impl DeviceSession {
 
     fn configure_for_hello(&mut self, hello: HelloCapabilities, output: &mut SessionOutput) {
         let snapshot = self.profile.clone();
+        if self.hello.is_some() {
+            self.settle_for_handshake(output);
+        }
         self.clear_handshake();
         if let Err(error) = validate_hello(self.candidate_board, &hello) {
             output.activities.push(activity_from_error(error));
@@ -669,12 +944,11 @@ impl DeviceSession {
             ));
             return;
         }
-        if runtime.profile.uses_advanced_actions()
-            && hello.protocol < ADVANCED_ACTION_PROTOCOL_VERSION
-        {
+        let minimum_protocol = runtime.profile.minimum_protocol_version();
+        if hello.protocol < minimum_protocol {
             output.activities.push(activity_from_error(
-                crate::workspace::AppError::new("protocol_mismatch")
-                    .with_param("expected", ADVANCED_ACTION_PROTOCOL_VERSION.to_string())
+                crate::workspace::AppError::new("firmware_update_required")
+                    .with_param("expected", minimum_protocol.to_string())
                     .with_param("actual", hello.protocol.to_string()),
             ));
             return;
@@ -687,7 +961,7 @@ impl DeviceSession {
                     revision: self.revision,
                     kind: ConfigurationKind::Activate,
                 });
-                output.lines = lines;
+                output.lines.extend(lines);
             }
             Err(error) => output.activities.push(activity_from_error(error)),
         }
@@ -702,13 +976,13 @@ impl DeviceSession {
             revision: self.revision,
             kind: ConfigurationKind::Clear,
         });
-        output.lines = vec![
+        output.lines.extend([
             format!(
                 "CONFIG_BEGIN {} {EMPTY_TOPOLOGY_DEBOUNCE_MS}\n",
                 self.revision
             ),
             format!("CONFIG_COMMIT {}\n", self.revision),
-        ];
+        ]);
     }
 
     #[cfg(test)]
@@ -728,20 +1002,78 @@ impl DeviceSession {
         self.active = None;
         self.active_snapshot = None;
         self.active_context = None;
+        self.active_release_placeholder = None;
         self.active_receive_sequence = None;
         self.pending_paste = None;
         self.queue.clear();
         self.pending_reconfiguration = None;
         self.pending_learning = None;
         self.learning = None;
+        self.reset_gestures();
+        self.gesture_placeholders.clear();
+        self.pending_receive_sequences.clear();
+    }
+
+    fn settle_for_handshake(&mut self, output: &mut SessionOutput) {
+        if let Some(mut sequence) = self.active.take() {
+            let run_id = sequence.run_id();
+            sequence.abort();
+            output.lines.push(format!("SKIP {run_id}\n"));
+            self.active_snapshot = None;
+            self.active_context = None;
+            self.pending_paste = None;
+            if let Some(receive_sequence) = self.active_receive_sequence.take() {
+                let release_placeholder = self.active_release_placeholder.take();
+                self.finish_queued_occurrence(receive_sequence, release_placeholder, output);
+            }
+        }
+        let queued_items = std::mem::take(&mut self.queue);
+        let is_v6 = self.is_v6();
+        for queued in queued_items {
+            if !is_v6 {
+                output.lines.push(format!("SKIP {}\n", queued.event_id));
+            }
+            self.finish_queued_occurrence(
+                queued.receive_sequence,
+                queued.release_placeholder,
+                output,
+            );
+        }
+        for receive_sequence in self
+            .pending_receive_sequences
+            .keys()
+            .copied()
+            .collect::<Vec<_>>()
+        {
+            if receive_sequence != 0 {
+                output.completed_receive_sequences.push(receive_sequence);
+            }
+        }
+        self.pending_receive_sequences.clear();
+        self.active_receive_sequence = None;
+        self.active_release_placeholder = None;
+        self.active_snapshot = None;
+        self.active_context = None;
+        self.pending_paste = None;
+    }
+
+    fn reset_gestures(&mut self) {
+        self.triggers.reset();
+        self.trigger_metadata.clear();
     }
 
     fn settle_queued(&mut self, output: &mut SessionOutput) {
-        for queued in self.queue.drain(..) {
-            output.lines.push(format!("SKIP {}\n", queued.event_id));
-            output
-                .completed_receive_sequences
-                .push(queued.receive_sequence);
+        let queued_items = std::mem::take(&mut self.queue);
+        let is_v6 = self.is_v6();
+        for queued in queued_items {
+            if !is_v6 {
+                output.lines.push(format!("SKIP {}\n", queued.event_id));
+            }
+            self.finish_queued_occurrence(
+                queued.receive_sequence,
+                queued.release_placeholder,
+                output,
+            );
         }
     }
 
@@ -782,18 +1114,18 @@ impl DeviceSession {
         }
     }
 
-    fn handle_done(&mut self, event_id: u64, step: u16, output: &mut SessionOutput) {
+    fn handle_done(&mut self, run_id: u64, step: u16, output: &mut SessionOutput) {
         let Some(sequence) = self.active.as_mut() else {
             output
                 .activities
                 .push(RuntimeActivity::new("unexpected_action_acknowledgement"));
             return;
         };
-        let completed = match sequence.acknowledge(event_id, step) {
+        let completed = match sequence.acknowledge(run_id, step) {
             Ok(completed) => completed,
             Err(error) => {
-                let active_event = sequence.event_id();
-                output.lines.push(format!("SKIP {active_event}\n"));
+                let active_run = sequence.run_id();
+                output.lines.push(format!("SKIP {active_run}\n"));
                 output.activities.push(
                     RuntimeActivity::new("invalid_action_acknowledgement")
                         .with_detail(error)
@@ -804,7 +1136,8 @@ impl DeviceSession {
                 self.active_context = None;
                 self.pending_paste = None;
                 if let Some(receive_sequence) = self.active_receive_sequence.take() {
-                    output.completed_receive_sequences.push(receive_sequence);
+                    let release_placeholder = self.active_release_placeholder.take();
+                    self.finish_queued_occurrence(receive_sequence, release_placeholder, output);
                 }
                 self.start_next(output);
                 return;
@@ -820,7 +1153,8 @@ impl DeviceSession {
             self.active_context = None;
             self.pending_paste = None;
             if let Some(receive_sequence) = self.active_receive_sequence.take() {
-                output.completed_receive_sequences.push(receive_sequence);
+                let release_placeholder = self.active_release_placeholder.take();
+                self.finish_queued_occurrence(receive_sequence, release_placeholder, output);
             }
             self.start_next(output);
         } else {
@@ -841,43 +1175,64 @@ impl DeviceSession {
             let Some(queued) = self.queue.pop_front() else {
                 return;
             };
-            let runtime = &queued.snapshot;
+            let occurrence = queued.occurrence;
+            let runtime = &occurrence.snapshot;
             let Some(button) = runtime
                 .profile
-                .button_for(&runtime.hardware_profile_id, &queued.input)
+                .button_for(&runtime.hardware_profile_id, &occurrence.input)
                 .map(str::to_owned)
             else {
-                output.lines.push(format!("SKIP {}\n", queued.event_id));
-                output
-                    .completed_receive_sequences
-                    .push(queued.receive_sequence);
+                if !self.is_v6() {
+                    output.lines.push(format!("SKIP {}\n", queued.event_id));
+                }
+                self.finish_queued_occurrence(
+                    queued.receive_sequence,
+                    queued.release_placeholder,
+                    output,
+                );
                 output
                     .activities
-                    .push(RuntimeActivity::new("unmapped_input").with_context(queued.context));
+                    .push(RuntimeActivity::new("unmapped_input").with_context(occurrence.context));
                 continue;
             };
             let actions = runtime
                 .profile
                 .actions
                 .get(&button)
-                .cloned()
+                .map(|triggers| triggers.actions_for(occurrence.trigger).to_vec())
                 .unwrap_or_default();
             if actions.is_empty() {
-                output.lines.push(format!("SKIP {}\n", queued.event_id));
-                output
-                    .completed_receive_sequences
-                    .push(queued.receive_sequence);
+                if !self.is_v6() {
+                    output.lines.push(format!("SKIP {}\n", queued.event_id));
+                }
+                self.finish_queued_occurrence(
+                    queued.receive_sequence,
+                    queued.release_placeholder,
+                    output,
+                );
                 output.activities.push(
                     RuntimeActivity::new("empty_action_list")
                         .with_param("button", button)
-                        .with_context(queued.context),
+                        .with_param("trigger", trigger_name(occurrence.trigger))
+                        .with_context(occurrence.context),
                 );
                 continue;
             }
-            self.active = Some(ActionSequence::new(queued.event_id, button, actions));
-            self.active_snapshot = Some(queued.snapshot);
-            self.active_context = queued.context;
+            let run_id = if self.is_v6() {
+                self.next_host_run_id()
+            } else {
+                queued.event_id
+            };
+            self.active = Some(ActionSequence::new(
+                run_id,
+                button,
+                occurrence.trigger,
+                actions,
+            ));
+            self.active_snapshot = Some(Arc::clone(&occurrence.snapshot));
+            self.active_context = occurrence.context;
             self.active_receive_sequence = Some(queued.receive_sequence);
+            self.active_release_placeholder = queued.release_placeholder;
             self.emit_active_step(output);
         }
     }
@@ -894,7 +1249,7 @@ impl DeviceSession {
             crate::profile::ButtonAction::Paste { text } => {
                 let request = PendingPaste {
                     receive_sequence: self.active_receive_sequence.unwrap_or_default(),
-                    event_id: step.event_id,
+                    event_id: step.run_id,
                     step: step.step,
                     total: step.total,
                     text: text.clone(),
@@ -905,20 +1260,28 @@ impl DeviceSession {
                 return;
             }
             crate::profile::ButtonAction::Hotkey { .. }
-            | crate::profile::ButtonAction::Media { .. } => step.command(|_| Ok(())),
+            | crate::profile::ButtonAction::Media { .. } => self.command_step(&step),
             crate::profile::ButtonAction::Delay { duration_ms } => {
                 output.action_timeout =
                     Some(ACTION_ACK_TIMEOUT + Duration::from_millis(u64::from(*duration_ms)));
-                step.command(|_| Ok(()))
+                self.command_step(&step)
             }
             crate::profile::ButtonAction::Open { target } => target_opener
                 .open(target)
                 .map_err(|_| "open_target_failed".to_owned())
-                .and_then(|()| step.command(|_| Ok(()))),
+                .and_then(|()| self.command_step(&step)),
         };
         match result {
             Ok(line) => output.lines.push(line),
             Err(error) => self.fail_action_step(output, &step, error),
+        }
+    }
+
+    fn command_step(&self, step: &crate::protocol::ActionStep) -> Result<String, String> {
+        if self.is_v6() {
+            step.command_v6(|_| Ok(()))
+        } else {
+            step.command_legacy(|_| Ok(()))
         }
     }
 
@@ -931,7 +1294,7 @@ impl DeviceSession {
         if let Some(sequence) = self.active.as_mut() {
             sequence.abort();
         }
-        output.lines.push(format!("SKIP {}\n", step.event_id));
+        output.lines.push(format!("SKIP {}\n", step.run_id));
         let detail = if matches!(&step.action, crate::profile::ButtonAction::Open { .. }) {
             "open_target_failed".into()
         } else {
@@ -949,7 +1312,8 @@ impl DeviceSession {
         self.active_context = None;
         self.pending_paste = None;
         if let Some(receive_sequence) = self.active_receive_sequence.take() {
-            output.completed_receive_sequences.push(receive_sequence);
+            let release_placeholder = self.active_release_placeholder.take();
+            self.finish_queued_occurrence(receive_sequence, release_placeholder, output);
         }
         self.start_next(output);
     }
@@ -1008,7 +1372,7 @@ impl DeviceSession {
 
 fn action_activity(code: &str, step: &crate::protocol::ActionStep) -> RuntimeActivity {
     let mut activity = RuntimeActivity::new(code)
-        .with_param("eventId", step.event_id.to_string())
+        .with_param("runId", step.run_id.to_string())
         .with_param("button", &step.button)
         .with_param("step", step.step.to_string())
         .with_param("total", step.total.to_string());
@@ -1061,12 +1425,19 @@ fn action_activity(code: &str, step: &crate::protocol::ActionStep) -> RuntimeAct
     activity
 }
 
+fn trigger_name(trigger: ActionTrigger) -> &'static str {
+    match trigger {
+        ActionTrigger::Press => "press",
+        ActionTrigger::Release => "release",
+        ActionTrigger::LongPress => "long_press",
+        ActionTrigger::DoublePress => "double_press",
+    }
+}
+
 #[cfg(test)]
 fn message_event_id(message: &DeviceMessage) -> Option<u64> {
     match message {
-        DeviceMessage::State { event_id, .. } | DeviceMessage::Done { event_id, .. } => {
-            Some(*event_id)
-        }
+        DeviceMessage::State { event_id, .. } => Some(*event_id),
         _ => None,
     }
 }
@@ -1134,6 +1505,16 @@ fn persist_metrics(
             snapshot_at_ms,
         )
         .map(Some)
+}
+
+fn monotonic_ms_since(origin: Instant, now: Instant) -> u64 {
+    now.saturating_duration_since(origin)
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
+}
+
+fn monotonic_deadline_reached(now_ms: u64, deadline_ms: u64) -> bool {
+    now_ms.wrapping_sub(deadline_ms) < (1_u64 << 63)
 }
 
 #[cfg(test)]
@@ -1242,12 +1623,163 @@ struct PendingPasteReply {
     replies: mpsc::Receiver<PasteReply>,
 }
 
+#[derive(Default)]
+pub struct DeviceDisplayLink {
+    tracker: SceneTracker,
+    enabled: bool,
+    renderer: Option<Arc<dyn DisplayRenderer>>,
+    pending_since: Option<Instant>,
+    queued_update: Option<SceneUpdate>,
+    desired_scene: Option<RenderedScene>,
+    latest_snapshot: Option<Arc<DisplaySnapshot>>,
+    needs_resync: bool,
+}
+
+impl DeviceDisplayLink {
+    pub(crate) fn configure(
+        &mut self,
+        protocol: u16,
+        profile: Option<&RuntimeProfileSnapshot>,
+        registry: &RendererRegistry,
+    ) {
+        let panel_id = profile
+            .and_then(|runtime| {
+                runtime
+                    .profile
+                    .hardware_profile(&runtime.hardware_profile_id)
+            })
+            .and_then(|hardware| hardware.ssd1306.as_ref().map(|_| SSD1306_PANEL_ID));
+        self.configure_panel(protocol, panel_id, registry);
+    }
+
+    fn configure_panel(
+        &mut self,
+        protocol: u16,
+        panel_id: Option<&str>,
+        registry: &RendererRegistry,
+    ) {
+        let renderer = (protocol >= DISPLAY_PROTOCOL_VERSION)
+            .then(|| panel_id.and_then(|id| registry.renderer(id).ok()))
+            .flatten();
+        let selected_panel = renderer.as_ref().map(|renderer| renderer.panel_id());
+        let current_panel = self.renderer.as_ref().map(|renderer| renderer.panel_id());
+        if self.enabled == renderer.is_some() && current_panel == selected_panel {
+            return;
+        }
+
+        self.tracker = SceneTracker::default();
+        self.pending_since = None;
+        self.queued_update = None;
+        self.desired_scene = None;
+        self.needs_resync = false;
+        self.enabled = renderer.is_some();
+        self.renderer = renderer;
+        let _ = self.render_latest();
+    }
+
+    fn reset_connection(
+        &mut self,
+        protocol: u16,
+        profile: Option<&RuntimeProfileSnapshot>,
+        registry: &RendererRegistry,
+    ) {
+        self.tracker = SceneTracker::default();
+        self.enabled = false;
+        self.renderer = None;
+        self.pending_since = None;
+        self.queued_update = None;
+        self.desired_scene = None;
+        self.needs_resync = false;
+        self.configure(protocol, profile, registry);
+    }
+
+    pub(crate) fn update_desired(&mut self, snapshot: Arc<DisplaySnapshot>) -> Result<(), String> {
+        self.latest_snapshot = Some(snapshot);
+        self.render_latest()
+    }
+
+    fn render_latest(&mut self) -> Result<(), String> {
+        let (Some(renderer), Some(snapshot)) =
+            (self.renderer.as_ref(), self.latest_snapshot.as_ref())
+        else {
+            self.desired_scene = None;
+            return Ok(());
+        };
+        self.desired_scene = Some(renderer.render(snapshot).map_err(str::to_owned)?);
+        Ok(())
+    }
+
+    pub(crate) fn next_lines(&mut self, now: Instant) -> Result<Vec<String>, String> {
+        if !self.enabled {
+            return Ok(Vec::new());
+        }
+        if self.queued_update.is_some() {
+            return Ok(Vec::new());
+        }
+        if self
+            .pending_since
+            .is_some_and(|sent_at| now.saturating_duration_since(sent_at) >= DISPLAY_ACK_TIMEOUT)
+        {
+            eprintln!("display acknowledgement timeout; retrying latest full scene");
+            self.pending_since = None;
+            self.needs_resync = true;
+        }
+        if self.pending_since.is_some() {
+            return Ok(Vec::new());
+        }
+        let update = if self.needs_resync {
+            self.needs_resync = false;
+            if let Some(scene) = self.desired_scene.clone() {
+                let _ = self.tracker.prepare(scene);
+            }
+            self.tracker.resync()
+        } else {
+            self.desired_scene
+                .clone()
+                .and_then(|scene| self.tracker.prepare(scene))
+        };
+        let Some(update) = update else {
+            return Ok(Vec::new());
+        };
+        let lines = display_commands(&update)?;
+        self.queued_update = Some(update);
+        Ok(lines)
+    }
+
+    pub(crate) fn mark_transmitted(&mut self, now: Instant) {
+        if self.queued_update.take().is_some() {
+            self.pending_since = Some(now);
+        }
+    }
+
+    pub(crate) fn on_message(&mut self, message: &DeviceMessage) -> bool {
+        match message {
+            DeviceMessage::DisplayOk { revision } => {
+                if self.pending_since.is_none() {
+                    return true;
+                }
+                self.pending_since = None;
+                let _ = self.tracker.ack(*revision);
+                true
+            }
+            DeviceMessage::DisplayResync { .. } | DeviceMessage::DisplayError { .. } => {
+                self.pending_since = None;
+                self.queued_update = None;
+                self.needs_resync = true;
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
 struct WorkerRuntime {
     paste: PasteHandle,
     metrics: Option<Arc<MetricsStore>>,
     operation_barrier: Arc<RwLock<()>>,
     transport_factory: Arc<dyn SerialTransportFactory>,
     clock: Arc<dyn Clock>,
+    renderers: Arc<RendererRegistry>,
 }
 
 pub(crate) fn apply_worker_context_update(
@@ -1288,6 +1820,19 @@ impl WorkerLauncher for SystemWorkerLauncher {
         start: WorkerStart,
         events: mpsc::Sender<WorkerEvent>,
     ) -> Result<Box<dyn DeviceWorker>, String> {
+        self.start_with_renderers(
+            start,
+            events,
+            WorkerRendererRegistry::new(Arc::new(built_in_renderer_registry())),
+        )
+    }
+
+    fn start_with_renderers(
+        &self,
+        start: WorkerStart,
+        events: mpsc::Sender<WorkerEvent>,
+        renderers: WorkerRendererRegistry,
+    ) -> Result<Box<dyn DeviceWorker>, String> {
         let (commands, command_receiver) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
@@ -1297,6 +1842,7 @@ impl WorkerLauncher for SystemWorkerLauncher {
             operation_barrier: Arc::clone(&self.operation_barrier),
             transport_factory: Arc::clone(&self.transport_factory),
             clock: Arc::clone(&self.clock),
+            renderers: renderers.into_inner(),
         };
         let join = thread::Builder::new()
             .name(format!("kivo-device-{}", start.device_id.as_str()))
@@ -1342,6 +1888,7 @@ fn run_isolated_worker_inner(
     let operation_barrier = runtime.operation_barrier.as_ref();
     let transport_factory = runtime.transport_factory.as_ref();
     let clock = runtime.clock.as_ref();
+    let renderers = runtime.renderers.as_ref();
     let board = crate::hardware::board_by_id(&start.board_profile_id)
         .ok_or_else(|| "unknown_board_profile".to_owned())?;
     let mut port = transport_factory.open(&start.port)?;
@@ -1359,6 +1906,10 @@ fn run_isolated_worker_inner(
         })
         .map_err(|_| "coordinator_stopped".to_owned())?;
     let mut session = DeviceSession::without_model(board);
+    let mut display_protocol = hello.protocol;
+    let mut display_link = DeviceDisplayLink::default();
+    display_link.reset_connection(display_protocol, None, renderers);
+    let monotonic_origin = clock.monotonic_now();
     let mut pending_paste: Option<PendingPasteReply> = None;
     let mut active_paste_ack = None;
     let mut action_deadline = None;
@@ -1390,6 +1941,7 @@ fn run_isolated_worker_inner(
             let (output, context) = match command {
                 WorkerCommand::UpdatePort(_) => unreachable!("port updates are handled above"),
                 WorkerCommand::UpdateSnapshot(snapshot) => {
+                    display_link.configure(display_protocol, snapshot.as_deref(), renderers);
                     current_context = RuntimeEventContext::from_snapshot(
                         clock.unix_time_ms(),
                         snapshot.as_deref(),
@@ -1398,6 +1950,7 @@ fn run_isolated_worker_inner(
                     (session.update_snapshot(snapshot), current_context.clone())
                 }
                 WorkerCommand::Reconfigure { snapshot, revision } => {
+                    display_link.configure(display_protocol, snapshot.as_deref(), renderers);
                     current_context = RuntimeEventContext::from_snapshot(
                         clock.unix_time_ms(),
                         snapshot.as_deref(),
@@ -1415,6 +1968,7 @@ fn run_isolated_worker_inner(
                     (session.begin_learning(target), current_context.clone())
                 }
                 WorkerCommand::EndLearning { snapshot, revision } => {
+                    display_link.configure(display_protocol, snapshot.as_deref(), renderers);
                     current_context = RuntimeEventContext::from_snapshot(
                         clock.unix_time_ms(),
                         snapshot.as_deref(),
@@ -1432,6 +1986,10 @@ fn run_isolated_worker_inner(
                     session.on_captured_input(&captured, receive_sequence),
                     captured.context,
                 ),
+                WorkerCommand::UpdateDisplay(snapshot) => {
+                    display_link.update_desired(snapshot)?;
+                    (SessionOutput::default(), current_context.clone())
+                }
                 WorkerCommand::Shutdown => return Ok(()),
             };
             write_isolated_output(
@@ -1445,6 +2003,38 @@ fn run_isolated_worker_inner(
                 &mut pending_paste,
                 &mut action_deadline,
                 &context,
+                clock,
+                stop,
+            )?;
+        }
+
+        let display_lines = display_link.next_lines(clock.monotonic_now())?;
+        if !display_lines.is_empty() {
+            write_display_lines(device.get_mut(), display_lines)?;
+            display_link.mark_transmitted(clock.monotonic_now());
+        }
+
+        let monotonic_now_ms = monotonic_ms_since(monotonic_origin, clock.monotonic_now());
+        let trigger_output = session
+            .next_trigger_deadline_ms()
+            .filter(|deadline| monotonic_deadline_reached(monotonic_now_ms, *deadline))
+            .map(|_| session.poll_triggers(monotonic_now_ms))
+            .unwrap_or_default();
+        if !trigger_output.lines.is_empty()
+            || !trigger_output.activities.is_empty()
+            || !trigger_output.paste_requests.is_empty()
+        {
+            write_isolated_output(
+                start,
+                events,
+                paste,
+                metrics,
+                operation_barrier,
+                device.get_mut(),
+                trigger_output,
+                &mut pending_paste,
+                &mut action_deadline,
+                &current_context.with_timestamp(clock.unix_time_ms()),
                 clock,
                 stop,
             )?;
@@ -1542,7 +2132,17 @@ fn run_isolated_worker_inner(
             && pending_paste.is_none()
             && active_paste_ack.is_none()
         {
-            let output = session.fail_active_deferred("action_ack_timeout", None);
+            let output = session
+                .active
+                .as_ref()
+                .map(ActionSequence::run_id)
+                .map(|run_id| {
+                    session.on_action_timeout(
+                        run_id,
+                        monotonic_ms_since(monotonic_origin, clock.monotonic_now()),
+                    )
+                })
+                .unwrap_or_default();
             write_isolated_output(
                 start,
                 events,
@@ -1577,14 +2177,20 @@ fn run_isolated_worker_inner(
                     continue;
                 };
                 match message {
+                    message @ (DeviceMessage::DisplayOk { .. }
+                    | DeviceMessage::DisplayResync { .. }
+                    | DeviceMessage::DisplayError { .. }) => {
+                        display_link.on_message(&message);
+                    }
                     DeviceMessage::State {
                         event_id,
                         input,
                         state,
                     } => {
-                        let captured = session.capture_input(
+                        let captured = session.capture_input_with_monotonic(
                             &current_context,
                             received_at_ms,
+                            monotonic_ms_since(monotonic_origin, clock.monotonic_now()),
                             event_id,
                             input,
                             state,
@@ -1597,16 +2203,16 @@ fn run_isolated_worker_inner(
                             })
                             .map_err(|_| "coordinator_stopped".to_owned())?;
                     }
-                    DeviceMessage::Done { event_id, step } => {
-                        if active_paste_ack == Some((event_id, step)) {
-                            if paste.complete(&start.device_id, event_id, step).is_err() {
+                    DeviceMessage::Done { run_id, step } => {
+                        if active_paste_ack == Some((run_id, step)) {
+                            if paste.complete(&start.device_id, run_id, step).is_err() {
                                 continue;
                             }
                             active_paste_ack = None;
                             pending_paste = None;
                         }
                         let output = session.on_message_deferred(
-                            DeviceMessage::Done { event_id, step },
+                            DeviceMessage::Done { run_id, step },
                             0,
                             received_at_ms,
                         );
@@ -1626,7 +2232,19 @@ fn run_isolated_worker_inner(
                         )?;
                     }
                     DeviceMessage::Hello(ref capability) => {
+                        if session.hello.is_some() {
+                            pending_paste = None;
+                            active_paste_ack = None;
+                            action_deadline = None;
+                            let _ = paste.cancel_device(&start.device_id);
+                        }
                         validate_hello(board, capability).map_err(|error| error.code.clone())?;
+                        display_protocol = capability.protocol;
+                        display_link.reset_connection(
+                            display_protocol,
+                            session.profile.as_deref(),
+                            renderers,
+                        );
                         let output = session.on_message_deferred(message, 0, received_at_ms);
                         write_isolated_output(
                             start,
@@ -1754,7 +2372,7 @@ fn write_isolated_output<W: Write + ?Sized>(
     }
     let action_timeout = output.action_timeout.take().unwrap_or(ACTION_ACK_TIMEOUT);
     let sent_action = output.lines.iter().any(|line| {
-        ["PASTE ", "HOTKEY ", "DELAY ", "MEDIA ", "HOST "]
+        ["PASTE ", "HOTKEY ", "CHORD ", "DELAY ", "MEDIA ", "HOST "]
             .iter()
             .any(|prefix| line.starts_with(prefix))
     });
@@ -1770,6 +2388,23 @@ fn write_isolated_output<W: Write + ?Sized>(
         *action_deadline = Some(clock.monotonic_now() + action_timeout);
     }
     Ok(())
+}
+
+fn write_display_lines<W: Write + ?Sized>(
+    writer: &mut W,
+    lines: Vec<String>,
+) -> Result<(), String> {
+    if lines.is_empty() {
+        return Ok(());
+    }
+    for line in lines {
+        writer
+            .write_all(line.as_bytes())
+            .map_err(|error| format!("serial_write_failed: {error}"))?;
+    }
+    writer
+        .flush()
+        .map_err(|error| format!("serial_write_failed: {error}"))
 }
 
 #[cfg(target_os = "macos")]
@@ -1885,6 +2520,11 @@ mod tests {
     use super::*;
     use crate::{
         coordinator::{EventLevel, RuntimeEvent},
+        display::{
+            DisplayCapabilities, DisplayItem, DisplayPriority, DisplayRegion, DisplayRenderer,
+            DisplaySnapshot, DisplayState, DrawOperation, Rect, RenderedScene, RendererRegistry,
+            SourceHealth, built_in_renderer_registry,
+        },
         hardware::DeviceId,
         metrics::{MetricAttribution, MetricsStore},
         model::{ButtonDefinition, ButtonGroup, ModelLayout},
@@ -1893,14 +2533,14 @@ mod tests {
             ButtonAction, DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION,
             Ssd1306Config,
         },
-        protocol::{DeviceMessage, PhysicalInput},
+        protocol::{DISPLAY_PROTOCOL_VERSION, DeviceMessage, PhysicalInput},
     };
     use serialport::{SerialPortInfo, SerialPortType, UsbPortInfo};
     use std::{
         cell::RefCell,
         collections::BTreeMap,
         sync::Mutex,
-        time::{SystemTime, UNIX_EPOCH},
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
 
     struct RecordingTargetOpener {
@@ -1942,6 +2582,7 @@ mod tests {
                         }],
                     }],
                 },
+                trigger_settings: TriggerSettings::default(),
                 hardware_profiles: vec![HardwareProfile {
                     id: "esp-primary".into(),
                     name: "ESP primary".into(),
@@ -1955,14 +2596,14 @@ mod tests {
                 }],
                 actions: BTreeMap::from([(
                     "A".into(),
-                    vec![
+                    TriggerActions::press(vec![
                         ButtonAction::Paste {
                             text: "第一步".into(),
                         },
                         ButtonAction::Paste {
                             text: "第二步".into(),
                         },
-                    ],
+                    ]),
                 )]),
             },
         }
@@ -1976,6 +2617,364 @@ mod tests {
         runtime.metric_attribution.device_id =
             DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "ABCDEF123456").unwrap();
         runtime
+    }
+
+    fn display_snapshot(running: u32) -> Arc<DisplaySnapshot> {
+        Arc::new(DisplaySnapshot {
+            items: vec![
+                DisplayItem::new(
+                    "codex.summary",
+                    "codex",
+                    DisplayPriority::Ambient,
+                    DisplayState::Running,
+                    "Codex",
+                )
+                .unwrap()
+                .with_metric("running", running),
+            ],
+            health: BTreeMap::from([("codex".into(), SourceHealth::Healthy)]),
+        })
+    }
+
+    struct TestDisplayRenderer {
+        panel_id: &'static str,
+        text: &'static str,
+    }
+
+    struct FlushFailingDisplayWriter;
+
+    impl std::io::Write for FlushFailingDisplayWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("flush failed"))
+        }
+    }
+
+    impl DisplayRenderer for TestDisplayRenderer {
+        fn panel_id(&self) -> &'static str {
+            self.panel_id
+        }
+
+        fn capabilities(&self) -> &DisplayCapabilities {
+            static CAPABILITIES: DisplayCapabilities = DisplayCapabilities::ssd1306_128x32_mono();
+            &CAPABILITIES
+        }
+
+        fn render(&self, _snapshot: &DisplaySnapshot) -> Result<RenderedScene, &'static str> {
+            Ok(RenderedScene {
+                regions: vec![DisplayRegion::new(
+                    0,
+                    "test",
+                    Rect::new(0, 0, 64, 16),
+                    vec![
+                        DrawOperation::ClearRegion,
+                        DrawOperation::Text {
+                            x: 0,
+                            baseline_y: 12,
+                            font_id: 0,
+                            text: self.text.into(),
+                        },
+                    ],
+                )],
+            })
+        }
+    }
+
+    #[test]
+    fn display_link_is_silent_for_protocol_six_or_a_profile_without_oled() {
+        let registry = built_in_renderer_registry();
+        let now = Instant::now();
+        let mut legacy = DeviceDisplayLink::default();
+        legacy.configure(6, Some(&oled_runtime_model()), &registry);
+        legacy.update_desired(display_snapshot(3)).unwrap();
+        assert!(legacy.next_lines(now).unwrap().is_empty());
+
+        let mut no_panel = DeviceDisplayLink::default();
+        no_panel.configure(DISPLAY_PROTOCOL_VERSION, Some(&runtime_model()), &registry);
+        no_panel.update_desired(display_snapshot(3)).unwrap();
+        assert!(no_panel.next_lines(now).unwrap().is_empty());
+    }
+
+    #[test]
+    fn protocol_seven_oled_starts_with_a_full_scene_at_base_zero() {
+        let registry = built_in_renderer_registry();
+        let mut link = DeviceDisplayLink::default();
+        link.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+
+        link.update_desired(display_snapshot(3)).unwrap();
+        let lines = link.next_lines(Instant::now()).unwrap();
+
+        assert_eq!(lines.first().unwrap(), "DISPLAY_BEGIN 1 0 full\n");
+        assert_eq!(lines.last().unwrap(), "DISPLAY_COMMIT 1\n");
+    }
+
+    #[test]
+    fn display_updates_coalesce_before_the_first_transaction_is_generated() {
+        let registry = built_in_renderer_registry();
+        let mut link = DeviceDisplayLink::default();
+        link.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+
+        link.update_desired(display_snapshot(3)).unwrap();
+        link.update_desired(display_snapshot(4)).unwrap();
+        let lines = link.next_lines(Instant::now()).unwrap();
+
+        assert_eq!(lines.first().unwrap(), "DISPLAY_BEGIN 1 0 full\n");
+        assert!(lines.iter().any(|line| line.contains("NCBSVU4=")));
+        assert!(!lines.iter().any(|line| line.contains("MyBSVU4=")));
+    }
+
+    #[test]
+    fn each_display_link_uses_its_selected_renderer_for_the_same_snapshot() {
+        let mut registry = RendererRegistry::default();
+        registry
+            .register(Arc::new(TestDisplayRenderer {
+                panel_id: "test_alpha",
+                text: "ALPHA",
+            }))
+            .unwrap();
+        registry
+            .register(Arc::new(TestDisplayRenderer {
+                panel_id: "test_beta",
+                text: "BETA",
+            }))
+            .unwrap();
+        let snapshot = display_snapshot(3);
+        let now = Instant::now();
+        let mut alpha = DeviceDisplayLink::default();
+        alpha.configure_panel(DISPLAY_PROTOCOL_VERSION, Some("test_alpha"), &registry);
+        alpha.update_desired(Arc::clone(&snapshot)).unwrap();
+        let mut beta = DeviceDisplayLink::default();
+        beta.configure_panel(DISPLAY_PROTOCOL_VERSION, Some("test_beta"), &registry);
+        beta.update_desired(snapshot).unwrap();
+
+        let alpha_lines = alpha.next_lines(now).unwrap();
+        let beta_lines = beta.next_lines(now).unwrap();
+
+        assert_ne!(alpha_lines, beta_lines);
+        assert!(alpha_lines.iter().any(|line| line.contains("QUxQSEE=")));
+        assert!(beta_lines.iter().any(|line| line.contains("QkVUQQ==")));
+    }
+
+    #[test]
+    fn pending_display_update_coalesces_until_the_exact_ack() {
+        let registry = built_in_renderer_registry();
+        let now = Instant::now();
+        let mut link = DeviceDisplayLink::default();
+        link.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+        link.update_desired(display_snapshot(3)).unwrap();
+        assert_eq!(
+            link.next_lines(now).unwrap().first().unwrap(),
+            "DISPLAY_BEGIN 1 0 full\n"
+        );
+        link.mark_transmitted(now);
+
+        link.update_desired(display_snapshot(4)).unwrap();
+        assert!(link.next_lines(now).unwrap().is_empty());
+        assert!(link.on_message(&DeviceMessage::DisplayOk { revision: 1 }));
+        let delta = link.next_lines(now).unwrap();
+
+        assert_eq!(delta.first().unwrap(), "DISPLAY_BEGIN 2 1 delta\n");
+        assert!(delta.iter().any(|line| line.contains("NCBSVU4=")));
+    }
+
+    #[test]
+    fn mismatched_display_ack_recovers_with_the_latest_full_scene() {
+        let registry = built_in_renderer_registry();
+        let now = Instant::now();
+        let mut link = DeviceDisplayLink::default();
+        link.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+        link.update_desired(display_snapshot(3)).unwrap();
+        link.next_lines(now).unwrap();
+        link.mark_transmitted(now);
+        link.update_desired(display_snapshot(4)).unwrap();
+
+        assert!(link.on_message(&DeviceMessage::DisplayOk { revision: 9 }));
+        let recovered = link.next_lines(now).unwrap();
+
+        assert_eq!(recovered.first().unwrap(), "DISPLAY_BEGIN 2 0 full\n");
+        assert!(recovered.iter().any(|line| line.contains("NCBSVU4=")));
+    }
+
+    #[test]
+    fn display_ack_before_the_transaction_is_written_is_ignored() {
+        let registry = built_in_renderer_registry();
+        let now = Instant::now();
+        let mut link = DeviceDisplayLink::default();
+        link.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+        link.update_desired(display_snapshot(3)).unwrap();
+
+        assert!(link.on_message(&DeviceMessage::DisplayOk { revision: 1 }));
+
+        assert_eq!(
+            link.next_lines(now).unwrap().first().unwrap(),
+            "DISPLAY_BEGIN 1 0 full\n"
+        );
+    }
+
+    #[test]
+    fn display_ack_after_generation_is_ignored_until_marked_transmitted() {
+        let registry = built_in_renderer_registry();
+        let now = Instant::now();
+        let mut link = DeviceDisplayLink::default();
+        link.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+        link.update_desired(display_snapshot(3)).unwrap();
+        assert_eq!(
+            link.next_lines(now).unwrap().first().unwrap(),
+            "DISPLAY_BEGIN 1 0 full\n"
+        );
+
+        assert!(link.on_message(&DeviceMessage::DisplayOk { revision: 1 }));
+        link.mark_transmitted(now);
+        link.update_desired(display_snapshot(4)).unwrap();
+        assert!(
+            link.next_lines(now + Duration::from_secs(1))
+                .unwrap()
+                .is_empty()
+        );
+
+        assert!(link.on_message(&DeviceMessage::DisplayOk { revision: 1 }));
+        let delta = link.next_lines(now + Duration::from_secs(1)).unwrap();
+        assert_eq!(delta.first().unwrap(), "DISPLAY_BEGIN 2 1 delta\n");
+        assert!(delta.iter().any(|line| line.contains("NCBSVU4=")));
+    }
+
+    #[test]
+    fn failed_display_flush_does_not_mark_or_acknowledge_the_generated_revision() {
+        let registry = built_in_renderer_registry();
+        let now = Instant::now();
+        let mut link = DeviceDisplayLink::default();
+        link.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+        link.update_desired(display_snapshot(3)).unwrap();
+        let lines = link.next_lines(now).unwrap();
+
+        let error = write_display_lines(&mut FlushFailingDisplayWriter, lines).unwrap_err();
+        assert!(error.starts_with("serial_write_failed:"));
+        assert!(link.on_message(&DeviceMessage::DisplayOk { revision: 1 }));
+
+        assert!(link.pending_since.is_none());
+        assert!(link.queued_update.is_some());
+    }
+
+    #[test]
+    fn display_ack_timeout_retries_the_latest_scene_full_once_per_deadline() {
+        let registry = built_in_renderer_registry();
+        let now = Instant::now();
+        let mut link = DeviceDisplayLink::default();
+        link.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+        link.update_desired(display_snapshot(3)).unwrap();
+        link.next_lines(now).unwrap();
+        link.mark_transmitted(now);
+        link.update_desired(display_snapshot(4)).unwrap();
+
+        assert!(
+            link.next_lines(now + Duration::from_millis(1_999))
+                .unwrap()
+                .is_empty()
+        );
+        let retried = link.next_lines(now + Duration::from_secs(2)).unwrap();
+        assert_eq!(retried.first().unwrap(), "DISPLAY_BEGIN 2 0 full\n");
+        assert!(retried.iter().any(|line| line.contains("NCBSVU4=")));
+        assert!(
+            link.next_lines(now + Duration::from_secs(2))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn display_resync_and_error_keep_the_link_alive_and_force_full() {
+        for reply in [
+            DeviceMessage::DisplayResync {
+                current_revision: 0,
+            },
+            DeviceMessage::DisplayError {
+                revision: 1,
+                code: "invalid_text".into(),
+            },
+        ] {
+            let registry = built_in_renderer_registry();
+            let now = Instant::now();
+            let mut link = DeviceDisplayLink::default();
+            link.configure(
+                DISPLAY_PROTOCOL_VERSION,
+                Some(&oled_runtime_model()),
+                &registry,
+            );
+            link.update_desired(display_snapshot(3)).unwrap();
+            link.next_lines(now).unwrap();
+            link.mark_transmitted(now);
+
+            assert!(link.on_message(&reply));
+            assert_eq!(
+                link.next_lines(now).unwrap().first().unwrap(),
+                "DISPLAY_BEGIN 2 0 full\n"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fresh_display_link_reconnects_with_a_full_scene() {
+        let registry = built_in_renderer_registry();
+        let snapshot = display_snapshot(3);
+        let now = Instant::now();
+        let mut original = DeviceDisplayLink::default();
+        original.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+        original.update_desired(Arc::clone(&snapshot)).unwrap();
+        original.next_lines(now).unwrap();
+        original.mark_transmitted(now);
+        original.on_message(&DeviceMessage::DisplayOk { revision: 1 });
+
+        let mut reconnected = DeviceDisplayLink::default();
+        reconnected.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+        reconnected.update_desired(snapshot).unwrap();
+
+        assert_eq!(
+            reconnected.next_lines(now).unwrap().first().unwrap(),
+            "DISPLAY_BEGIN 1 0 full\n"
+        );
     }
 
     #[test]
@@ -2224,16 +3223,16 @@ mod tests {
     #[test]
     fn protocol_v4_rejects_profiles_that_use_advanced_actions() {
         let mut runtime = runtime_model();
-        runtime
-            .profile
-            .actions
-            .insert("A".into(), vec![ButtonAction::Delay { duration_ms: 200 }]);
+        runtime.profile.actions.insert(
+            "A".into(),
+            TriggerActions::press(vec![ButtonAction::Delay { duration_ms: 200 }]),
+        );
         let mut session = DeviceSession::new(runtime);
 
         let rejected = session.on_message_deferred(hello(), 0, 100);
 
         assert!(rejected.lines.is_empty());
-        assert_eq!(rejected.activities[0].code, "protocol_mismatch");
+        assert_eq!(rejected.activities[0].code, "firmware_update_required");
         assert_eq!(
             rejected.activities[0]
                 .params
@@ -2371,24 +3370,381 @@ mod tests {
         );
         assert!(queued.lines.is_empty());
 
-        let second = session.on_message(
-            DeviceMessage::Done {
-                event_id: 9,
-                step: 1,
-            },
-            &mut copy,
-        );
+        let second = session.on_message(DeviceMessage::Done { run_id: 9, step: 1 }, &mut copy);
         assert_eq!(copied.borrow().as_slice(), ["第一步", "第二步"]);
         assert!(second.lines[0].contains(" 9 2 2"));
-        let next_press = session.on_message(
-            DeviceMessage::Done {
-                event_id: 9,
-                step: 2,
-            },
-            &mut copy,
-        );
+        let next_press = session.on_message(DeviceMessage::Done { run_id: 9, step: 2 }, &mut copy);
         assert_eq!(copied.borrow().as_slice(), ["第一步", "第二步", "第一步"]);
         assert!(next_press.lines[0].contains(" 10 1 2"));
+    }
+
+    #[test]
+    fn protocol_v6_dispatches_host_runs_with_chord_commands() {
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            TriggerActions::press(vec![ButtonAction::Hotkey {
+                keys: vec!["ctrl".into(), "a".into()],
+            }]),
+        );
+        let mut session = DeviceSession::new(runtime);
+        let DeviceMessage::Hello(mut capabilities) = hello() else {
+            unreachable!();
+        };
+        capabilities.protocol = 6;
+        session.on_message_deferred(DeviceMessage::Hello(capabilities), 0, 100);
+        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
+
+        let first = session.on_message_deferred(
+            DeviceMessage::State {
+                event_id: 41,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            41,
+            102,
+        );
+        assert_eq!(first.lines, ["CHORD 1 1 1 1 1 4\n"]);
+        assert_eq!(first.activities[2].params["runId"], "1");
+
+        session.on_message_deferred(DeviceMessage::Done { run_id: 1, step: 1 }, 0, 103);
+        session.on_message_deferred(
+            DeviceMessage::State {
+                event_id: 42,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Up,
+            },
+            42,
+            104,
+        );
+        let second = session.on_message_deferred(
+            DeviceMessage::State {
+                event_id: 99,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            99,
+            105,
+        );
+        assert_eq!(second.lines, ["CHORD 2 1 1 1 1 4\n"]);
+        assert_eq!(second.activities[3].params["runId"], "2");
+    }
+
+    fn protocol6_hello() -> DeviceMessage {
+        let DeviceMessage::Hello(mut capabilities) = hello() else {
+            unreachable!();
+        };
+        capabilities.protocol = 6;
+        DeviceMessage::Hello(capabilities)
+    }
+
+    #[test]
+    fn v6_pickup_and_hangup_queue_distinct_host_runs() {
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            TriggerActions {
+                press: vec![ButtonAction::Open {
+                    target: "pickup".into(),
+                }],
+                release: vec![ButtonAction::Media {
+                    command: crate::profile::MediaCommand::PlayPause,
+                }],
+                ..TriggerActions::default()
+            },
+        );
+        let mut session = DeviceSession::new(runtime);
+        session.on_message_deferred(protocol6_hello(), 0, 100);
+        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
+
+        session.target_opener = Arc::new(RecordingTargetOpener {
+            targets: Arc::new(Mutex::new(Vec::new())),
+            error: None,
+        });
+        let down = session.on_line_deferred("STATE 91 DIRECT 6 DOWN\n", 1, 100);
+        assert!(down.lines[0].starts_with("HOST 1 1 1"));
+        let done = session.on_line_deferred("DONE 1 1\n", 2, 101);
+        assert!(done.activities.iter().any(|activity| {
+            activity.code == "action_step_completed"
+                && activity.params.get("runId").map(String::as_str) == Some("1")
+        }));
+
+        let up = session.on_line_deferred("STATE 92 DIRECT 6 UP\n", 3, 200);
+        assert!(up.lines[0].starts_with("MEDIA 2 1 1"));
+    }
+
+    #[test]
+    fn duplicate_hello_aborts_active_and_queued_runs_once() {
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            TriggerActions {
+                press: vec![ButtonAction::Hotkey {
+                    keys: vec!["a".into()],
+                }],
+                double_press: vec![ButtonAction::Hotkey {
+                    keys: vec!["b".into()],
+                }],
+                ..TriggerActions::default()
+            },
+        );
+        let mut session = DeviceSession::new(runtime);
+        session.on_message_deferred(protocol6_hello(), 0, 100);
+        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
+        session.on_line_deferred("STATE 1 DIRECT 6 DOWN\n", 1, 0);
+        session.on_line_deferred("STATE 2 DIRECT 6 UP\n", 2, 10);
+        session.on_line_deferred("STATE 3 DIRECT 6 DOWN\n", 3, 20);
+
+        let restarted = session.on_message_deferred(protocol6_hello(), 4, 21);
+        assert!(restarted.lines.iter().any(|line| line == "SKIP 1\n"));
+        let completed = restarted
+            .completed_receive_sequences
+            .iter()
+            .copied()
+            .filter(|sequence| *sequence != 0)
+            .collect::<Vec<_>>();
+        let unique = completed.iter().copied().collect::<BTreeSet<_>>();
+        assert_eq!(completed.len(), unique.len());
+        assert_eq!(unique, BTreeSet::from([1, 2, 3]));
+        assert!(session.active.is_none());
+        assert!(session.queue.is_empty());
+    }
+
+    #[test]
+    fn timer_poll_fires_long_press_without_serial_input() {
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            TriggerActions {
+                long_press: vec![ButtonAction::Open {
+                    target: "hold".into(),
+                }],
+                ..TriggerActions::default()
+            },
+        );
+        let mut session = DeviceSession::new(runtime);
+        session.on_message_deferred(protocol6_hello(), 0, 100);
+        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
+        session.target_opener = Arc::new(RecordingTargetOpener {
+            targets: Arc::new(Mutex::new(Vec::new())),
+            error: None,
+        });
+
+        let down = session.on_line_deferred("STATE 5 DIRECT 6 DOWN\n", 1, 0);
+        assert!(down.lines.is_empty());
+        assert!(session.poll_triggers(499).lines.is_empty());
+        let long = session.poll_triggers(500);
+        assert!(long.activities.iter().any(|activity| {
+            activity.code == "trigger_occurred"
+                && activity.params.get("trigger").map(String::as_str) == Some("long_press")
+        }));
+        assert!(long.lines[0].starts_with("HOST 1 1 1"));
+    }
+
+    #[test]
+    fn long_press_only_paste_keeps_down_sequence_until_release() {
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            TriggerActions {
+                long_press: vec![ButtonAction::Paste {
+                    text: "hold".into(),
+                }],
+                ..TriggerActions::default()
+            },
+        );
+        let mut session = DeviceSession::new(runtime);
+        session.on_message_deferred(protocol6_hello(), 0, 100);
+        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
+
+        let down = session.on_line_deferred("STATE 1 DIRECT 6 DOWN\n", 1, 0);
+        assert!(down.completed_receive_sequences.is_empty());
+        let long = session.poll_triggers(500);
+        assert_eq!(long.paste_requests[0].receive_sequence, 1);
+        assert!(long.completed_receive_sequences.is_empty());
+        session.grant_paste(1, 1);
+        let completed_action = session.on_line_deferred("DONE 1 1\n", 2, 501);
+        assert!(completed_action.completed_receive_sequences.is_empty());
+
+        let release = session.on_line_deferred("STATE 2 DIRECT 6 UP\n", 3, 600);
+        assert_eq!(
+            release
+                .completed_receive_sequences
+                .iter()
+                .filter(|sequence| **sequence == 1)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn legacy_v5_uses_event_id_for_down_and_ignores_up_actions() {
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            TriggerActions::press(vec![ButtonAction::Hotkey {
+                keys: vec!["a".into()],
+            }]),
+        );
+        let mut session = DeviceSession::new(runtime);
+        let DeviceMessage::Hello(mut capabilities) = hello() else {
+            unreachable!();
+        };
+        capabilities.protocol = 5;
+        session.on_message_deferred(DeviceMessage::Hello(capabilities), 0, 100);
+        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
+
+        let down = session.on_line_deferred("STATE 77 DIRECT 6 DOWN\n", 1, 102);
+        assert_eq!(down.lines, ["HOTKEY 77 1 1 0 4\n"]);
+        let up = session.on_line_deferred("STATE 78 DIRECT 6 UP\n", 2, 103);
+        assert!(up.lines.is_empty());
+        session.on_line_deferred("DONE 77 1\n", 3, 104);
+    }
+
+    #[test]
+    fn malformed_ack_aborts_only_active_v6_run_and_starts_queued_occurrence() {
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            TriggerActions::press(vec![ButtonAction::Hotkey {
+                keys: vec!["a".into()],
+            }]),
+        );
+        let mut session = DeviceSession::new(runtime);
+        session.on_message_deferred(protocol6_hello(), 0, 100);
+        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
+        session.on_line_deferred("STATE 1 DIRECT 6 DOWN\n", 1, 0);
+        session.on_line_deferred("STATE 2 DIRECT 6 UP\n", 2, 10);
+        session.on_line_deferred("STATE 3 DIRECT 6 DOWN\n", 3, 20);
+
+        let recovered = session.on_line_deferred("DONE 999 1\n", 4, 21);
+        assert!(recovered.lines.iter().any(|line| line == "SKIP 1\n"));
+        assert!(
+            recovered
+                .lines
+                .iter()
+                .any(|line| line.starts_with("CHORD 2 1 1"))
+        );
+        assert!(
+            recovered
+                .activities
+                .iter()
+                .any(|activity| activity.code == "invalid_action_acknowledgement")
+        );
+    }
+
+    #[test]
+    fn timeout_aborts_active_run_and_preserves_the_queued_trigger() {
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            TriggerActions::press(vec![ButtonAction::Hotkey {
+                keys: vec!["a".into()],
+            }]),
+        );
+        let mut session = DeviceSession::new(runtime);
+        session.on_message_deferred(protocol6_hello(), 0, 100);
+        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
+        session.on_line_deferred("STATE 1 DIRECT 6 DOWN\n", 1, 0);
+        session.on_line_deferred("STATE 2 DIRECT 6 UP\n", 2, 10);
+        session.on_line_deferred("STATE 3 DIRECT 6 DOWN\n", 3, 20);
+
+        let recovered = session.on_action_timeout(1, 2_000);
+        assert!(recovered.lines.iter().any(|line| line == "SKIP 1\n"));
+        assert!(
+            recovered
+                .lines
+                .iter()
+                .any(|line| line.starts_with("CHORD 2 1 1"))
+        );
+        assert!(
+            recovered
+                .activities
+                .iter()
+                .any(|activity| activity.code == "action_timeout")
+        );
+    }
+
+    #[test]
+    fn reconfigure_resets_held_v6_input_before_long_press_deadline() {
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            TriggerActions {
+                long_press: vec![ButtonAction::Hotkey {
+                    keys: vec!["a".into()],
+                }],
+                ..TriggerActions::default()
+            },
+        );
+        let mut session = DeviceSession::new(runtime.clone());
+        session.on_message_deferred(protocol6_hello(), 0, 100);
+        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
+        session.on_line_deferred("STATE 1 DIRECT 6 DOWN\n", 1, 0);
+        let reset = session.reconfigure(Some(Arc::new(runtime)), 2);
+        assert_eq!(reset.completed_receive_sequences, [1]);
+        assert!(session.poll_triggers(500).lines.is_empty());
+        assert!(
+            session
+                .poll_triggers(500)
+                .activities
+                .iter()
+                .all(|activity| activity.code != "trigger_occurred")
+        );
+    }
+
+    #[test]
+    fn snapshot_update_preserves_pending_press_and_double_sequence_bookkeeping() {
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            TriggerActions {
+                press: vec![ButtonAction::Hotkey {
+                    keys: vec!["a".into()],
+                }],
+                double_press: vec![ButtonAction::Hotkey {
+                    keys: vec!["b".into()],
+                }],
+                ..TriggerActions::default()
+            },
+        );
+        let mut updated = runtime.clone();
+        updated.profile.profile.name = "Updated".into();
+        let mut session = DeviceSession::new(runtime);
+        session.on_message_deferred(protocol6_hello(), 0, 100);
+        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
+
+        session.on_line_deferred("STATE 1 DIRECT 6 DOWN\n", 1, 0);
+        session.on_line_deferred("STATE 2 DIRECT 6 UP\n", 2, 10);
+        session.on_line_deferred("DONE 1 1\n", 3, 11);
+        let second = session.on_line_deferred("STATE 3 DIRECT 6 DOWN\n", 4, 20);
+        assert!(
+            second
+                .lines
+                .iter()
+                .any(|line| line.starts_with("CHORD 2 1 1"))
+        );
+
+        session.update_snapshot(Some(Arc::new(updated)));
+        let double = session.on_line_deferred("DONE 2 1\n", 5, 21);
+        assert!(
+            double
+                .lines
+                .iter()
+                .any(|line| line.starts_with("CHORD 3 1 1"))
+        );
+        assert!(double.completed_receive_sequences.is_empty());
+        let completed = session.on_line_deferred("DONE 3 1\n", 6, 22);
+        assert!(completed.completed_receive_sequences.is_empty());
+        let release = session.on_line_deferred("STATE 4 DIRECT 6 UP\n", 7, 23);
+        assert_eq!(
+            release
+                .completed_receive_sequences
+                .iter()
+                .filter(|sequence| **sequence == 4)
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -2396,14 +3752,14 @@ mod tests {
         let mut runtime = runtime_model();
         runtime.profile.actions.insert(
             "A".into(),
-            vec![
+            TriggerActions::press(vec![
                 ButtonAction::Paste {
                     text: "甲乙丙".into(),
                 },
                 ButtonAction::Hotkey {
                     keys: vec!["primary".into(), "enter".into()],
                 },
-            ],
+            ]),
         );
         let mut session = DeviceSession::new(runtime);
         session.ready = true;
@@ -2424,7 +3780,7 @@ mod tests {
         assert_eq!(
             started.params,
             BTreeMap::from([
-                ("eventId".into(), "41".into()),
+                ("runId".into(), "41".into()),
                 ("button".into(), "A".into()),
                 ("step".into(), "1".into()),
                 ("total".into(), "2".into()),
@@ -2452,7 +3808,7 @@ mod tests {
         assert_eq!(granted.lines, [format_paste_command(41, 1, 2)]);
         let next = session.on_message_deferred(
             DeviceMessage::Done {
-                event_id: 41,
+                run_id: 41,
                 step: 1,
             },
             0,
@@ -2471,6 +3827,71 @@ mod tests {
         assert_eq!(next.activities[1].code, "action_step_started");
         assert_eq!(next.activities[1].params["actionKind"], "hotkey");
         assert_eq!(next.activities[1].params["keys"], "primary+enter");
+    }
+
+    #[test]
+    fn protocol_v6_device_session_runs_deferred_paste_delay_and_media_in_one_host_run() {
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            TriggerActions::press(vec![
+                ButtonAction::Paste {
+                    text: "甲乙丙".into(),
+                },
+                ButtonAction::Delay { duration_ms: 500 },
+                ButtonAction::Media {
+                    command: crate::profile::MediaCommand::PlayPause,
+                },
+            ]),
+        );
+        let mut session = DeviceSession::new(runtime);
+        session.on_message_deferred(protocol6_hello(), 0, 100);
+        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
+
+        let pending = session.on_message_deferred(
+            DeviceMessage::State {
+                event_id: 700,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            91,
+            102,
+        );
+        assert!(pending.lines.is_empty());
+        assert_eq!(pending.paste_requests.len(), 1);
+        let request = &pending.paste_requests[0];
+        assert_eq!(request.receive_sequence, 91);
+        assert_eq!(request.event_id, 1);
+        assert_eq!(request.step, 1);
+        assert_eq!(request.total, 3);
+        assert_eq!(request.text, "甲乙丙");
+
+        let mismatched_grant = session.grant_paste(700, 1);
+        assert!(mismatched_grant.lines.is_empty());
+        assert_eq!(mismatched_grant.activities[0].code, "paste_grant_mismatch");
+
+        let paste = session.grant_paste(1, 1);
+        assert_eq!(paste.lines, [format_paste_command(1, 1, 3)]);
+
+        let delay = session.on_message_deferred(DeviceMessage::Done { run_id: 1, step: 1 }, 0, 103);
+        assert_eq!(delay.lines, ["DELAY 1 2 3 500\n"]);
+        assert_eq!(
+            delay.action_timeout,
+            Some(ACTION_ACK_TIMEOUT + Duration::from_millis(500)),
+        );
+
+        let media = session.on_message_deferred(DeviceMessage::Done { run_id: 1, step: 2 }, 0, 604);
+        assert_eq!(media.lines, ["MEDIA 1 3 3 205\n"]);
+
+        let completed =
+            session.on_message_deferred(DeviceMessage::Done { run_id: 1, step: 3 }, 0, 605);
+        assert!(completed.lines.is_empty());
+        assert!(completed.activities.iter().any(|activity| {
+            activity.code == "action_step_completed"
+                && activity.params.get("runId").map(String::as_str) == Some("1")
+                && activity.params.get("step").map(String::as_str) == Some("3")
+        }));
+        assert!(session.active.is_none());
     }
 
     struct FailingClipboard;
@@ -2495,9 +3916,9 @@ mod tests {
         let mut runtime = runtime_model();
         runtime.profile.actions.insert(
             "A".into(),
-            vec![ButtonAction::Paste {
+            TriggerActions::press(vec![ButtonAction::Paste {
                 text: secret.into(),
-            }],
+            }]),
         );
         let mut session = DeviceSession::new(runtime);
         session.ready = true;
@@ -2543,7 +3964,7 @@ mod tests {
         let stop = AtomicBool::new(false);
         let barrier = RwLock::new(());
         let mut action = SessionOutput::default();
-        action.lines.push("HOTKEY 10 1 1 0 40\n".into());
+        action.lines.push("CHORD 10 1 1 0 1 40\n".into());
 
         write_isolated_output(
             &start,
@@ -2591,9 +4012,9 @@ mod tests {
         let mut old = runtime_model();
         old.profile.actions.insert(
             "A".into(),
-            vec![ButtonAction::Paste {
+            TriggerActions::press(vec![ButtonAction::Paste {
                 text: secret.into(),
-            }],
+            }]),
         );
         let old = Arc::new(old);
         let device_id = old.metric_attribution.device_id.clone();
@@ -2719,9 +4140,9 @@ mod tests {
         let mut runtime = runtime_model();
         runtime.profile.actions.insert(
             "A".into(),
-            vec![ButtonAction::Hotkey {
+            TriggerActions::press(vec![ButtonAction::Hotkey {
                 keys: vec!["enter".into()],
-            }],
+            }]),
         );
         let mut session = DeviceSession::new(runtime);
         session.ready = true;
@@ -2746,7 +4167,7 @@ mod tests {
         let mut runtime = runtime_model();
         runtime.profile.actions.insert(
             "A".into(),
-            vec![
+            TriggerActions::press(vec![
                 ButtonAction::Open {
                     target: "https://example.com".into(),
                 },
@@ -2754,7 +4175,7 @@ mod tests {
                 ButtonAction::Media {
                     command: crate::profile::MediaCommand::PlayPause,
                 },
-            ],
+            ]),
         );
         let mut session = DeviceSession::new(runtime);
         session.target_opener = Arc::new(RecordingTargetOpener {
@@ -2777,7 +4198,7 @@ mod tests {
 
         let second = session.on_message_deferred(
             DeviceMessage::Done {
-                event_id: 43,
+                run_id: 43,
                 step: 1,
             },
             0,
@@ -2791,7 +4212,7 @@ mod tests {
 
         let third = session.on_message_deferred(
             DeviceMessage::Done {
-                event_id: 43,
+                run_id: 43,
                 step: 2,
             },
             0,
@@ -2810,9 +4231,9 @@ mod tests {
         let mut runtime = runtime_model();
         runtime.profile.actions.insert(
             "A".into(),
-            vec![ButtonAction::Open {
+            TriggerActions::press(vec![ButtonAction::Open {
                 target: target.into(),
-            }],
+            }]),
         );
         let mut session = DeviceSession::new(runtime);
         session.target_opener = Arc::new(RecordingTargetOpener {
@@ -2853,9 +4274,9 @@ mod tests {
         let mut runtime = runtime_model();
         runtime.profile.actions.insert(
             "A".into(),
-            vec![ButtonAction::Open {
+            TriggerActions::press(vec![ButtonAction::Open {
                 target: target.into(),
-            }],
+            }]),
         );
         let mut session = DeviceSession::new(runtime);
         session.target_opener = Arc::new(RecordingTargetOpener {
@@ -2907,9 +4328,9 @@ mod tests {
         let mut updated = runtime_model();
         updated.profile.actions.insert(
             "A".into(),
-            vec![ButtonAction::Paste {
+            TriggerActions::press(vec![ButtonAction::Paste {
                 text: "新动作".into(),
-            }],
+            }]),
         );
         let swapped = session.update_snapshot(Some(Arc::new(updated)));
         assert!(swapped.lines.is_empty());
@@ -2917,7 +4338,7 @@ mod tests {
         session.grant_paste(50, 1);
         let second = session.on_message_deferred(
             DeviceMessage::Done {
-                event_id: 50,
+                run_id: 50,
                 step: 1,
             },
             0,
@@ -2927,7 +4348,7 @@ mod tests {
         session.grant_paste(50, 2);
         session.on_message_deferred(
             DeviceMessage::Done {
-                event_id: 50,
+                run_id: 50,
                 step: 2,
             },
             0,
@@ -2983,7 +4404,7 @@ mod tests {
         session.grant_paste(60, 1);
         let old_second = session.on_message_deferred(
             DeviceMessage::Done {
-                event_id: 60,
+                run_id: 60,
                 step: 1,
             },
             0,
@@ -2993,7 +4414,7 @@ mod tests {
         session.grant_paste(60, 2);
         let configured = session.on_message_deferred(
             DeviceMessage::Done {
-                event_id: 60,
+                run_id: 60,
                 step: 2,
             },
             0,

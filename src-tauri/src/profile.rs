@@ -1,16 +1,19 @@
 use crate::{
     hardware::board_by_id,
     model::ModelLayout,
-    protocol::{PhysicalInput, encode_hotkey},
+    protocol::{
+        ACTION_RUN_PROTOCOL_VERSION, ADVANCED_ACTION_PROTOCOL_VERSION, OLED_PROTOCOL_VERSION,
+        PhysicalInput, encode_hotkey,
+    },
     workspace::AppError,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 #[cfg(test)]
 use crate::model::{ButtonDefinition, ButtonGroup};
 
-pub const PROFILE_SCHEMA_VERSION: u16 = 2;
+pub const PROFILE_SCHEMA_VERSION: u16 = 3;
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -33,6 +36,117 @@ pub enum ButtonAction {
     Delay { duration_ms: u32 },
     Media { command: MediaCommand },
     Open { target: String },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionTrigger {
+    Press,
+    Release,
+    LongPress,
+    DoublePress,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct TriggerSettings {
+    pub long_press_ms: u32,
+    pub double_press_ms: u32,
+}
+
+impl Default for TriggerSettings {
+    fn default() -> Self {
+        Self {
+            long_press_ms: 500,
+            double_press_ms: 300,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for TriggerSettings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawTriggerSettings {
+            #[serde(default = "default_long_press_ms")]
+            long_press_ms: u32,
+            #[serde(default = "default_double_press_ms")]
+            double_press_ms: u32,
+        }
+
+        let raw = RawTriggerSettings::deserialize(deserializer)?;
+        let settings = Self {
+            long_press_ms: raw.long_press_ms,
+            double_press_ms: raw.double_press_ms,
+        };
+        settings.validate().map_err(de::Error::custom)?;
+        Ok(settings)
+    }
+}
+
+impl TriggerSettings {
+    fn validate(&self) -> Result<(), &'static str> {
+        if !(100..=5_000).contains(&self.long_press_ms) {
+            return Err("invalid_long_press_ms");
+        }
+        if !(100..=1_000).contains(&self.double_press_ms) {
+            return Err("invalid_double_press_ms");
+        }
+        Ok(())
+    }
+}
+
+fn default_long_press_ms() -> u32 {
+    TriggerSettings::default().long_press_ms
+}
+
+fn default_double_press_ms() -> u32 {
+    TriggerSettings::default().double_press_ms
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TriggerActions {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub press: Vec<ButtonAction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub release: Vec<ButtonAction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub long_press: Vec<ButtonAction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub double_press: Vec<ButtonAction>,
+}
+
+impl TriggerActions {
+    pub fn press(actions: Vec<ButtonAction>) -> Self {
+        Self {
+            press: actions,
+            ..Self::default()
+        }
+    }
+
+    pub fn action_count(&self) -> usize {
+        self.press.len() + self.release.len() + self.long_press.len() + self.double_press.len()
+    }
+
+    pub fn actions_for(&self, trigger: ActionTrigger) -> &[ButtonAction] {
+        match trigger {
+            ActionTrigger::Press => &self.press,
+            ActionTrigger::Release => &self.release,
+            ActionTrigger::LongPress => &self.long_press,
+            ActionTrigger::DoublePress => &self.double_press,
+        }
+    }
+
+    pub fn all(&self) -> impl Iterator<Item = &ButtonAction> {
+        self.press
+            .iter()
+            .chain(&self.release)
+            .chain(&self.long_press)
+            .chain(&self.double_press)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -100,9 +214,11 @@ pub struct DeviceProfile {
     pub schema_version: u16,
     pub profile: ModelLayout,
     #[serde(default)]
+    pub trigger_settings: TriggerSettings,
+    #[serde(default)]
     pub hardware_profiles: Vec<HardwareProfile>,
     #[serde(default)]
-    pub actions: BTreeMap<String, Vec<ButtonAction>>,
+    pub actions: BTreeMap<String, TriggerActions>,
 }
 
 pub fn blank_device_profile(id: String, name: String, board_profile_id: String) -> DeviceProfile {
@@ -113,6 +229,7 @@ pub fn blank_device_profile(id: String, name: String, board_profile_id: String) 
             name,
             groups: Vec::new(),
         },
+        trigger_settings: TriggerSettings::default(),
         hardware_profiles: vec![HardwareProfile {
             id: "hardware".into(),
             name: "Default hardware".into(),
@@ -205,6 +322,43 @@ fn topology_signature(
 }
 
 impl DeviceProfile {
+    pub fn minimum_protocol_version(&self) -> u16 {
+        let mut required = 3;
+        if self
+            .hardware_profiles
+            .iter()
+            .any(|hardware| hardware.ssd1306.is_some())
+        {
+            required = required.max(OLED_PROTOCOL_VERSION);
+        }
+        for actions in self.actions.values() {
+            if !actions.release.is_empty()
+                || !actions.long_press.is_empty()
+                || !actions.double_press.is_empty()
+            {
+                required = required.max(ACTION_RUN_PROTOCOL_VERSION);
+            }
+            for action in actions.all() {
+                match action {
+                    ButtonAction::Hotkey { keys } => {
+                        if let Ok(chord) = encode_hotkey(keys)
+                            && chord.keycodes.len() != 1
+                        {
+                            required = required.max(ACTION_RUN_PROTOCOL_VERSION);
+                        }
+                    }
+                    ButtonAction::Delay { .. }
+                    | ButtonAction::Media { .. }
+                    | ButtonAction::Open { .. } => {
+                        required = required.max(ADVANCED_ACTION_PROTOCOL_VERSION);
+                    }
+                    ButtonAction::Paste { .. } => {}
+                }
+            }
+        }
+        required
+    }
+
     pub fn hardware_profile(&self, id: &str) -> Option<&HardwareProfile> {
         self.hardware_profiles
             .iter()
@@ -263,6 +417,7 @@ impl DeviceProfile {
         self.profile
             .validate()
             .map_err(|detail| AppError::new("invalid_layout").with_param("detail", detail))?;
+        self.trigger_settings.validate().map_err(AppError::new)?;
 
         let mut buttons = BTreeSet::new();
         for group in &self.profile.groups {
@@ -359,7 +514,7 @@ impl DeviceProfile {
             if !buttons.contains(button.as_str()) {
                 return Err(AppError::new("unknown_action_button").with_param("button", button));
             }
-            for action in actions {
+            for action in actions.all() {
                 match action {
                     ButtonAction::Paste { text } if text.is_empty() => {
                         return Err(AppError::new("empty_paste_text").with_param("button", button));
@@ -398,12 +553,17 @@ impl DeviceProfile {
     }
 
     pub fn uses_advanced_actions(&self) -> bool {
-        self.actions.values().flatten().any(|action| {
-            matches!(
-                action,
-                ButtonAction::Delay { .. } | ButtonAction::Media { .. } | ButtonAction::Open { .. }
-            )
-        })
+        self.actions
+            .values()
+            .flat_map(TriggerActions::all)
+            .any(|action| {
+                matches!(
+                    action,
+                    ButtonAction::Delay { .. }
+                        | ButtonAction::Media { .. }
+                        | ButtonAction::Open { .. }
+                )
+            })
     }
 }
 
@@ -494,7 +654,7 @@ mod tests {
             .unwrap_or_default();
         serde_yaml_ng::from_str(&format!(
             concat!(
-                "schema_version: 2\n",
+                "schema_version: 3\n",
                 "profile:\n",
                 "  id: red-phone-v1\n",
                 "  name: Phone\n",
@@ -524,6 +684,7 @@ mod tests {
         DeviceProfile {
             schema_version: PROFILE_SCHEMA_VERSION,
             profile: test_model_layout(),
+            trigger_settings: TriggerSettings::default(),
             hardware_profiles: vec![
                 HardwareProfile {
                     id: "esp-primary".into(),
@@ -553,14 +714,58 @@ mod tests {
     }
 
     #[test]
+    fn schema_v3_defaults_trigger_settings_and_omits_empty_groups() {
+        let profile: DeviceProfile = serde_yaml_ng::from_str(
+            "schema_version: 3\nprofile:\n  id: pad\n  name: Pad\n  groups:\n    - id: keys\n      columns: 1\n      buttons:\n        - { id: A, label: A }\ntrigger_settings: {}\nhardware_profiles: []\nactions:\n  A:\n    press:\n      - { type: delay, duration_ms: 10 }\n",
+        )
+        .unwrap();
+
+        assert_eq!(profile.trigger_settings, TriggerSettings::default());
+        assert_eq!(profile.actions["A"].press.len(), 1);
+        assert!(profile.actions["A"].release.is_empty());
+        let yaml = serde_yaml_ng::to_string(&profile).unwrap();
+        assert!(!yaml.contains("release:"));
+    }
+
+    #[test]
+    fn trigger_timing_bounds_are_enforced() {
+        let mut invalid_profile = profile();
+        invalid_profile.trigger_settings.long_press_ms = 99;
+        assert_eq!(
+            invalid_profile.validate().unwrap_err().code,
+            "invalid_long_press_ms"
+        );
+        invalid_profile.trigger_settings.long_press_ms = 500;
+        invalid_profile.trigger_settings.double_press_ms = 1001;
+        assert_eq!(
+            invalid_profile.validate().unwrap_err().code,
+            "invalid_double_press_ms"
+        );
+
+        let yaml = serde_yaml_ng::to_string(&profile())
+            .unwrap()
+            .replace("long_press_ms: 500", "long_press_ms: 99");
+        assert!(serde_yaml_ng::from_str::<DeviceProfile>(&yaml).is_err());
+    }
+
+    #[test]
+    fn rejects_removed_or_unknown_trigger_names() {
+        let yaml = serde_yaml_ng::to_string(&profile())
+            .unwrap()
+            .replace("actions: {}", "actions:\n  UP:\n    short_press: []");
+
+        assert!(serde_yaml_ng::from_str::<DeviceProfile>(&yaml).is_err());
+    }
+
+    #[test]
     fn live_update_classifies_action_only_changes_without_topology() {
         let old = profile();
         let mut new = old.clone();
         new.actions.insert(
             "UP".into(),
-            vec![ButtonAction::Paste {
+            TriggerActions::press(vec![ButtonAction::Paste {
                 text: "updated".into(),
-            }],
+            }]),
         );
 
         let change = ProfileChange::between(Some(&old), Some(&new));
@@ -575,7 +780,7 @@ mod tests {
         let mut profile = profile();
         profile.actions.insert(
             "UP".into(),
-            vec![
+            TriggerActions::press(vec![
                 ButtonAction::Delay { duration_ms: 200 },
                 ButtonAction::Media {
                     command: MediaCommand::Mute,
@@ -583,7 +788,7 @@ mod tests {
                 ButtonAction::Open {
                     target: "https://example.com".into(),
                 },
-            ],
+            ]),
         );
 
         assert!(profile.validate().is_ok());
@@ -591,16 +796,59 @@ mod tests {
 
         profile.actions.insert(
             "UP".into(),
-            vec![ButtonAction::Delay {
+            TriggerActions::press(vec![ButtonAction::Delay {
                 duration_ms: MAX_DELAY_MS + 1,
-            }],
+            }]),
         );
         assert_eq!(profile.validate().unwrap_err().code, "invalid_delay");
 
-        profile
-            .actions
-            .insert("UP".into(), vec![ButtonAction::Open { target: " ".into() }]);
+        profile.actions.insert(
+            "UP".into(),
+            TriggerActions::press(vec![ButtonAction::Open { target: " ".into() }]),
+        );
         assert_eq!(profile.validate().unwrap_err().code, "invalid_open_target");
+    }
+
+    #[test]
+    fn profile_protocol_requirement_tracks_trigger_and_chord_features() {
+        let mut press_only = profile();
+        press_only.actions.insert(
+            "UP".into(),
+            TriggerActions::press(vec![ButtonAction::Hotkey {
+                keys: vec!["a".into()],
+            }]),
+        );
+        assert_eq!(press_only.minimum_protocol_version(), 3);
+
+        let mut release = press_only.clone();
+        release.actions.insert(
+            "UP".into(),
+            TriggerActions {
+                release: vec![ButtonAction::Paste {
+                    text: "released".into(),
+                }],
+                ..TriggerActions::default()
+            },
+        );
+        assert_eq!(release.minimum_protocol_version(), 6);
+
+        let mut multi_key = press_only.clone();
+        multi_key.actions.insert(
+            "UP".into(),
+            TriggerActions::press(vec![ButtonAction::Hotkey {
+                keys: vec!["a".into(), "b".into()],
+            }]),
+        );
+        assert_eq!(multi_key.minimum_protocol_version(), 6);
+
+        let mut modifier_only = press_only;
+        modifier_only.actions.insert(
+            "UP".into(),
+            TriggerActions::press(vec![ButtonAction::Hotkey {
+                keys: vec!["right_cmd".into()],
+            }]),
+        );
+        assert_eq!(modifier_only.minimum_protocol_version(), 6);
     }
 
     #[test]

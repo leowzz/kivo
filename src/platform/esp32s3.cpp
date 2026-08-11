@@ -1,15 +1,34 @@
 #include <Arduino.h>
 #include <USB.h>
 #include <USBCDC.h>
+#include <USBHID.h>
 #include <USBHIDKeyboard.h>
 #include <USBHIDConsumerControl.h>
 
+#include "platform/HidReportTransport.h"
 #include "platform/Platform.h"
 
 namespace {
+constexpr std::size_t kHidReadyPollLimit = 100;
 USBCDC usbSerial;
 USBHIDKeyboard keyboard;
+USBHID keyboardTransport;
 USBHIDConsumerControl consumerControl;
+
+bool sendKeyboardReport(const platform::KeyboardReport &keyboardReport) {
+  KeyReport report{};
+  report.modifiers = keyboardReport.modifiers;
+  for (std::size_t index = 0; index < keyboardReport.keys.size(); ++index) {
+    report.keys[index] = keyboardReport.keys[index];
+  }
+  hid_keyboard_report_t hidReport{};
+  hidReport.modifier = report.modifiers;
+  for (std::size_t index = 0; index < keyboardReport.keys.size(); ++index) {
+    hidReport.keycode[index] = report.keys[index];
+  }
+  return keyboardTransport.SendReport(HID_REPORT_ID_KEYBOARD, &hidReport,
+                                      sizeof(hidReport));
+}
 }  // namespace
 
 namespace platform {
@@ -38,13 +57,16 @@ void write(const char *data, std::size_t size) { usbSerial.write(data, size); }
 void flush() { usbSerial.flush(); }
 
 bool sendHotkey(std::uint8_t modifiers, std::uint8_t keycode) {
-  KeyReport report{};
-  report.modifiers = modifiers;
-  report.keys[0] = keycode;
-  keyboard.sendReport(&report);
-  delay(10);
-  keyboard.releaseAll();
-  return true;
+  KeyboardKeycodes keys{};
+  keys[0] = keycode;
+  return sendKeyboardChord(modifiers, keys);
+}
+
+bool sendKeyboardChord(std::uint8_t modifiers, const KeyboardKeycodes &keys) {
+  return transmitKeyboardReports(
+      modifiers, keys, kHidReadyPollLimit,
+      []() { return keyboardTransport.ready(); }, sendKeyboardReport,
+      []() { delay(1); });
 }
 
 bool sendConsumerControl(std::uint16_t usage) {
@@ -54,9 +76,17 @@ bool sendConsumerControl(std::uint16_t usage) {
   return pressed && released;
 }
 
-void configureDisplay(const std::optional<OledConfig> &) {}
+bool configureDisplay(const std::optional<OledConfig> &config) {
+  return !config.has_value();
+}
 
-void renderDisplay(const DisplayFrame &) {}
+bool renderLocalDisplay(const DisplayFrame &) { return true; }
+
+bool renderRemoteDisplay(const RemoteDisplayCommit &, bool) { return true; }
+
+void resetRemoteDisplay() {}
+
+void serviceDisplay() {}
 
 void showRandomKeyColor() {}
 

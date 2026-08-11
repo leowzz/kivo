@@ -269,6 +269,7 @@ export function DeviceSetupWizard({
             className="icon-button"
             type="button"
             aria-label={t(language, "common.close")}
+            title={t(language, "common.close")}
             disabled={pending}
             onClick={onClose}
           >

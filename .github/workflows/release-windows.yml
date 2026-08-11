@@ -65,6 +65,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
@@ -84,9 +89,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Set app version from tag
+      - name: Verify repository version
+        shell: bash
         run: |
-          node -e 'const fs = require("node:fs"); const tag = process.env.GITHUB_REF_NAME; if (!/^v\d+\.\d+\.\d+$/.test(tag)) throw new Error("Invalid release tag: " + tag); const path = "src-tauri/tauri.conf.json"; const config = JSON.parse(fs.readFileSync(path, "utf8")); config.version = tag.slice(1); fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n");'
+          cp .env.example .env
+          python scripts/repo_version.py check "${GITHUB_REF_NAME}"
 
       - name: Build and publish release
         uses: tauri-apps/tauri-action@v1

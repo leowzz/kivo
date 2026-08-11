@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+#[cfg(test)]
+use crate::profile::{TriggerActions, TriggerSettings};
 use crate::{
     coordinator::{
         AssignmentDimension, ConnectionDimension, DeviceMode, DeviceStatus, IdentityDimension,
@@ -146,7 +148,7 @@ impl TrayMenuModel {
                                 profile
                                     .actions
                                     .get(&button.id)
-                                    .map(Vec::as_slice)
+                                    .map(|triggers| triggers.press.as_slice())
                                     .unwrap_or(&[]),
                                 language,
                             )
@@ -337,6 +339,7 @@ mod tests {
                     },
                 ],
             },
+            trigger_settings: TriggerSettings::default(),
             hardware_profiles: vec![HardwareProfile {
                 id: "hardware".into(),
                 name: "Hardware".into(),
@@ -347,9 +350,9 @@ mod tests {
             }],
             actions: BTreeMap::from([(
                 "B".into(),
-                vec![ButtonAction::Hotkey {
+                TriggerActions::press(vec![ButtonAction::Hotkey {
                     keys: vec!["cmd".into(), "b".into()],
-                }],
+                }]),
             )]),
         }
     }
@@ -368,6 +371,7 @@ mod tests {
             controller_family_id: "esp32s3".into(),
             board_profile_id: "luatos-esp32s3-aio".into(),
             firmware_build_id: Some("test".into()),
+            firmware_protocol: Some(6),
             pins: vec![1],
             runtime_assignment: Some(RuntimeAssignment {
                 device_profile_id: "desk-profile".into(),
