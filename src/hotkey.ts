@@ -1,3 +1,5 @@
+import { t, type Language, type MessageKey } from "./i18n";
+
 const NAMED_KEYS: Record<string, string> = {
   Enter: "enter",
   Escape: "escape",
@@ -57,37 +59,58 @@ const MODIFIER_CODES: Record<string, string> = {
   ShiftRight: "right_shift",
 };
 
-const HOTKEY_LABELS: Record<string, string> = {
-  alt: "Option / Alt",
-  option: "Option / Alt",
-  cmd: "Command",
-  ctrl: "Control",
-  shift: "Shift",
-  primary: "Primary (Command / Control)",
-  left_cmd: "Left Command",
-  right_cmd: "Right Command",
-  left_ctrl: "Left Control",
-  right_ctrl: "Right Control",
-  left_alt: "Left Option / Alt",
-  right_alt: "Right Option / Alt",
-  left_shift: "Left Shift",
-  right_shift: "Right Shift",
-  enter: "Enter",
-  escape: "Escape",
-  backspace: "Backspace",
-  tab: "Tab",
-  space: "Space",
-  up: "Arrow Up",
-  down: "Arrow Down",
-  left: "Arrow Left",
-  right: "Arrow Right",
-  delete: "Delete",
-  home: "Home",
-  end: "End",
-  pageup: "Page Up",
-  page_up: "Page Up",
-  pagedown: "Page Down",
-  page_down: "Page Down",
+const HOTKEY_LABEL_KEYS: Record<string, MessageKey> = {
+  alt: "behavior.key.optionAlt",
+  option: "behavior.key.optionAlt",
+  cmd: "behavior.key.cmd",
+  ctrl: "behavior.key.ctrl",
+  shift: "behavior.key.shift",
+  primary: "behavior.key.primary",
+  left_cmd: "behavior.key.leftCmd",
+  right_cmd: "behavior.key.rightCmd",
+  left_ctrl: "behavior.key.leftCtrl",
+  right_ctrl: "behavior.key.rightCtrl",
+  left_alt: "behavior.key.leftAlt",
+  right_alt: "behavior.key.rightAlt",
+  left_shift: "behavior.key.leftShift",
+  right_shift: "behavior.key.rightShift",
+  enter: "behavior.key.enter",
+  escape: "behavior.key.escape",
+  backspace: "behavior.key.backspace",
+  tab: "behavior.key.tab",
+  space: "behavior.key.space",
+  up: "behavior.key.arrowUp",
+  down: "behavior.key.arrowDown",
+  left: "behavior.key.arrowLeft",
+  right: "behavior.key.arrowRight",
+  delete: "behavior.key.delete",
+  home: "behavior.key.home",
+  end: "behavior.key.end",
+  pageup: "behavior.key.pageUp",
+  page_up: "behavior.key.pageUp",
+  pagedown: "behavior.key.pageDown",
+  page_down: "behavior.key.pageDown",
+  caps_lock: "behavior.key.capsLock",
+  print_screen: "behavior.key.printScreen",
+  scroll_lock: "behavior.key.scrollLock",
+  pause: "behavior.key.pause",
+  insert: "behavior.key.insert",
+  application: "behavior.key.application",
+  num_lock: "behavior.key.numLock",
+  ...Object.fromEntries(Array.from(
+    { length: 10 },
+    (_, index) => [`numpad_${index}`, `behavior.key.numpad${index}` as MessageKey],
+  )),
+  numpad_divide: "behavior.key.numpadDivide",
+  numpad_multiply: "behavior.key.numpadMultiply",
+  numpad_subtract: "behavior.key.numpadSubtract",
+  numpad_add: "behavior.key.numpadAdd",
+  numpad_enter: "behavior.key.numpadEnter",
+  numpad_decimal: "behavior.key.numpadDecimal",
+  numpad_equal: "behavior.key.numpadEqual",
+};
+
+const HOTKEY_LITERAL_LABELS: Record<string, string> = {
   backtick: "`",
   minus: "-",
   equal: "=",
@@ -99,20 +122,6 @@ const HOTKEY_LABELS: Record<string, string> = {
   comma: ",",
   period: ".",
   slash: "/",
-  caps_lock: "Caps Lock",
-  print_screen: "Print Screen",
-  scroll_lock: "Scroll Lock",
-  pause: "Pause",
-  insert: "Insert",
-  application: "Menu",
-  num_lock: "Num Lock",
-  numpad_divide: "Numpad /",
-  numpad_multiply: "Numpad *",
-  numpad_subtract: "Numpad -",
-  numpad_add: "Numpad +",
-  numpad_enter: "Numpad Enter",
-  numpad_decimal: "Numpad .",
-  numpad_equal: "Numpad =",
 };
 
 export const HOTKEY_CATEGORIES = [
@@ -235,12 +244,15 @@ export function validateHotkey(keys: string[]): "empty_hotkey" | "duplicate_key"
   return ordinary.size > 6 ? "too_many_keys" : null;
 }
 
-export function hotkeyDisplayLabel(token: string) {
-  return HOTKEY_LABELS[token.toLowerCase()] ?? token.toUpperCase();
+export function hotkeyDisplayLabel(language: Language, token: string) {
+  const normalized = token.toLowerCase();
+  const messageKey = HOTKEY_LABEL_KEYS[normalized];
+  if (messageKey) return t(language, messageKey);
+  return HOTKEY_LITERAL_LABELS[normalized] ?? token.toUpperCase();
 }
 
-export function formatHotkey(keys: string[]) {
-  return keys.map(hotkeyDisplayLabel).join(" + ");
+export function formatHotkey(keys: string[], language: Language) {
+  return keys.map((token) => hotkeyDisplayLabel(language, token)).join(" + ");
 }
 
 export function normalizeHotkey(event: KeyboardEvent): string[] | null {

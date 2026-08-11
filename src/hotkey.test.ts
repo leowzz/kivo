@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import {
   HOTKEY_CATEGORIES,
   formatHotkey,
+  hotkeyDisplayLabel,
   keyboardCodeToToken,
   normalizeHotkey,
   validateHotkey,
@@ -47,18 +48,19 @@ test("normalizes the backtick key", () => {
   } as KeyboardEvent)).toEqual(["backtick"]);
 });
 
-test("formats the backtick key as its symbol", () => {
-  expect(formatHotkey(["backtick"])).toBe("`");
+test("keeps current English and literal hotkey labels", () => {
+  expect(hotkeyDisplayLabel("en-US", "right_cmd")).toBe("Right Command");
+  expect(hotkeyDisplayLabel("en-US", "numpad_0")).toBe("NUMPAD_0");
+  expect(formatHotkey(["backtick", "left_bracket"], "en-US")).toBe("` + [");
 });
 
-test("formats sided modifiers using their canonical label", () => {
-  expect(formatHotkey(["left_cmd"])).toBe("Left Command");
-});
-
-test("formats protocol modifiers with the same technical labels as the picker", () => {
-  expect(formatHotkey(["primary", "alt", "left_alt", "right_alt"])).toBe(
-    "Primary (Command / Control) + Option / Alt + Left Option / Alt + Right Option / Alt",
-  );
+test("formats named hotkeys in Chinese without changing their tokens", () => {
+  expect(hotkeyDisplayLabel("zh-CN", "right_cmd")).toBe("右cmd");
+  expect(hotkeyDisplayLabel("zh-CN", "left")).toBe("方向左");
+  expect(formatHotkey(
+    ["left_cmd", "right_ctrl", "left", "enter", "numpad_enter"],
+    "zh-CN",
+  )).toBe("左cmd + 右ctrl + 方向左 + 回车 + 小键盘回车");
 });
 
 test("maps physical modifier codes without collapsing sides", () => {
