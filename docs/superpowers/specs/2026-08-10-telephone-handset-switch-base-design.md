@@ -1,17 +1,18 @@
 # Telephone Handset Switch Base Design
 
 Date: 2026-08-10
-Revised: 2026-08-11
+Revised: 2026-08-11 (40 x 55 locating throat)
 Status: Approved
 
 ## Goal
 
 Create a one-piece FDM-printable base that holds the center of a telephone
 handset and fully bottoms out one mechanical keyboard switch when the handset
-is placed in the base. A wide funnel mouth guides insertion into an exact
-`55 x 70` locating section. At full switch travel, the handset's adjacent
-bearing surface reaches all four corner pads so the normal resting load is
-shared and the former single-point rocking is removed.
+is placed in the base. A wide `59 x 74` mouth guides insertion down a
+full-depth funnel to an exact `40 x 55` locating throat at the support datum.
+At full switch travel, the handset's adjacent bearing surface reaches all four
+corner pads so the normal resting load is shared and the former single-point
+rocking is removed.
 
 All dimensions in this document are millimeters.
 
@@ -68,25 +69,30 @@ Z: 0.0 .. 28.4
 
 ## Handset Pocket
 
-The locating pocket has exact `55 x 70` wall-to-wall section extents from the
-`Z=13.4` support datum through `Z=24.4`. These are internal dimensions, not
-outer dimensions. The `R1.6` lower inner corners round the four section
-corners, so `55 x 70` describes the section bounding box rather than a
-sharp-cornered rectangular prism.
+The locating throat has exact `40 x 55` wall-to-wall section extents at the
+`Z=13.4` support datum. These are internal dimensions, not outer dimensions.
+The `R1.6` lower inner corners round the four section corners, so `40 x 55`
+describes the section bounding box rather than a sharp-cornered rectangle.
 
-The upper `4.0` of pocket depth is a straight-sided funnel:
+The complete `15.0` pocket depth is a straight ruled funnel:
 
-- funnel bottom at `Z=24.4`: `55 x 70`, `R1.6`;
+- funnel throat at `Z=13.4`: `40 x 55`, `R1.6`;
 - funnel mouth at `Z=28.4`: `59 x 74`, `R3.6`;
-- widening per side: `2.0` over `4.0` vertical height;
-- straight locating height below the funnel: `11.0`;
+- widening per side and per end: `9.5` over `15.0` vertical height;
+- no vertical locating band above the support datum;
 - minimum wall thickness at the mouth: `2.4`.
 
+The throat and mouth profiles are explicit rounded rectangles joined by a
+convex ruled surface. The mouth radius remains `R3.6`; it is not the `R11.1`
+that a uniform `9.5` offset of the throat would produce. At the straight side
+walls, the funnel rises approximately `57.7 degrees` above horizontal, which
+keeps the upright print support-free.
+
 The outer footprint is `63.8 x 78.8` with vertical `R6.0` outer corners. The
-wall is `2.4` thick at the funnel mouth and `4.4` thick around the lower
-locating section. The safety-pad tops define the support datum at `Z=13.4`.
+wall is `2.4` thick at the funnel mouth and `11.9` thick around the lower
+throat. The safety-pad tops define the support datum at `Z=13.4`.
 The rim top is `Z=28.4`, producing exactly `15.0` pocket depth. There is no
-continuous `55 x 70` floor.
+continuous `40 x 55` floor.
 
 ## Open-Bottom Structure
 
@@ -96,8 +102,8 @@ wire tunnel.
 ### Outer Ring
 
 The perimeter wall continues from `Z=0` to the rim at `Z=28.4`. Its outer
-profile is vertical while its inner profile follows the lower locating section
-and upper funnel. It forms a closed outer ring while leaving the underside
+profile is vertical while its inner profile follows the lower throat and
+full-depth funnel. It forms a closed outer ring while leaving the underside
 interior open and accessible. All bottom edges are coplanar at `Z=0`.
 
 ### Central Platform And Tower
@@ -168,7 +174,8 @@ No keycap or separate actuator extension is part of this design. Physical
 acceptance must confirm that the switch reaches full travel at the same moment
 the handset reaches the four pads. If the actual switch or handset recess
 differs from the nominal `5`/`2` chain, adjust the platform height before
-printing another final part; do not enlarge the `55 x 70` locating section.
+printing another final part; do not change the `40 x 55` throat from mesh-only
+inference.
 
 ## Rear Wire Exit
 
@@ -178,6 +185,10 @@ Cut one circular hole through the rear outer wall:
 - axis: parallel to `Y`;
 - horizontal center: `X=31.9`;
 - vertical center: `Z=5.0`.
+
+The lower rear wall now spans `Y=66.9..78.8`, so the bore must remain clear
+through the complete `11.9` thickness. The rear guide ribs end at its inner
+face, `Y=66.9`.
 
 The hole carries two flying wires from the switch pins. Do not add a connector,
 strain-relief clamp, or bottom-open cable notch.
@@ -203,7 +214,7 @@ The open underside deliberately keeps the pins and solder joints serviceable.
 - Do not create a broad roof over the open underside.
 - Preserve the source switch aperture without support material inside it.
 - The minimum `2.4` mouth-wall thickness aligns with six nominal `0.4`-mm
-  extrusion widths; the lower locating wall is `4.4` thick.
+  extrusion widths; the lower throat wall is `11.9` thick.
 - Nominal slicing context is a `0.4` nozzle and `0.2` layer height.
 
 The design must not require a second printed part, screws, threaded inserts,
@@ -236,13 +247,14 @@ The implementation must verify all of the following before exporting:
 - one connected, positive-volume, consistently wound, watertight two-manifold
   output mesh;
 - exact `63.8 x 78.8 x 28.4` outer extents;
-- exact `55 x 70` locating section through `Z=24.4`;
-- exact `4.0`-high funnel ending at a `59 x 74` mouth;
+- exact `40 x 55`, `R1.6` throat at `Z=13.4`;
+- exact `15.0`-high funnel ending at a `59 x 74`, `R3.6` mouth;
 - exact `15.0` pocket depth;
 - switch protected region matches the normalized source cell;
 - lower `14.798 x 14.798` relief and upper `14.000 x 14.000` aperture remain
   centered and retain their measured heights;
-- central platform, U-tower, guide-rib, safety-pad, and rear-hole dimensions;
+- central platform, U-tower, guide-rib, safety-pad, and rear-hole dimensions,
+  including the complete `11.9`-thick rear wall;
 - open underside access to the switch-pin region;
 - no broad floor or roof bridges the open underside;
 - rear wire hole reaches the guide channel and exterior;

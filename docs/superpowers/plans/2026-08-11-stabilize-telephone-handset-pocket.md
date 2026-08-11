@@ -1,5 +1,11 @@
 # Stabilize Telephone Handset Pocket Implementation Plan
 
+> **Revision note:** The pocket/throat, funnel-depth, lower-wall, rear-wall,
+> and related validation requirements in this plan are superseded by
+> `docs/superpowers/plans/2026-08-11-narrow-telephone-handset-throat.md`.
+> The switch-height, canonical aperture, open-bottom, and four-pad support
+> constraints remain binding.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task-by-task. Steps use
