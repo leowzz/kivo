@@ -351,7 +351,7 @@ def test_validator_rejects_bottom_plate_below_existing_probes() -> None:
 def test_validator_rejects_non_r6_finished_ring_profile() -> None:
     source = base.load_canonical_source(SOURCE_ROOT)
     mesh = base.generate_base(source)
-    r5_outer = base.rounded_prism(
+    r3_outer = base.rounded_prism(
         base.OUTER_WIDTH,
         base.OUTER_LENGTH,
         3.0,
@@ -367,15 +367,15 @@ def test_validator_rejects_non_r6_finished_ring_profile() -> None:
         height=base.OUTER_HEIGHT + 0.2,
         center=(base.CENTER_X, base.CENTER_Y),
     )
-    corner_fill = base.subtract_meshes(r5_outer, [r6_outer])
-    r5_profile = macro.union_meshes([mesh, corner_fill])
+    corner_fill = base.subtract_meshes(r3_outer, [r6_outer])
+    r3_profile = macro.union_meshes([mesh, corner_fill])
     for legacy_probe in base.OUTER_CORNER_PROBES:
-        assert base.probe_volume(r5_profile, legacy_probe) == pytest.approx(
+        assert base.probe_volume(r3_profile, legacy_probe) == pytest.approx(
             0.0, abs=1e-6
         )
 
     with pytest.raises(ValueError, match="R6 outer corner"):
-        base.validate_base(r5_profile, source)
+        base.validate_base(r3_profile, source)
 
 
 def test_validator_rejects_19_191_mm_switch_channel() -> None:
@@ -569,7 +569,7 @@ def test_validator_rejects_partial_outer_front_wall_notch() -> None:
         base.validate_base(missing_front_wall, source)
 
 
-@pytest.mark.parametrize("rear_y", (74.4, 76.6, 78.8))
+@pytest.mark.parametrize("rear_y", (75.0, 76.0, 78.2))
 def test_validator_rejects_internal_rear_hole_annulus(rear_y: float) -> None:
     source = base.load_canonical_source(SOURCE_ROOT)
     mesh = base.generate_base(source)
@@ -590,7 +590,7 @@ def test_validator_rejects_internal_rear_hole_annulus(rear_y: float) -> None:
     annulus = base.subtract_meshes(outer, [inner])
     restricted_hole = macro.union_meshes([mesh, annulus])
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"rear wire (path|hole clearance)"):
         base.validate_base(restricted_hole, source)
 
 
