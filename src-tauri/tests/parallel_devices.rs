@@ -427,9 +427,9 @@ fn board(id: &str) -> &'static BoardProfile {
     BOARD_PROFILES.iter().find(|board| board.id == id).unwrap()
 }
 
-fn hello(board: &BoardProfile, build: &str) -> String {
+fn hello_with_protocol(board: &BoardProfile, build: &str, protocol: u16) -> String {
     format!(
-        "HELLO 4 {} {} {} {} {}\n",
+        "HELLO {protocol} {} {} {} {} {}\n",
         board.family_id,
         board.id,
         build,
@@ -441,6 +441,10 @@ fn hello(board: &BoardProfile, build: &str) -> String {
             .collect::<Vec<_>>()
             .join(" ")
     )
+}
+
+fn hello(board: &BoardProfile, build: &str) -> String {
+    hello_with_protocol(board, build, 4)
 }
 
 fn serial(port: &str, board: &BoardProfile, serial: &str) -> SerialObservation {
@@ -635,6 +639,142 @@ fn wait_for_input_event(coordinator: &mut RuntimeCoordinator, serial: &str) {
         );
         thread::sleep(Duration::from_millis(1));
     }
+}
+
+#[test]
+fn held_input_on_one_device_does_not_block_another_devices_paste_sequence() {
+    let rp = board("vccgnd-yd-rp2040");
+    let specs = [
+        (
+            "HOLD",
+            "/dev/fake-held",
+            "profile-held",
+            "hardware-held",
+            10,
+            11,
+        ),
+        (
+            "PASTE",
+            "/dev/fake-paste",
+            "profile-paste",
+            "hardware-paste",
+            12,
+            13,
+        ),
+    ];
+    let held_profile = profile("profile-held", "hardware-held", rp.id, 10, 11);
+    let mut paste_profile = profile("profile-paste", "hardware-paste", rp.id, 12, 13);
+    paste_profile.actions.insert(
+        "PASTE".into(),
+        TriggerActions::press(vec![
+            ButtonAction::Paste {
+                text: "paste-profile-paste".into(),
+            },
+            ButtonAction::Hotkey {
+                keys: vec!["enter".into()],
+            },
+        ]),
+    );
+
+    let directory = TestDirectory::new();
+    let workspace = Arc::new(RwLock::new(
+        Workspace::create(&directory.0, vec![held_profile, paste_profile]).unwrap(),
+    ));
+    let enumerator = Arc::new(FakeUsbEnumerator::default());
+    let transports = Arc::new(FakeTransportFactory::default());
+    let clock = Arc::new(FakeClock::new());
+    let clipboard = RecordingClipboard::default();
+    let paste =
+        PasteCoordinator::with_clock(clipboard.clone(), Duration::from_secs(60), clock.clone());
+    let endpoints = specs
+        .iter()
+        .map(|(serial_id, port, ..)| {
+            let endpoint = FakeEndpoint::new(
+                port,
+                hello_with_protocol(rp, &format!("build-{serial_id}"), 6),
+            );
+            transports.add(endpoint.clone());
+            ((*serial_id).to_owned(), endpoint)
+        })
+        .collect::<BTreeMap<_, _>>();
+    enumerator.set(
+        specs
+            .iter()
+            .map(|(serial_id, port, ..)| serial(port, rp, serial_id))
+            .collect(),
+        Vec::new(),
+    );
+    let launcher = Arc::new(SystemWorkerLauncher::with_runtime(
+        paste.handle(),
+        None,
+        Arc::new(RwLock::new(())),
+        transports,
+        clock,
+    ));
+    let coordinator = RuntimeCoordinator::with_paste(
+        enumerator,
+        launcher,
+        workspace.clone(),
+        Some(paste.handle()),
+    );
+    let mut coordinator = RuntimeFixture { coordinator, paste };
+
+    coordinator.scan_once().unwrap();
+    wait_until(&mut coordinator, |coordinator| {
+        coordinator.devices().len() == 2
+    });
+    {
+        let mut workspace = workspace.write().unwrap();
+        for (serial_id, _, profile_id, hardware_id, ..) in specs {
+            workspace
+                .set_assignment(
+                    &DeviceId::new(rp.id, serial_id).unwrap(),
+                    RuntimeAssignment {
+                        device_profile_id: profile_id.into(),
+                        hardware_profile_id: hardware_id.into(),
+                    },
+                )
+                .unwrap();
+        }
+        coordinator.apply_workspace_revision(WorkspaceRevision::capture(&workspace));
+    }
+    for (serial_id, _, _, _, hot_pin, paste_pin) in specs {
+        let endpoint = &endpoints[serial_id];
+        let suffix = format!(" 0 2 {hot_pin} {paste_pin}\n");
+        let direct = endpoint
+            .wait_for_line(|line| line.starts_with("CONFIG_DIRECT ") && line.ends_with(&suffix));
+        let revision = direct
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .parse::<u32>()
+            .unwrap();
+        endpoint.emit(&format!("CONFIG_OK {revision}\n"));
+    }
+    wait_until(&mut coordinator, |coordinator| {
+        ready_count(coordinator) == 2
+    });
+
+    let held = &endpoints["HOLD"];
+    held.emit("STATE 100 DIRECT 10 DOWN\n");
+    wait_for_input_event(&mut coordinator, "HOLD");
+    held.wait_for_line(|line| line == "CHORD 1 1 2 0 1 40\n");
+    held.emit("DONE 1 1\n");
+    held.wait_for_line(|line| line == "CHORD 1 2 2 0 1 43\n");
+    held.emit("DONE 1 2\n");
+
+    let paste_device = &endpoints["PASTE"];
+    paste_device.emit("STATE 200 DIRECT 13 DOWN\n");
+    wait_for_input_event(&mut coordinator, "PASTE");
+    paste_device.wait_for_line(|line| line == paste_action_line(1, 1, 2));
+    assert_eq!(clipboard.writes(), ["paste-profile-paste"]);
+    paste_device.emit("DONE 1 1\n");
+    paste_device.wait_for_line(|line| line == "CHORD 1 2 2 0 1 40\n");
+    paste_device.emit("DONE 1 2\n");
+
+    wait_until(&mut coordinator, |coordinator| {
+        ready_count(coordinator) == 2
+    });
 }
 
 #[test]

@@ -13,6 +13,8 @@ RP2040_BUILD = KIVO_FIRMWARE_BUILD_ID="$(BUILD_ID)" $(UV_CMD) run pio run -e rp2
 
 all: helper
 
+dev: helper
+
 require-serial:
 	@test -n "$(SERIAL)" || { echo "SERIAL is required" >&2; exit 2; }
 
@@ -27,7 +29,7 @@ require-build-id:
 	    ;; \
 	esac
 
-build: build-esp32s3
+build: build-rp2040
 
 build-esp32s3: require-build-id
 	$(ESP32S3_BUILD)
@@ -38,9 +40,7 @@ build-rp2040: require-build-id
 download-mode: require-serial
 	$(UV_CMD) run python scripts/enter_download_mode.py --serial "$(SERIAL)"
 
-upload:
-	@echo "Specify upload-esp32s3 or upload-rp2040" >&2
-	@exit 2
+upload: upload-rp2040
 
 upload-esp32s3: require-build-id
 	@set -e; \
