@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { ActionEditor } from "./ActionEditor";
-import type { TriggerActions } from "./types";
+import type { Language, TriggerActions } from "./types";
 
 const emptyGroups = (): TriggerActions => ({
   press: [],
@@ -12,9 +12,10 @@ const emptyGroups = (): TriggerActions => ({
   double_press: [],
 });
 
-function Harness({ initial = emptyGroups(), onChange }: {
+function Harness({ initial = emptyGroups(), onChange, language = "en-US" }: {
   initial?: TriggerActions;
   onChange?: (actions: TriggerActions) => void;
+  language?: Language;
 }) {
   const [actions, setActions] = useState(initial);
   const [, setRenderTick] = useState(0);
@@ -27,7 +28,7 @@ function Harness({ initial = emptyGroups(), onChange }: {
       <button type="button" onClick={() => setRenderTick((value) => value + 1)}>Rerender parent</button>
       <button type="button" onClick={() => setActions(emptyGroups())}>Clear actions</button>
       <ActionEditor
-        language="en-US"
+        language={language}
         button={{ id: "A", label: "A" }}
         actions={actions}
         onChange={update}
@@ -65,6 +66,18 @@ test("uses the picker technical key names in Action summaries", () => {
   expect(screen.getByText(
     "Hotkey - Primary (Command / Control) + Option / Alt + Left Option / Alt + Right Option / Alt",
   )).toBeInTheDocument();
+});
+
+test("localizes hotkey summaries without rewriting action tokens", () => {
+  render(<Harness language="zh-CN" initial={{
+    ...emptyGroups(),
+    press: [{ type: "hotkey", keys: ["right_cmd", "left"] }],
+  }} />);
+
+  expect(screen.getByText("快捷键 - 右cmd + 方向左")).toBeInTheDocument();
+  expect(configuredActions().press).toEqual([
+    { type: "hotkey", keys: ["right_cmd", "left"] },
+  ]);
 });
 
 test("changing trigger appends the Action to the destination group", async () => {

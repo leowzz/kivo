@@ -60,7 +60,7 @@ function actionSummary(action: ButtonAction, language: Language): string {
     case "paste":
       return `${prefix} - ${action.text || "-"}`;
     case "hotkey":
-      return `${prefix} - ${action.keys.length ? formatHotkey(action.keys) : "-"}`;
+      return `${prefix} - ${action.keys.length ? formatHotkey(action.keys, language) : "-"}`;
     case "delay":
       return `${prefix} - ${action.duration_ms} ms`;
     case "media": {
