@@ -1,6 +1,6 @@
 [package]
 name = "kivo"
-version = "0.6.6"
+version = "0.6.8"
 description = "Desktop helper for the Kivo GPIO keyboard"
 edition = "2024"
 

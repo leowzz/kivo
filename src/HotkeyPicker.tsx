@@ -131,8 +131,12 @@ export function HotkeyPicker({ value, onChange, language, error, onRecordingChan
   const activeCategory = HOTKEY_CATEGORIES.find(({ name }) => name === activeCategoryName) ?? HOTKEY_CATEGORIES[0];
   const filteredTokens = useMemo(() => activeCategory.tokens.filter((token) =>
     !isModifierToken(token) &&
-    (!normalizedSearch || hotkeyDisplayLabel(token).toLowerCase().includes(normalizedSearch))
-  ), [activeCategory, normalizedSearch]);
+    (!normalizedSearch || hotkeyDisplayLabel(language, token).toLowerCase().includes(normalizedSearch))
+  ), [activeCategory, language, normalizedSearch]);
+  const matchingPhysicalModifiers = useMemo(() => normalizedSearch
+    ? PHYSICAL_MODIFIERS.filter((token) => hotkeyDisplayLabel(language, token).toLowerCase().includes(normalizedSearch))
+    : [], [language, normalizedSearch]);
+  const visiblePhysicalModifiers = showPhysicalModifiers ? PHYSICAL_MODIFIERS : matchingPhysicalModifiers;
 
   const handleCategoryKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => {
     let nextIndex: number | null = null;
@@ -166,8 +170,8 @@ export function HotkeyPicker({ value, onChange, language, error, onRecordingChan
       <div className="hotkey-chips" aria-label={t(language, "behavior.shortcut")}>
         {value.length === 0 && <span className="hotkey-empty">-</span>}
         {value.map((token) => (
-          <button className="hotkey-chip" type="button" key={token} aria-label={t(language, "behavior.removeKey", { key: hotkeyDisplayLabel(token) })} onClick={() => toggle(token)}>
-            {hotkeyDisplayLabel(token)} <X size={12} aria-hidden="true" />
+          <button className="hotkey-chip" type="button" key={token} aria-label={t(language, "behavior.removeKey", { key: hotkeyDisplayLabel(language, token) })} onClick={() => toggle(token)}>
+            {hotkeyDisplayLabel(language, token)} <X size={12} aria-hidden="true" />
           </button>
         ))}
       </div>
@@ -181,20 +185,20 @@ export function HotkeyPicker({ value, onChange, language, error, onRecordingChan
       <div className="hotkey-modifier-row">
         {COMPACT_MODIFIERS.map(({ token }) => (
           <label key={token}>
-            <input type="checkbox" checked={hasUsage(value, token)} onChange={() => toggle(token)} aria-label={hotkeyDisplayLabel(token)} />
-            <span>{hotkeyDisplayLabel(token)}</span>
+            <input type="checkbox" checked={hasUsage(value, token)} onChange={() => toggle(token)} aria-label={hotkeyDisplayLabel(language, token)} />
+            <span>{hotkeyDisplayLabel(language, token)}</span>
           </label>
         ))}
         <button type="button" className="hotkey-disclosure" aria-expanded={showPhysicalModifiers} onClick={() => setShowPhysicalModifiers((open) => !open)}>
           <ChevronDown size={14} aria-hidden="true" />{t(language, "behavior.moreModifiers")}
         </button>
       </div>
-      {showPhysicalModifiers && (
+      {(showPhysicalModifiers || matchingPhysicalModifiers.length > 0) && (
         <div className="hotkey-physical-modifiers">
-          {PHYSICAL_MODIFIERS.map((token) => (
+          {visiblePhysicalModifiers.map((token) => (
             <label key={token}>
-              <input type="checkbox" checked={hasUsage(value, token)} onChange={() => toggle(token)} aria-label={hotkeyDisplayLabel(token)} />
-              <span>{hotkeyDisplayLabel(token)}</span>
+              <input type="checkbox" checked={hasUsage(value, token)} onChange={() => toggle(token)} aria-label={hotkeyDisplayLabel(language, token)} />
+              <span>{hotkeyDisplayLabel(language, token)}</span>
             </label>
           ))}
         </div>
@@ -232,8 +236,8 @@ export function HotkeyPicker({ value, onChange, language, error, onRecordingChan
             const disabled = !selected && ordinaryCount(value) >= 6;
             return (
               <label key={token} className={disabled ? "is-disabled" : undefined}>
-                <input type="checkbox" checked={selected} disabled={disabled} onChange={() => toggle(token)} aria-label={hotkeyDisplayLabel(token)} />
-                <span>{hotkeyDisplayLabel(token)}</span>
+                <input type="checkbox" checked={selected} disabled={disabled} onChange={() => toggle(token)} aria-label={hotkeyDisplayLabel(language, token)} />
+                <span>{hotkeyDisplayLabel(language, token)}</span>
               </label>
             );
           })}

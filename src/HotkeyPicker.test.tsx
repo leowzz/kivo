@@ -91,20 +91,56 @@ test("aborts an unsupported recording without replacing the previous chord", asy
   expect(screen.getByRole("button", { name: "Record shortcut" })).toBeInTheDocument();
 });
 
-test("localizes categories but keeps protocol key names stable", async () => {
+test("localizes named keys across picker controls and selected chips", async () => {
+  const user = userEvent.setup();
+  render(<HotkeyPicker value={["right_cmd", "left"]} onChange={vi.fn()} language="zh-CN" />);
+
+  expect(screen.getByRole("button", { name: "移除 右cmd" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "移除 方向左" })).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "回车" })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "更多修饰键" }));
+  expect(screen.getByRole("checkbox", { name: "右cmd" })).toBeChecked();
+
+  await user.click(screen.getByRole("tab", { name: "导航" }));
+  expect(screen.getByRole("checkbox", { name: "方向左" })).toBeChecked();
+  expect(screen.getByRole("checkbox", { name: "方向右" })).toBeInTheDocument();
+  expect(screen.queryByRole("checkbox", { name: "Arrow Left" })).not.toBeInTheDocument();
+});
+
+test("searches keys by their localized display label", async () => {
+  const user = userEvent.setup();
   render(<HotkeyPicker value={[]} onChange={vi.fn()} language="zh-CN" />);
-  expect(screen.getByRole("tablist", { name: "按键分类" })).toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: "常用" })).toHaveAttribute("aria-selected", "true");
-  expect(screen.getByRole("checkbox", { name: "Command" })).toBeInTheDocument();
-  expect(screen.getByRole("checkbox", { name: "Control" })).toBeInTheDocument();
-  expect(screen.getByRole("checkbox", { name: "Option / Alt" })).toBeInTheDocument();
-  expect(screen.getByRole("checkbox", { name: "Shift" })).toBeInTheDocument();
-  expect(screen.getByRole("checkbox", { name: "Enter" })).toBeInTheDocument();
-  expect(screen.getByRole("checkbox", { name: "Backspace" })).toBeInTheDocument();
-  expect(screen.getByRole("checkbox", { name: "Space" })).toBeInTheDocument();
-  expect(screen.getByRole("checkbox", { name: "Caps Lock" })).toBeInTheDocument();
-  expect(screen.queryByRole("checkbox", { name: "命令" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("checkbox", { name: "回车" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("tab", { name: "导航" }));
+  await user.type(screen.getByRole("searchbox", { name: "搜索按键" }), "方向左");
+  expect(screen.getByRole("checkbox", { name: "方向左" })).toBeInTheDocument();
+  expect(screen.queryByRole("checkbox", { name: "方向右" })).not.toBeInTheDocument();
+});
+
+test("searching a localized physical modifier expands its matching result without changing the value", async () => {
+  const user = userEvent.setup();
+  const onChange = vi.fn();
+  render(<HotkeyPicker value={["right_cmd"]} onChange={onChange} language="zh-CN" />);
+
+  await user.type(screen.getByRole("searchbox", { name: "搜索按键" }), "右cmd");
+
+  expect(screen.getByRole("checkbox", { name: "右cmd" })).toBeChecked();
+  expect(onChange).not.toHaveBeenCalled();
+});
+
+test("keeps physical modifiers collapsed until manually expanded or matched by a search", () => {
+  render(<HotkeyPicker value={[]} onChange={vi.fn()} language="en-US" />);
+
+  expect(screen.queryByRole("checkbox", { name: "Right Command" })).not.toBeInTheDocument();
+});
+
+test("changing the picker language does not write back the current value", () => {
+  const onChange = vi.fn();
+  const { rerender } = render(<HotkeyPicker value={["right_cmd", "left"]} onChange={onChange} language="en-US" />);
+
+  rerender(<HotkeyPicker value={["right_cmd", "left"]} onChange={onChange} language="zh-CN" />);
+
+  expect(onChange).not.toHaveBeenCalled();
 });
 
 test("shows one category panel and keeps recording above search", async () => {
@@ -115,14 +151,14 @@ test("shows one category panel and keeps recording above search", async () => {
   const search = screen.getByRole("searchbox", { name: "搜索按键" });
   expect(record.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(screen.getAllByRole("tabpanel")).toHaveLength(1);
-  expect(screen.getByRole("checkbox", { name: "Enter" })).toBeChecked();
+  expect(screen.getByRole("checkbox", { name: "回车" })).toBeChecked();
 
   await user.click(screen.getByRole("tab", { name: "功能键 F1-F24" }));
   expect(screen.getAllByRole("tabpanel")).toHaveLength(1);
   expect(screen.getByRole("checkbox", { name: "F1" })).toBeInTheDocument();
   expect(screen.getByRole("checkbox", { name: "F24" })).toBeInTheDocument();
-  expect(screen.queryByRole("checkbox", { name: "Enter" })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "移除 Enter" })).toBeInTheDocument();
+  expect(screen.queryByRole("checkbox", { name: "回车" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "移除 回车" })).toBeInTheDocument();
 });
 
 test("only the active category tab controls the rendered panel", async () => {
