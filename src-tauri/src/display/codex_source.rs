@@ -1395,11 +1395,21 @@ fn file_identity(metadata: &fs::Metadata) -> FileIdentity {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn file_identity(metadata: &fs::Metadata) -> FileIdentity {
+    use std::os::windows::fs::MetadataExt;
+
     FileIdentity {
         device: 0,
-        inode: metadata.len(),
+        inode: metadata.creation_time(),
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn file_identity(_metadata: &fs::Metadata) -> FileIdentity {
+    FileIdentity {
+        device: 0,
+        inode: 0,
     }
 }
 
