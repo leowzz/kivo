@@ -497,17 +497,13 @@ fn route_app_server_line(line: &str) -> Option<AppServerResponse> {
 }
 
 fn locate_codex() -> Option<PathBuf> {
-    locate_codex_in_path(std::env::var_os("PATH").as_deref()).or_else(|| {
-        #[cfg(target_os = "macos")]
-        {
-            let bundled = PathBuf::from("/Applications/Codex.app/Contents/Resources/codex");
-            is_executable(&bundled).then_some(bundled)
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            None
-        }
-    })
+    let executable = locate_codex_in_path(std::env::var_os("PATH").as_deref());
+    #[cfg(target_os = "macos")]
+    let executable = executable.or_else(|| {
+        let bundled = PathBuf::from("/Applications/Codex.app/Contents/Resources/codex");
+        is_executable(&bundled).then_some(bundled)
+    });
+    executable
 }
 
 fn locate_codex_in_path(path: Option<&OsStr>) -> Option<PathBuf> {
