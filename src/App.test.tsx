@@ -217,7 +217,7 @@ async function addPasteAction(user: ReturnType<typeof userEvent.setup>, text: st
 
 async function addHotkeyAction(user: ReturnType<typeof userEvent.setup>) {
   await openActionDialog(user, "hotkey");
-  await user.click(screen.getByRole("checkbox", { name: "Enter" }));
+  await user.click(screen.getByRole("checkbox", { name: "回车" }));
   await user.click(screen.getByRole("button", { name: "保存" }));
 }
 
@@ -1910,9 +1910,9 @@ test("manually selects a multi-modifier shortcut", async () => {
   const editor = await screen.findByRole("complementary", { name: "2" });
 
   await openActionDialog(user, "hotkey");
-  await user.click(screen.getByRole("checkbox", { name: "Command" }));
-  await user.click(screen.getByRole("checkbox", { name: "Control" }));
-  await user.click(screen.getByRole("checkbox", { name: "Shift" }));
+  await user.click(screen.getByRole("checkbox", { name: "cmd" }));
+  await user.click(screen.getByRole("checkbox", { name: "ctrl" }));
+  await user.click(screen.getByRole("checkbox", { name: "shift" }));
   await user.click(screen.getByRole("tab", { name: "字母" }));
   await user.click(screen.getByRole("checkbox", { name: "K" }));
 
