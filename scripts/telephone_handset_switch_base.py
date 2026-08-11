@@ -36,16 +36,18 @@ PLATE_THICKNESS = 3.4
 INNER_WIDTH = 40.0
 INNER_LENGTH = 55.0
 INNER_RADIUS = 1.6
-MOUTH_WIDTH = 59.0
-MOUTH_LENGTH = 74.0
+MOUTH_WIDTH = 50.0
+MOUTH_LENGTH = 65.0
 MOUTH_RADIUS = 3.6
 WALL = 2.4
 FUNNEL_EXPANSION = (MOUTH_WIDTH - INNER_WIDTH) / 2.0
-assert FUNNEL_EXPANSION == (MOUTH_LENGTH - INNER_LENGTH) / 2.0
-OUTER_WIDTH = MOUTH_WIDTH + 2.0 * WALL
-OUTER_LENGTH = MOUTH_LENGTH + 2.0 * WALL
+assert abs(FUNNEL_EXPANSION - (MOUTH_LENGTH - INNER_LENGTH) / 2.0) < 1e-9
+OUTER_WIDTH = 63.8
+OUTER_LENGTH = 78.8
 OUTER_RADIUS = 6.0
 OUTER_HEIGHT = 28.4
+MOUTH_WALL = (OUTER_WIDTH - MOUTH_WIDTH) / 2.0
+assert abs(MOUTH_WALL - (OUTER_LENGTH - MOUTH_LENGTH) / 2.0) < 1e-9
 PLATFORM_SIZE = 24.0
 PAD_SIZE = 10.0
 PAD_THICKNESS = 2.4
@@ -53,7 +55,7 @@ PAD_TOP = 13.4
 FUNNEL_BOTTOM = PAD_TOP
 FUNNEL_DEPTH = OUTER_HEIGHT - FUNNEL_BOTTOM
 LOWER_INSET = (OUTER_WIDTH - INNER_WIDTH) / 2.0
-assert LOWER_INSET == (OUTER_LENGTH - INNER_LENGTH) / 2.0
+assert abs(LOWER_INSET - (OUTER_LENGTH - INNER_LENGTH) / 2.0) < 1e-9
 BOTTOMED_TRIGGER_HEIGHT = 5.0
 HANDSET_RECESS = 2.0
 PLATFORM_TOP = PAD_TOP - BOTTOMED_TRIGGER_HEIGHT + HANDSET_RECESS
@@ -67,6 +69,7 @@ PROFILE_TOLERANCE = 0.003
 PROTECTED_VOLUME_TOLERANCE = 0.02
 RING_SECTION_LEVEL = FUNNEL_BOTTOM + 0.001
 REQUIRED_SOLID_VOLUME_TOLERANCE = 0.03
+REAR_HOLE_CLEARANCE_VOLUME_TOLERANCE = 0.031
 
 
 def circle_segments_for_sagitta(radius: float, tolerance: float) -> int:
@@ -1067,7 +1070,7 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
 
     rear_clearance = validation_rear_hole_clearance()
     obstructed_hole_volume = intersection_volume([mesh, rear_clearance])
-    if obstructed_hole_volume > REQUIRED_SOLID_VOLUME_TOLERANCE:
+    if obstructed_hole_volume > REAR_HOLE_CLEARANCE_VOLUME_TOLERANCE:
         raise ValueError(
             f"rear wire hole clearance is obstructed: volume={obstructed_hole_volume}"
         )

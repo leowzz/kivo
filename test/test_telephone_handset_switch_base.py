@@ -184,10 +184,10 @@ def test_generate_base_uses_exact_full_depth_funnel() -> None:
 
     expected_sections = (
         (13.401, (40.001, 55.001)),
-        (17.15, (44.75, 59.75)),
-        (20.9, (49.5, 64.5)),
-        (24.65, (54.25, 69.25)),
-        (28.399, (58.999, 73.999)),
+        (17.15, (42.5, 57.5)),
+        (20.9, (45.0, 60.0)),
+        (24.65, (47.5, 62.5)),
+        (28.399, (49.999, 64.999)),
     )
     for level, expected in expected_sections:
         loops = section_loop_sizes(mesh, axis=2, level=level)
@@ -236,7 +236,7 @@ def test_generate_base_preserves_outer_pocket_and_switch_dimensions() -> None:
     )
     base.require_rounded_rectangle_loop(
         base.measured_section_loops(mesh, axis=2, level=28.399),
-        np.array([[2.4005, 2.4005], [61.3995, 76.3995]]),
+        np.array([[6.9005, 6.9005], [56.8995, 71.8995]]),
         3.5995,
         "R3.6 top funnel profile",
         0.003,

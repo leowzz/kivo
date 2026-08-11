@@ -1,14 +1,14 @@
 # Telephone Handset Switch Base Design
 
 Date: 2026-08-10
-Revised: 2026-08-11 (40 x 55 locating throat)
+Revised: 2026-08-11 (50 x 65 top opening)
 Status: Approved
 
 ## Goal
 
 Create a one-piece FDM-printable base that holds the center of a telephone
 handset and fully bottoms out one mechanical keyboard switch when the handset
-is placed in the base. A wide `59 x 74` mouth guides insertion down a
+is placed in the base. A `50 x 65` mouth guides insertion down a
 full-depth funnel to an exact `40 x 55` locating throat at the support datum.
 At full switch travel, the handset's adjacent bearing surface reaches all four
 corner pads so the normal resting load is shared and the former single-point
@@ -77,19 +77,19 @@ describes the section bounding box rather than a sharp-cornered rectangle.
 The complete `15.0` pocket depth is a straight ruled funnel:
 
 - funnel throat at `Z=13.4`: `40 x 55`, `R1.6`;
-- funnel mouth at `Z=28.4`: `59 x 74`, `R3.6`;
-- widening per side and per end: `9.5` over `15.0` vertical height;
+- funnel mouth at `Z=28.4`: `50 x 65`, `R3.6`;
+- widening per side and per end: `5.0` over `15.0` vertical height;
 - no vertical locating band above the support datum;
-- minimum wall thickness at the mouth: `2.4`.
+- wall thickness at the mouth: `6.9`.
 
 The throat and mouth profiles are explicit rounded rectangles joined by a
-convex ruled surface. The mouth radius remains `R3.6`; it is not the `R11.1`
-that a uniform `9.5` offset of the throat would produce. At the straight side
-walls, the funnel rises approximately `57.7 degrees` above horizontal, which
+convex ruled surface. The mouth radius remains `R3.6`; it is not the `R6.6`
+that a uniform `5.0` offset of the throat would produce. At the straight side
+walls, the funnel rises approximately `71.6 degrees` above horizontal, which
 keeps the upright print support-free.
 
 The outer footprint is `63.8 x 78.8` with vertical `R6.0` outer corners. The
-wall is `2.4` thick at the funnel mouth and `11.9` thick around the lower
+wall is `6.9` thick at the funnel mouth and `11.9` thick around the lower
 throat. The safety-pad tops define the support datum at `Z=13.4`.
 The rim top is `Z=28.4`, producing exactly `15.0` pocket depth. There is no
 continuous `40 x 55` floor.
@@ -213,8 +213,8 @@ The open underside deliberately keeps the pins and solder joints serviceable.
 - The safety pads use `45 degree` gussets.
 - Do not create a broad roof over the open underside.
 - Preserve the source switch aperture without support material inside it.
-- The minimum `2.4` mouth-wall thickness aligns with six nominal `0.4`-mm
-  extrusion widths; the lower throat wall is `11.9` thick.
+- The `6.9` mouth-wall thickness and `11.9` lower throat wall provide a broad,
+  continuous rim around the handset opening.
 - Nominal slicing context is a `0.4` nozzle and `0.2` layer height.
 
 The design must not require a second printed part, screws, threaded inserts,
@@ -248,7 +248,7 @@ The implementation must verify all of the following before exporting:
   output mesh;
 - exact `63.8 x 78.8 x 28.4` outer extents;
 - exact `40 x 55`, `R1.6` throat at `Z=13.4`;
-- exact `15.0`-high funnel ending at a `59 x 74`, `R3.6` mouth;
+- exact `15.0`-high funnel ending at a `50 x 65`, `R3.6` mouth;
 - exact `15.0` pocket depth;
 - switch protected region matches the normalized source cell;
 - lower `14.798 x 14.798` relief and upper `14.000 x 14.000` aperture remain
