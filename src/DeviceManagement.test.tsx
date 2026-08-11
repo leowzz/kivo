@@ -231,6 +231,36 @@ test("preserves selected device identity across live replacements", () => {
   expect(screen.getByRole("button", { name: /ESP32 A/ })).toHaveAttribute("aria-pressed", "true");
 });
 
+test("applies a controlled non-first device before publishing selection", () => {
+  const onSelectedDeviceChange = vi.fn();
+  renderManagement({
+    devices: [
+      device(),
+      device({ deviceId: "rp-b", name: "RP2040 B", hardwareSerial: "RP-B-002" }),
+    ],
+    selectedDeviceId: "rp-b",
+    onSelectedDeviceChange,
+  });
+
+  expect(screen.getByRole("button", { name: /RP2040 B/ })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(onSelectedDeviceChange).not.toHaveBeenCalledWith("rp-a");
+});
+
+test("publishes explicit device and candidate row selections", async () => {
+  const user = userEvent.setup();
+  const onSelectedDeviceChange = vi.fn();
+  renderManagement({ onSelectedDeviceChange });
+
+  await user.click(screen.getByRole("button", { name: /RP2040 B/ }));
+  expect(onSelectedDeviceChange).toHaveBeenLastCalledWith("rp-b");
+
+  await user.click(screen.getByRole("button", { name: /AD-001/ }));
+  expect(onSelectedDeviceChange).toHaveBeenLastCalledWith(null);
+});
+
 test("moves candidate selection to the nearest remaining row when its observation disappears", () => {
   const { rerender, props } = renderManagement();
   screen.getByRole("button", { name: /AD-001/ }).click();
