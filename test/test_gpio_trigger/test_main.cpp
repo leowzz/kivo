@@ -520,7 +520,7 @@ void test_display_operations_require_regions_and_enforce_total_limit() {
   TEST_ASSERT_NULL(display.commit(1));
 }
 
-void test_display_text_rejects_invalid_font_charset_and_length() {
+void test_display_text_accepts_declared_fonts_and_rejects_invalid_values() {
   RemoteDisplay display;
   const std::string longest(kMaxDisplayTextBytes, 'A');
   const std::string oversized(kMaxDisplayTextBytes + 1, 'A');
@@ -533,10 +533,19 @@ void test_display_text_rejects_invalid_font_charset_and_length() {
   TEST_ASSERT_TRUE(display.text(0, 0, 0, 0, longest));
   TEST_ASSERT_FALSE(display.text(0, 0, 0, 0, oversized));
 
+  for (std::uint8_t fontId = 0; fontId <= kRemoteDisplayMaxFontId;
+       ++fontId) {
+    RemoteDisplay supported;
+    TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                      supported.begin(1, 0, DisplayMode::Full));
+    TEST_ASSERT_TRUE(supported.region(0, {0, 0, 128, 32}));
+    TEST_ASSERT_TRUE(supported.text(0, 0, 21, fontId, "FONT"));
+  }
+
   TEST_ASSERT_EQUAL(DisplayResult::Accepted,
                     display.begin(1, 0, DisplayMode::Full));
   TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 32}));
-  TEST_ASSERT_FALSE(display.text(0, 0, 0, 1, "FONT"));
+  TEST_ASSERT_FALSE(display.text(0, 0, 21, 3, "FONT"));
   TEST_ASSERT_EQUAL(DisplayResult::Accepted,
                     display.begin(1, 0, DisplayMode::Full));
   TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 32}));
@@ -601,6 +610,49 @@ void test_display_full_commit_dirties_old_and_new_slot_union() {
   TEST_ASSERT_EQUAL_UINT16(0, second->dirtyBounds[0].y);
   TEST_ASSERT_EQUAL_UINT16(64, second->dirtyBounds[0].width);
   TEST_ASSERT_EQUAL_UINT16(32, second->dirtyBounds[0].height);
+}
+
+void test_display_layout_transitions_mark_the_full_panel_dirty() {
+  RemoteDisplay display;
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(1, 0, DisplayMode::Full));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 32}));
+  TEST_ASSERT_TRUE(display.clear(0));
+  TEST_ASSERT_TRUE(display.text(0, 9, 22, 2, "CODEX 3 RUN"));
+  TEST_ASSERT_NOT_NULL(display.commit(1));
+
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(2, 1, DisplayMode::Delta));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 64, 16}));
+  TEST_ASSERT_TRUE(display.clear(0));
+  TEST_ASSERT_TRUE(display.text(0, 0, 12, 0, "CODEX"));
+  TEST_ASSERT_TRUE(display.region(1, {64, 0, 64, 16}));
+  TEST_ASSERT_TRUE(display.clear(1));
+  TEST_ASSERT_TRUE(display.text(1, 64, 12, 0, "3 RUN"));
+  TEST_ASSERT_TRUE(display.region(2, {0, 16, 128, 16}));
+  TEST_ASSERT_TRUE(display.clear(2));
+  const auto compact = display.commit(2);
+
+  TEST_ASSERT_NOT_NULL(compact);
+  TEST_ASSERT_TRUE(compact->dirtyCount >= 1);
+  TEST_ASSERT_EQUAL_UINT16(0, compact->dirtyBounds[0].x);
+  TEST_ASSERT_EQUAL_UINT16(0, compact->dirtyBounds[0].y);
+  TEST_ASSERT_EQUAL_UINT16(128, compact->dirtyBounds[0].width);
+  TEST_ASSERT_EQUAL_UINT16(32, compact->dirtyBounds[0].height);
+
+  TEST_ASSERT_EQUAL(DisplayResult::Accepted,
+                    display.begin(3, 0, DisplayMode::Full));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 32}));
+  TEST_ASSERT_TRUE(display.clear(0));
+  TEST_ASSERT_TRUE(display.text(0, 9, 22, 2, "CODEX 3 RUN"));
+  const auto full = display.commit(3);
+
+  TEST_ASSERT_NOT_NULL(full);
+  TEST_ASSERT_TRUE(full->dirtyCount >= 1);
+  TEST_ASSERT_EQUAL_UINT16(0, full->dirtyBounds[0].x);
+  TEST_ASSERT_EQUAL_UINT16(0, full->dirtyBounds[0].y);
+  TEST_ASSERT_EQUAL_UINT16(128, full->dirtyBounds[0].width);
+  TEST_ASSERT_EQUAL_UINT16(32, full->dirtyBounds[0].height);
 }
 
 void test_parses_display_commands_and_decodes_ascii_base64() {
@@ -836,9 +888,9 @@ void test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins() {
                     platform::selectRp2040OledBus(5, 6));
 }
 
-void test_formats_protocol_v7_hello_with_board_and_build() {
+void test_formats_protocol_v8_hello_with_board_and_build() {
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 7 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 27 "
+      "HELLO 8 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 27 "
       "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 26 "
       "27 28 29\n",
       formatHello(kVccGndYdRp2040, "0.1.0+gabc1234").c_str());
@@ -1679,9 +1731,10 @@ int main(int, char **) {
   RUN_TEST(test_display_invalid_operation_discards_staging_without_mutation);
   RUN_TEST(test_display_regions_are_bounded_aligned_unique_and_fixed_capacity);
   RUN_TEST(test_display_operations_require_regions_and_enforce_total_limit);
-  RUN_TEST(test_display_text_rejects_invalid_font_charset_and_length);
+  RUN_TEST(test_display_text_accepts_declared_fonts_and_rejects_invalid_values);
   RUN_TEST(test_display_delta_replaces_only_declared_slots_and_unions_dirty_bounds);
   RUN_TEST(test_display_full_commit_dirties_old_and_new_slot_union);
+  RUN_TEST(test_display_layout_transitions_mark_the_full_panel_dirty);
   RUN_TEST(test_parses_display_commands_and_decodes_ascii_base64);
   RUN_TEST(test_rejects_malformed_display_command_tokens_numbers_and_base64);
   RUN_TEST(test_display_dispatch_formats_exact_replies_and_clears_bad_staging);
@@ -1695,7 +1748,7 @@ int main(int, char **) {
   RUN_TEST(test_rp2040_standalone_debug_topology_matches_keyboard_wiring);
   RUN_TEST(test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match);
   RUN_TEST(test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins);
-  RUN_TEST(test_formats_protocol_v7_hello_with_board_and_build);
+  RUN_TEST(test_formats_protocol_v8_hello_with_board_and_build);
   RUN_TEST(test_rejects_empty_firmware_build_id);
   RUN_TEST(test_rejects_whitespace_in_firmware_build_id);
   RUN_TEST(test_contact_edge_reports_unordered_pair_once_after_debounce);

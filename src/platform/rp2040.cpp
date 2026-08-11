@@ -75,6 +75,19 @@ void startHardwareI2c(TwoWire &wire, std::uint8_t sda, std::uint8_t scl) {
   displayWire = &wire;
 }
 
+const std::uint8_t *remoteDisplayFont(std::uint8_t fontId) {
+  switch (fontId) {
+    case 0:
+      return u8g2_font_6x13_tf;
+    case 1:
+      return u8g2_font_9x18_tf;
+    case 2:
+      return u8g2_font_10x20_tf;
+    default:
+      return nullptr;
+  }
+}
+
 bool supportsRemoteScene(const RemoteDisplayCommit &scene) {
   if (scene.regionCount > kMaxDisplayRegions ||
       scene.operationCount > kMaxDisplayOps ||
@@ -85,7 +98,8 @@ bool supportsRemoteScene(const RemoteDisplayCommit &scene) {
     const auto &operation = scene.operations[index];
     if (operation.kind == DisplayOperationKind::Clear) continue;
     if (operation.kind != DisplayOperationKind::Text ||
-        operation.fontId != kRemoteDisplayFontId) {
+        operation.fontId > kRemoteDisplayMaxFontId ||
+        remoteDisplayFont(operation.fontId) == nullptr) {
       return false;
     }
   }
@@ -248,10 +262,12 @@ bool renderRemoteDisplay(const RemoteDisplayCommit &scene,
   for (std::size_t index = 0; index < scene.operationCount; ++index) {
     const auto &operation = scene.operations[index];
     if (operation.kind != DisplayOperationKind::Text ||
-        operation.fontId != kRemoteDisplayFontId) {
+        operation.fontId > kRemoteDisplayMaxFontId) {
       continue;
     }
-    display->setFont(u8g2_font_6x13_tf);
+    const auto *font = remoteDisplayFont(operation.fontId);
+    if (!font) return false;
+    display->setFont(font);
     display->drawStr(operation.x, operation.baselineY,
                      operation.text.c_str());
   }

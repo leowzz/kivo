@@ -150,7 +150,8 @@ bool RemoteDisplay::text(std::uint8_t slot, std::uint16_t x,
                          std::string_view value) {
   auto *regionState = findStagedRegion(slot);
   if (regionState == nullptr || staged_->operationCount >= kMaxDisplayOps ||
-      value.size() > kMaxDisplayTextBytes || fontId != kRemoteDisplayFontId) {
+      value.size() > kMaxDisplayTextBytes ||
+      fontId > kRemoteDisplayMaxFontId) {
     return reject();
   }
   const auto right = static_cast<std::uint32_t>(regionState->bounds.x) +
