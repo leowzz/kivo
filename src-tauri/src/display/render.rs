@@ -5,6 +5,28 @@ use super::{DisplayItem, DisplaySnapshot, DisplayState, SourceHealth};
 const PANEL_ID: &str = "ssd1306_128x32_mono";
 const SUMMARY_ID: &str = "codex.summary";
 const EMPTY_TEXT: &str = "";
+const COMPACT_FONT: FontMetrics = FontMetrics {
+    id: 0,
+    advance: 6,
+    baseline_y: 21,
+};
+const MEDIUM_FONT: FontMetrics = FontMetrics {
+    id: 1,
+    advance: 9,
+    baseline_y: 21,
+};
+const LARGE_FONT: FontMetrics = FontMetrics {
+    id: 2,
+    advance: 10,
+    baseline_y: 22,
+};
+
+#[derive(Clone, Copy)]
+struct FontMetrics {
+    id: u8,
+    advance: u16,
+    baseline_y: u16,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Rect {
@@ -95,6 +117,7 @@ pub(crate) struct DisplayCapabilities {
     pub width: u16,
     pub height: u16,
     pub ascii_font_id: u8,
+    pub max_font_id: u8,
     pub max_regions: u8,
     pub max_operations: u8,
     pub max_text_bytes: u8,
@@ -115,6 +138,7 @@ impl DisplayCapabilities {
             width: 128,
             height: 32,
             ascii_font_id: 0,
+            max_font_id: 2,
             max_regions: 8,
             max_operations: 24,
             max_text_bytes: 48,
@@ -130,6 +154,14 @@ pub(crate) trait DisplayRenderer: Send + Sync {
     fn panel_id(&self) -> &'static str;
     fn capabilities(&self) -> &DisplayCapabilities;
     fn render(&self, snapshot: &DisplaySnapshot) -> Result<RenderedScene, &'static str>;
+
+    fn render_with_font_limit(
+        &self,
+        snapshot: &DisplaySnapshot,
+        _max_font_id: u8,
+    ) -> Result<RenderedScene, &'static str> {
+        self.render(snapshot)
+    }
 }
 
 #[derive(Default)]
@@ -186,6 +218,14 @@ impl DisplayRenderer for MonoText128x32Renderer {
     }
 
     fn render(&self, snapshot: &DisplaySnapshot) -> Result<RenderedScene, &'static str> {
+        self.render_with_font_limit(snapshot, self.capabilities().max_font_id)
+    }
+
+    fn render_with_font_limit(
+        &self,
+        snapshot: &DisplaySnapshot,
+        max_font_id: u8,
+    ) -> Result<RenderedScene, &'static str> {
         let (left, right, bottom) = match select_view(snapshot) {
             View::Task {
                 label,
@@ -219,6 +259,14 @@ impl DisplayRenderer for MonoText128x32Renderer {
             ),
         };
 
+        if max_font_id > 0
+            && let Some(text) = single_visual_line(&left, &right, &bottom)
+        {
+            return Ok(RenderedScene {
+                regions: vec![single_line_region(text, max_font_id)],
+            });
+        }
+
         Ok(RenderedScene {
             regions: vec![
                 text_region(0, "row0_left", Rect::new(0, 0, 64, 16), left),
@@ -227,6 +275,44 @@ impl DisplayRenderer for MonoText128x32Renderer {
             ],
         })
     }
+}
+
+fn single_visual_line(left: &str, right: &str, bottom: &str) -> Option<String> {
+    let top = match (left.is_empty(), right.is_empty()) {
+        (false, false) => format!("{left} {right}"),
+        (false, true) => left.to_owned(),
+        (true, false) => right.to_owned(),
+        (true, true) => String::new(),
+    };
+    match (top.is_empty(), bottom.is_empty()) {
+        (false, true) => Some(top),
+        (true, false) => Some(bottom.to_owned()),
+        _ => None,
+    }
+}
+
+fn single_line_region(text: String, max_font_id: u8) -> DisplayRegion {
+    let font = [LARGE_FONT, MEDIUM_FONT, COMPACT_FONT]
+        .into_iter()
+        .find(|font| {
+            font.id <= max_font_id && (text.len() as u16).saturating_mul(font.advance) <= 128
+        })
+        .unwrap_or(COMPACT_FONT);
+    let text_width = (text.len() as u16).saturating_mul(font.advance);
+    DisplayRegion::new(
+        0,
+        "single_line",
+        Rect::new(0, 0, 128, 32),
+        vec![
+            DrawOperation::ClearRegion,
+            DrawOperation::Text {
+                x: 128u16.saturating_sub(text_width) / 2,
+                baseline_y: font.baseline_y,
+                font_id: font.id,
+                text,
+            },
+        ],
+    )
 }
 
 enum View {
@@ -446,6 +532,71 @@ mod tests {
             items: vec![item],
             health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
         }
+    }
+
+    fn summary_snapshot(running: u32, needs_input: u32) -> DisplaySnapshot {
+        snapshot(
+            DisplayItem::new(
+                "codex.summary",
+                "codex",
+                DisplayPriority::Ambient,
+                DisplayState::Running,
+                "Codex",
+            )
+            .unwrap()
+            .with_metric("running", running)
+            .with_metric("needs_input", needs_input),
+        )
+    }
+
+    #[test]
+    fn single_summary_row_uses_the_largest_fitting_centered_font() {
+        let scene = MonoText128x32Renderer
+            .render(&summary_snapshot(3, 0))
+            .unwrap();
+
+        assert_eq!(
+            region_layout(&scene),
+            vec![(0, "single_line", Rect::new(0, 0, 128, 32))]
+        );
+        assert_eq!(
+            text_details(&scene, "single_line"),
+            Some((9, 22, 2, "CODEX 3 RUN"))
+        );
+    }
+
+    #[test]
+    fn single_row_falls_back_through_the_declared_font_sizes() {
+        let medium = single_line_region("CODEX 999+ RUN".into(), 2);
+        let compact = single_line_region("1234567890123456".into(), 2);
+
+        assert_eq!(
+            region_text_details(&medium),
+            Some((1, 21, 1, "CODEX 999+ RUN"))
+        );
+        assert_eq!(
+            region_text_details(&compact),
+            Some((16, 21, 0, "1234567890123456"))
+        );
+    }
+
+    #[test]
+    fn font_zero_limit_preserves_the_legacy_three_region_layout() {
+        let scene = MonoText128x32Renderer
+            .render_with_font_limit(&summary_snapshot(3, 0), 0)
+            .unwrap();
+
+        assert_eq!(
+            region_layout(&scene),
+            vec![
+                (0, "row0_left", Rect::new(0, 0, 64, 16)),
+                (1, "row0_right", Rect::new(64, 0, 64, 16)),
+                (2, "row1", Rect::new(0, 16, 128, 16)),
+            ]
+        );
+        assert_eq!(scene.text("row0_left"), "CODEX");
+        assert_eq!(scene.text("row0_right"), "3 RUN");
+        assert_eq!(scene.text("row1"), "");
     }
 
     #[test]
@@ -806,7 +957,7 @@ mod tests {
     }
 
     #[test]
-    fn clearing_all_waits_returns_to_summary_without_changing_regions() {
+    fn clearing_all_waits_switches_to_the_single_summary_row() {
         let now = Instant::now();
         let waiting_scene = MonoText128x32Renderer
             .render(&DisplaySnapshot {
@@ -834,10 +985,12 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(summary_scene.text("row0_left"), "CODEX");
-        assert_eq!(summary_scene.text("row0_right"), "2 RUN");
-        assert_eq!(summary_scene.text("row1"), "");
-        assert_eq!(region_layout(&waiting_scene), region_layout(&summary_scene));
+        assert_eq!(summary_scene.text("single_line"), "CODEX 2 RUN");
+        assert_ne!(region_layout(&waiting_scene), region_layout(&summary_scene));
+        assert_eq!(
+            region_layout(&summary_scene),
+            vec![(0, "single_line", Rect::new(0, 0, 128, 32))]
+        );
     }
 
     fn waiting_item(id: &str, title: &str, updated_at: Instant) -> DisplayItem {
@@ -873,6 +1026,29 @@ mod tests {
                         DrawOperation::Text { x, baseline_y, .. } => Some((*x, *baseline_y)),
                         DrawOperation::ClearRegion => None,
                     })
+            })
+    }
+
+    fn text_details<'a>(scene: &'a RenderedScene, id: &str) -> Option<(u16, u16, u8, &'a str)> {
+        scene
+            .regions
+            .iter()
+            .find(|region| region.id == id)
+            .and_then(region_text_details)
+    }
+
+    fn region_text_details(region: &DisplayRegion) -> Option<(u16, u16, u8, &str)> {
+        region
+            .operations
+            .iter()
+            .find_map(|operation| match operation {
+                DrawOperation::Text {
+                    x,
+                    baseline_y,
+                    font_id,
+                    text,
+                } => Some((*x, *baseline_y, *font_id, text.as_str())),
+                DrawOperation::ClearRegion => None,
             })
     }
 
