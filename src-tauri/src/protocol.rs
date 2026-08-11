@@ -1194,8 +1194,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_protocol_v5_and_v7_hello_compatibility_fixtures() {
-        for protocol in [5, 7] {
+    fn parses_protocol_v5_v7_and_v8_hello_compatibility_fixtures() {
+        for protocol in [5, 7, 8] {
             let message = parse_device(&format!(
                 "HELLO {protocol} rp2040 vccgnd-yd-rp2040 build 3 0 11 22"
             ))
