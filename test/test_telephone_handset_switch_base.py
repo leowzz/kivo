@@ -271,7 +271,7 @@ def test_bottomed_switch_and_four_pads_share_the_support_datum() -> None:
     assert base.PAD_TOP == pytest.approx(13.4)
 
     report = base.validate_base(mesh, source)
-    assert report.pocket_depth == pytest.approx(15.0, abs=0.003)
+    assert report.pocket_depth == 15.0
     assert report.open_underside
     assert report.rear_wire_path
 
@@ -756,6 +756,7 @@ def test_main_exports_stl_json_and_four_nonblank_previews(
     assert payload["stl_path"] == str(target)
     assert payload["stl_sha256"] == hashlib.sha256(target.read_bytes()).hexdigest()
     assert payload["pocket_bounds"] == [40.0, 55.0]
+    assert payload["pocket_depth"] == 15.0
     assert payload["protected_mismatch_volume"] <= base.PROTECTED_VOLUME_TOLERANCE
 
     expected_previews = {

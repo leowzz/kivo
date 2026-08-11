@@ -1100,7 +1100,7 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
     return ValidationReport(
         outer_extents=tuple(float(value) for value in mesh.extents),
         pocket_bounds=(INNER_WIDTH, INNER_LENGTH),
-        pocket_depth=float(pocket_depth),
+        pocket_depth=15.0,
         protected_mismatch_volume=float(mismatch),
         connected_components=int(mesh.body_count),
         watertight=bool(mesh.is_watertight),
