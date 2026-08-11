@@ -77,8 +77,10 @@ grep -Fq 'new (std::nothrow)' "$RP2040_PLATFORM"
 grep -Fq 'if (!display->begin())' "$RP2040_PLATFORM"
 grep -Fq 'bool renderLocalDisplay(const DisplayFrame &frame)' "$RP2040_PLATFORM"
 grep -Fq 'bool renderRemoteDisplay(const RemoteDisplayCommit &scene,' "$RP2040_PLATFORM"
-grep -Fq 'operation.fontId != kRemoteDisplayFontId' "$RP2040_PLATFORM"
+grep -Fq 'operation.fontId > kRemoteDisplayMaxFontId' "$RP2040_PLATFORM"
 grep -Fq 'display->setFont(u8g2_font_6x13_tf);' "$RP2040_PLATFORM"
+grep -Fq 'u8g2_font_9x18_tf' "$RP2040_PLATFORM"
+grep -Fq 'u8g2_font_10x20_tf' "$RP2040_PLATFORM"
 grep -Fq 'display->drawBox(bounds.x, bounds.y, bounds.width, bounds.height);' \
   "$RP2040_PLATFORM"
 grep -Fq 'display->sendBuffer();' "$RP2040_PLATFORM"
@@ -139,7 +141,7 @@ done
 
 require_serial_body="$(target_body require-serial)"
 grep -Fq 'test -n "$(SERIAL)"' <<<"$require_serial_body"
-grep -Fq 'expected = ["HELLO", "7", family, board, build]' "$ROOT/scripts/verify_runtime_firmware.py"
+grep -Fq 'expected = ["HELLO", "8", family, board, build]' "$ROOT/scripts/verify_runtime_firmware.py"
 
 for target in upload-esp32s3 upload-rp2040; do
   ! grep -Eq "^${target}:[[:space:]].*require-serial([[:space:]]|$)" "$MAKEFILE"

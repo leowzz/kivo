@@ -23,7 +23,7 @@ std::string formatHello(const BoardProfile &profile,
     return {};
   }
 
-  std::string line = "HELLO 7 ";
+  std::string line = "HELLO 8 ";
   line += profile.controllerFamilyId;
   line += ' ';
   line += profile.boardProfileId;

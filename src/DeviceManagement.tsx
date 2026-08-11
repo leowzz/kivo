@@ -261,42 +261,51 @@ export function DeviceManagement({
     ],
     [visibleDevices, visibleCandidates],
   );
-  useEffect(() => {
-    const exists =
-      selection &&
-      rows.some(
+  const requestedSelection: Selection | null = controlledDeviceId
+    ? { kind: "device", id: controlledDeviceId }
+    : selection;
+  const requestedExists =
+    requestedSelection &&
+    rows.some(
+      (row) =>
+        row.selection.kind === requestedSelection.kind &&
+        row.selection.id === requestedSelection.id,
+    );
+  const previousIndex = requestedSelection
+    ? previous.current.findIndex(
         (row) =>
-          row.selection.kind === selection.kind &&
-          row.selection.id === selection.id,
-      );
-    if (!exists) {
-      const index = selection
-        ? previous.current.findIndex(
-            (row) =>
-              row.selection.kind === selection.kind &&
-              row.selection.id === selection.id,
-          )
-        : 0;
-      setSelection(
-        rows[Math.max(0, Math.min(index, rows.length - 1))]?.selection ?? null,
-      );
+          row.selection.kind === requestedSelection.kind &&
+          row.selection.id === requestedSelection.id,
+      )
+    : 0;
+  const activeSelection = requestedExists
+    ? requestedSelection
+    : (rows[Math.max(0, Math.min(previousIndex, rows.length - 1))]
+        ?.selection ?? null);
+  useEffect(() => {
+    if (
+      selection?.kind !== activeSelection?.kind ||
+      selection?.id !== activeSelection?.id
+    ) {
+      setSelection(activeSelection);
     }
     previous.current = rows;
-  }, [rows, selection]);
-  const activeSelection = selection ?? rows[0]?.selection ?? null;
+  }, [activeSelection?.id, activeSelection?.kind, rows, selection?.id, selection?.kind]);
   const selectedDevice =
     activeSelection?.kind === "device"
       ? (devices.find((device) => device.deviceId === activeSelection.id) ?? null)
       : null;
+  const activeDeviceId =
+    activeSelection?.kind === "device" ? activeSelection.id : null;
   useEffect(() => {
-    if (!controlledDeviceId) return;
-    if (devices.some((device) => device.deviceId === controlledDeviceId)) {
-      setSelection({ kind: "device", id: controlledDeviceId });
+    if (activeDeviceId !== (controlledDeviceId ?? null)) {
+      onSelectedDeviceChange?.(activeDeviceId);
     }
-  }, [controlledDeviceId, devices]);
-  useEffect(() => {
-    if (selectedDevice && onSelectedDeviceChange) onSelectedDeviceChange(selectedDevice.deviceId);
-  }, [onSelectedDeviceChange, selectedDevice?.deviceId]);
+  }, [activeDeviceId, controlledDeviceId, onSelectedDeviceChange]);
+  const selectRow = (next: Selection) => {
+    setSelection(next);
+    onSelectedDeviceChange?.(next.kind === "device" ? next.id : null);
+  };
   const selectedCandidate =
     activeSelection?.kind === "candidate"
       ? (candidates.find((candidate) => candidate.key === activeSelection.id) ?? null)
@@ -570,7 +579,7 @@ export function DeviceManagement({
                     activeSelection.id === device.deviceId
                   }
                   onClick={() =>
-                    setSelection({ kind: "device", id: device.deviceId })
+                    selectRow({ kind: "device", id: device.deviceId })
                   }
                 >
                   <strong title={device.name}>{device.name}</strong>
@@ -602,7 +611,7 @@ export function DeviceManagement({
                     activeSelection.id === candidate.key
                     }
                     onClick={() =>
-                      setSelection({ kind: "candidate", id: candidate.key })
+                      selectRow({ kind: "candidate", id: candidate.key })
                     }
                   >
                     <strong title={candidateLabels.get(candidate.key)}>{candidateLabels.get(candidate.key)}</strong>
