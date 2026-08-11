@@ -36,24 +36,37 @@ PLATE_THICKNESS = 3.4
 INNER_WIDTH = 40.0
 INNER_LENGTH = 55.0
 INNER_RADIUS = 1.6
-MOUTH_WIDTH = 50.0
-MOUTH_LENGTH = 65.0
-MOUTH_RADIUS = 3.6
+SLOPE_REFERENCE_WIDTH = 50.0
+SLOPE_REFERENCE_LENGTH = 65.0
+SLOPE_REFERENCE_RADIUS = 3.6
+SLOPE_REFERENCE_HEIGHT = 28.4
+HEIGHT_EXTENSION = 5.0
 WALL = 2.4
-FUNNEL_EXPANSION = (MOUTH_WIDTH - INNER_WIDTH) / 2.0
-assert abs(FUNNEL_EXPANSION - (MOUTH_LENGTH - INNER_LENGTH) / 2.0) < 1e-9
 OUTER_WIDTH = 63.8
 OUTER_LENGTH = 78.8
 OUTER_RADIUS = 6.0
-OUTER_HEIGHT = 28.4
-MOUTH_WALL = (OUTER_WIDTH - MOUTH_WIDTH) / 2.0
-assert abs(MOUTH_WALL - (OUTER_LENGTH - MOUTH_LENGTH) / 2.0) < 1e-9
+OUTER_HEIGHT = SLOPE_REFERENCE_HEIGHT + HEIGHT_EXTENSION
 PLATFORM_SIZE = 24.0
 PAD_SIZE = 10.0
 PAD_THICKNESS = 2.4
 PAD_TOP = 13.4
 FUNNEL_BOTTOM = PAD_TOP
 FUNNEL_DEPTH = OUTER_HEIGHT - FUNNEL_BOTTOM
+SLOPE_REFERENCE_DEPTH = SLOPE_REFERENCE_HEIGHT - FUNNEL_BOTTOM
+SLOPE_EXTENSION_FACTOR = FUNNEL_DEPTH / SLOPE_REFERENCE_DEPTH
+MOUTH_WIDTH = INNER_WIDTH + SLOPE_EXTENSION_FACTOR * (
+    SLOPE_REFERENCE_WIDTH - INNER_WIDTH
+)
+MOUTH_LENGTH = INNER_LENGTH + SLOPE_EXTENSION_FACTOR * (
+    SLOPE_REFERENCE_LENGTH - INNER_LENGTH
+)
+MOUTH_RADIUS = INNER_RADIUS + SLOPE_EXTENSION_FACTOR * (
+    SLOPE_REFERENCE_RADIUS - INNER_RADIUS
+)
+FUNNEL_EXPANSION = (MOUTH_WIDTH - INNER_WIDTH) / 2.0
+assert abs(FUNNEL_EXPANSION - (MOUTH_LENGTH - INNER_LENGTH) / 2.0) < 1e-9
+MOUTH_WALL = (OUTER_WIDTH - MOUTH_WIDTH) / 2.0
+assert abs(MOUTH_WALL - (OUTER_LENGTH - MOUTH_LENGTH) / 2.0) < 1e-9
 LOWER_INSET = (OUTER_WIDTH - INNER_WIDTH) / 2.0
 assert abs(LOWER_INSET - (OUTER_LENGTH - INNER_LENGTH) / 2.0) < 1e-9
 BOTTOMED_TRIGGER_HEIGHT = 5.0
@@ -1040,7 +1053,7 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
         if not np.isclose(pad_top, PAD_TOP, atol=0.003):
             raise ValueError(f"safety-pad top drifted: {probe}")
     pocket_depth = float(mesh.bounds[1, 2] - PAD_TOP)
-    if not np.isclose(pocket_depth, 15.0, atol=0.003):
+    if not np.isclose(pocket_depth, FUNNEL_DEPTH, atol=0.003):
         raise ValueError(f"pocket depth drifted: {pocket_depth}")
 
     lower = macro.measure_switch_section(
@@ -1103,7 +1116,7 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
     return ValidationReport(
         outer_extents=tuple(float(value) for value in mesh.extents),
         pocket_bounds=(INNER_WIDTH, INNER_LENGTH),
-        pocket_depth=15.0,
+        pocket_depth=float(pocket_depth),
         protected_mismatch_volume=float(mismatch),
         connected_components=int(mesh.body_count),
         watertight=bool(mesh.is_watertight),

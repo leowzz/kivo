@@ -188,6 +188,7 @@ def test_generate_base_uses_exact_full_depth_funnel() -> None:
         (20.9, (45.0, 60.0)),
         (24.65, (47.5, 62.5)),
         (28.399, (49.999, 64.999)),
+        (33.399, (53.333, 68.333)),
     )
     for level, expected in expected_sections:
         loops = section_loop_sizes(mesh, axis=2, level=level)
@@ -196,6 +197,7 @@ def test_generate_base_uses_exact_full_depth_funnel() -> None:
         (13.401, 1.600133),
         (20.9, 2.6),
         (28.399, 3.599867),
+        (33.399, 4.266533),
     ):
         width, length = next(
             expected
@@ -222,7 +224,7 @@ def test_generate_base_preserves_outer_pocket_and_switch_dimensions() -> None:
 
     macro.assert_closed_manifold(mesh, "telephone handset switch base")
     assert mesh.bounds[0] == pytest.approx((0.0, 0.0, 0.0), abs=0.003)
-    assert mesh.extents == pytest.approx((63.8, 78.8, 28.4), abs=0.003)
+    assert mesh.extents == pytest.approx((63.8, 78.8, 33.4), abs=0.003)
 
     loops = section_loop_sizes(mesh, axis=2, level=13.401)
     assert any(np.allclose(size, (63.8, 78.8), atol=0.003) for size in loops)
@@ -235,10 +237,10 @@ def test_generate_base_preserves_outer_pocket_and_switch_dimensions() -> None:
         0.003,
     )
     base.require_rounded_rectangle_loop(
-        base.measured_section_loops(mesh, axis=2, level=28.399),
-        np.array([[6.9005, 6.9005], [56.8995, 71.8995]]),
-        3.5995,
-        "R3.6 top funnel profile",
+        base.measured_section_loops(mesh, axis=2, level=33.399),
+        np.array([[5.2337, 5.2337], [58.5663, 73.5663]]),
+        4.2665,
+        "extended top funnel profile",
         0.003,
     )
 
@@ -271,7 +273,7 @@ def test_bottomed_switch_and_four_pads_share_the_support_datum() -> None:
     assert base.PAD_TOP == pytest.approx(13.4)
 
     report = base.validate_base(mesh, source)
-    assert report.pocket_depth == 15.0
+    assert report.pocket_depth == 20.0
     assert report.open_underside
     assert report.rear_wire_path
 
@@ -366,9 +368,9 @@ def test_validate_base_reports_every_mesh_contract() -> None:
 
     report = base.validate_base(mesh, source)
 
-    assert report.outer_extents == pytest.approx((63.8, 78.8, 28.4), abs=0.003)
+    assert report.outer_extents == pytest.approx((63.8, 78.8, 33.4), abs=0.003)
     assert report.pocket_bounds == (40.0, 55.0)
-    assert report.pocket_depth == pytest.approx(15.0, abs=0.003)
+    assert report.pocket_depth == pytest.approx(20.0, abs=0.003)
     assert report.protected_mismatch_volume <= base.PROTECTED_VOLUME_TOLERANCE
     assert report.connected_components == 1
     assert report.watertight
@@ -756,7 +758,7 @@ def test_main_exports_stl_json_and_four_nonblank_previews(
     assert payload["stl_path"] == str(target)
     assert payload["stl_sha256"] == hashlib.sha256(target.read_bytes()).hexdigest()
     assert payload["pocket_bounds"] == [40.0, 55.0]
-    assert payload["pocket_depth"] == 15.0
+    assert payload["pocket_depth"] == 20.0
     assert payload["protected_mismatch_volume"] <= base.PROTECTED_VOLUME_TOLERANCE
 
     expected_previews = {
