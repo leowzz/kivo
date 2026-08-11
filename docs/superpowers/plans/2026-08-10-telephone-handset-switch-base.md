@@ -1,5 +1,10 @@
 # Telephone Handset Switch Base Implementation Plan
 
+> **Revision note (2026-08-11):** The pocket, support, platform, outer-ring,
+> rear-wall, and preview requirements in this plan are superseded by
+> `docs/superpowers/plans/2026-08-11-stabilize-telephone-handset-pocket.md`.
+> The canonical switch-aperture and open-bottom constraints remain binding.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > `superpowers:subagent-driven-development` (recommended) or
 > `superpowers:executing-plans` to implement this plan task-by-task.
