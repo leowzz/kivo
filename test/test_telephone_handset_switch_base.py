@@ -508,7 +508,7 @@ def test_validator_rejects_partial_required_solid() -> None:
         base.validate_base(front_wall_stub, source)
 
 
-def test_validation_report_uses_measured_pocket_loop() -> None:
+def test_validation_report_normalizes_validated_pocket_bounds() -> None:
     source = base.load_canonical_source(SOURCE_ROOT)
     mesh = base.generate_base(source)
     sub_tolerance_inner_strip = base.box_from_bounds(
