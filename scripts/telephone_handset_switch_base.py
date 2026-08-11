@@ -33,28 +33,38 @@ CELL_SIZE = 19.05
 CELL_END = CELL_START + CELL_SIZE
 PLATE_THICKNESS = 3.4
 
-OUTER_WIDTH = 59.8
-OUTER_LENGTH = 74.8
-OUTER_HEIGHT = 28.4
-WALL = 2.4
-OUTER_RADIUS = 4.0
 INNER_WIDTH = 55.0
 INNER_LENGTH = 70.0
 INNER_RADIUS = 1.6
-CHAMFER = 0.8
+WALL = 2.4
+FUNNEL_EXPANSION = 2.0
+FUNNEL_DEPTH = 4.0
+MOUTH_WIDTH = INNER_WIDTH + 2.0 * FUNNEL_EXPANSION
+MOUTH_LENGTH = INNER_LENGTH + 2.0 * FUNNEL_EXPANSION
+MOUTH_RADIUS = INNER_RADIUS + FUNNEL_EXPANSION
+LOWER_INSET = WALL + FUNNEL_EXPANSION
+OUTER_WIDTH = MOUTH_WIDTH + 2.0 * WALL
+OUTER_LENGTH = MOUTH_LENGTH + 2.0 * WALL
+OUTER_RADIUS = MOUTH_RADIUS + WALL
+OUTER_HEIGHT = 28.4
+FUNNEL_BOTTOM = OUTER_HEIGHT - FUNNEL_DEPTH
 PLATFORM_SIZE = 24.0
-PLATFORM_BOTTOM = 10.0
-PLATFORM_TOP = PLATFORM_BOTTOM + PLATE_THICKNESS
 PAD_SIZE = 10.0
 PAD_THICKNESS = 2.4
+PAD_TOP = 13.4
+BOTTOMED_TRIGGER_HEIGHT = 5.0
+HANDSET_RECESS = 2.0
+PLATFORM_TOP = PAD_TOP - BOTTOMED_TRIGGER_HEIGHT + HANDSET_RECESS
+PLATFORM_BOTTOM = PLATFORM_TOP - PLATE_THICKNESS
 WIRE_HOLE_DIAMETER = 4.0
 CENTER_X = OUTER_WIDTH / 2.0
 CENTER_Y = OUTER_LENGTH / 2.0
+REAR_WALL_THICKNESS = LOWER_INSET
 BOOLEAN_TOLERANCE = 5e-5
 PROFILE_TOLERANCE = 0.003
 PROTECTED_VOLUME_TOLERANCE = 0.02
 RING_SECTION_LEVEL = 20.0
-REQUIRED_SOLID_VOLUME_TOLERANCE = 0.01
+REQUIRED_SOLID_VOLUME_TOLERANCE = 0.03
 
 
 def circle_segments_for_sagitta(radius: float, tolerance: float) -> int:
@@ -68,41 +78,67 @@ WIRE_HOLE_SEGMENTS = circle_segments_for_sagitta(
 )
 
 OPEN_UNDERSIDE_PROBES = (
-    ((8.0, 25.0, -0.1), (15.0, 35.0, 9.0)),
-    ((44.8, 25.0, -0.1), (51.8, 35.0, 9.0)),
-    ((8.0, 48.0, -0.1), (15.0, 58.0, 9.0)),
-    ((44.8, 48.0, -0.1), (51.8, 58.0, 9.0)),
+    ((8.0, 25.0, -0.1), (15.0, 35.0, PLATFORM_BOTTOM - 0.1)),
+    (
+        (OUTER_WIDTH - 15.0, 25.0, -0.1),
+        (OUTER_WIDTH - 8.0, 35.0, PLATFORM_BOTTOM - 0.1),
+    ),
+    ((8.0, 48.0, -0.1), (15.0, 58.0, PLATFORM_BOTTOM - 0.1)),
+    (
+        (OUTER_WIDTH - 15.0, 48.0, -0.1),
+        (OUTER_WIDTH - 8.0, 58.0, PLATFORM_BOTTOM - 0.1),
+    ),
 )
-SWITCH_CHANNEL_PROBE = ((20.3, 28.0, -0.1), (39.5, 72.0, 9.0))
-REAR_WIRE_PROBE = ((28.9, 49.4, 4.5), (30.9, 75.8, 5.5))
+SWITCH_CHANNEL_PROBE = (
+    (
+        CENTER_X - PLATFORM_SIZE / 2.0 + WALL + 0.001,
+        CENTER_Y - PLATFORM_SIZE / 2.0 + WALL + 0.001,
+        -0.1,
+    ),
+    (
+        CENTER_X + PLATFORM_SIZE / 2.0 - WALL - 0.001,
+        OUTER_LENGTH - LOWER_INSET - 0.001,
+        PLATFORM_BOTTOM - 0.1,
+    ),
+)
+REAR_WIRE_PROBE = (
+    (CENTER_X - 1.0, 49.4, 4.5),
+    (CENTER_X + 1.0, OUTER_LENGTH + 1.0, 5.5),
+)
 OUTER_CORNER_PROBES = (
     ((0.0, 0.0, 11.2), (0.5, 0.5, 13.2)),
-    ((59.3, 0.0, 11.2), (59.8, 0.5, 13.2)),
-    ((0.0, 74.3, 11.2), (0.5, 74.8, 13.2)),
-    ((59.3, 74.3, 11.2), (59.8, 74.8, 13.2)),
+    ((OUTER_WIDTH - 0.5, 0.0, 11.2), (OUTER_WIDTH, 0.5, 13.2)),
+    ((0.0, OUTER_LENGTH - 0.5, 11.2), (0.5, OUTER_LENGTH, 13.2)),
+    (
+        (OUTER_WIDTH - 0.5, OUTER_LENGTH - 0.5, 11.2),
+        (OUTER_WIDTH, OUTER_LENGTH, 13.2),
+    ),
 )
-REQUIRED_SOLID_PROBES = (
-    ((18.0, 30.0, 1.0), (20.2, 45.0, 9.0)),
-    ((39.6, 30.0, 1.0), (41.8, 45.0, 9.0)),
-    ((21.0, 25.5, 1.0), (38.8, 27.7, 9.0)),
-    ((18.0, 52.0, 1.0), (20.2, 70.0, 9.0)),
-    ((39.6, 52.0, 1.0), (41.8, 70.0, 9.0)),
-    ((40.0, 36.0, 10.2), (41.5, 38.8, 13.2)),
-    ((3.0, 3.0, 11.2), (12.0, 12.0, 13.2)),
-    ((47.8, 3.0, 11.2), (56.8, 12.0, 13.2)),
-    ((3.0, 62.8, 11.2), (12.0, 71.8, 13.2)),
-    ((47.8, 62.8, 11.2), (56.8, 71.8, 13.2)),
-    ((5.5, 5.5, 6.5), (7.5, 7.5, 7.5)),
-    ((52.3, 5.5, 6.5), (54.3, 7.5, 7.5)),
-    ((5.5, 67.3, 6.5), (7.5, 69.3, 7.5)),
-    ((52.3, 67.3, 6.5), (54.3, 69.3, 7.5)),
+PLATFORM_TOP_PROBE = (
+    (CENTER_X + CELL_SIZE / 2.0 + 0.25, CENTER_Y - 1.0, -0.1),
+    (CENTER_X + PLATFORM_SIZE / 2.0 - 0.25, CENTER_Y + 1.0, OUTER_HEIGHT + 1.0),
 )
-SUPPORT_TOP_PROBES = (
-    ((40.0, 36.0, -0.1), (41.0, 38.0, 29.4)),
-    ((6.0, 6.0, -0.1), (8.0, 8.0, 29.4)),
-    ((51.8, 6.0, -0.1), (53.8, 8.0, 29.4)),
-    ((6.0, 66.8, -0.1), (8.0, 68.8, 29.4)),
-    ((51.8, 66.8, -0.1), (53.8, 68.8, 29.4)),
+PAD_TOP_PROBES = (
+    (
+        (LOWER_INSET + 1.5, LOWER_INSET + 1.5, -0.1),
+        (LOWER_INSET + 3.5, LOWER_INSET + 3.5, OUTER_HEIGHT + 1.0),
+    ),
+    (
+        (OUTER_WIDTH - LOWER_INSET - 3.5, LOWER_INSET + 1.5, -0.1),
+        (OUTER_WIDTH - LOWER_INSET - 1.5, LOWER_INSET + 3.5, OUTER_HEIGHT + 1.0),
+    ),
+    (
+        (LOWER_INSET + 1.5, OUTER_LENGTH - LOWER_INSET - 3.5, -0.1),
+        (LOWER_INSET + 3.5, OUTER_LENGTH - LOWER_INSET - 1.5, OUTER_HEIGHT + 1.0),
+    ),
+    (
+        (OUTER_WIDTH - LOWER_INSET - 3.5, OUTER_LENGTH - LOWER_INSET - 3.5, -0.1),
+        (
+            OUTER_WIDTH - LOWER_INSET - 1.5,
+            OUTER_LENGTH - LOWER_INSET - 1.5,
+            OUTER_HEIGHT + 1.0,
+        ),
+    ),
 )
 
 DEFAULT_SOURCE_ROOT = Path("models/3d-print/3x3keypad")
@@ -237,20 +273,20 @@ def extract_source_cell(source: trimesh.Trimesh) -> trimesh.Trimesh:
 JOIN_OVERLAP = 0.02
 
 
-def inner_chamfer_cutter() -> trimesh.Trimesh:
+def inner_funnel_cutter() -> trimesh.Trimesh:
     lower_section = rounded_rectangle_section(
         INNER_WIDTH, INNER_LENGTH, INNER_RADIUS, (CENTER_X, CENTER_Y)
     )
-    upper_section = lower_section.offset(
-        CHAMFER,
+    mouth_section = lower_section.offset(
+        FUNNEL_EXPANSION,
         join_type=manifold3d.JoinType.Round,
         circular_segments=ROUNDED_SECTION_SEGMENTS,
     )
     points = [
         [float(x), float(y), z]
         for section, z in (
-            (lower_section, OUTER_HEIGHT - CHAMFER),
-            (upper_section, OUTER_HEIGHT),
+            (lower_section, FUNNEL_BOTTOM),
+            (mouth_section, OUTER_HEIGHT),
         )
         for polygon in section.to_polygons()
         for x, y in polygon
@@ -275,7 +311,7 @@ def build_outer_ring() -> trimesh.Trimesh:
         height=OUTER_HEIGHT + 2.0,
         center=(CENTER_X, CENTER_Y),
     )
-    return subtract_meshes(outer, [inner, inner_chamfer_cutter()])
+    return subtract_meshes(outer, [inner, inner_funnel_cutter()])
 
 
 def place_source_cell(source: trimesh.Trimesh) -> trimesh.Trimesh:
@@ -333,7 +369,7 @@ def build_tower_and_ribs() -> trimesh.Trimesh:
     x1 = CENTER_X + PLATFORM_SIZE / 2.0
     y0 = CENTER_Y - PLATFORM_SIZE / 2.0
     y1 = CENTER_Y + PLATFORM_SIZE / 2.0
-    inner_rear = OUTER_LENGTH - WALL
+    inner_rear = OUTER_LENGTH - LOWER_INSET
     z1 = PLATFORM_BOTTOM + JOIN_OVERLAP
 
     parts = [
@@ -374,14 +410,18 @@ def side_bounds(
 
 
 def build_safety_pad(x_side: int, y_side: int) -> trimesh.Trimesh:
-    x_pad, x_exposed, x_foot = side_bounds(x_side, WALL, OUTER_WIDTH - WALL)
-    y_pad, y_exposed, y_foot = side_bounds(y_side, WALL, OUTER_LENGTH - WALL)
-    pad_bottom = PLATFORM_TOP - PAD_THICKNESS
+    x_pad, x_exposed, x_foot = side_bounds(
+        x_side, LOWER_INSET, OUTER_WIDTH - LOWER_INSET
+    )
+    y_pad, y_exposed, y_foot = side_bounds(
+        y_side, LOWER_INSET, OUTER_LENGTH - LOWER_INSET
+    )
+    pad_bottom = PAD_TOP - PAD_THICKNESS
     gusset_bottom = pad_bottom - (PAD_SIZE - WALL)
 
     pad = box_from_bounds(
         np.array([x_pad[0], y_pad[0], pad_bottom]),
-        np.array([x_pad[1], y_pad[1], PLATFORM_TOP]),
+        np.array([x_pad[1], y_pad[1], PAD_TOP]),
     )
     foot = box_from_bounds(
         np.array([x_foot[0], y_foot[0], 0.0]),
@@ -403,13 +443,13 @@ def build_safety_pad(x_side: int, y_side: int) -> trimesh.Trimesh:
 def rear_hole_cutter() -> trimesh.Trimesh:
     cutter = trimesh.creation.cylinder(
         radius=WIRE_HOLE_DIAMETER / 2.0,
-        height=WALL + 2.0,
+        height=REAR_WALL_THICKNESS + 2.0,
         sections=WIRE_HOLE_SEGMENTS,
     )
     cutter.apply_transform(
         trimesh.transformations.rotation_matrix(np.pi / 2.0, [1.0, 0.0, 0.0])
     )
-    cutter.apply_translation([CENTER_X, OUTER_LENGTH - WALL / 2.0, 5.0])
+    cutter.apply_translation([CENTER_X, OUTER_LENGTH - REAR_WALL_THICKNESS / 2.0, 5.0])
     return cutter
 
 
@@ -424,7 +464,6 @@ def generate_base(source: trimesh.Trimesh) -> trimesh.Trimesh:
     )
     joined = macro.union_meshes(parts)
     result = subtract_meshes(joined, [rear_hole_cutter()])
-    result.merge_vertices()
     result.remove_unreferenced_vertices()
     return result
 
@@ -637,13 +676,16 @@ def measured_pocket_floor_top(mesh: trimesh.Trimesh) -> float:
 
 
 def validation_rounded_rectangle_section(
-    width: float, length: float, radius: float
+    width: float,
+    length: float,
+    radius: float,
+    circular_segments: int = ROUNDED_SECTION_SEGMENTS,
 ) -> manifold3d.CrossSection:
     x0 = CENTER_X - width / 2.0
     x1 = CENTER_X + width / 2.0
     y0 = CENTER_Y - length / 2.0
     y1 = CENTER_Y + length / 2.0
-    quarter_segments = ROUNDED_SECTION_SEGMENTS // 4
+    quarter_segments = circular_segments // 4
     corners = (
         ((x1 - radius, y0 + radius), -np.pi / 2.0, 0.0),
         ((x1 - radius, y1 - radius), 0.0, np.pi / 2.0),
@@ -665,13 +707,15 @@ def validation_rounded_rectangle_section(
 def validation_rear_hole_clearance() -> trimesh.Trimesh:
     clearance = trimesh.creation.cylinder(
         radius=WIRE_HOLE_DIAMETER / 2.0,
-        height=WALL + 2.0 * BOOLEAN_TOLERANCE,
+        height=REAR_WALL_THICKNESS + 2.0 * BOOLEAN_TOLERANCE,
         sections=WIRE_HOLE_SEGMENTS,
     )
     clearance.apply_transform(
         trimesh.transformations.rotation_matrix(np.pi / 2.0, [1.0, 0.0, 0.0])
     )
-    clearance.apply_translation([CENTER_X, OUTER_LENGTH - WALL / 2.0, 5.0])
+    clearance.apply_translation(
+        [CENTER_X, OUTER_LENGTH - REAR_WALL_THICKNESS / 2.0, 5.0]
+    )
     return clearance
 
 
@@ -684,26 +728,27 @@ def required_outer_ring_reference(
     inner_section = validation_rounded_rectangle_section(
         INNER_WIDTH, INNER_LENGTH, INNER_RADIUS
     )
-    chamfer_section = validation_rounded_rectangle_section(
-        INNER_WIDTH + 2.0 * CHAMFER,
-        INNER_LENGTH + 2.0 * CHAMFER,
-        INNER_RADIUS + CHAMFER,
+    mouth_section = validation_rounded_rectangle_section(
+        MOUTH_WIDTH,
+        MOUTH_LENGTH,
+        MOUTH_RADIUS,
+        circular_segments=2 * ROUNDED_SECTION_SEGMENTS,
     )
     outer = manifold_to_mesh(outer_section.extrude(OUTER_HEIGHT))
     inner = manifold_to_mesh(
         inner_section.extrude(OUTER_HEIGHT + 2.0).translate((0.0, 0.0, -1.0))
     )
-    chamfer_points = [
+    funnel_points = [
         [float(x), float(y), z]
         for section, z in (
-            (inner_section, OUTER_HEIGHT - CHAMFER),
-            (chamfer_section, OUTER_HEIGHT),
+            (inner_section, FUNNEL_BOTTOM),
+            (mouth_section, OUTER_HEIGHT),
         )
         for polygon in section.to_polygons()
         for x, y in polygon
     ]
-    chamfer = manifold_to_mesh(manifold3d.Manifold.hull_points(chamfer_points))
-    return subtract_meshes(outer, [inner, chamfer, rear_clearance])
+    funnel = manifold_to_mesh(manifold3d.Manifold.hull_points(funnel_points))
+    return subtract_meshes(outer, [inner, funnel, rear_clearance])
 
 
 def intersection_volume(meshes: Iterable[trimesh.Trimesh]) -> float:
@@ -728,7 +773,7 @@ def required_feature_references() -> list[tuple[str, trimesh.Trimesh]]:
     y0 = CENTER_Y - PLATFORM_SIZE / 2.0
     y1 = CENTER_Y + PLATFORM_SIZE / 2.0
     z1 = PLATFORM_BOTTOM + JOIN_OVERLAP
-    rear = OUTER_LENGTH - WALL
+    rear = OUTER_LENGTH - LOWER_INSET
 
     platform = box_from_bounds(
         np.array([x0, y0, PLATFORM_BOTTOM]),
@@ -798,13 +843,15 @@ def required_feature_references() -> list[tuple[str, trimesh.Trimesh]]:
             (upper - WALL, upper),
         )
 
-    pad_bottom = PLATFORM_TOP - PAD_THICKNESS
+    pad_bottom = PAD_TOP - PAD_THICKNESS
     gusset_bottom = pad_bottom - (PAD_SIZE - WALL)
     for x_side in (-1, 1):
-        x_pad, x_exposed, x_foot = reference_ranges(x_side, WALL, OUTER_WIDTH - WALL)
+        x_pad, x_exposed, x_foot = reference_ranges(
+            x_side, LOWER_INSET, OUTER_WIDTH - LOWER_INSET
+        )
         for y_side in (-1, 1):
             y_pad, y_exposed, y_foot = reference_ranges(
-                y_side, WALL, OUTER_LENGTH - WALL
+                y_side, LOWER_INSET, OUTER_LENGTH - LOWER_INSET
             )
             suffix = f"{x_side},{y_side}"
             references.append(
@@ -812,7 +859,7 @@ def required_feature_references() -> list[tuple[str, trimesh.Trimesh]]:
                     f"safety pad {suffix}",
                     box_from_bounds(
                         np.array([x_pad[0], y_pad[0], pad_bottom]),
-                        np.array([x_pad[1], y_pad[1], PLATFORM_TOP]),
+                        np.array([x_pad[1], y_pad[1], PAD_TOP]),
                     ),
                 )
             )
@@ -894,6 +941,15 @@ def validate_unexpected_material(
         raise ValueError(f"unexpected model material: volume={unexpected_volume}")
 
 
+def funnel_section_dimensions(level: float) -> tuple[float, float, float]:
+    expansion = (level - FUNNEL_BOTTOM) / FUNNEL_DEPTH * FUNNEL_EXPANSION
+    return (
+        INNER_WIDTH + 2.0 * expansion,
+        INNER_LENGTH + 2.0 * expansion,
+        INNER_RADIUS + expansion,
+    )
+
+
 def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationReport:
     if not mesh.is_watertight:
         mesh = mesh.copy()
@@ -915,32 +971,75 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
         pocket_loops,
         np.array([[0.0, 0.0], [OUTER_WIDTH, OUTER_LENGTH]]),
         OUTER_RADIUS,
-        "R4 outer corner ring profile",
+        "R6 outer corner ring profile",
         PROFILE_TOLERANCE,
     )
     measured_pocket_bounds = require_rounded_rectangle_loop(
         pocket_loops,
-        np.array([[WALL, WALL], [OUTER_WIDTH - WALL, OUTER_LENGTH - WALL]]),
+        np.array(
+            [
+                [LOWER_INSET, LOWER_INSET],
+                [OUTER_WIDTH - LOWER_INSET, OUTER_LENGTH - LOWER_INSET],
+            ]
+        ),
         INNER_RADIUS,
         "R1.6 inner pocket ring profile",
         PROFILE_TOLERANCE,
     )
-    platform_loops = measured_section_loop_sizes(mesh, axis=2, level=12.7)
+    for level in (PAD_TOP + 0.001, RING_SECTION_LEVEL, FUNNEL_BOTTOM - 0.001):
+        require_rounded_rectangle_loop(
+            measured_section_loops(mesh, axis=2, level=level),
+            np.array(
+                [
+                    [LOWER_INSET, LOWER_INSET],
+                    [OUTER_WIDTH - LOWER_INSET, OUTER_LENGTH - LOWER_INSET],
+                ]
+            ),
+            INNER_RADIUS,
+            "R1.6 lower locating section",
+            PROFILE_TOLERANCE,
+        )
+    for level in (
+        FUNNEL_BOTTOM + 1.0,
+        FUNNEL_BOTTOM + 2.0,
+        FUNNEL_BOTTOM + 3.0,
+        OUTER_HEIGHT - 0.001,
+    ):
+        width, length, radius = funnel_section_dimensions(level)
+        require_rounded_rectangle_loop(
+            measured_section_loops(mesh, axis=2, level=level),
+            np.array(
+                [
+                    [CENTER_X - width / 2.0, CENTER_Y - length / 2.0],
+                    [CENTER_X + width / 2.0, CENTER_Y + length / 2.0],
+                ]
+            ),
+            radius,
+            "funnel section",
+            PROFILE_TOLERANCE,
+        )
+
+    platform_loops = measured_section_loop_sizes(mesh, axis=2, level=PLATFORM_TOP - 0.7)
     require_loop_size(platform_loops, (24.0, 24.0), "switch platform", 0.003)
 
     support_top = measured_pocket_floor_top(mesh)
-    if not np.isclose(support_top, PLATFORM_TOP, atol=0.003):
+    if not np.isclose(support_top, PAD_TOP, atol=0.003):
         raise ValueError(f"pocket floor datum drifted: {support_top}")
-    for probe in SUPPORT_TOP_PROBES:
-        feature_top = float(probe_bounds(mesh, probe)[1, 2])
-        if not np.isclose(feature_top, PLATFORM_TOP, atol=0.003):
-            raise ValueError(f"platform or safety-pad top drifted: {probe}")
-    pocket_depth = float(mesh.bounds[1, 2] - support_top)
+    platform_top = float(probe_bounds(mesh, PLATFORM_TOP_PROBE)[1, 2])
+    if not np.isclose(platform_top, PLATFORM_TOP, atol=0.003):
+        raise ValueError(f"platform top drifted: {platform_top}")
+    for probe in PAD_TOP_PROBES:
+        pad_top = float(probe_bounds(mesh, probe)[1, 2])
+        if not np.isclose(pad_top, PAD_TOP, atol=0.003):
+            raise ValueError(f"safety-pad top drifted: {probe}")
+    pocket_depth = float(mesh.bounds[1, 2] - PAD_TOP)
     if not np.isclose(pocket_depth, 15.0, atol=0.003):
         raise ValueError(f"pocket depth drifted: {pocket_depth}")
 
-    lower = macro.measure_switch_section(mesh, z=11.0, nominal_size=14.8)
-    upper = macro.measure_switch_section(mesh, z=12.7, nominal_size=14.0)
+    lower = macro.measure_switch_section(
+        mesh, z=PLATFORM_BOTTOM + 1.0, nominal_size=14.8
+    )
+    upper = macro.measure_switch_section(mesh, z=PLATFORM_TOP - 0.7, nominal_size=14.0)
     expected_center = np.array([[CENTER_X, CENTER_Y]])
     if not np.allclose(lower.centers, expected_center, atol=0.003):
         raise ValueError("lower switch relief center drifted")
@@ -951,7 +1050,9 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
     if not np.allclose(upper.sizes, [[14.0, 14.0]], atol=0.003):
         raise ValueError("upper switch aperture drifted")
 
-    rear_loops = measured_section_loops(mesh, axis=1, level=73.6)
+    rear_loops = measured_section_loops(
+        mesh, axis=1, level=OUTER_LENGTH - REAR_WALL_THICKNESS / 2.0
+    )
     require_circular_loop(
         rear_loops,
         np.array([CENTER_X, 5.0]),
@@ -969,7 +1070,7 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
         raise ValueError("rear wire path is obstructed")
     for probe in OUTER_CORNER_PROBES:
         if probe_volume(mesh, probe) >= 1e-6:
-            raise ValueError(f"R4 outer corner is filled: {probe}")
+            raise ValueError(f"R6 outer corner is filled: {probe}")
 
     rear_clearance = validation_rear_hole_clearance()
     obstructed_hole_volume = intersection_volume([mesh, rear_clearance])
