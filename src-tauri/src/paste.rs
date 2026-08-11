@@ -528,45 +528,45 @@ fn start_next(
     next_deadline_token: &mut u64,
 ) {
     while active.is_none() {
-        let Some(sequence_id) = sequences.keys().next().copied() else {
+        sequences.retain(|_, sequence| !(sequence.finished && sequence.requests.is_empty()));
+        let Some(sequence_id) = sequences.iter().find_map(|(sequence_id, sequence)| {
+            (!sequence.requests.is_empty()).then_some(*sequence_id)
+        }) else {
             return;
         };
-        let sequence = sequences
+        let request = sequences
             .get_mut(&sequence_id)
-            .expect("sequence key exists");
-        if let Some(request) = sequence.requests.pop_front() {
-            match clipboard.write(&request.text) {
-                Ok(()) => {
-                    let _ = request.reply.send(PasteReply::Granted);
-                    *next_deadline_token = next_deadline_token
-                        .checked_add(1)
-                        .expect("paste deadline token exhausted");
-                    let deadline_token = *next_deadline_token;
-                    *active = Some(ActivePaste {
-                        request,
-                        deadline_token,
-                    });
-                    let deadline = clock.monotonic_now() + timeout;
-                    let sender = sender.clone();
-                    clock.schedule_deadline(
-                        deadline,
-                        Box::new(move || {
-                            let _ = sender.send(PasteMessage::DeadlineElapsed {
-                                token: deadline_token,
-                            });
-                        }),
-                    );
-                    return;
-                }
-                Err(error) => {
-                    let _ = request.reply.send(PasteReply::ClipboardError(error));
-                    cancel_sequence(sequences, sequence_id);
-                }
+            .expect("sequence key exists")
+            .requests
+            .pop_front()
+            .expect("selected sequence has a paste request");
+        match clipboard.write(&request.text) {
+            Ok(()) => {
+                let _ = request.reply.send(PasteReply::Granted);
+                *next_deadline_token = next_deadline_token
+                    .checked_add(1)
+                    .expect("paste deadline token exhausted");
+                let deadline_token = *next_deadline_token;
+                *active = Some(ActivePaste {
+                    request,
+                    deadline_token,
+                });
+                let deadline = clock.monotonic_now() + timeout;
+                let sender = sender.clone();
+                clock.schedule_deadline(
+                    deadline,
+                    Box::new(move || {
+                        let _ = sender.send(PasteMessage::DeadlineElapsed {
+                            token: deadline_token,
+                        });
+                    }),
+                );
+                return;
             }
-        } else if sequence.finished {
-            sequences.remove(&sequence_id);
-        } else {
-            return;
+            Err(error) => {
+                let _ = request.reply.send(PasteReply::ClipboardError(error));
+                cancel_sequence(sequences, sequence_id);
+            }
         }
     }
 }
@@ -827,37 +827,81 @@ mod tests {
     }
 
     #[test]
-    fn processes_registered_inputs_strictly_by_receive_sequence_without_coalescing() {
+    fn processes_ready_requests_strictly_by_receive_sequence_without_coalescing() {
         let clipboard = FakeClipboard::default();
         let writes = Arc::clone(&clipboard.0);
         let coordinator = PasteCoordinator::with_timeout(clipboard, Duration::from_secs(1));
         let handle = coordinator.handle();
         handle.register_sequence(1).unwrap();
         handle.register_sequence(2).unwrap();
-        let (second, second_reply) = request(2, "B", 20, 1);
+        handle.register_sequence(3).unwrap();
+        let (active, active_reply) = request(1, "A", 10, 1);
+        let (first, first_reply) = request(2, "B", 20, 1);
+        let (second, second_reply) = request(3, "C", 30, 1);
+        handle.submit(active).unwrap();
+        assert_eq!(active_reply.recv().unwrap(), PasteReply::Granted);
         handle.submit(second).unwrap();
         assert!(second_reply.try_recv().is_err());
-        let (first, first_reply) = request(1, "A", 10, 1);
         handle.submit(first).unwrap();
-        assert_eq!(first_reply.recv().unwrap(), PasteReply::Granted);
         assert_eq!(writes.lock().unwrap().as_slice(), ["A-1"]);
-
-        assert!(
-            handle
-                .complete(&DeviceId::new("luatos-esp32s3-aio", "B").unwrap(), 20, 1)
-                .is_err()
-        );
+        assert!(first_reply.try_recv().is_err());
         assert!(second_reply.try_recv().is_err());
         handle
             .complete(&DeviceId::new("luatos-esp32s3-aio", "A").unwrap(), 10, 1)
             .unwrap();
         handle.finish_sequence(1).unwrap();
-        assert_eq!(second_reply.recv().unwrap(), PasteReply::Granted);
+        assert_eq!(first_reply.recv().unwrap(), PasteReply::Granted);
         assert_eq!(writes.lock().unwrap().as_slice(), ["A-1", "B-1"]);
         handle
             .complete(&DeviceId::new("luatos-esp32s3-aio", "B").unwrap(), 20, 1)
             .unwrap();
         handle.finish_sequence(2).unwrap();
+        assert_eq!(second_reply.recv().unwrap(), PasteReply::Granted);
+        assert_eq!(writes.lock().unwrap().as_slice(), ["A-1", "B-1", "C-1"]);
+        handle
+            .complete(&DeviceId::new("luatos-esp32s3-aio", "C").unwrap(), 30, 1)
+            .unwrap();
+        handle.finish_sequence(3).unwrap();
+        coordinator.shutdown();
+    }
+
+    #[test]
+    fn unfinished_empty_sequence_does_not_block_a_later_paste() {
+        let clipboard = FakeClipboard::default();
+        let writes = Arc::clone(&clipboard.0);
+        let coordinator = PasteCoordinator::with_timeout(clipboard, Duration::from_secs(1));
+        let handle = coordinator.handle();
+        handle.register_sequence(1).unwrap();
+        handle.register_sequence(2).unwrap();
+
+        let (later, later_reply) = request(2, "B", 20, 1);
+        handle.submit(later).unwrap();
+
+        assert_eq!(
+            later_reply
+                .recv_timeout(Duration::from_millis(100))
+                .unwrap(),
+            PasteReply::Granted
+        );
+        assert_eq!(writes.lock().unwrap().as_slice(), ["B-1"]);
+        handle
+            .complete(&DeviceId::new("luatos-esp32s3-aio", "B").unwrap(), 20, 1)
+            .unwrap();
+        handle.finish_sequence(2).unwrap();
+
+        let (earlier, earlier_reply) = request(1, "A", 10, 1);
+        handle.submit(earlier).unwrap();
+        assert_eq!(
+            earlier_reply
+                .recv_timeout(Duration::from_millis(100))
+                .unwrap(),
+            PasteReply::Granted
+        );
+        assert_eq!(writes.lock().unwrap().as_slice(), ["B-1", "A-1"]);
+        handle
+            .complete(&DeviceId::new("luatos-esp32s3-aio", "A").unwrap(), 10, 1)
+            .unwrap();
+        handle.finish_sequence(1).unwrap();
         coordinator.shutdown();
     }
 
