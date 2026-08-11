@@ -10,8 +10,9 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-pub const HOST_PROTOCOL_VERSION: u16 = 7;
+pub const HOST_PROTOCOL_VERSION: u16 = 8;
 pub const DISPLAY_PROTOCOL_VERSION: u16 = 7;
+pub const DISPLAY_LARGE_FONT_PROTOCOL_VERSION: u16 = 8;
 pub const ACTION_RUN_PROTOCOL_VERSION: u16 = 6;
 pub const OLED_PROTOCOL_VERSION: u16 = 4;
 pub const ADVANCED_ACTION_PROTOCOL_VERSION: u16 = 5;
@@ -21,7 +22,7 @@ const DISPLAY_HEIGHT: u16 = 32;
 const DISPLAY_MAX_REGIONS: usize = 8;
 const DISPLAY_MAX_OPERATIONS: usize = 24;
 const DISPLAY_MAX_TEXT_BYTES: usize = 48;
-const DISPLAY_ASCII_FONT_ID: u8 = 0;
+const DISPLAY_MAX_FONT_ID: u8 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -268,7 +269,7 @@ pub(crate) fn display_commands(update: &SceneUpdate) -> Result<Vec<String>, Stri
                     {
                         return Err("display_text_bounds".into());
                     }
-                    if *font_id != DISPLAY_ASCII_FONT_ID {
+                    if *font_id > DISPLAY_MAX_FONT_ID {
                         return Err("display_font_unsupported".into());
                     }
                     if text.len() > DISPLAY_MAX_TEXT_BYTES {
@@ -1064,11 +1065,24 @@ mod tests {
         else {
             unreachable!();
         };
-        *font_id = 1;
+        *font_id = 3;
         assert_eq!(
             display_commands(&unsupported_font).unwrap_err(),
             "display_font_unsupported"
         );
+    }
+
+    #[test]
+    fn accepts_each_declared_display_font() {
+        for supported_font_id in [0, 1, 2] {
+            let mut update = display_update(2, 1, SceneMode::Delta, "4 RUN");
+            let DrawOperation::Text { font_id, .. } = &mut update.regions[0].operations[1] else {
+                unreachable!();
+            };
+            *font_id = supported_font_id;
+
+            assert!(display_commands(&update).is_ok());
+        }
     }
 
     #[test]

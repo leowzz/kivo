@@ -16,9 +16,10 @@ use crate::{
     paste::{Clock, PasteHandle, PasteReply, PasteRequest, SystemClock},
     profile::{ActionTrigger, DeviceProfile},
     protocol::{
-        ACTION_RUN_PROTOCOL_VERSION, ActionSequence, DISPLAY_PROTOCOL_VERSION, DeviceMessage,
-        HelloCapabilities, InputState, OLED_PROTOCOL_VERSION, PhysicalInput, display_commands,
-        format_paste_command, is_hello_line, parse_device, topology_commands, validate_hello,
+        ACTION_RUN_PROTOCOL_VERSION, ActionSequence, DISPLAY_LARGE_FONT_PROTOCOL_VERSION,
+        DISPLAY_PROTOCOL_VERSION, DeviceMessage, HelloCapabilities, InputState,
+        OLED_PROTOCOL_VERSION, PhysicalInput, display_commands, format_paste_command,
+        is_hello_line, parse_device, topology_commands, validate_hello,
     },
     trigger::{TriggerEdge, TriggerOccurrence, TriggerTracker},
 };
@@ -1628,6 +1629,7 @@ pub struct DeviceDisplayLink {
     tracker: SceneTracker,
     enabled: bool,
     renderer: Option<Arc<dyn DisplayRenderer>>,
+    max_font_id: u8,
     pending_since: Option<Instant>,
     queued_update: Option<SceneUpdate>,
     desired_scene: Option<RenderedScene>,
@@ -1663,7 +1665,17 @@ impl DeviceDisplayLink {
             .flatten();
         let selected_panel = renderer.as_ref().map(|renderer| renderer.panel_id());
         let current_panel = self.renderer.as_ref().map(|renderer| renderer.panel_id());
-        if self.enabled == renderer.is_some() && current_panel == selected_panel {
+        let max_font_id = renderer.as_ref().map_or(0, |renderer| {
+            if protocol >= DISPLAY_LARGE_FONT_PROTOCOL_VERSION {
+                renderer.capabilities().max_font_id
+            } else {
+                renderer.capabilities().ascii_font_id
+            }
+        });
+        if self.enabled == renderer.is_some()
+            && current_panel == selected_panel
+            && self.max_font_id == max_font_id
+        {
             return;
         }
 
@@ -1674,6 +1686,7 @@ impl DeviceDisplayLink {
         self.needs_resync = false;
         self.enabled = renderer.is_some();
         self.renderer = renderer;
+        self.max_font_id = max_font_id;
         let _ = self.render_latest();
     }
 
@@ -1686,6 +1699,7 @@ impl DeviceDisplayLink {
         self.tracker = SceneTracker::default();
         self.enabled = false;
         self.renderer = None;
+        self.max_font_id = 0;
         self.pending_since = None;
         self.queued_update = None;
         self.desired_scene = None;
@@ -1705,7 +1719,11 @@ impl DeviceDisplayLink {
             self.desired_scene = None;
             return Ok(());
         };
-        self.desired_scene = Some(renderer.render(snapshot).map_err(str::to_owned)?);
+        self.desired_scene = Some(
+            renderer
+                .render_with_font_limit(snapshot, self.max_font_id)
+                .map_err(str::to_owned)?,
+        );
         Ok(())
     }
 
@@ -2533,7 +2551,10 @@ mod tests {
             ButtonAction, DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION,
             Ssd1306Config,
         },
-        protocol::{DISPLAY_PROTOCOL_VERSION, DeviceMessage, PhysicalInput},
+        protocol::{
+            DISPLAY_LARGE_FONT_PROTOCOL_VERSION, DISPLAY_PROTOCOL_VERSION, DeviceMessage,
+            PhysicalInput,
+        },
     };
     use serialport::{SerialPortInfo, SerialPortType, UsbPortInfo};
     use std::{
@@ -2713,6 +2734,51 @@ mod tests {
 
         assert_eq!(lines.first().unwrap(), "DISPLAY_BEGIN 1 0 full\n");
         assert_eq!(lines.last().unwrap(), "DISPLAY_COMMIT 1\n");
+    }
+
+    #[test]
+    fn protocol_seven_keeps_compact_layout_and_protocol_eight_uses_large_font() {
+        let registry = built_in_renderer_registry();
+        let now = Instant::now();
+        let mut version_seven = DeviceDisplayLink::default();
+        version_seven.configure(
+            DISPLAY_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+        version_seven.update_desired(display_snapshot(3)).unwrap();
+        let version_seven_lines = version_seven.next_lines(now).unwrap();
+
+        assert!(
+            version_seven_lines
+                .iter()
+                .any(|line| line == "DISPLAY_REGION 0 0 0 64 16\n")
+        );
+        assert!(
+            version_seven_lines
+                .iter()
+                .all(|line| !line.starts_with("DISPLAY_TEXT 0 9 22 2 "))
+        );
+
+        let mut version_eight = DeviceDisplayLink::default();
+        version_eight.configure(
+            DISPLAY_LARGE_FONT_PROTOCOL_VERSION,
+            Some(&oled_runtime_model()),
+            &registry,
+        );
+        version_eight.update_desired(display_snapshot(3)).unwrap();
+        let version_eight_lines = version_eight.next_lines(now).unwrap();
+
+        assert!(
+            version_eight_lines
+                .iter()
+                .any(|line| line == "DISPLAY_REGION 0 0 0 128 32\n")
+        );
+        assert!(
+            version_eight_lines
+                .iter()
+                .any(|line| line.starts_with("DISPLAY_TEXT 0 9 22 2 "))
+        );
     }
 
     #[test]
