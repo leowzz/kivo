@@ -121,7 +121,7 @@ def test_runtime_verifier_retries_until_protocol_is_ready() -> None:
     assert runtime.write_count == 2
 
 
-def test_runtime_verifier_requires_protocol_v7(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_runtime_verifier_requires_protocol_v8(monkeypatch: pytest.MonkeyPatch) -> None:
     observed: list[tuple[str, list[str]]] = []
     monkeypatch.setattr(
         "scripts.verify_runtime_firmware.wait_for_runtime_port",
@@ -143,7 +143,7 @@ def test_runtime_verifier_requires_protocol_v7(monkeypatch: pytest.MonkeyPatch) 
     assert observed == [
         (
             "/dev/target",
-            ["HELLO", "7", "rp2040", "vccgnd-yd-rp2040", "v0.6.1"],
+            ["HELLO", "8", "rp2040", "vccgnd-yd-rp2040", "v0.6.1"],
         )
     ]
 
