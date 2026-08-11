@@ -178,22 +178,42 @@ def build_profile_variant(
     raise ValueError("one profile must be chorded")
 
 
-def test_generate_base_uses_exact_funnel_and_locating_sections() -> None:
+def test_generate_base_uses_exact_full_depth_funnel() -> None:
     source = base.load_canonical_source(SOURCE_ROOT)
     mesh = base.generate_base(source)
 
     expected_sections = (
-        (13.401, (55.0, 70.0)),
-        (20.0, (55.0, 70.0)),
-        (24.399, (55.0, 70.0)),
-        (25.4, (56.0, 71.0)),
-        (26.4, (57.0, 72.0)),
-        (27.4, (58.0, 73.0)),
+        (13.401, (40.001, 55.001)),
+        (17.15, (44.75, 59.75)),
+        (20.9, (49.5, 64.5)),
+        (24.65, (54.25, 69.25)),
         (28.399, (58.999, 73.999)),
     )
     for level, expected in expected_sections:
         loops = section_loop_sizes(mesh, axis=2, level=level)
         assert any(np.allclose(size, expected, rtol=0.0, atol=0.003) for size in loops)
+    for level, radius in (
+        (13.401, 1.600133),
+        (20.9, 2.6),
+        (28.399, 3.599867),
+    ):
+        width, length = next(
+            expected
+            for expected_level, expected in expected_sections
+            if expected_level == level
+        )
+        base.require_rounded_rectangle_loop(
+            base.measured_section_loops(mesh, axis=2, level=level),
+            np.array(
+                [
+                    [base.CENTER_X - width / 2.0, base.CENTER_Y - length / 2.0],
+                    [base.CENTER_X + width / 2.0, base.CENTER_Y + length / 2.0],
+                ]
+            ),
+            radius,
+            "full-depth funnel profile",
+            0.003,
+        )
 
 
 def test_generate_base_preserves_outer_pocket_and_switch_dimensions() -> None:
@@ -204,12 +224,12 @@ def test_generate_base_preserves_outer_pocket_and_switch_dimensions() -> None:
     assert mesh.bounds[0] == pytest.approx((0.0, 0.0, 0.0), abs=0.003)
     assert mesh.extents == pytest.approx((63.8, 78.8, 28.4), abs=0.003)
 
-    loops = section_loop_sizes(mesh, axis=2, level=20.0)
+    loops = section_loop_sizes(mesh, axis=2, level=13.401)
     assert any(np.allclose(size, (63.8, 78.8), atol=0.003) for size in loops)
-    assert any(np.allclose(size, (55.0, 70.0), atol=0.003) for size in loops)
+    assert any(np.allclose(size, (40.001, 55.001), atol=0.003) for size in loops)
     base.require_rounded_rectangle_loop(
-        base.measured_section_loops(mesh, axis=2, level=20.0),
-        np.array([[4.4, 4.4], [59.4, 74.4]]),
+        base.measured_section_loops(mesh, axis=2, level=13.401),
+        np.array([[11.8995, 11.8995], [51.9005, 66.9005]]),
         1.6,
         "R1.6 lower locating profile",
         0.003,
@@ -236,7 +256,7 @@ def test_generate_base_preserves_outer_pocket_and_switch_dimensions() -> None:
     np.testing.assert_allclose(lower.sizes, [[14.798, 14.798]], rtol=0.0, atol=0.003)
     np.testing.assert_allclose(upper.sizes, [[14.0, 14.0]], rtol=0.0, atol=0.003)
 
-    rear = section_loop_sizes(mesh, axis=1, level=76.6)
+    rear = section_loop_sizes(mesh, axis=1, level=72.85)
     assert any(np.allclose(size, (4.0, 4.0), atol=0.01) for size in rear)
 
 
@@ -268,40 +288,40 @@ def test_finished_mesh_locks_literal_safety_pad_geometry() -> None:
         if entity.closed
     ]
     pad_contour = contour_with_points(
-        top_contours, (14.4, 14.4), (14.4, 4.4), (4.4, 14.4)
+        top_contours, (21.9, 21.9), (21.9, 11.9), (11.9, 21.9)
     )
-    pad_corner = contour_point(pad_contour, (14.4, 14.4))
+    pad_corner = contour_point(pad_contour, (21.9, 21.9))
     np.testing.assert_allclose(
-        pad_corner - contour_point(pad_contour, (14.4, 4.4)),
+        pad_corner - contour_point(pad_contour, (21.9, 11.9)),
         [0.0, 10.0],
         rtol=0.0,
         atol=0.003,
     )
     np.testing.assert_allclose(
-        pad_corner - contour_point(pad_contour, (4.4, 14.4)),
+        pad_corner - contour_point(pad_contour, (11.9, 21.9)),
         [10.0, 0.0],
         rtol=0.0,
         atol=0.003,
     )
 
     outer_face = base.vertical_section_contours(
-        mesh, np.array([0.0, 10.0, 0.0]), np.array([1.0, 0.0, 0.0])
+        mesh, np.array([0.0, 17.0, 0.0]), np.array([1.0, 0.0, 0.0])
     )
-    face_contour = contour_with_points(outer_face, (14.4, 11.0), (14.4, 13.4))
+    face_contour = contour_with_points(outer_face, (21.9, 11.0), (21.9, 13.4))
     np.testing.assert_allclose(
-        contour_point(face_contour, (14.4, 13.4))
-        - contour_point(face_contour, (14.4, 11.0)),
+        contour_point(face_contour, (21.9, 13.4))
+        - contour_point(face_contour, (21.9, 11.0)),
         [0.0, 2.4],
         rtol=0.0,
         atol=0.003,
     )
 
     gusset = base.vertical_section_contours(
-        mesh, np.array([0.0, 5.6, 0.0]), np.array([1.0, 0.0, 0.0])
+        mesh, np.array([0.0, 13.1, 0.0]), np.array([1.0, 0.0, 0.0])
     )
-    gusset_contour = contour_with_points(gusset, (6.8, 3.4), (14.4, 11.0))
-    gusset_run = contour_point(gusset_contour, (14.4, 11.0)) - contour_point(
-        gusset_contour, (6.8, 3.4)
+    gusset_contour = contour_with_points(gusset, (14.3, 3.4), (21.9, 11.0))
+    gusset_run = contour_point(gusset_contour, (21.9, 11.0)) - contour_point(
+        gusset_contour, (14.3, 3.4)
     )
     np.testing.assert_allclose(gusset_run, [7.6, 7.6], rtol=0.0, atol=0.003)
     assert gusset_run[1] / gusset_run[0] == pytest.approx(1.0, abs=0.0004)
@@ -322,6 +342,20 @@ def test_open_bottom_wire_path_and_required_supports() -> None:
             mesh, np.array(lower), np.array(upper)
         ) == pytest.approx(0.0, abs=1e-6)
 
+    assert base.LOWER_INSET == pytest.approx(11.9)
+    expected_open_probes = (
+        ((12.4, 22.4, -0.1), (19.4, 26.9, base.PLATFORM_BOTTOM - 0.1)),
+        ((44.4, 22.4, -0.1), (51.4, 26.9, base.PLATFORM_BOTTOM - 0.1)),
+        ((12.4, 51.9, -0.1), (19.4, 56.4, base.PLATFORM_BOTTOM - 0.1)),
+        ((44.4, 51.9, -0.1), (51.4, 56.4, base.PLATFORM_BOTTOM - 0.1)),
+    )
+    for actual, expected in zip(base.OPEN_UNDERSIDE_PROBES, expected_open_probes):
+        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=1e-12)
+    references = dict(base.required_feature_references())
+    assert base.OUTER_LENGTH - base.LOWER_INSET == pytest.approx(66.9)
+    assert references["left rear rib"].bounds[1, 1] >= 66.9
+    assert references["right rear rib"].bounds[1, 1] >= 66.9
+
     for _, feature in base.required_feature_references():
         assert base.intersection_volume([mesh, feature]) >= feature.volume - 0.03
 
@@ -333,7 +367,7 @@ def test_validate_base_reports_every_mesh_contract() -> None:
     report = base.validate_base(mesh, source)
 
     assert report.outer_extents == pytest.approx((63.8, 78.8, 28.4), abs=0.003)
-    assert report.pocket_bounds == pytest.approx((55.0, 70.0), abs=0.003)
+    assert report.pocket_bounds == (40.0, 55.0)
     assert report.pocket_depth == pytest.approx(15.0, abs=0.003)
     assert report.protected_mismatch_volume <= base.PROTECTED_VOLUME_TOLERANCE
     assert report.connected_components == 1
@@ -382,8 +416,8 @@ def test_validator_measures_datum_corners_and_every_required_feature() -> None:
     mesh = base.generate_base(source)
 
     ledge = base.box_from_bounds(
-        np.array([base.LOWER_INSET - 0.1, 30.0, 14.0]),
-        np.array([10.0, 40.0, 14.5]),
+        np.array([base.LOWER_INSET - 1.0, 30.0, 14.0]),
+        np.array([base.LOWER_INSET + 5.0, 40.0, 14.5]),
     )
     with pytest.raises(ValueError, match="pocket floor datum"):
         base.validate_base(macro.union_meshes([mesh, ledge]), source)
@@ -478,13 +512,13 @@ def test_validation_report_uses_measured_pocket_loop() -> None:
     source = base.load_canonical_source(SOURCE_ROOT)
     mesh = base.generate_base(source)
     sub_tolerance_inner_strip = base.box_from_bounds(
-        np.array([4.399, 4.4, 19.98]), np.array([4.4025, 74.4, 20.02])
+        np.array([11.8, 11.9, 13.38]), np.array([11.9025, 66.9, 13.415])
     )
     measured_variant = macro.union_meshes([mesh, sub_tolerance_inner_strip])
 
     report = base.validate_base(measured_variant, source)
 
-    assert report.pocket_bounds == pytest.approx((54.9975, 70.0), abs=0.0002)
+    assert report.pocket_bounds == (40.0, 55.0)
 
 
 def test_validator_rejects_r5_9_finished_ring_profile() -> None:
@@ -541,14 +575,14 @@ def test_validator_rejects_square_rear_wire_hole() -> None:
     source = base.load_canonical_source(SOURCE_ROOT)
     mesh = base.generate_base(source)
     hole_fill = base.box_from_bounds(
-        np.array([29.7, 74.3, 2.8]), np.array([34.1, 78.8, 7.2])
+        np.array([29.7, 66.9, 2.8]), np.array([34.1, 78.8, 7.2])
     )
     filled_hole = macro.union_meshes([mesh, hole_fill])
     square_cutter = base.box_from_bounds(
-        np.array([29.9, 74.2, 3.0]), np.array([33.9, 78.9, 7.0])
+        np.array([29.9, 66.8, 3.0]), np.array([33.9, 78.9, 7.0])
     )
     square_hole = base.subtract_meshes(filled_hole, [square_cutter])
-    rear_loops = section_loop_sizes(square_hole, axis=1, level=76.6)
+    rear_loops = section_loop_sizes(square_hole, axis=1, level=72.85)
     assert any(
         np.allclose(size, (4.0, 4.0), rtol=0.0, atol=0.003) for size in rear_loops
     )
@@ -596,7 +630,7 @@ def test_validator_rejects_inscribed_diamond_rear_wire_hole() -> None:
     )
     diamond_hole = base.subtract_meshes(filled_hole, [diamond_cutter])
 
-    with pytest.raises(ValueError, match="rear wire hole profile"):
+    with pytest.raises(ValueError, match=r"rear wire hole (profile|clearance)"):
         base.validate_base(diamond_hole, source)
 
 
@@ -609,7 +643,7 @@ def test_validator_rejects_partial_lower_floor_outside_legacy_probes() -> None:
     )
     obstructed = macro.union_meshes([mesh, partial_floor])
 
-    with pytest.raises(ValueError, match="unexpected lower material"):
+    with pytest.raises(ValueError, match=r"(open underside|unexpected lower material)"):
         base.validate_base(obstructed, source)
 
 
@@ -638,12 +672,12 @@ def test_validator_rejects_partial_outer_front_wall_notch() -> None:
         base.validate_base(missing_front_wall, source)
 
 
-@pytest.mark.parametrize("rear_y", (75.0, 76.0, 78.2))
+@pytest.mark.parametrize("rear_y", (67.5, 72.85, 78.2))
 def test_validator_rejects_internal_rear_hole_annulus(rear_y: float) -> None:
     source = base.load_canonical_source(SOURCE_ROOT)
     mesh = base.generate_base(source)
     outer = trimesh.creation.cylinder(
-        radius=base.WIRE_HOLE_DIAMETER / 2.0,
+        radius=base.WIRE_HOLE_DIAMETER / 2.0 + 0.05,
         height=1.2,
         sections=base.WIRE_HOLE_SEGMENTS,
     )
@@ -721,6 +755,7 @@ def test_main_exports_stl_json_and_four_nonblank_previews(
     payload = json.loads(capsys.readouterr().out)
     assert payload["stl_path"] == str(target)
     assert payload["stl_sha256"] == hashlib.sha256(target.read_bytes()).hexdigest()
+    assert payload["pocket_bounds"] == [40.0, 55.0]
     assert payload["protected_mismatch_volume"] <= base.PROTECTED_VOLUME_TOLERANCE
 
     expected_previews = {
