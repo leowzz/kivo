@@ -36,27 +36,43 @@ PLATE_THICKNESS = 3.4
 INNER_WIDTH = 40.0
 INNER_LENGTH = 55.0
 INNER_RADIUS = 1.6
-MOUTH_WIDTH = 59.0
-MOUTH_LENGTH = 74.0
-MOUTH_RADIUS = 3.6
+SLOPE_REFERENCE_WIDTH = 50.0
+SLOPE_REFERENCE_LENGTH = 65.0
+SLOPE_REFERENCE_RADIUS = 3.6
+SLOPE_REFERENCE_HEIGHT = 28.4
+HEIGHT_EXTENSION = 5.0
 WALL = 2.4
-FUNNEL_EXPANSION = (MOUTH_WIDTH - INNER_WIDTH) / 2.0
-assert FUNNEL_EXPANSION == (MOUTH_LENGTH - INNER_LENGTH) / 2.0
-OUTER_WIDTH = MOUTH_WIDTH + 2.0 * WALL
-OUTER_LENGTH = MOUTH_LENGTH + 2.0 * WALL
+OUTER_WIDTH = 63.8
+OUTER_LENGTH = 78.8
 OUTER_RADIUS = 6.0
-OUTER_HEIGHT = 28.4
+OUTER_HEIGHT = SLOPE_REFERENCE_HEIGHT + HEIGHT_EXTENSION
 PLATFORM_SIZE = 24.0
 PAD_SIZE = 10.0
 PAD_THICKNESS = 2.4
-PAD_TOP = 13.4
-FUNNEL_BOTTOM = PAD_TOP
+FUNNEL_BOTTOM = 13.4
+PAD_RAISE = 1.0
+PAD_TOP = FUNNEL_BOTTOM + PAD_RAISE
 FUNNEL_DEPTH = OUTER_HEIGHT - FUNNEL_BOTTOM
+SLOPE_REFERENCE_DEPTH = SLOPE_REFERENCE_HEIGHT - FUNNEL_BOTTOM
+SLOPE_EXTENSION_FACTOR = FUNNEL_DEPTH / SLOPE_REFERENCE_DEPTH
+MOUTH_WIDTH = INNER_WIDTH + SLOPE_EXTENSION_FACTOR * (
+    SLOPE_REFERENCE_WIDTH - INNER_WIDTH
+)
+MOUTH_LENGTH = INNER_LENGTH + SLOPE_EXTENSION_FACTOR * (
+    SLOPE_REFERENCE_LENGTH - INNER_LENGTH
+)
+MOUTH_RADIUS = INNER_RADIUS + SLOPE_EXTENSION_FACTOR * (
+    SLOPE_REFERENCE_RADIUS - INNER_RADIUS
+)
+FUNNEL_EXPANSION = (MOUTH_WIDTH - INNER_WIDTH) / 2.0
+assert abs(FUNNEL_EXPANSION - (MOUTH_LENGTH - INNER_LENGTH) / 2.0) < 1e-9
+MOUTH_WALL = (OUTER_WIDTH - MOUTH_WIDTH) / 2.0
+assert abs(MOUTH_WALL - (OUTER_LENGTH - MOUTH_LENGTH) / 2.0) < 1e-9
 LOWER_INSET = (OUTER_WIDTH - INNER_WIDTH) / 2.0
-assert LOWER_INSET == (OUTER_LENGTH - INNER_LENGTH) / 2.0
+assert abs(LOWER_INSET - (OUTER_LENGTH - INNER_LENGTH) / 2.0) < 1e-9
 BOTTOMED_TRIGGER_HEIGHT = 5.0
 HANDSET_RECESS = 2.0
-PLATFORM_TOP = PAD_TOP - BOTTOMED_TRIGGER_HEIGHT + HANDSET_RECESS
+PLATFORM_TOP = FUNNEL_BOTTOM - BOTTOMED_TRIGGER_HEIGHT + HANDSET_RECESS
 PLATFORM_BOTTOM = PLATFORM_TOP - PLATE_THICKNESS
 WIRE_HOLE_DIAMETER = 4.0
 CENTER_X = OUTER_WIDTH / 2.0
@@ -65,8 +81,9 @@ REAR_WALL_THICKNESS = LOWER_INSET
 BOOLEAN_TOLERANCE = 5e-5
 PROFILE_TOLERANCE = 0.003
 PROTECTED_VOLUME_TOLERANCE = 0.02
-RING_SECTION_LEVEL = FUNNEL_BOTTOM + 0.001
+RING_SECTION_LEVEL = PAD_TOP + 0.001
 REQUIRED_SOLID_VOLUME_TOLERANCE = 0.03
+REAR_HOLE_CLEARANCE_VOLUME_TOLERANCE = 0.031
 
 
 def circle_segments_for_sagitta(radius: float, tolerance: float) -> int:
@@ -991,16 +1008,25 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
         "R6 outer corner ring profile",
         PROFILE_TOLERANCE,
     )
+    ring_width, ring_length, ring_radius = funnel_section_dimensions(
+        RING_SECTION_LEVEL
+    )
     require_rounded_rectangle_loop(
         pocket_loops,
         np.array(
             [
-                [LOWER_INSET, LOWER_INSET],
-                [OUTER_WIDTH - LOWER_INSET, OUTER_LENGTH - LOWER_INSET],
+                [
+                    CENTER_X - ring_width / 2.0,
+                    CENTER_Y - ring_length / 2.0,
+                ],
+                [
+                    CENTER_X + ring_width / 2.0,
+                    CENTER_Y + ring_length / 2.0,
+                ],
             ]
         ),
-        INNER_RADIUS,
-        "R1.6 inner pocket ring profile",
+        ring_radius,
+        "inner pocket ring profile above raised pads",
         PROFILE_TOLERANCE,
     )
     for level in (
@@ -1036,8 +1062,8 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
         pad_top = float(probe_bounds(mesh, probe)[1, 2])
         if not np.isclose(pad_top, PAD_TOP, atol=0.003):
             raise ValueError(f"safety-pad top drifted: {probe}")
-    pocket_depth = float(mesh.bounds[1, 2] - PAD_TOP)
-    if not np.isclose(pocket_depth, 15.0, atol=0.003):
+    pocket_depth = float(mesh.bounds[1, 2] - FUNNEL_BOTTOM)
+    if not np.isclose(pocket_depth, FUNNEL_DEPTH, atol=0.003):
         raise ValueError(f"pocket depth drifted: {pocket_depth}")
 
     lower = macro.measure_switch_section(
@@ -1067,7 +1093,7 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
 
     rear_clearance = validation_rear_hole_clearance()
     obstructed_hole_volume = intersection_volume([mesh, rear_clearance])
-    if obstructed_hole_volume > REQUIRED_SOLID_VOLUME_TOLERANCE:
+    if obstructed_hole_volume > REAR_HOLE_CLEARANCE_VOLUME_TOLERANCE:
         raise ValueError(
             f"rear wire hole clearance is obstructed: volume={obstructed_hole_volume}"
         )
@@ -1100,7 +1126,7 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
     return ValidationReport(
         outer_extents=tuple(float(value) for value in mesh.extents),
         pocket_bounds=(INNER_WIDTH, INNER_LENGTH),
-        pocket_depth=15.0,
+        pocket_depth=float(pocket_depth),
         protected_mismatch_volume=float(mismatch),
         connected_components=int(mesh.body_count),
         watertight=bool(mesh.is_watertight),

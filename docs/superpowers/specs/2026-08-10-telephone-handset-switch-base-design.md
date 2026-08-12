@@ -1,18 +1,19 @@
 # Telephone Handset Switch Base Design
 
 Date: 2026-08-10
-Revised: 2026-08-11 (40 x 55 locating throat)
+Revised: 2026-08-11 (four corner load pads raised 1 mm)
 Status: Approved
 
 ## Goal
 
 Create a one-piece FDM-printable base that holds the center of a telephone
-handset and fully bottoms out one mechanical keyboard switch when the handset
-is placed in the base. A wide `59 x 74` mouth guides insertion down a
-full-depth funnel to an exact `40 x 55` locating throat at the support datum.
-At full switch travel, the handset's adjacent bearing surface reaches all four
-corner pads so the normal resting load is shared and the former single-point
-rocking is removed.
+handset and actuates one mechanical keyboard switch when the handset is placed
+in the base. The funnel passes through an exact `50 x 65` internal
+section at `Z=28.4`, then continues upward for `5.0` at the same slope before
+reaching the top rim and the exact `40 x 55` locating throat below.
+The four corner pads are raised `1.0` above their previous position so the
+normal resting load is shared sooner and the former single-point rocking is
+removed.
 
 All dimensions in this document are millimeters.
 
@@ -64,34 +65,38 @@ The complete model has nominal bounds:
 ```text
 X: 0.0 .. 63.8
 Y: 0.0 .. 78.8
-Z: 0.0 .. 28.4
+Z: 0.0 .. 33.4
 ```
 
 ## Handset Pocket
 
 The locating throat has exact `40 x 55` wall-to-wall section extents at the
-`Z=13.4` support datum. These are internal dimensions, not outer dimensions.
+`Z=13.4` funnel datum. These are internal dimensions, not outer dimensions.
 The `R1.6` lower inner corners round the four section corners, so `40 x 55`
 describes the section bounding box rather than a sharp-cornered rectangle.
 
-The complete `15.0` pocket depth is a straight ruled funnel:
+The complete `20.0` pocket depth is a straight ruled funnel:
 
 - funnel throat at `Z=13.4`: `40 x 55`, `R1.6`;
-- funnel mouth at `Z=28.4`: `59 x 74`, `R3.6`;
-- widening per side and per end: `9.5` over `15.0` vertical height;
+- reference section at `Z=28.4`: `50 x 65`, `R3.6`;
+- funnel mouth at `Z=33.4`: `53.333 x 68.333`, `R4.267`;
+- widening per side and per end: `6.667` over `20.0` vertical height;
 - no vertical locating band above the support datum;
-- minimum wall thickness at the mouth: `2.4`.
+- wall thickness at the mouth: `5.233`.
 
 The throat and mouth profiles are explicit rounded rectangles joined by a
-convex ruled surface. The mouth radius remains `R3.6`; it is not the `R11.1`
-that a uniform `9.5` offset of the throat would produce. At the straight side
-walls, the funnel rises approximately `57.7 degrees` above horizontal, which
-keeps the upright print support-free.
+convex ruled surface. The slope remains unchanged above the `Z=28.4` reference
+section; width, length, and corner radius all continue at their existing rates.
+The final mouth radius is `R4.267`, not the `R8.267` that a uniform `6.667`
+offset of the throat would produce. At the straight side walls, the funnel
+rises approximately `71.6 degrees` above horizontal, which keeps the upright
+print support-free.
 
 The outer footprint is `63.8 x 78.8` with vertical `R6.0` outer corners. The
-wall is `2.4` thick at the funnel mouth and `11.9` thick around the lower
-throat. The safety-pad tops define the support datum at `Z=13.4`.
-The rim top is `Z=28.4`, producing exactly `15.0` pocket depth. There is no
+wall is `5.233` thick at the funnel mouth and `11.9` thick around the lower
+throat. The safety-pad tops are at `Z=14.4`, exactly `1.0` above the funnel
+datum.
+The rim top is `Z=33.4`, producing exactly `20.0` pocket depth. There is no
 continuous `40 x 55` floor.
 
 ## Open-Bottom Structure
@@ -101,7 +106,7 @@ wire tunnel.
 
 ### Outer Ring
 
-The perimeter wall continues from `Z=0` to the rim at `Z=28.4`. Its outer
+The perimeter wall continues from `Z=0` to the rim at `Z=33.4`. Its outer
 profile is vertical while its inner profile follows the lower throat and
 full-depth funnel. It forms a closed outer ring while leaving the underside
 interior open and accessible. All bottom edges are coplanar at `Z=0`.
@@ -142,14 +147,14 @@ wires directed toward the rear exit. The channel remains open from below.
 
 Place one `10 x 10` safety pad at each inner pocket corner. Each pad:
 
-- has its top at `Z=13.4`;
+- has its top at `Z=14.4`, raised `1.0` from the previous design;
 - is `2.4` thick at the outer-wall attachment;
 - uses a `45 degree` underside gusset back to the adjacent walls;
 - does not project into the central switch protected region.
 
-The pads are normal handset supports after the switch reaches full travel.
-They prevent the handset from rocking around the center switch while keeping
-the center trigger fully depressed.
+The pads are the normal handset supports. They prevent the handset from
+rocking around the center switch while keeping load off the trigger after the
+desired actuation point is reached.
 
 ## Switch Travel And Handset Height
 
@@ -164,18 +169,19 @@ The `4`-mm full-travel value assumes the stated `4`-mm trigger protrusion can be
 fully consumed. At nominal full travel, the trigger top is `5` above the
 platform. With the platform top at `Z=10.4`, the trigger contact is `Z=15.4`.
 The handset center is recessed `2` above its adjacent bearing surface, placing
-that bearing surface exactly at the `Z=13.4` corner-pad datum:
+the nominal bottomed-switch bearing surface at `Z=13.4`:
 
 ```text
 10.4 mm platform + 5 mm bottomed trigger - 2 mm handset recess = 13.4 mm
 ```
 
-No keycap or separate actuator extension is part of this design. Physical
-acceptance must confirm that the switch reaches full travel at the same moment
-the handset reaches the four pads. If the actual switch or handset recess
-differs from the nominal `5`/`2` chain, adjust the platform height before
-printing another final part; do not change the `40 x 55` throat from mesh-only
-inference.
+The corner pads are intentionally at `Z=14.4`, `1.0` above that nominal chain,
+while the switch platform and funnel remain unchanged. No keycap or separate
+actuator extension is part of this design. Physical acceptance must confirm
+the desired switch actuation before all four pads carry the resting load. If
+the actual switch or handset recess differs from the nominal `5`/`2` chain,
+adjust the platform height before printing another final part; do not change
+the `40 x 55` throat from mesh-only inference.
 
 ## Rear Wire Exit
 
@@ -200,8 +206,8 @@ strain-relief clamp, or bottom-open cable notch.
 3. Feed two wires through the rear `4.0` hole into the open underside.
 4. Solder the wires to the two exposed switch pins from below.
 5. Route both wires between the rear guide ribs.
-6. Place the handset and verify the switch reaches full travel as all four
-   safety pads begin carrying the normal resting load.
+6. Place the handset and verify the desired switch actuation before all four
+   safety pads carry the normal resting load.
 
 The open underside deliberately keeps the pins and solder joints serviceable.
 
@@ -213,8 +219,8 @@ The open underside deliberately keeps the pins and solder joints serviceable.
 - The safety pads use `45 degree` gussets.
 - Do not create a broad roof over the open underside.
 - Preserve the source switch aperture without support material inside it.
-- The minimum `2.4` mouth-wall thickness aligns with six nominal `0.4`-mm
-  extrusion widths; the lower throat wall is `11.9` thick.
+- The `5.233` mouth-wall thickness and `11.9` lower throat wall provide a
+  broad, continuous rim around the handset opening.
 - Nominal slicing context is a `0.4` nozzle and `0.2` layer height.
 
 The design must not require a second printed part, screws, threaded inserts,
@@ -246,10 +252,12 @@ The implementation must verify all of the following before exporting:
 - canonical source hash matches;
 - one connected, positive-volume, consistently wound, watertight two-manifold
   output mesh;
-- exact `63.8 x 78.8 x 28.4` outer extents;
+- exact `63.8 x 78.8 x 33.4` outer extents;
 - exact `40 x 55`, `R1.6` throat at `Z=13.4`;
-- exact `15.0`-high funnel ending at a `59 x 74`, `R3.6` mouth;
-- exact `15.0` pocket depth;
+- exact `50 x 65`, `R3.6` reference section at `Z=28.4`;
+- exact `20.0`-high funnel ending at a `53.333 x 68.333`, `R4.267` mouth;
+- exact `20.0` pocket depth;
+- all four `10 x 10 x 2.4` load-pad tops at `Z=14.4`, raised exactly `1.0`;
 - switch protected region matches the normalized source cell;
 - lower `14.798 x 14.798` relief and upper `14.000 x 14.000` aperture remain
   centered and retain their measured heights;
@@ -274,7 +282,7 @@ these items separate:
 - support-free toolpath inspection;
 - printed switch snap-fit;
 - full switch travel under the actual handset;
-- simultaneous full switch travel and four-pad contact;
+- switch actuation with four-pad contact;
 - rear wire-hole fit;
 - base stability on a flat surface;
 - sustained-load behavior of the selected switch and filament.
