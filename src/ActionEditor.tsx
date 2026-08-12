@@ -2,13 +2,16 @@ import {
   ArrowDown,
   ArrowUp,
   AudioLines,
+  Check,
   Clock3,
   ExternalLink,
   Keyboard,
+  Pencil,
   Plus,
   TextCursorInput,
+  X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ActionDialog, type ActionDraft } from "./ActionDialog";
 import { formatHotkey } from "./hotkey";
 import { t, type MessageKey } from "./i18n";
@@ -19,6 +22,7 @@ interface ActionEditorProps {
   button: ModelButton | null;
   actions: TriggerActions;
   onChange(actions: TriggerActions): void;
+  onRename(buttonId: string, label: string): void;
 }
 
 export const TRIGGER_ORDER: ActionTrigger[] = ["press", "release", "long_press", "double_press"];
@@ -86,11 +90,18 @@ function normalizedActions(actions: TriggerActions): TriggerActions {
   return { ...emptyTriggerActions(), ...actions };
 }
 
-export function ActionEditor({ language, button, actions, onChange }: ActionEditorProps) {
+export function ActionEditor({ language, button, actions, onChange, onRename }: ActionEditorProps) {
   const [editingTarget, setEditingTarget] = useState<EditingTarget>(null);
   const [dialogDraft, setDialogDraft] = useState<ActionDraft | undefined>();
+  const [editingLabel, setEditingLabel] = useState(false);
+  const [labelDraft, setLabelDraft] = useState(button?.label ?? "");
   const groups = normalizedActions(actions);
   const totalCount = TRIGGER_ORDER.reduce((count, trigger) => count + groups[trigger].length, 0);
+
+  useEffect(() => {
+    setEditingLabel(false);
+    setLabelDraft(button?.label ?? "");
+  }, [button?.id]);
 
   if (!button) {
     return (
@@ -162,12 +173,67 @@ export function ActionEditor({ language, button, actions, onChange }: ActionEdit
     onChange(next);
   };
 
+  const saveLabel = () => {
+    const label = labelDraft.trim();
+    if (!button || !label) return;
+    onRename(button.id, label);
+    setEditingLabel(false);
+  };
+
   return (
     <aside className="action-panel" aria-labelledby="action-title">
       <div className="panel-title">
-        <div>
+        <div className="action-panel-heading">
           <span>{t(language, "behavior.title")}</span>
-          <h2 id="action-title">{button.label}</h2>
+          {editingLabel ? (
+            <div className="button-label-edit">
+              <input
+                autoFocus
+                aria-label={t(language, "behavior.buttonName")}
+                value={labelDraft}
+                onChange={(event) => setLabelDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") saveLabel();
+                  if (event.key === "Escape") {
+                    setLabelDraft(button.label);
+                    setEditingLabel(false);
+                  }
+                }}
+              />
+              <button
+                className="icon-button"
+                type="button"
+                aria-label={t(language, "behavior.confirmRename")}
+                title={t(language, "behavior.confirmRename")}
+                disabled={!labelDraft.trim()}
+                onClick={saveLabel}
+              ><Check size={16} /></button>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label={t(language, "common.cancel")}
+                title={t(language, "common.cancel")}
+                onClick={() => {
+                  setLabelDraft(button.label);
+                  setEditingLabel(false);
+                }}
+              ><X size={16} /></button>
+            </div>
+          ) : (
+            <div className="button-label-display">
+              <h2 id="action-title">{button.label}</h2>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label={`${t(language, "behavior.renameButton")} ${button.label}`}
+                title={t(language, "behavior.renameButton")}
+                onClick={() => {
+                  setLabelDraft(button.label);
+                  setEditingLabel(true);
+                }}
+              ><Pencil size={16} /></button>
+            </div>
+          )}
         </div>
         <strong>{totalCount}</strong>
       </div>
