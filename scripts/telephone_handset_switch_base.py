@@ -49,8 +49,9 @@ OUTER_HEIGHT = SLOPE_REFERENCE_HEIGHT + HEIGHT_EXTENSION
 PLATFORM_SIZE = 24.0
 PAD_SIZE = 10.0
 PAD_THICKNESS = 2.4
-PAD_TOP = 13.4
-FUNNEL_BOTTOM = PAD_TOP
+FUNNEL_BOTTOM = 13.4
+PAD_RAISE = 1.0
+PAD_TOP = FUNNEL_BOTTOM + PAD_RAISE
 FUNNEL_DEPTH = OUTER_HEIGHT - FUNNEL_BOTTOM
 SLOPE_REFERENCE_DEPTH = SLOPE_REFERENCE_HEIGHT - FUNNEL_BOTTOM
 SLOPE_EXTENSION_FACTOR = FUNNEL_DEPTH / SLOPE_REFERENCE_DEPTH
@@ -71,7 +72,7 @@ LOWER_INSET = (OUTER_WIDTH - INNER_WIDTH) / 2.0
 assert abs(LOWER_INSET - (OUTER_LENGTH - INNER_LENGTH) / 2.0) < 1e-9
 BOTTOMED_TRIGGER_HEIGHT = 5.0
 HANDSET_RECESS = 2.0
-PLATFORM_TOP = PAD_TOP - BOTTOMED_TRIGGER_HEIGHT + HANDSET_RECESS
+PLATFORM_TOP = FUNNEL_BOTTOM - BOTTOMED_TRIGGER_HEIGHT + HANDSET_RECESS
 PLATFORM_BOTTOM = PLATFORM_TOP - PLATE_THICKNESS
 WIRE_HOLE_DIAMETER = 4.0
 CENTER_X = OUTER_WIDTH / 2.0
@@ -80,7 +81,7 @@ REAR_WALL_THICKNESS = LOWER_INSET
 BOOLEAN_TOLERANCE = 5e-5
 PROFILE_TOLERANCE = 0.003
 PROTECTED_VOLUME_TOLERANCE = 0.02
-RING_SECTION_LEVEL = FUNNEL_BOTTOM + 0.001
+RING_SECTION_LEVEL = PAD_TOP + 0.001
 REQUIRED_SOLID_VOLUME_TOLERANCE = 0.03
 REAR_HOLE_CLEARANCE_VOLUME_TOLERANCE = 0.031
 
@@ -1007,16 +1008,25 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
         "R6 outer corner ring profile",
         PROFILE_TOLERANCE,
     )
+    ring_width, ring_length, ring_radius = funnel_section_dimensions(
+        RING_SECTION_LEVEL
+    )
     require_rounded_rectangle_loop(
         pocket_loops,
         np.array(
             [
-                [LOWER_INSET, LOWER_INSET],
-                [OUTER_WIDTH - LOWER_INSET, OUTER_LENGTH - LOWER_INSET],
+                [
+                    CENTER_X - ring_width / 2.0,
+                    CENTER_Y - ring_length / 2.0,
+                ],
+                [
+                    CENTER_X + ring_width / 2.0,
+                    CENTER_Y + ring_length / 2.0,
+                ],
             ]
         ),
-        INNER_RADIUS,
-        "R1.6 inner pocket ring profile",
+        ring_radius,
+        "inner pocket ring profile above raised pads",
         PROFILE_TOLERANCE,
     )
     for level in (
@@ -1052,7 +1062,7 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
         pad_top = float(probe_bounds(mesh, probe)[1, 2])
         if not np.isclose(pad_top, PAD_TOP, atol=0.003):
             raise ValueError(f"safety-pad top drifted: {probe}")
-    pocket_depth = float(mesh.bounds[1, 2] - PAD_TOP)
+    pocket_depth = float(mesh.bounds[1, 2] - FUNNEL_BOTTOM)
     if not np.isclose(pocket_depth, FUNNEL_DEPTH, atol=0.003):
         raise ValueError(f"pocket depth drifted: {pocket_depth}")
 

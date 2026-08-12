@@ -179,8 +179,7 @@ def build_profile_variant(
 
 
 def test_generate_base_uses_exact_full_depth_funnel() -> None:
-    source = base.load_canonical_source(SOURCE_ROOT)
-    mesh = base.generate_base(source)
+    ring = base.build_outer_ring()
 
     expected_sections = (
         (13.401, (40.001, 55.001)),
@@ -191,7 +190,7 @@ def test_generate_base_uses_exact_full_depth_funnel() -> None:
         (33.399, (53.333, 68.333)),
     )
     for level, expected in expected_sections:
-        loops = section_loop_sizes(mesh, axis=2, level=level)
+        loops = section_loop_sizes(ring, axis=2, level=level)
         assert any(np.allclose(size, expected, rtol=0.0, atol=0.003) for size in loops)
     for level, radius in (
         (13.401, 1.600133),
@@ -205,7 +204,7 @@ def test_generate_base_uses_exact_full_depth_funnel() -> None:
             if expected_level == level
         )
         base.require_rounded_rectangle_loop(
-            base.measured_section_loops(mesh, axis=2, level=level),
+            base.measured_section_loops(ring, axis=2, level=level),
             np.array(
                 [
                     [base.CENTER_X - width / 2.0, base.CENTER_Y - length / 2.0],
@@ -229,11 +228,25 @@ def test_generate_base_preserves_outer_pocket_and_switch_dimensions() -> None:
     loops = section_loop_sizes(mesh, axis=2, level=13.401)
     assert any(np.allclose(size, (63.8, 78.8), atol=0.003) for size in loops)
     assert any(np.allclose(size, (40.001, 55.001), atol=0.003) for size in loops)
+    ring_width, ring_length, ring_radius = base.funnel_section_dimensions(
+        base.RING_SECTION_LEVEL
+    )
     base.require_rounded_rectangle_loop(
-        base.measured_section_loops(mesh, axis=2, level=13.401),
-        np.array([[11.8995, 11.8995], [51.9005, 66.9005]]),
-        1.6,
-        "R1.6 lower locating profile",
+        base.measured_section_loops(mesh, axis=2, level=base.RING_SECTION_LEVEL),
+        np.array(
+            [
+                [
+                    base.CENTER_X - ring_width / 2.0,
+                    base.CENTER_Y - ring_length / 2.0,
+                ],
+                [
+                    base.CENTER_X + ring_width / 2.0,
+                    base.CENTER_Y + ring_length / 2.0,
+                ],
+            ]
+        ),
+        ring_radius,
+        "lower locating profile above raised pads",
         0.003,
     )
     base.require_rounded_rectangle_loop(
@@ -262,15 +275,17 @@ def test_generate_base_preserves_outer_pocket_and_switch_dimensions() -> None:
     assert any(np.allclose(size, (4.0, 4.0), atol=0.01) for size in rear)
 
 
-def test_bottomed_switch_and_four_pads_share_the_support_datum() -> None:
+def test_four_pads_are_one_mm_above_the_bottomed_switch_datum() -> None:
     source = base.load_canonical_source(SOURCE_ROOT)
     mesh = base.generate_base(source)
 
     cell = base.place_source_cell(source)
     np.testing.assert_allclose(cell.bounds[:, 2], [7.0, 10.4], rtol=0.0, atol=0.003)
-    assert base.PLATFORM_TOP + 5.0 - 2.0 == pytest.approx(base.PAD_TOP)
+    assert base.PLATFORM_TOP + 5.0 - 2.0 == pytest.approx(base.FUNNEL_BOTTOM)
     assert base.PLATFORM_TOP == pytest.approx(10.4)
-    assert base.PAD_TOP == pytest.approx(13.4)
+    assert base.FUNNEL_BOTTOM == pytest.approx(13.4)
+    assert base.PAD_RAISE == pytest.approx(1.0)
+    assert base.PAD_TOP == pytest.approx(14.4)
 
     report = base.validate_base(mesh, source)
     assert report.pocket_depth == 20.0
@@ -282,7 +297,7 @@ def test_finished_mesh_locks_literal_safety_pad_geometry() -> None:
     source = base.load_canonical_source(SOURCE_ROOT)
     mesh = base.generate_base(source)
 
-    top = mesh.section(plane_origin=[0.0, 0.0, 12.0], plane_normal=[0.0, 0.0, 1.0])
+    top = mesh.section(plane_origin=[0.0, 0.0, 13.0], plane_normal=[0.0, 0.0, 1.0])
     assert top is not None
     top_contours = [
         np.asarray(entity.discrete(top.vertices))[:, :2]
@@ -309,10 +324,10 @@ def test_finished_mesh_locks_literal_safety_pad_geometry() -> None:
     outer_face = base.vertical_section_contours(
         mesh, np.array([0.0, 17.0, 0.0]), np.array([1.0, 0.0, 0.0])
     )
-    face_contour = contour_with_points(outer_face, (21.9, 11.0), (21.9, 13.4))
+    face_contour = contour_with_points(outer_face, (21.9, 12.0), (21.9, 14.4))
     np.testing.assert_allclose(
-        contour_point(face_contour, (21.9, 13.4))
-        - contour_point(face_contour, (21.9, 11.0)),
+        contour_point(face_contour, (21.9, 14.4))
+        - contour_point(face_contour, (21.9, 12.0)),
         [0.0, 2.4],
         rtol=0.0,
         atol=0.003,
@@ -321,9 +336,9 @@ def test_finished_mesh_locks_literal_safety_pad_geometry() -> None:
     gusset = base.vertical_section_contours(
         mesh, np.array([0.0, 13.1, 0.0]), np.array([1.0, 0.0, 0.0])
     )
-    gusset_contour = contour_with_points(gusset, (14.3, 3.4), (21.9, 11.0))
-    gusset_run = contour_point(gusset_contour, (21.9, 11.0)) - contour_point(
-        gusset_contour, (14.3, 3.4)
+    gusset_contour = contour_with_points(gusset, (14.3, 4.4), (21.9, 12.0))
+    gusset_run = contour_point(gusset_contour, (21.9, 12.0)) - contour_point(
+        gusset_contour, (14.3, 4.4)
     )
     np.testing.assert_allclose(gusset_run, [7.6, 7.6], rtol=0.0, atol=0.003)
     assert gusset_run[1] / gusset_run[0] == pytest.approx(1.0, abs=0.0004)
@@ -418,7 +433,7 @@ def test_validator_measures_datum_corners_and_every_required_feature() -> None:
     mesh = base.generate_base(source)
 
     ledge = base.box_from_bounds(
-        np.array([base.LOWER_INSET - 1.0, 30.0, 14.0]),
+        np.array([base.LOWER_INSET - 1.0, 30.0, base.RING_SECTION_LEVEL + 0.01]),
         np.array([base.LOWER_INSET + 5.0, 40.0, 14.5]),
     )
     with pytest.raises(ValueError, match="pocket floor datum"):
@@ -597,7 +612,7 @@ def test_validator_rejects_square_rear_wire_hole() -> None:
     ("chord_outer", "chord_inner", "error_pattern"),
     (
         (True, False, "R6 outer"),
-        (False, True, "R1.6 inner"),
+        (False, True, "inner pocket"),
     ),
 )
 def test_validator_rejects_tangent_endpoint_chord_profiles(
