@@ -38,6 +38,10 @@
 .activity-log { min-width: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--border-subtle); background: var(--bg-surface); }
 .panel-title { min-height: 64px; display: flex; align-items: center; justify-content: space-between; padding: 10px 18px; border-bottom: 1px solid var(--border-subtle); }
 .panel-title strong { min-width: 24px; height: 24px; display: grid; place-items: center; border-radius: 12px; color: var(--green-11); background: var(--green-3); font-size: var(--text-11); font-variant-numeric: tabular-nums; }
+.action-panel-heading { min-width: 0; }
+.button-label-display, .button-label-edit { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.button-label-display h2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.button-label-edit input { min-width: 0; width: min(220px, 100%); height: 32px; padding: 0 8px; color: var(--gray-12); font-size: var(--text-17); font-weight: var(--weight-semibold); }
 .activity-log-list { min-height: 0; flex: 1; overflow: auto; padding: var(--space-8); }
 .activity-log-item {
   display: flex; align-items: center; gap: 8px; min-width: 0;
@@ -281,10 +285,9 @@
 .device-detail-field { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: var(--space-8); padding: var(--space-8) 0; border-bottom: 1px solid var(--gray-3); color: var(--gray-10); font-size: var(--text-11); }
 .device-detail-field > span:last-child { overflow-wrap: anywhere; color: var(--gray-12); font-size: var(--text-12); }
 .device-detail-field .device-id-value { max-width: 28ch; user-select: text; }
-.device-assignment { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-8); padding: var(--space-12) 0; border-bottom: 1px solid var(--gray-3); }
+.device-assignment { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-8); padding: var(--space-12) 0; border-bottom: 1px solid var(--gray-3); }
 .device-assignment label { min-width: 0; display: grid; gap: 5px; color: var(--gray-10); font-size: var(--text-11); }
 .device-assignment select { min-width: 0; width: 100%; height: 32px; padding: 0 7px; }
-.device-assignment button { min-width: 0; min-height: 32px; padding: 5px var(--space-8); }
 .device-assignment .field-error { grid-column: 1 / -1; }
 .device-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px var(--space-12); margin-top: var(--space-12); border-top: 1px solid var(--border-default); border-bottom: 1px solid var(--border-default); }
 .device-metrics div { min-width: 0; display: flex; align-items: baseline; justify-content: space-between; gap: 6px; padding: var(--space-8) 0; color: var(--gray-10); font-size: 10px; }
@@ -471,7 +474,9 @@
 .shared-configuration-warning button { min-height: 28px; border: 1px solid var(--amber-border); border-radius: var(--radius-6); padding: 0 8px; color: var(--amber-text); background: var(--bg-surface); }
 .required-hardware-resolver { display: grid; grid-template-columns: 1fr auto; gap: 7px; margin: 8px 0; border: 1px solid var(--amber-border); border-radius: var(--radius-6); padding: 8px; background: var(--amber-bg); }
 .required-hardware-resolver p { grid-column: 1 / -1; margin: 0; color: var(--amber-text); font-size: var(--text-12); }
-.configuration-settings-dialog { width: min(520px, 100%); max-height: calc(100vh - 32px); overflow: auto; }
+.configuration-settings-dialog { width: min(520px, 100%); max-height: calc(100vh - 32px); overflow: hidden; }
+.configuration-settings-dialog .device-setup-body { min-height: 0; flex: 1 1 auto; overflow: auto; }
+.configuration-settings-dialog .device-setup-footer { min-height: 58px; display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-8); padding: 10px 14px; border-top: 1px solid var(--border-subtle); background: var(--bg-app); }
 .settings-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-12); }
 .settings-fields label, .settings-duplicate label { display: grid; gap: 6px; color: var(--gray-10); font-size: var(--text-12); }
 .settings-fields input, .settings-duplicate input { min-height: 34px; padding: 0 8px; }

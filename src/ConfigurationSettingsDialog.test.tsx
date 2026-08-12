@@ -1,5 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+// Vitest runs this source assertion in Node, while the production tsconfig excludes Node globals.
+// @ts-expect-error Test-only Node module.
+import { readFileSync } from "node:fs";
 import { expect, test, vi } from "vitest";
 import { ConfigurationSettingsDialog } from "./ConfigurationSettingsDialog";
 import type { DeviceProfile } from "./types";
@@ -11,6 +14,13 @@ const profile: DeviceProfile = {
   hardware_profiles: [],
   actions: {},
 };
+const viewCss = readFileSync("src/styles/views.css", "utf8");
+
+test("keeps configuration settings actions in a stable footer", () => {
+  expect(viewCss).toMatch(/\.configuration-settings-dialog\s*\{[^}]*overflow:\s*hidden/);
+  expect(viewCss).toMatch(/\.configuration-settings-dialog \.device-setup-body\s*\{[^}]*overflow:\s*auto/);
+  expect(viewCss).toMatch(/\.configuration-settings-dialog \.device-setup-footer\s*\{[^}]*justify-content:\s*flex-end/);
+});
 
 test("saves validated timing settings and can duplicate the complete draft", async () => {
   const user = userEvent.setup();

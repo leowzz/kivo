@@ -175,7 +175,7 @@ export function DeviceSetupWizard({
       ) ?? [];
     setName(selectedDevice.name);
     setDeviceProfileId(firstProfile?.profile.id ?? "");
-    setHardwareProfileId(hardware.length === 1 ? hardware[0].id : "");
+    setHardwareProfileId(hardware[0]?.id ?? "");
     setCreatingProfile(false);
     setConfirming(false);
     setError(null);
@@ -210,7 +210,7 @@ export function DeviceSetupWizard({
             (item) => item.board_profile_id === selectedDevice.boardProfileId,
           ) ?? [];
         setDeviceProfileId(created?.profile.id ?? "");
-        setHardwareProfileId(hardware.length === 1 ? hardware[0].id : "");
+        setHardwareProfileId(hardware[0]?.id ?? "");
       }
       setCreatingProfile(false);
     } catch (operationError) {
@@ -377,12 +377,6 @@ export function DeviceSetupWizard({
                 <dd>{serialSuffix(selectedDevice.hardwareSerial)}</dd>
                 <dt>{t(language, "setup.deviceProfile")}</dt>
                 <dd>{selectedProfile?.profile.name ?? deviceProfileId}</dd>
-                <dt>{t(language, "setup.hardwareProfile")}</dt>
-                <dd>
-                  {compatibleHardware.find(
-                    (hardware) => hardware.id === hardwareProfileId,
-                  )?.name ?? hardwareProfileId}
-                </dd>
               </dl>
               <div className="device-setup-actions">
                 <button
@@ -423,32 +417,12 @@ export function DeviceSetupWizard({
                           item.board_profile_id === selectedDevice.boardProfileId,
                       ) ?? [];
                     setDeviceProfileId(nextId);
-                    setHardwareProfileId(
-                      hardware.length === 1 ? hardware[0].id : "",
-                    );
+                    setHardwareProfileId(hardware[0]?.id ?? "");
                   }}
                 >
                   {compatible.map((profile) => (
                     <option key={profile.profile.id} value={profile.profile.id}>
                       {profile.profile.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>{t(language, "setup.hardwareProfile")}</span>
-                <select
-                  aria-label={t(language, "setup.hardwareProfile")}
-                  value={hardwareProfileId}
-                  disabled={pending}
-                  onChange={(event) => setHardwareProfileId(event.target.value)}
-                >
-                  {compatibleHardware.length !== 1 ? (
-                    <option value="">-</option>
-                  ) : null}
-                  {compatibleHardware.map((hardware) => (
-                    <option key={hardware.id} value={hardware.id}>
-                      {hardware.name}
                     </option>
                   ))}
                 </select>

@@ -16,6 +16,22 @@ type DraftGroup = Omit<ButtonGroup, "buttons"> & { buttons: DraftButton[]; isNew
 type DraftLayout = Omit<ModelLayout, "groups"> & { groups: DraftGroup[] };
 const NEW_ID_PATTERN = /^[A-Z0-9_]+$/;
 function normalizeId(value: string) { return value.toUpperCase().replace(/[^A-Z0-9_]/g, "_"); }
+function nextGeneratedId(ids: Iterable<string>, prefix: string) {
+  const used = new Set(ids);
+  let index = 1;
+  let candidate = `${prefix}_${index}`;
+  while (used.has(candidate)) {
+    index += 1;
+    candidate = `${prefix}_${index}`;
+  }
+  return candidate;
+}
+function nextGroupId(layout: DraftLayout) {
+  return nextGeneratedId(layout.groups.map((group) => group.id), "GROUP");
+}
+function nextButtonId(layout: DraftLayout) {
+  return nextGeneratedId(layout.groups.flatMap((group) => group.buttons.map((button) => button.id)), "KEY");
+}
 function move<T>(items: T[], index: number, offset: -1 | 1) { const next = [...items]; [next[index], next[index + offset]] = [next[index + offset], next[index]]; return next; }
 function validationError(layout: DraftLayout | null, language: Language) {
   const zh = language === "zh-CN";
@@ -84,9 +100,15 @@ export function LayoutEditor({ layout, language, open, onCancel = () => undefine
         {draft?.groups.map((group, groupIndex) => <section className="layout-group-editor" key={group.isNew ? `new-${groupIndex}` : group.id}>
           <div className="layout-group-header"><label><span>{label("按键组 ID", "Group ID")}</span><input value={group.id} readOnly={!group.isNew} onChange={(event) => updateGroup(groupIndex, (current) => ({ ...current, id: normalizeId(event.target.value) }))} /></label><label className="columns-field"><span>{label("列数", "Columns")}</span><input type="number" min="1" value={group.columns} onChange={(event) => updateGroup(groupIndex, (current) => ({ ...current, columns: Number(event.target.value) }))} /></label><div className="icon-row"><button className="icon-button" type="button" aria-label={label("上移按键组", "Move group up")} title={label("上移按键组", "Move group up")} disabled={groupIndex === 0} onClick={() => updateDraft((current) => ({ ...current, groups: move(current.groups, groupIndex, -1) }))}><ArrowUp size={16} /></button><button className="icon-button" type="button" aria-label={label("下移按键组", "Move group down")} title={label("下移按键组", "Move group down")} disabled={groupIndex === (draft?.groups.length ?? 1) - 1} onClick={() => updateDraft((current) => ({ ...current, groups: move(current.groups, groupIndex, 1) }))}><ArrowDown size={16} /></button><button className="icon-button is-danger" type="button" aria-label={label("删除按键组", "Delete group")} title={label("删除按键组", "Delete group")} onClick={() => updateDraft((current) => ({ ...current, groups: current.groups.filter((_, index) => index !== groupIndex) }))}><Trash2 size={16} /></button></div></div>
           <div className="layout-button-list">{group.buttons.map((button, buttonIndex) => <div className="layout-button-row" key={button.isNew ? `new-${buttonIndex}` : button.id}><label><span>{label("按键 ID", "Button ID")}</span><input value={button.id} readOnly={!button.isNew} onChange={(event) => updateGroup(groupIndex, (current) => ({ ...current, buttons: current.buttons.map((item, index) => index === buttonIndex ? { ...item, id: normalizeId(event.target.value) } : item) }))} /></label><label><span>{label("名称", "Label")}</span><input value={button.label} onChange={(event) => updateGroup(groupIndex, (current) => ({ ...current, buttons: current.buttons.map((item, index) => index === buttonIndex ? { ...item, label: event.target.value } : item) }))} /></label><div className="icon-row"><button className="icon-button" type="button" aria-label={label("上移按键", "Move button up")} title={label("上移按键", "Move button up")} disabled={buttonIndex === 0} onClick={() => updateGroup(groupIndex, (current) => ({ ...current, buttons: move(current.buttons, buttonIndex, -1) }))}><ArrowUp size={16} /></button><button className="icon-button" type="button" aria-label={label("下移按键", "Move button down")} title={label("下移按键", "Move button down")} disabled={buttonIndex === group.buttons.length - 1} onClick={() => updateGroup(groupIndex, (current) => ({ ...current, buttons: move(current.buttons, buttonIndex, 1) }))}><ArrowDown size={16} /></button><button className="icon-button is-danger" type="button" aria-label={label("删除按键", "Delete button")} title={label("删除按键", "Delete button")} onClick={() => updateGroup(groupIndex, (current) => ({ ...current, buttons: current.buttons.filter((_, index) => index !== buttonIndex) }))}><Trash2 size={16} /></button></div></div>)}</div>
-          <button className="layout-add-button" type="button" onClick={() => updateGroup(groupIndex, (current) => ({ ...current, buttons: [...current.buttons, { id: "", label: "", isNew: true }] }))}><Plus size={15} />{label("添加按键", "Add button")}</button>
+          <button className="layout-add-button" type="button" onClick={() => updateDraft((current) => {
+            const id = nextButtonId(current);
+            return {
+              ...current,
+              groups: current.groups.map((item, index) => index === groupIndex ? { ...item, buttons: [...item.buttons, { id, label: id, isNew: true }] } : item),
+            };
+          })}><Plus size={15} />{label("添加按键", "Add button")}</button>
         </section>)}
-        <button className="layout-add-button" type="button" onClick={() => updateDraft((current) => ({ ...current, groups: [...current.groups, { id: "", columns: 1, buttons: [], isNew: true }] }))}><Plus size={15} />{label("添加按键组", "Add group")}</button>
+        <button className="layout-add-button" type="button" onClick={() => updateDraft((current) => ({ ...current, groups: [...current.groups, { id: nextGroupId(current), columns: 1, buttons: [], isNew: true }] }))}><Plus size={15} />{label("添加按键组", "Add group")}</button>
       </div>
       {(error || !embedded) && <div className="layout-editor-footer">{error && <p className="layout-editor-error" role="alert">{error}</p>}{!embedded && <button type="button" onClick={onCancel}>{t(language, "common.cancel")}</button>}{!embedded && <button className="primary-button" type="button" disabled={Boolean(error)} onClick={apply}>{t(language, "layout.apply")}</button>}</div>}
     </>

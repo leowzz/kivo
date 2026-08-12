@@ -264,10 +264,7 @@ test("lists only exact-board profiles and completes one exact Device", async () 
     screen.getByRole("combobox", { name: "键盘配置" }),
     "rp-profile",
   );
-  await user.selectOptions(
-    screen.getByRole("combobox", { name: "硬件配置" }),
-    "rp-hardware",
-  );
+  expect(screen.queryByRole("combobox", { name: "硬件配置" })).toBeNull();
   await user.click(screen.getByRole("button", { name: "下一步" }));
   await user.clear(screen.getByRole("textbox", { name: "键盘名称" }));
   await user.type(screen.getByRole("textbox", { name: "键盘名称" }), "桌面 RP2040");

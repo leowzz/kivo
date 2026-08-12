@@ -509,18 +509,6 @@ export default function App() {
     }
   }, [language, replaceRegistrySnapshot]);
 
-  const clearManagedRuntimeAssignment = useCallback(async (deviceId: string) => {
-    try {
-      const snapshot = await invoke<AppSnapshot>("clear_runtime_assignment", {
-        deviceId,
-      });
-      if (mountedRef.current) replaceRegistrySnapshot(snapshot);
-    } catch (operationError) {
-      setError(`${t(language, "error.save")}: ${errorMessage(operationError)}`);
-      throw operationError;
-    }
-  }, [language, replaceRegistrySnapshot]);
-
   const refreshManagedDeviceMetrics = useCallback(async (deviceId: string | null) => {
     selectedManagedDeviceIdRef.current = deviceId;
     const generation = ++managedMetricsGenerationRef.current;
@@ -1160,7 +1148,6 @@ export default function App() {
               onRename={renameManagedDevice}
               onForget={forgetManagedDevice}
               onSaveRuntimeAssignment={saveManagedRuntimeAssignment}
-              onClearRuntimeAssignment={clearManagedRuntimeAssignment}
               onMetricsChange={handleManagedMetricsChange}
               onOpenSetup={openSetup}
               onRetryCandidate={retrySetupCandidate}
@@ -1231,6 +1218,18 @@ export default function App() {
             actions: {
               ...profile.actions,
               [selectedButtonId]: actions,
+            },
+          }))}
+          onRename={(buttonId, label) => updateEditorProfile((profile) => ({
+            ...profile,
+            profile: {
+              ...profile.profile,
+              groups: profile.profile.groups.map((group) => ({
+                ...group,
+                buttons: group.buttons.map((button) => button.id === buttonId
+                  ? { ...button, label }
+                  : button),
+              })),
             },
           }))}
         />}
