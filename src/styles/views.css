@@ -474,7 +474,9 @@
 .shared-configuration-warning button { min-height: 28px; border: 1px solid var(--amber-border); border-radius: var(--radius-6); padding: 0 8px; color: var(--amber-text); background: var(--bg-surface); }
 .required-hardware-resolver { display: grid; grid-template-columns: 1fr auto; gap: 7px; margin: 8px 0; border: 1px solid var(--amber-border); border-radius: var(--radius-6); padding: 8px; background: var(--amber-bg); }
 .required-hardware-resolver p { grid-column: 1 / -1; margin: 0; color: var(--amber-text); font-size: var(--text-12); }
-.configuration-settings-dialog { width: min(520px, 100%); max-height: calc(100vh - 32px); overflow: auto; }
+.configuration-settings-dialog { width: min(520px, 100%); max-height: calc(100vh - 32px); overflow: hidden; }
+.configuration-settings-dialog .device-setup-body { min-height: 0; flex: 1 1 auto; overflow: auto; }
+.configuration-settings-dialog .device-setup-footer { min-height: 58px; display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-8); padding: 10px 14px; border-top: 1px solid var(--border-subtle); background: var(--bg-app); }
 .settings-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-12); }
 .settings-fields label, .settings-duplicate label { display: grid; gap: 6px; color: var(--gray-10); font-size: var(--text-12); }
 .settings-fields input, .settings-duplicate input { min-height: 34px; padding: 0 8px; }
