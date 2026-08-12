@@ -725,10 +725,6 @@ test("completes one exact Device and navigates to its Hardware Profile", async (
     within(dialog).getByRole("combobox", { name: "键盘配置" }),
     "rp-profile",
   );
-  await user.selectOptions(
-    within(dialog).getByRole("combobox", { name: "硬件配置" }),
-    "rp-hardware",
-  );
   await user.click(within(dialog).getByRole("button", { name: "下一步" }));
   await user.click(
     within(dialog).getByRole("button", { name: "完成设置" }),
@@ -740,7 +736,7 @@ test("completes one exact Device and navigates to its Hardware Profile", async (
       name: expect.any(String),
       assignment: {
         device_profile_id: "rp-profile",
-        hardware_profile_id: "rp-hardware",
+        hardware_profile_id: "rp-other",
       },
     }),
   );
@@ -749,9 +745,7 @@ test("completes one exact Device and navigates to its Hardware Profile", async (
       ?.runtimeAssignment,
   ).toBeNull();
   expect(await screen.findByRole("heading", { name: "设备管理" })).toBeInTheDocument();
-  expect(screen.getByRole("combobox", { name: "硬件配置" })).toHaveValue(
-    "rp-hardware",
-  );
+  expect(screen.queryByRole("combobox", { name: "硬件配置" })).toBeNull();
 });
 
 test("keeps completed setup successful when saving the Editor Profile fails", async () => {
@@ -771,10 +765,6 @@ test("keeps completed setup successful when saving the Editor Profile fails", as
     within(dialog).getByRole("combobox", { name: "键盘配置" }),
     "rp-profile",
   );
-  await user.selectOptions(
-    within(dialog).getByRole("combobox", { name: "硬件配置" }),
-    "rp-hardware",
-  );
   await user.click(within(dialog).getByRole("button", { name: "下一步" }));
   await user.click(
     within(dialog).getByRole("button", { name: "完成设置" }),
@@ -785,9 +775,7 @@ test("keeps completed setup successful when saving the Editor Profile fails", as
   ).toHaveClass("error-banner");
   expect(screen.queryByRole("dialog", { name: "添加键盘" })).toBeNull();
   expect(screen.getByRole("heading", { name: "设备管理" })).toBeInTheDocument();
-  expect(screen.getByRole("combobox", { name: "硬件配置" })).toHaveValue(
-    "rp-hardware",
-  );
+  expect(screen.queryByRole("combobox", { name: "硬件配置" })).toBeNull();
 });
 
 test("serializes bootstrap behind a delayed listener and existing registry refresh", async () => {
@@ -1114,8 +1102,6 @@ test("saves one runtime assignment through the authoritative snapshot without ch
   render(<App />);
   await user.click(await screen.findByRole("button", { name: "设备管理" }));
   await user.selectOptions(screen.getByRole("combobox", { name: "使用配置" }), "call-center");
-  await user.click(screen.getByRole("button", { name: "保存运行分配" }));
-  await user.click(within(screen.getByRole("dialog", { name: "保存运行分配" })).getByRole("button", { name: "确认" }));
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_runtime_assignment", {
     deviceId: "device-front-desk",
     assignment: {
@@ -1123,12 +1109,18 @@ test("saves one runtime assignment through the authoritative snapshot without ch
       hardware_profile_id: "call-center-hardware",
     },
   }));
-  expect(screen.getAllByText("呼叫中心键盘 / 呼叫中心硬件")).toHaveLength(2);
+  expect(screen.getAllByText("呼叫中心键盘")).toHaveLength(3);
   expect(screen.getByRole("combobox", { name: "使用配置" })).toHaveValue("call-center");
-  expect(screen.getByRole("button", { name: /后台键盘.*碳膜电话键盘 \/ 前台硬件配置/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /后台键盘.*碳膜电话键盘/ })).toBeInTheDocument();
 });
 
 test("keeps the existing assignment visible after runtime assignment rejection", async () => {
+  const rejectedProfile: DeviceProfile = {
+    ...deviceProfile,
+    profile: { ...deviceProfile.profile, id: "rejected", name: "被拒绝的配置" },
+    hardware_profiles: [{ ...deviceProfile.hardware_profiles[0], id: "rejected-hardware" }],
+  };
+  currentSnapshot.deviceProfiles.push(rejectedProfile);
   vi.mocked(invoke).mockImplementation(async (command) => {
     if (command === "get_device_metrics") return currentSnapshot.homeMetrics;
     if (command === "save_runtime_assignment") throw new Error("assignment denied");
@@ -1137,30 +1129,20 @@ test("keeps the existing assignment visible after runtime assignment rejection",
   const user = userEvent.setup();
   render(<App />);
   await user.click(await screen.findByRole("button", { name: "设备管理" }));
-  await user.click(screen.getByRole("button", { name: "保存运行分配" }));
-  await user.click(within(screen.getByRole("dialog", { name: "保存运行分配" })).getByRole("button", { name: "确认" }));
+  await user.selectOptions(screen.getByRole("combobox", { name: "使用配置" }), "rejected");
   expect(await screen.findByText("保存失败: assignment denied")).toHaveClass("error-banner");
-  expect(screen.getAllByText("碳膜电话键盘 / 前台硬件配置")).toHaveLength(2);
+  expect(screen.getByRole("combobox", { name: "使用配置" })).toHaveValue(deviceProfile.profile.id);
+  expect(screen.getAllByText("碳膜电话键盘")).toHaveLength(3);
 });
 
-test("clears one runtime assignment through the authoritative snapshot", async () => {
-  vi.mocked(invoke).mockImplementation(async (command, args) => {
-    if (command === "get_device_metrics") return currentSnapshot.homeMetrics;
-    if (command === "clear_runtime_assignment") {
-      expect(args).toEqual({ deviceId: "device-front-desk" });
-      currentSnapshot.devices[0] = device({ runtimeAssignment: null, assignment: "unassigned" });
-    }
-    return structuredClone(currentSnapshot);
-  });
+test("does not expose a clear runtime assignment action", async () => {
   const user = userEvent.setup();
   render(<App />);
   await user.click(await screen.findByRole("button", { name: "设备管理" }));
-  await user.click(screen.getByRole("button", { name: "清除运行分配" }));
-  await user.click(within(screen.getByRole("dialog", { name: "清除运行分配" })).getByRole("button", { name: "确认" }));
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("clear_runtime_assignment", {
-    deviceId: "device-front-desk",
-  }));
-  expect(screen.getByRole("button", { name: "清除运行分配" })).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "保存运行分配" })).toBeNull();
+  expect(screen.queryByRole("dialog", { name: "保存运行分配" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "清除运行分配" })).toBeNull();
+  expect(screen.queryByRole("dialog", { name: "清除运行分配" })).toBeNull();
 });
 
 test("forgets only the confirmed offline Device and keeps failure retryable", async () => {
