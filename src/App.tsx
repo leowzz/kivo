@@ -1233,6 +1233,18 @@ export default function App() {
               [selectedButtonId]: actions,
             },
           }))}
+          onRename={(buttonId, label) => updateEditorProfile((profile) => ({
+            ...profile,
+            profile: {
+              ...profile.profile,
+              groups: profile.profile.groups.map((group) => ({
+                ...group,
+                buttons: group.buttons.map((button) => button.id === buttonId
+                  ? { ...button, label }
+                  : button),
+              })),
+            },
+          }))}
         />}
       </div>
 

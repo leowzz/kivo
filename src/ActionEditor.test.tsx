@@ -12,12 +12,14 @@ const emptyGroups = (): TriggerActions => ({
   double_press: [],
 });
 
-function Harness({ initial = emptyGroups(), onChange, language = "en-US" }: {
+function Harness({ initial = emptyGroups(), onChange, onRename, language = "en-US" }: {
   initial?: TriggerActions;
   onChange?: (actions: TriggerActions) => void;
+  onRename?: (buttonId: string, label: string) => void;
   language?: Language;
 }) {
   const [actions, setActions] = useState(initial);
+  const [buttonLabel, setButtonLabel] = useState("A");
   const [, setRenderTick] = useState(0);
   const update = (next: TriggerActions) => {
     setActions(next);
@@ -29,9 +31,13 @@ function Harness({ initial = emptyGroups(), onChange, language = "en-US" }: {
       <button type="button" onClick={() => setActions(emptyGroups())}>Clear actions</button>
       <ActionEditor
         language={language}
-        button={{ id: "A", label: "A" }}
+        button={{ id: "stable-id", label: buttonLabel }}
         actions={actions}
         onChange={update}
+        onRename={(buttonId, label) => {
+          onRename?.(buttonId, label);
+          setButtonLabel(label);
+        }}
       />
       <output data-testid="actions-json">{JSON.stringify(actions)}</output>
     </>
@@ -55,6 +61,51 @@ test("shows only populated groups in trigger order with compact summaries", () =
   expect(screen.getByText("Paste - Hello from Kivo")).toBeInTheDocument();
   expect(screen.getByText("Wait - 300 ms")).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Long press", level: 3 })).not.toBeInTheDocument();
+});
+
+test("renames the selected button while preserving its stable id", async () => {
+  const user = userEvent.setup();
+  const onRename = vi.fn();
+  render(<Harness onRename={onRename} />);
+
+  await user.click(screen.getByRole("button", { name: "Rename button A" }));
+  const label = screen.getByRole("textbox", { name: "Button name" });
+  await user.clear(label);
+  await user.type(label, "  Launch  ");
+  await user.click(screen.getByRole("button", { name: "Confirm rename" }));
+
+  expect(onRename).toHaveBeenCalledWith("stable-id", "Launch");
+  expect(screen.getByRole("heading", { name: "Launch" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Rename button Launch" })).toBeInTheDocument();
+});
+
+test("cancels a button rename without changing the label", async () => {
+  const user = userEvent.setup();
+  const onRename = vi.fn();
+  render(<Harness onRename={onRename} />);
+
+  await user.click(screen.getByRole("button", { name: "Rename button A" }));
+  const label = screen.getByRole("textbox", { name: "Button name" });
+  await user.clear(label);
+  await user.type(label, "Changed");
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+  expect(onRename).not.toHaveBeenCalled();
+  expect(screen.getByRole("heading", { name: "A" })).toBeInTheDocument();
+});
+
+test("does not save a blank button name", async () => {
+  const user = userEvent.setup();
+  const onRename = vi.fn();
+  render(<Harness onRename={onRename} />);
+
+  await user.click(screen.getByRole("button", { name: "Rename button A" }));
+  const label = screen.getByRole("textbox", { name: "Button name" });
+  await user.clear(label);
+  await user.type(label, "   ");
+
+  expect(screen.getByRole("button", { name: "Confirm rename" })).toBeDisabled();
+  expect(onRename).not.toHaveBeenCalled();
 });
 
 test("uses the picker technical key names in Action summaries", () => {
