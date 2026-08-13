@@ -83,7 +83,7 @@ type PersistedProfileSave = {
 };
 type ProfileMutation = (profile: DeviceProfile) => DeviceProfile;
 type PendingProfileMutation = {
-  deviceId: string;
+  deviceId: string | null;
   profileId: string;
   apply: ProfileMutation;
 };
@@ -910,19 +910,19 @@ export default function App() {
   }, [applySnapshot, autosave.flush, homeMetrics, language, registry]);
 
   const requestDeviceProfileMutation = useCallback((mutation: ProfileMutation) => {
-    if (!selectedDevice || !profileMutationTarget) return;
+    if (!profileMutationTarget) return;
     const profile = profileMutationTarget;
-    const relationshipKey = `${selectedDevice.deviceId}:${profile.profile.id}`;
     const affectedDeviceCount = devices.filter((device) =>
       device.runtimeAssignment?.device_profile_id === profile.profile.id,
     ).length;
-    const isAssignedToSelectedDevice = selectedDevice.runtimeAssignment?.device_profile_id === profile.profile.id;
-    if (isAssignedToSelectedDevice && (affectedDeviceCount <= 1 || confirmedSharedRelationship === relationshipKey)) {
+    const isAssignedToSelectedDevice = selectedDevice?.runtimeAssignment?.device_profile_id === profile.profile.id;
+    const relationshipKey = isAssignedToSelectedDevice ? `${selectedDevice.deviceId}:${profile.profile.id}` : null;
+    if (affectedDeviceCount <= 1 || (relationshipKey && confirmedSharedRelationship === relationshipKey)) {
       updateProfile(profile.profile.id, mutation);
       return;
     }
     setPendingProfileMutation({
-      deviceId: selectedDevice.deviceId,
+      deviceId: isAssignedToSelectedDevice ? selectedDevice.deviceId : null,
       profileId: profile.profile.id,
       apply: mutation,
     });
@@ -933,22 +933,24 @@ export default function App() {
     const pending = pendingProfileMutation;
     if (!pending) return;
     const profile = profileById(pending.profileId);
-    const device = devices.find((item) => item.deviceId === pending.deviceId);
-    if (!profile || !device) {
+    const device = pending.deviceId ? devices.find((item) => item.deviceId === pending.deviceId) : undefined;
+    if (!profile) {
       setPendingProfileMutation(null);
       return;
     }
+    if (scope === "device" && !device) return;
     sharedProfileEditSubmittingRef.current = true;
     setSharedProfileEditSubmitting(true);
     try {
       if (scope === "shared") {
-        setConfirmedSharedRelationship(`${pending.deviceId}:${pending.profileId}`);
+        if (pending.deviceId) setConfirmedSharedRelationship(`${pending.deviceId}:${pending.profileId}`);
         setPendingProfileMutation(null);
         updateProfile(pending.profileId, pending.apply);
         return;
       }
+      if (!device) return;
       await duplicateManagedProfileForDevice({
-        deviceId: pending.deviceId,
+        deviceId: device.deviceId,
         sourceProfile: pending.apply(profile),
         name: `${profile.profile.name} (${device.name})`,
       });
@@ -1460,17 +1462,19 @@ export default function App() {
       )}
       {pendingProfileMutation && (() => {
         const profile = profileById(pendingProfileMutation.profileId);
-        const device = devices.find((item) => item.deviceId === pendingProfileMutation.deviceId);
-        if (!profile || !device) return null;
+        const device = pendingProfileMutation.deviceId
+          ? devices.find((item) => item.deviceId === pendingProfileMutation.deviceId)
+          : undefined;
+        if (!profile) return null;
         const affectedDeviceCount = devices.filter((item) =>
           item.runtimeAssignment?.device_profile_id === pendingProfileMutation.profileId,
         ).length;
         return <SharedProfileEditDialog
           language={language}
-          deviceName={device.name}
+          deviceName={device?.name ?? profile.profile.name}
           profileName={profile.profile.name}
           affectedDeviceCount={affectedDeviceCount}
-          allowDeviceScope={device.runtimeAssignment?.device_profile_id === pendingProfileMutation.profileId}
+          allowDeviceScope={device?.runtimeAssignment?.device_profile_id === pendingProfileMutation.profileId}
           submitting={sharedProfileEditSubmitting}
           onChoose={(scope) => void chooseSharedProfileEditScope(scope)}
           onCancel={() => {

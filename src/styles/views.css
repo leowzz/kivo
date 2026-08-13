@@ -486,6 +486,8 @@
 .advanced-technical dt, .advanced-technical dd { margin: 0; border-bottom: 1px solid var(--border-subtle); padding: var(--space-8) 0; overflow-wrap: anywhere; font-size: var(--text-12); }
 .advanced-technical dt { color: var(--gray-9); }
 .advanced-technical dd { color: var(--gray-12); }
+.without-device-duplicate .configuration-settings-dialog .settings-duplicate,
+.without-device-duplicate .configuration-settings-dialog .device-setup-footer > button:last-child { display: none; }
 
 @media (max-width: 760px) {
   .profile-row { align-items: stretch; flex-direction: column; }

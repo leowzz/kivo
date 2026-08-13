@@ -467,6 +467,77 @@ test("keeps the editor configuration independent from the device assignment", as
   expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_runtime_assignment")).toBe(false);
 });
 
+test("autosaves advanced offline editor layout changes without a selected device", async () => {
+  currentSnapshot.devices = [];
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(await screen.findByRole("button", { name: "设置" }));
+  await user.click(screen.getByRole("button", { name: "高级设置" }));
+  await user.click(screen.getByRole("tab", { name: "按键布局" }));
+  await user.click(screen.getByRole("button", { name: "添加按键" }));
+
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_device_profile", {
+    profile: expect.objectContaining({
+      profile: expect.objectContaining({
+        id: deviceProfile.profile.id,
+        groups: expect.arrayContaining([expect.objectContaining({
+          buttons: expect.arrayContaining([expect.objectContaining({ id: "KEY_1" })]),
+        })]),
+      }),
+    }),
+  }));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "duplicate_profile_for_device")).toBe(false);
+});
+
+test("does not duplicate an unrelated editor profile for an unassigned selected device", async () => {
+  currentSnapshot.devices[0] = device({ assignment: "unassigned", runtimeAssignment: null });
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(await screen.findByRole("button", { name: "设置" }));
+  await user.click(screen.getByRole("button", { name: "高级设置" }));
+  await user.click(screen.getByRole("tab", { name: "按键布局" }));
+  await user.click(screen.getByRole("button", { name: "配置设置" }));
+  expect(screen.queryByRole("button", { name: "复制并仅用于此设备" })).toBeNull();
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "duplicate_profile_for_device")).toBe(false);
+});
+
+test("saves a uniquely used editor profile directly when the selected device is unassigned", async () => {
+  currentSnapshot.devices[0] = device({ assignment: "unassigned", runtimeAssignment: null });
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(await screen.findByRole("button", { name: "设置" }));
+  await user.click(screen.getByRole("button", { name: "高级设置" }));
+  await user.click(screen.getByRole("tab", { name: "按键布局" }));
+  await user.click(screen.getByRole("button", { name: "添加按键" }));
+
+  expect(screen.queryByRole("heading", { name: "选择修改范围" })).toBeNull();
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_device_profile", {
+    profile: expect.objectContaining({ profile: expect.objectContaining({ id: deviceProfile.profile.id }) }),
+  }));
+});
+
+test("offers only the shared edit scope for an offline editor profile shared by two devices", async () => {
+  currentSnapshot.devices = [
+    device({ assignment: "unassigned", runtimeAssignment: null }),
+    device({ deviceId: "device-second", name: "后台键盘" }),
+    device({ deviceId: "device-third", name: "第三键盘" }),
+  ];
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(await screen.findByRole("button", { name: "设置" }));
+  await user.click(screen.getByRole("button", { name: "高级设置" }));
+  await user.click(screen.getByRole("tab", { name: "按键布局" }));
+  await user.click(screen.getByRole("button", { name: "添加按键" }));
+
+  expect(await screen.findByRole("heading", { name: "选择修改范围" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "同步修改 2 台键盘" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "仅修改这台键盘" })).toBeNull();
+});
+
 test("waits for an autosave before changing pages", async () => {
   const pendingSave = deferred<AppSnapshot>();
   vi.mocked(invoke).mockImplementation(async (command, args) => {

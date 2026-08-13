@@ -41,3 +41,40 @@ test("keeps device technical details unavailable without a runtime assignment", 
   expect(screen.getByText("请选择一台已分配设备以查看技术信息。")).toBeInTheDocument();
   expect(screen.queryByText("serial-123")).not.toBeInTheDocument();
 });
+
+test("edits the selected editor profile offline through the mutation callback", async () => {
+  const user = userEvent.setup();
+  const onRequestProfileMutation = vi.fn();
+  render(<AdvancedSettings language="zh-CN" profiles={[profile]} editorProfileId="profile-a" devices={[]} selectedDevice={null} boardProfiles={[board]} onCreate={vi.fn()} onSelectProfile={vi.fn()} onImport={vi.fn()} onExport={vi.fn()} onDelete={vi.fn()} onRequestProfileMutation={onRequestProfileMutation} onDuplicateForDevice={vi.fn()} onBeginLearning={vi.fn()} onEndLearning={vi.fn()} />);
+
+  await user.click(screen.getByRole("tab", { name: "按键布局" }));
+  await user.click(screen.getByRole("button", { name: "添加按键" }));
+  await user.click(screen.getByRole("tab", { name: "I/O 映射" }));
+  await user.click(screen.getByRole("button", { name: "添加直连输入" }));
+  expect(onRequestProfileMutation).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole("button", { name: "开始学习" })).toBeDisabled();
+});
+
+test("routes offline trigger thresholds through the mutation callback", async () => {
+  const user = userEvent.setup();
+  const onRequestProfileMutation = vi.fn();
+  render(<AdvancedSettings language="zh-CN" profiles={[profile]} editorProfileId="profile-a" devices={[]} selectedDevice={null} boardProfiles={[board]} onCreate={vi.fn()} onSelectProfile={vi.fn()} onImport={vi.fn()} onExport={vi.fn()} onDelete={vi.fn()} onRequestProfileMutation={onRequestProfileMutation} onDuplicateForDevice={vi.fn()} onBeginLearning={vi.fn()} onEndLearning={vi.fn()} />);
+
+  await user.click(screen.getByRole("tab", { name: "按键布局" }));
+  await user.click(screen.getByRole("button", { name: "配置设置" }));
+  await user.clear(screen.getByRole("spinbutton", { name: "长按阈值" }));
+  await user.type(screen.getByRole("spinbutton", { name: "长按阈值" }), "700");
+  await user.click(screen.getByRole("button", { name: "保存" }));
+  expect(onRequestProfileMutation).toHaveBeenCalledTimes(1);
+});
+
+test("does not invoke device duplication for an unassigned selected device", async () => {
+  const user = userEvent.setup();
+  const onDuplicateForDevice = vi.fn();
+  render(<AdvancedSettings language="zh-CN" profiles={[profile]} editorProfileId="profile-a" devices={[device]} selectedDevice={{ ...device, assignment: "unassigned", runtimeAssignment: null }} boardProfiles={[board]} onCreate={vi.fn()} onSelectProfile={vi.fn()} onImport={vi.fn()} onExport={vi.fn()} onDelete={vi.fn()} onRequestProfileMutation={vi.fn()} onDuplicateForDevice={onDuplicateForDevice} onBeginLearning={vi.fn()} onEndLearning={vi.fn()} />);
+
+  await user.click(screen.getByRole("tab", { name: "按键布局" }));
+  await user.click(screen.getByRole("button", { name: "配置设置" }));
+  await user.click(screen.getByRole("button", { name: "复制并仅用于此设备" }));
+  expect(onDuplicateForDevice).not.toHaveBeenCalled();
+});
