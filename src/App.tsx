@@ -301,6 +301,11 @@ export default function App() {
     localStorage.setItem("kivo:selected-device-id", deviceId);
   }, [devices]);
 
+  const selectManagedDevice = useCallback((deviceId: string | null) => {
+    if (deviceId) selectPhysicalDevice(deviceId);
+    else setSelectedDeviceId(null);
+  }, [selectPhysicalDevice]);
+
   useEffect(() => {
     if (!loaded) return;
     const next = reconcileSetupSession(
@@ -1169,7 +1174,7 @@ export default function App() {
               onOpenSetup={openSetup}
               onRetryCandidate={retrySetupCandidate}
               selectedDeviceId={selectedDeviceIdValue}
-              onSelectedDeviceChange={setSelectedDeviceId}
+              onSelectedDeviceChange={selectManagedDevice}
               onChangeProfile={changeManagedProfile}
               onSaveSharedProfile={saveManagedSharedProfile}
               onDuplicateProfileForDevice={duplicateManagedProfileForDevice}

@@ -545,7 +545,15 @@ test("shows all physical keyboards in the top switcher", async () => {
 test("switches physical keyboard context without persisting settings or assignments", async () => {
   const alternateProfile: DeviceProfile = {
     ...structuredClone(deviceProfile),
-    profile: { ...deviceProfile.profile, id: "alternate-profile", name: "备用配置" },
+    profile: {
+      ...deviceProfile.profile,
+      id: "alternate-profile",
+      name: "备用配置",
+      groups: [{
+        ...deviceProfile.profile.groups[0],
+        buttons: [{ id: "ALT_ENTER", label: "备用确认" }],
+      }],
+    },
   };
   currentSnapshot.deviceProfiles.push(alternateProfile);
   currentSnapshot.devices.push(device({
@@ -561,8 +569,13 @@ test("switches physical keyboard context without persisting settings or assignme
   render(<App />);
 
   const keyboard = await screen.findByRole("combobox", { name: "当前键盘" });
-  await user.selectOptions(keyboard, "device-second");
-
+  expect(keyboard).toHaveValue("device-front-desk");
+  expect(localStorage.getItem("kivo:selected-device-id")).toBeNull();
+  await user.click(screen.getByRole("button", { name: "设备管理" }));
+  await user.click(screen.getByRole("button", { name: /备用键盘/ }));
+  expect(screen.getByRole("heading", { name: "备用键盘" })).toBeInTheDocument();
+  await user.click(screen.getByRole("tab", { name: "按键布局" }));
+  expect(within(screen.getByRole("tabpanel", { name: "按键布局" })).getByDisplayValue("备用确认")).toBeInTheDocument();
   expect(keyboard).toHaveValue("device-second");
   expect(localStorage.getItem("kivo:selected-device-id")).toBe("device-second");
   const invokedCommands = () => vi.mocked(invoke).mock.calls.map(([command]) => command);
