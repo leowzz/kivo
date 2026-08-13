@@ -576,10 +576,6 @@ export function DeviceManagement({
               </div>
             )}
             <Detail
-              label={t(language, "devices.serial")}
-              value={selectedDevice.hardwareSerial}
-            />
-            <Detail
               label={t(language, "devices.board")}
               value={
                 boards.get(selectedDevice.boardProfileId)?.displayName ??
@@ -606,6 +602,10 @@ export function DeviceManagement({
                 <details className="device-technical-details">
                   <summary>{t(language, "setup.technicalDetails")}</summary>
                   <dl>
+                    <TechnicalDetail
+                      label={t(language, "devices.serial")}
+                      value={selectedDevice.hardwareSerial}
+                    />
                     <TechnicalDetail
                       label={t(language, "devices.id")}
                       value={selectedDevice.deviceId}

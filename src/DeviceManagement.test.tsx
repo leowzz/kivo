@@ -116,6 +116,18 @@ test("keeps professional configuration controls out of ordinary device details",
   expect(screen.getByText("查看技术详情").closest("details")).not.toHaveAttribute("open");
 });
 
+test("keeps the raw serial in collapsed technical device details", () => {
+  renderManagement({ selectedDeviceId: "rp-a" });
+
+  expect(screen.getByText("原始序列号")).not.toBeVisible();
+  expect(screen.getByText("RP-A-001")).not.toBeVisible();
+
+  fireEvent.click(screen.getByText("查看技术详情"));
+
+  expect(screen.getByText("原始序列号")).toBeVisible();
+  expect(screen.getByText("RP-A-001")).toBeVisible();
+});
+
 test("sorts Device rows by availability and preserves source order within each status", () => {
   const { container } = renderManagement({ devices: [
     device({ deviceId: "offline-a", name: "Offline A", connection: "offline", mode: null, runtime: "inactive" }),
