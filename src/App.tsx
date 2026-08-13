@@ -784,11 +784,20 @@ export default function App() {
   }, [applySnapshot, refreshManagedDeviceMetrics, refreshRegistry]);
 
   useEffect(() => {
+    if (view === "home") return;
     const buttons = allButtons(editorProfileConfig);
     if (!buttons.some((button) => button.id === selectedButtonId)) {
       setSelectedButtonId(buttons[0]?.id ?? null);
     }
-  }, [editorProfileConfig, selectedButtonId]);
+  }, [editorProfileConfig, selectedButtonId, view]);
+
+  useEffect(() => {
+    if (view !== "home") return;
+    const buttons = allButtons(selectedDeviceProfile);
+    if (!buttons.some((button) => button.id === selectedButtonId)) {
+      setSelectedButtonId(buttons[0]?.id ?? null);
+    }
+  }, [selectedButtonId, selectedDeviceProfile, view]);
 
   const updateProfile = useCallback((profileId: string, update: (profile: DeviceProfile) => DeviceProfile) => {
     if (!editorLearningActive || profileId !== editorProfileConfig?.profile.id) {

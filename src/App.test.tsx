@@ -584,6 +584,53 @@ test("switches physical keyboard context without persisting settings or assignme
   expect(invokedCommands()).not.toContain("clear_runtime_assignment");
 });
 
+test("switching Home keyboards selects the assigned profile's first non-overlapping key", async () => {
+  const alternateProfile: DeviceProfile = {
+    ...structuredClone(deviceProfile),
+    profile: {
+      ...deviceProfile.profile,
+      id: "alternate-profile",
+      name: "备用配置",
+      groups: [{ id: "alternate", columns: 1, buttons: [{ id: "ALT_ONLY", label: "备用确认" }] }],
+    },
+    hardware_profiles: [{
+      ...structuredClone(deviceProfile.hardware_profiles[0]),
+      id: "alternate-hardware",
+      inputs: [{ type: "direct", id: "alternate-direct", keys: { ALT_ONLY: 6 } }],
+    }],
+    actions: {},
+  };
+  currentSnapshot.deviceProfiles.push(alternateProfile);
+  currentSnapshot.devices.push(device({
+    deviceId: "device-second",
+    name: "备用键盘",
+    hardwareSerial: "SECOND",
+    runtimeAssignment: {
+      device_profile_id: alternateProfile.profile.id,
+      hardware_profile_id: "alternate-hardware",
+    },
+  }));
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.selectOptions(await screen.findByRole("combobox", { name: "当前键盘" }), "device-second");
+  expect(await screen.findByRole("heading", { name: "备用确认" })).toBeInTheDocument();
+});
+
+test("default Home highlights input only from the selected keyboard", async () => {
+  currentSnapshot.devices.push(device({ deviceId: "device-second", hardwareSerial: "SECOND" }));
+  const user = userEvent.setup();
+  render(<App />);
+  await user.selectOptions(await screen.findByRole("combobox", { name: "当前键盘" }), "device-second");
+  const enter = screen.getByRole("button", { name: "确认，0 项行为" });
+
+  await act(async () => emitRuntimeEvent(runtimeEvent()));
+  expect(enter).not.toHaveClass("is-pressed");
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({ deviceId: "device-second", rawSerial: "SECOND" })));
+  expect(enter).toHaveClass("is-pressed");
+});
+
 test("keeps a Device Management candidate detail selected without changing physical keyboard context", async () => {
   currentSnapshot.candidates = [rpCandidate({
     issue: "firmware_not_responding",

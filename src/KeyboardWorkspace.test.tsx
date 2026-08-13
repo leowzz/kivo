@@ -98,7 +98,7 @@ test("renders the assigned keypad for a ready keyboard", () => {
 test("keeps an assigned offline keyboard editable and marks it disconnected", () => {
   expect(renderWorkspace({
     device: device({ connection: "offline", mode: null, runtime: "inactive", port: null }),
-  }).getByText("未连接")).toBeInTheDocument();
+  }).getByText("未连接，仍可编辑；重新连接后更改将生效")).toBeInTheDocument();
 });
 
 test("selecting a key updates the action panel without remounting the keypad", async () => {

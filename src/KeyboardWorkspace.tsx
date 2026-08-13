@@ -59,7 +59,7 @@ export function KeyboardWorkspace({
   return <div className="keyboard-workspace">
     <header className="keyboard-workspace-heading">
       <div><span>{device.name}</span><h2>{profile.profile.name}</h2></div>
-      {device.connection === "offline" && <span className="keyboard-connection is-offline"><Cable size={15} />{t(language, "workspace.disconnected")}</span>}
+      {device.connection === "offline" && <span className="keyboard-connection is-offline"><Cable size={15} />{t(language, "workspace.offlineEditing")}</span>}
     </header>
     <div className="keypad-stage">
       <Keypad
