@@ -48,7 +48,7 @@ function configuredActions() {
   return JSON.parse(screen.getByTestId("actions-json").textContent ?? "{}") as TriggerActions;
 }
 
-test("shows only populated groups in trigger order with compact summaries", () => {
+test("always shows Press and only configured advanced groups in trigger order", () => {
   render(<Harness initial={{
     ...emptyGroups(),
     press: [{ type: "paste", text: "Hello from Kivo" }],
@@ -61,6 +61,54 @@ test("shows only populated groups in trigger order with compact summaries", () =
   expect(screen.getByText("Paste - Hello from Kivo")).toBeInTheDocument();
   expect(screen.getByText("Wait - 300 ms")).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Long press", level: 3 })).not.toBeInTheDocument();
+});
+
+test("offers common Actions for an unconfigured key and commits Copy immediately", async () => {
+  const user = userEvent.setup();
+  const onChange = vi.fn();
+  render(<Harness language="zh-CN" onChange={onChange} />);
+
+  expect(screen.getByRole("heading", { name: "按下时 · 未设置", level: 3 })).toBeInTheDocument();
+  for (const label of ["复制", "粘贴", "输入文字", "快捷键", "打开应用", "媒体控制"]) {
+    expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+  }
+
+  await user.click(screen.getByRole("button", { name: "复制" }));
+  expect(onChange).toHaveBeenCalledWith({
+    press: [{ type: "hotkey", keys: ["primary", "c"] }],
+    release: [], long_press: [], double_press: [],
+  });
+});
+
+test("commits Paste immediately and opens draft-aware common Actions", async () => {
+  const user = userEvent.setup();
+  const onChange = vi.fn();
+  render(<Harness language="zh-CN" onChange={onChange} />);
+
+  await user.click(screen.getByRole("button", { name: "粘贴" }));
+  expect(onChange).toHaveBeenCalledWith({
+    press: [{ type: "hotkey", keys: ["primary", "v"] }],
+    release: [], long_press: [], double_press: [],
+  });
+
+  await user.click(screen.getByRole("button", { name: "Clear actions" }));
+
+  for (const [label, type] of [["输入文字", "paste"], ["快捷键", "hotkey"], ["打开应用", "open"], ["媒体控制", "media"]] as const) {
+    await user.click(screen.getByRole("button", { name: label }));
+    expect(screen.getByLabelText("触发方式")).toHaveValue("press");
+    expect(screen.getByLabelText("行为类型")).toHaveValue(type);
+    await user.click(screen.getByRole("button", { name: "取消" }));
+  }
+});
+
+test("keeps empty advanced trigger groups hidden until adding another Action", async () => {
+  const user = userEvent.setup();
+  render(<Harness />);
+
+  expect(screen.getAllByRole("heading", { level: 3 }).map((node) => node.textContent)).toEqual(["Press - Not set"]);
+  expect(screen.queryByRole("heading", { name: "Release", level: 3 })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Add another action" }));
+  expect(screen.getByLabelText("Trigger")).toBeInTheDocument();
 });
 
 test("renames the selected button while preserving its stable id", async () => {
@@ -227,7 +275,7 @@ test("creates a new action with the default press trigger", async () => {
   const user = userEvent.setup();
   render(<Harness />);
 
-  await user.click(screen.getByRole("button", { name: "Add action" }));
+  await user.click(screen.getByRole("button", { name: "Add another action" }));
   expect(screen.getByLabelText("Trigger")).toHaveValue("press");
   expect(screen.getByLabelText("Action type")).toHaveValue("hotkey");
   await user.click(screen.getByLabelText("Action type"));

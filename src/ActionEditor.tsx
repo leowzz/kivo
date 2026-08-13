@@ -54,6 +54,21 @@ const MEDIA_COMMANDS: Array<{ value: MediaCommand; label: MessageKey }> = [
 
 type EditingTarget = { trigger: ActionTrigger; index: number } | "create" | null;
 
+type CommonAction = {
+  key: "copy" | "paste" | "text" | "hotkey" | "open" | "media";
+  draft: ActionDraft;
+  commitImmediately: boolean;
+};
+
+const COMMON_ACTIONS: CommonAction[] = [
+  { key: "copy", draft: { trigger: "press", action: { type: "hotkey", keys: ["primary", "c"] } }, commitImmediately: true },
+  { key: "paste", draft: { trigger: "press", action: { type: "hotkey", keys: ["primary", "v"] } }, commitImmediately: true },
+  { key: "text", draft: { trigger: "press", action: { type: "paste", text: "" } }, commitImmediately: false },
+  { key: "hotkey", draft: { trigger: "press", action: { type: "hotkey", keys: [] } }, commitImmediately: false },
+  { key: "open", draft: { trigger: "press", action: { type: "open", target: "" } }, commitImmediately: false },
+  { key: "media", draft: { trigger: "press", action: { type: "media", command: "play_pause" } }, commitImmediately: false },
+];
+
 function emptyTriggerActions(): TriggerActions {
   return { press: [], release: [], long_press: [], double_press: [] };
 }
@@ -113,7 +128,16 @@ export function ActionEditor({ language, button, actions, onChange, onRename }: 
   }
 
   const openCreateDialog = () => {
-    setDialogDraft(undefined);
+    setDialogDraft({ trigger: "press", action: { type: "hotkey", keys: [] } });
+    setEditingTarget("create");
+  };
+
+  const chooseCommonAction = (commonAction: CommonAction) => {
+    if (commonAction.commitImmediately) {
+      onChange({ ...groups, press: [...groups.press, commonAction.draft.action] });
+      return;
+    }
+    setDialogDraft(commonAction.draft);
     setEditingTarget("create");
   };
 
@@ -239,17 +263,31 @@ export function ActionEditor({ language, button, actions, onChange, onRename }: 
       </div>
 
       <div className="action-list action-group-list">
-        {totalCount === 0 && <div className="panel-empty">{t(language, "behavior.noActions")}</div>}
         {TRIGGER_ORDER.map((trigger) => {
           const group = groups[trigger];
-          if (group.length === 0) return null;
+          if (trigger !== "press" && group.length === 0) return null;
+          const isUnconfiguredPress = trigger === "press" && group.length === 0;
           return (
             <section className="action-group" key={trigger} aria-labelledby={`action-group-${trigger}`}>
               <div className="action-group-heading">
-                <h3 id={`action-group-${trigger}`}>{t(language, TRIGGER_LABELS[trigger])}</h3>
-                <span>{group.length}</span>
+                <h3 id={`action-group-${trigger}`}>
+                  {isUnconfiguredPress ? t(language, "behavior.pressUnconfigured") : t(language, TRIGGER_LABELS[trigger])}
+                </h3>
+                {!isUnconfiguredPress && <span>{group.length}</span>}
               </div>
-              <div className="action-group-items">
+              {isUnconfiguredPress ? (
+                <div className="common-action-grid">
+                  {COMMON_ACTIONS.map((commonAction) => (
+                    <button
+                      type="button"
+                      key={commonAction.key}
+                      onClick={() => chooseCommonAction(commonAction)}
+                    >
+                      {t(language, `behavior.common.${commonAction.key}` as MessageKey)}
+                    </button>
+                  ))}
+                </div>
+              ) : <div className="action-group-items">
                 {group.map((action, index) => {
                   const summary = actionSummary(action, language);
                   const Icon = actionIcon(action);
@@ -286,7 +324,7 @@ export function ActionEditor({ language, button, actions, onChange, onRename }: 
                     </div>
                   );
                 })}
-              </div>
+              </div>}
             </section>
           );
         })}
@@ -294,7 +332,7 @@ export function ActionEditor({ language, button, actions, onChange, onRename }: 
 
       <div className="add-actions">
         <button type="button" onClick={openCreateDialog}>
-          <Plus size={16} />{t(language, "behavior.add")}
+          <Plus size={16} />{t(language, "behavior.addOther")}
         </button>
       </div>
 

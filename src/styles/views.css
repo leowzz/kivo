@@ -108,6 +108,9 @@
 .action-group-heading h3 { margin: 0; color: var(--gray-12); font-size: var(--text-12); font-weight: var(--weight-semibold); }
 .action-group-heading span { min-width: 20px; display: grid; place-items: center; color: var(--gray-9); font-size: var(--text-11); font-variant-numeric: tabular-nums; }
 .action-group-items { display: grid; gap: 1px; padding: 3px; }
+.common-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 8px; }
+.common-action-grid button { min-height: 36px; border: 1px solid var(--border-default); border-radius: var(--radius-6); padding: 6px 8px; color: var(--gray-11); background: var(--gray-1); font-size: var(--text-12); }
+.common-action-grid button:hover { border-color: var(--green-7); color: var(--green-11); background: var(--green-2); }
 .action-row { min-width: 0; min-height: 42px; display: flex; align-items: stretch; gap: 4px; border-radius: var(--radius-6); background: var(--gray-1); }
 .action-row:hover { background: var(--green-1); }
 .action-row-main { min-width: 0; flex: 1; display: flex; align-items: center; gap: 8px; border: 0; padding: 7px 8px; color: var(--gray-11); background: transparent; text-align: left; font-size: var(--text-12); }
@@ -166,7 +169,7 @@
 .hotkey-key-grid input { margin: 0; }
 
 /* 添加动作：虚线 drop-zone 风格 */
-.add-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: var(--space-12); border-top: 1px solid var(--border-subtle); background: var(--bg-app); }
+.add-actions { display: grid; gap: 8px; padding: var(--space-12); border-top: 1px solid var(--border-subtle); background: var(--bg-app); }
 .add-actions button { border-style: dashed; border-color: var(--border-strong); box-shadow: none; color: var(--gray-10); background: transparent; }
 .add-actions button:hover { border-color: var(--green-7); border-style: dashed; color: var(--green-11); background: var(--green-1); box-shadow: none; }
 

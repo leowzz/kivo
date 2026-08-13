@@ -15,6 +15,15 @@ test("new Action defaults to Press and commits only on Save", async () => {
   expect(onSave).toHaveBeenCalledWith({ trigger: "press", action: { type: "hotkey", keys: ["cmd"] } });
 });
 
+test("resets a create dialog from its supplied initial draft when reopened", () => {
+  const initial = { trigger: "press" as const, action: { type: "media" as const, command: "play_pause" as const } };
+  const { rerender } = render(<ActionDialog open={false} mode="create" language="en-US" initial={initial} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+  rerender(<ActionDialog open mode="create" language="en-US" initial={initial} onSave={vi.fn()} onCancel={vi.fn()} />);
+  expect(screen.getByLabelText("Trigger")).toHaveValue("press");
+  expect(screen.getByLabelText("Action type")).toHaveValue("media");
+});
+
 test("Cancel discards local edits and Delete is available only in edit mode", async () => {
   const user = userEvent.setup();
   const onCancel = vi.fn();
