@@ -300,8 +300,18 @@ export default function App() {
   useEffect(() => {
     setupOpenRef.current = setupOpen;
     setupTargetIdRef.current = setupTargetId;
-    if (!setupOpen) setSetupInputEvent(null);
-  }, [setupOpen, setupTargetId]);
+    const setupTarget = devices.find((device) => device.deviceId === setupTargetId);
+    if (
+      !setupOpen ||
+      !setupTarget ||
+      setupTarget.connection !== "online" ||
+      setupTarget.mode !== "runtime" ||
+      setupTarget.identity !== "valid" ||
+      setupTarget.assignment !== "unassigned"
+    ) {
+      setSetupInputEvent(null);
+    }
+  }, [devices, setupOpen, setupTargetId]);
 
   useEffect(() => {
     setConfirmedSharedRelationship(null);

@@ -1044,6 +1044,57 @@ test("forwards unassigned input_state only to the open setup target", async () =
   expect(within(dialog).getByRole("button", { name: /RP Key/ })).toHaveClass("is-pressed");
 });
 
+test("clears a retained setup input when its target disconnects", async () => {
+  const user = userEvent.setup();
+  const connected = rpUnassignedDevice();
+  currentSnapshot.devices = [connected];
+  currentSnapshot.candidates = [];
+  currentSnapshot.boardProfiles = [rpBoard];
+  currentSnapshot.deviceProfiles = [rpProfile];
+  render(<App />);
+  const dialog = await screen.findByRole("dialog", { name: "添加键盘" });
+  await user.click(within(dialog).getByRole("button", { name: "继续设置" }));
+  await user.click(within(dialog).getByRole("button", { name: "下一步" }));
+
+  await act(async () =>
+    emitRuntimeEvent(runtimeEvent({
+      deviceId: "stable-rp",
+      deviceProfileId: null,
+      hardwareProfileId: null,
+      input: { type: "direct", gpio: 0 },
+      pressed: true,
+    })),
+  );
+  expect(within(dialog).getByRole("button", { name: /RP Key/ })).toHaveClass("is-pressed");
+
+  currentSnapshot.devices = [];
+  await act(async () =>
+    emitRuntimeEvent(runtimeEvent({
+      deviceId: "other-rp",
+      deviceProfileId: null,
+      hardwareProfileId: null,
+      input: { type: "direct", gpio: 0 },
+      pressed: false,
+    })),
+  );
+  expect(await within(dialog).findByRole("heading", { name: /键盘已断开/ })).toBeInTheDocument();
+
+  currentSnapshot.devices = [connected];
+  await act(async () =>
+    emitRuntimeEvent(runtimeEvent({
+      deviceId: "other-rp",
+      deviceProfileId: null,
+      hardwareProfileId: null,
+      input: { type: "direct", gpio: 0 },
+      pressed: false,
+    })),
+  );
+  expect(await within(dialog).findByText("第 3 步，共 3 步")).toBeInTheDocument();
+  await waitFor(() =>
+    expect(within(dialog).getByRole("button", { name: /RP Key/ })).not.toHaveClass("is-pressed"),
+  );
+});
+
 test("keeps completed setup successful when saving the Editor Profile fails", async () => {
   const defaultInvoke = vi.mocked(invoke).getMockImplementation()!;
   currentSnapshot.devices = [rpUnassignedDevice()];

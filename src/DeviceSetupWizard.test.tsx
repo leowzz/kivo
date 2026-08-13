@@ -307,12 +307,19 @@ test("skips the key test and resumes it after the same device reconnects", async
 test("clears pressed test keys while the same device is disconnected", async () => {
   const user = userEvent.setup();
   const connected = unassignedDevice();
+  const pressedEvent = {
+    timestampMs: 1,
+    deviceId: "rp-device-id",
+    input: { type: "direct" as const, gpio: 0 },
+    pressed: true,
+  };
   const { rerender, props } = renderWizard({ devices: [connected] });
   await user.click(screen.getByRole("button", { name: "继续设置" }));
   await user.click(screen.getByRole("button", { name: "下一步" }));
-  rerender(<DeviceSetupWizard {...props} devices={[connected]} inputEvent={{ timestampMs: 1, deviceId: "rp-device-id", input: { type: "direct", gpio: 0 }, pressed: true }} />);
+  rerender(<DeviceSetupWizard {...props} devices={[connected]} inputEvent={pressedEvent} />);
   expect(screen.getByRole("button", { name: /RP Key/ })).toHaveClass("is-pressed");
-  rerender(<DeviceSetupWizard {...props} devices={[]} />);
-  rerender(<DeviceSetupWizard {...props} devices={[connected]} />);
+  rerender(<DeviceSetupWizard {...props} devices={[]} inputEvent={pressedEvent} />);
+  expect(screen.getByRole("heading", { name: /键盘已断开/ })).toBeInTheDocument();
+  rerender(<DeviceSetupWizard {...props} devices={[connected]} inputEvent={pressedEvent} />);
   expect(screen.getByRole("button", { name: /RP Key/ })).not.toHaveClass("is-pressed");
 });
