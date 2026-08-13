@@ -30,17 +30,7 @@ const boards = [
 const profiles: DeviceProfile[] = [
   {
     schema_version: 3,
-    profile: {
-      id: "rp-profile",
-      name: "RP Profile",
-      groups: [
-        {
-          id: "main",
-          columns: 1,
-          buttons: [{ id: "rp-key", label: "RP Key" }],
-        },
-      ],
-    },
+    profile: { id: "rp-profile", name: "RP Profile", groups: [{ id: "main", columns: 1, buttons: [{ id: "rp-key", label: "RP Key" }] }] },
     hardware_profiles: [
       {
         id: "rp-hardware",
@@ -203,10 +193,7 @@ test("firmware failure can enter independent profile creation", async () => {
 
   await user.click(screen.getByRole("button", { name: "先新建配置" }));
   await user.click(screen.getByRole("radio", { name: "空白配置" }));
-  await user.type(
-    screen.getByRole("textbox", { name: "配置名称" }),
-    "RP 离线配置",
-  );
+  await user.type(screen.getByRole("textbox", { name: "配置名称" }), "RP 离线配置");
   await user.click(screen.getByRole("button", { name: "创建配置" }));
   expect(onCreateProfile).toHaveBeenCalledWith({
     kind: "blank",
@@ -276,9 +263,7 @@ test("recognizes an unassigned keyboard and recommends only compatible presets",
   expect(screen.getByText("RP Profile")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "继续设置" }));
   expect(screen.getByText("第 2 步，共 3 步")).toBeInTheDocument();
-  expect(
-    screen.getByRole("option", { name: "RP Profile" }),
-  ).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "RP Profile" })).toBeInTheDocument();
   expect(screen.queryByRole("option", { name: "ESP Profile" })).toBeNull();
   await user.click(screen.getByRole("button", { name: "下一步" }));
   expect(screen.getByText("第 3 步，共 3 步")).toBeInTheDocument();
@@ -288,77 +273,46 @@ test("recognizes an unassigned keyboard and recommends only compatible presets",
 test("shows setup input on the selected layout and completes with its exact assignment", async () => {
   const user = userEvent.setup();
   const onComplete = vi.fn().mockResolvedValue(undefined);
-  const { rerender, props } = renderWizard({
-    devices: [unassignedDevice()],
-    onComplete,
-  });
+  const { rerender, props } = renderWizard({ devices: [unassignedDevice()], onComplete });
   await user.click(screen.getByRole("button", { name: "继续设置" }));
   await user.click(screen.getByRole("button", { name: "下一步" }));
-  rerender(
-    <DeviceSetupWizard
-      {...props}
-      devices={[unassignedDevice()]}
-      inputEvent={{
-        timestampMs: 1,
-        deviceId: "rp-device-id",
-        input: { type: "direct", gpio: 0 },
-        pressed: true,
-      }}
-    />,
-  );
-  expect(screen.getByRole("button", { name: /RP Key/ })).toHaveClass(
-    "is-pressed",
-  );
-  rerender(
-    <DeviceSetupWizard
-      {...props}
-      devices={[unassignedDevice()]}
-      inputEvent={{
-        timestampMs: 2,
-        deviceId: "rp-device-id",
-        input: { type: "direct", gpio: 0 },
-        pressed: false,
-      }}
-    />,
-  );
-  expect(screen.getByRole("button", { name: /RP Key/ })).not.toHaveClass(
-    "is-pressed",
-  );
+  rerender(<DeviceSetupWizard {...props} devices={[unassignedDevice()]} inputEvent={{ timestampMs: 1, deviceId: "rp-device-id", input: { type: "direct", gpio: 0 }, pressed: true }} />);
+  expect(screen.getByRole("button", { name: /RP Key/ })).toHaveClass("is-pressed");
+  rerender(<DeviceSetupWizard {...props} devices={[unassignedDevice()]} inputEvent={{ timestampMs: 2, deviceId: "rp-device-id", input: { type: "direct", gpio: 0 }, pressed: false }} />);
+  expect(screen.getByRole("button", { name: /RP Key/ })).not.toHaveClass("is-pressed");
   await user.click(screen.getByRole("button", { name: "完成设置" }));
-  expect(onComplete).toHaveBeenCalledWith(
-    "rp-device-id",
-    "RP2040 Pad · 4E811C",
-    {
-      device_profile_id: "rp-profile",
-      hardware_profile_id: "rp-hardware",
-    },
-  );
+  expect(onComplete).toHaveBeenCalledWith("rp-device-id", "RP2040 Pad · 4E811C", {
+    device_profile_id: "rp-profile", hardware_profile_id: "rp-hardware",
+  });
 });
 
 test("skips the key test and resumes it after the same device reconnects", async () => {
   const user = userEvent.setup();
   const connected = unassignedDevice();
   const onComplete = vi.fn().mockResolvedValue(undefined);
-  const { rerender, props } = renderWizard({
-    devices: [connected],
-    onComplete,
-  });
+  const { rerender, props } = renderWizard({ devices: [connected], onComplete });
   await user.click(screen.getByRole("button", { name: "继续设置" }));
   await user.click(screen.getByRole("button", { name: "下一步" }));
   rerender(<DeviceSetupWizard {...props} devices={[]} />);
-  expect(
-    screen.getByRole("heading", { name: /键盘已断开/ }),
-  ).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: /键盘已断开/ })).toBeInTheDocument();
 
   rerender(<DeviceSetupWizard {...props} devices={[connected]} />);
   expect(screen.getByText("第 3 步，共 3 步")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "跳过测试" }));
-  expect(onComplete).toHaveBeenCalledWith(
-    "rp-device-id",
-    "RP2040 Pad · 4E811C",
-    {
-      device_profile_id: "rp-profile",
-      hardware_profile_id: "rp-hardware",
-    },
-  );
+  expect(onComplete).toHaveBeenCalledWith("rp-device-id", "RP2040 Pad · 4E811C", {
+    device_profile_id: "rp-profile", hardware_profile_id: "rp-hardware",
+  });
+});
+
+test("clears pressed test keys while the same device is disconnected", async () => {
+  const user = userEvent.setup();
+  const connected = unassignedDevice();
+  const { rerender, props } = renderWizard({ devices: [connected] });
+  await user.click(screen.getByRole("button", { name: "继续设置" }));
+  await user.click(screen.getByRole("button", { name: "下一步" }));
+  rerender(<DeviceSetupWizard {...props} devices={[connected]} inputEvent={{ timestampMs: 1, deviceId: "rp-device-id", input: { type: "direct", gpio: 0 }, pressed: true }} />);
+  expect(screen.getByRole("button", { name: /RP Key/ })).toHaveClass("is-pressed");
+  rerender(<DeviceSetupWizard {...props} devices={[]} />);
+  rerender(<DeviceSetupWizard {...props} devices={[connected]} />);
+  expect(screen.getByRole("button", { name: /RP Key/ })).not.toHaveClass("is-pressed");
 });
