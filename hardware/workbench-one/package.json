@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsci dev",
-    "build": "tsci build src/main.tsx --routing-disabled --disable-parts-engine",
-    "build:preview": "tsci build src/main.tsx --routing-disabled --disable-parts-engine --pcb-png --pcb-svgs",
+    "build": "tsci build src/main.tsx --disable-parts-engine --autorouter-timeout 2m",
+    "build:preview": "tsci build src/main.tsx --disable-parts-engine --autorouter-timeout 2m --pcb-png --pcb-svgs",
     "snapshot": "tsci snapshot --pcb-only",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

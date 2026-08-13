@@ -1,3 +1,5 @@
+import { Fragment } from "react"
+
 import { mechanicalSwitchFootprint } from "./footprints"
 
 const KEY_PITCH = 19.05
@@ -11,32 +13,23 @@ export const KEY_LAYOUT = Array.from({ length: 18 }, (_, index) => {
     column,
     pcbX: (column - 2.5) * KEY_PITCH,
     pcbY: 6 - row * KEY_PITCH,
+    schX: (column - 2.5) * 6,
+    schY: -4 - row * 3,
   }
 })
 
 export const KeyMatrix = () => (
-  <group
-    name="G_KEY_MATRIX"
-    pcbX={0}
-    pcbY={0}
-    pcbPositionAnchor="center"
-    pack={false}
-  >
-    {KEY_LAYOUT.map(({ id, row, column, pcbX, pcbY }) => (
-      <group
-        key={id}
-        name={`G_K${id}`}
-        pcbX={0}
-        pcbY={0}
-        pcbPositionAnchor="center"
-        pack={false}
-      >
+  <>
+    {KEY_LAYOUT.map(({ id, row, column, pcbX, pcbY, schX, schY }) => (
+      <Fragment key={id}>
         <chip
           name={`SW_K${id}`}
           footprint={mechanicalSwitchFootprint}
           pinLabels={{ pin1: "COL", pin2: "DIODE" }}
           pcbX={pcbX}
           pcbY={pcbY}
+          schX={schX}
+          schY={schY}
         />
         <diode
           name={`D_K${id}`}
@@ -44,13 +37,15 @@ export const KeyMatrix = () => (
           pcbX={pcbX + 6.5}
           pcbY={pcbY - 6.4}
           pcbRotation={90}
+          schX={schX + 2.3}
+          schY={schY}
         />
         <trace from={`SW_K${id}.COL`} to={`net.COL${column}`} />
         <trace from={`SW_K${id}.DIODE`} to={`D_K${id}.pin1`} />
         <trace from={`D_K${id}.pin2`} to={`net.ROW${row}`} />
-      </group>
+      </Fragment>
     ))}
-  </group>
+  </>
 )
 
 export default KeyMatrix

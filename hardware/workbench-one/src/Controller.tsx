@@ -53,13 +53,7 @@ const MCU_SIGNALS = [
 ] as const
 
 export const Controller = () => (
-  <group
-    name="G_CONTROLLER"
-    pcbX={0}
-    pcbY={0}
-    pcbPositionAnchor="center"
-    pack={false}
-  >
+  <>
     <chip
       name="U_MCU"
       manufacturerPartNumber="ESP32-S3-WROOM-1"
@@ -67,11 +61,11 @@ export const Controller = () => (
       pinLabels={MCU_PIN_LABELS}
       pcbX={-12}
       pcbY={38}
+      schX={0}
+      schY={8}
     />
-    <trace from="U_MCU.V3V3" to="net.V3V3" />
-    <trace from="U_MCU.GND" to="net.GND" />
-    <trace from="U_MCU.USB_DP" to="net.USB_MCU_DP" />
-    <trace from="U_MCU.USB_DM" to="net.USB_MCU_DM" />
+    <trace from="U_MCU.V3V3" to="net.V3V3" thickness="0.5mm" />
+    <trace from="U_MCU.GND" to="net.GND" thickness="0.5mm" />
     {MCU_SIGNALS.map((signal) => (
       <Fragment key={signal}>
         <trace from={`U_MCU.${signal}`} to={`net.${signal}`} />
@@ -83,9 +77,12 @@ export const Controller = () => (
       footprint="0603"
       pcbX={0}
       pcbY={31}
+      schX={0}
+      schY={4.5}
+      schOrientation="vertical"
     />
-    <trace from="C_MCU.pin1" to="net.V3V3" />
-    <trace from="C_MCU.pin2" to="net.GND" />
+    <trace from="C_MCU.pin1" to="net.V3V3" thickness="0.5mm" />
+    <trace from="C_MCU.pin2" to="net.GND" thickness="0.5mm" />
     <keepout shape="rect" pcbX={-12} pcbY={48} width="20mm" height="5mm" />
-  </group>
+  </>
 )

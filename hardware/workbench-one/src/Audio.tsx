@@ -20,13 +20,7 @@ const AUDIO_PIN_LABELS = {
 } as const
 
 export const Audio = () => (
-  <group
-    name="G_AUDIO"
-    pcbX={0}
-    pcbY={0}
-    pcbPositionAnchor="center"
-    pack={false}
-  >
+  <>
     <chip
       name="U_AUDIO"
       manufacturerPartNumber="CM108B"
@@ -34,20 +28,37 @@ export const Audio = () => (
       pinLabels={AUDIO_PIN_LABELS}
       pcbX={66}
       pcbY={40}
+      schX={16.5}
+      schY={18}
     />
-    <trace from="U_AUDIO.VDD5" to="net.VBUS" />
-    <trace from="U_AUDIO.VDD33" to="net.V3V3" />
-    <trace from="U_AUDIO.GND" to="net.GND" />
-    <trace from="U_AUDIO.USB_DP" to="net.USB_AUDIO_DP" />
-    <trace from="U_AUDIO.USB_DM" to="net.USB_AUDIO_DM" />
+    <trace from="U_AUDIO.VDD5" to="net.VBUS" thickness="0.5mm" />
+    <trace from="U_AUDIO.VDD33" to="net.V3V3" thickness="0.5mm" />
+    <resistor
+      name="R_AUDIO_GND"
+      resistance="0"
+      footprint="0603"
+      pcbX={62}
+      pcbY={39.75}
+      schX={13.5}
+      schY={20}
+    />
+    <trace
+      from="U_AUDIO.GND"
+      to="R_AUDIO_GND.pin2"
+      thickness="0.5mm"
+      pcbStraightLine
+    />
+    <trace from="R_AUDIO_GND.pin1" to="net.GND" thickness="0.5mm" />
 
     <crystal
       name="Y_AUDIO"
       frequency="12MHz"
       loadCapacitance="12pF"
       footprint="crystal4_px2.5mm_py2mm"
-      pcbX={55}
-      pcbY={40}
+      pcbX={66}
+      pcbY={34.5}
+      schX={12}
+      schY={18}
     />
     <trace from="U_AUDIO.XTAL_IN" to="Y_AUDIO.pin1" />
     <trace from="U_AUDIO.XTAL_OUT" to="Y_AUDIO.pin2" />
@@ -63,6 +74,8 @@ export const Audio = () => (
       }}
       pcbX={76}
       pcbY={45}
+      schX={21.5}
+      schY={18}
     />
     <resistor
       name="R_MIC_BIAS"
@@ -70,6 +83,8 @@ export const Audio = () => (
       footprint="0603"
       pcbX={75}
       pcbY={36}
+      schX={14}
+      schY={13.5}
     />
     <capacitor
       name="C_RCV"
@@ -77,6 +92,9 @@ export const Audio = () => (
       footprint="1206"
       pcbX={79}
       pcbY={36}
+      schX={18}
+      schY={13.5}
+      schOrientation="vertical"
     />
     <resistor
       name="R_RCV"
@@ -84,6 +102,8 @@ export const Audio = () => (
       footprint="0603"
       pcbX={83}
       pcbY={36}
+      schX={21}
+      schY={13.5}
     />
     <trace from="U_AUDIO.MIC_BIAS" to="R_MIC_BIAS.pin1" />
     <trace from="R_MIC_BIAS.pin2" to="J_HANDSET.MIC_POS" />
@@ -98,10 +118,14 @@ export const Audio = () => (
       name="C_AUDIO"
       capacitance="10uF"
       footprint="0603"
-      pcbX={69}
+      pcbX={70.5}
       pcbY={33}
+      pcbRotation={180}
+      schX={11}
+      schY={13.5}
+      schOrientation="vertical"
     />
-    <trace from="C_AUDIO.pin1" to="net.V3V3" />
-    <trace from="C_AUDIO.pin2" to="net.GND" />
-  </group>
+    <trace from="C_AUDIO.pin1" to="net.V3V3" thickness="0.5mm" />
+    <trace from="C_AUDIO.pin2" to="net.GND" thickness="0.5mm" />
+  </>
 )

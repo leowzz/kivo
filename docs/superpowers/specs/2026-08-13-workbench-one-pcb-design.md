@@ -53,7 +53,10 @@ path.
 
 ## Board Composition
 
-- Board: rectangular, approximately `180 mm x 105 mm`, two copper layers.
+- Board: rectangular, approximately `180 mm x 105 mm`, four copper layers.
+- Stackup intent: L1/L4 carry most signals, L2 is GND-dominant copper, and L3
+  is 3V3-dominant copper. The P0 autorouter may cross the inner layers; pours
+  clear those traces automatically rather than forming unbroken planes.
 - Main interaction face: 18 MX-style switch footprints at `19.05 mm` pitch.
 - Upper-left: three toggle switches and hook-state connector.
 - Upper-center/right: 1x9 display-module connector in the exact signal order
@@ -113,6 +116,31 @@ not raw edges.
 - A 3.3 V regulator supplies digital logic. Bulk and local decoupling are shown
   as functional groups rather than a manufacturer-validated layout.
 
+### P0 Routing
+
+- The four-layer board uses tscircuit's local autorouter for a complete visual
+  routing pass across `top`, `inner1`, `inner2`, and `bottom`.
+- `inner1` carries a GND copper pour and `inner2` carries a 3V3 copper pour.
+  Six GND and four 3V3 through vias tie the outer copper to those planes from
+  low-congestion edge corridors.
+- Ordinary control, matrix, and low-current signals use `0.25 mm` copper with
+  at least `0.20 mm` trace clearance.
+- Primary `VBUS`, `VBUS_RAW`, `V3V3`, and ground-return branches use `0.50 mm`
+  copper where they are represented by individual source traces.
+- The upstream, ESP32-S3 downstream, and CM108B downstream USB D+/D- networks
+  are all routed. The point-to-point ESP32-S3 and CM108B links use native
+  differential-pair constraints with `0.20 mm` edge-to-edge gap and no more
+  than `0.5 mm` routed-length skew. The upstream Type-C link remains a
+  multi-terminal net because the receptacle exposes duplicate D+/D- pins and
+  the ESD device is modeled as a shunt.
+- Routing must produce at least one PCB trace for every routable source
+  connection and no autorouting, missing-trace, clearance, or PCB trace errors.
+
+These are P0 geometry constraints, not an impedance guarantee. A production
+revision still requires an actual stackup, 90 ohm differential calculation,
+continuous return-plane review, USB test coupons or measurement, and EMC
+validation.
+
 ## Visual Language
 
 The PCB uses black solder mask, exposed metal pads, and restrained white
@@ -131,6 +159,11 @@ Automated checks cover:
 - the hub exposes exactly one upstream and two downstream USB pairs;
 - the rendered PCB has a board outline and four mounting holes;
 - a PCB SVG/PNG or viewer output can be generated for visual inspection.
+- routed Circuit JSON contains copper traces and no routing errors;
+- the rendered board reports four layers, inner GND/3V3 pours, and through-via
+  connectivity for both plane nets;
+- all three USB links and both valid point-to-point differential-pair
+  constraints are present in the source model.
 
 Manual review covers component overlap, readable silkscreen, keyboard pitch,
 logical zone separation, and a nonblank PCB view.
@@ -138,6 +171,8 @@ logical zone separation, and a nonblank PCB view.
 ## Explicit Limitations
 
 - No Gerber release or fabrication claim is made in P0.
+- Inner-layer pours are dominant power regions, not verified unbroken planes;
+  the installed autorouter can also use those layers for signals.
 - Exact footprints and 3D bodies are not guaranteed to match purchasable parts.
 - USB impedance, return path, crystal loading, antenna keepout, audio gain,
   microphone bias, ESD performance, thermal behavior, and EMC are not validated.
