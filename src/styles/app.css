@@ -36,22 +36,18 @@
 
 /* ===== 侧栏 200px ===== */
 .sidebar { min-height: 0; display: flex; flex-direction: column; padding: var(--space-12) 10px; border-right: 1px solid var(--border-subtle); background: var(--bg-app); }
-.home-nav-button, .devices-nav-button, .sidebar nav button, .data-nav-button, .settings-nav-button {
+.home-nav-button, .devices-nav-button, .settings-nav-button {
   position: relative; width: 100%; min-height: 34px; display: flex; align-items: center; gap: 9px;
   border: 0; border-radius: var(--radius-8); padding: 7px 10px;
   color: var(--gray-11); background: transparent; text-align: left; font-size: var(--text-13);
   transition: background .12s ease;
 }
-.home-nav-button:hover, .devices-nav-button:hover, .sidebar nav button:hover, .data-nav-button:hover, .settings-nav-button:hover { background: var(--gray-3); }
-.home-nav-button.is-active, .devices-nav-button.is-active, .sidebar nav button.is-active, .data-nav-button.is-active, .settings-nav-button.is-active { color: var(--green-11); background: var(--green-3); font-weight: var(--weight-semibold); }
+.home-nav-button:hover, .devices-nav-button:hover, .settings-nav-button:hover { background: var(--gray-3); }
+.home-nav-button.is-active, .devices-nav-button.is-active, .settings-nav-button.is-active { color: var(--green-11); background: var(--green-3); font-weight: var(--weight-semibold); }
 /* 激活态左侧 3px 指示条 */
-.home-nav-button.is-active::before, .devices-nav-button.is-active::before, .sidebar nav button.is-active::before, .data-nav-button.is-active::before, .settings-nav-button.is-active::before {
+.home-nav-button.is-active::before, .devices-nav-button.is-active::before, .settings-nav-button.is-active::before {
   content: ""; position: absolute; left: -10px; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--green-9);
 }
-.sidebar nav { display: grid; gap: 2px; margin-top: var(--space-12); padding-top: var(--space-12); border-top: 1px solid var(--border-subtle); }
-.sidebar nav > span { padding: 0 10px var(--space-4); color: var(--gray-9); font-size: var(--text-11); font-weight: var(--weight-semibold); letter-spacing: 0; }
-/* 「配置文件」固定底部 */
-.data-nav-button { margin-top: auto; }
 .settings-nav-button { margin-top: var(--space-4); }
 
 /* ===== 工作区 ===== */
@@ -122,10 +118,7 @@
   .save-state { grid-column: 1 / -1; min-height: 0; padding: 0 var(--space-12) 6px; }
   .product-workspace { display: block; }
   .sidebar { display: grid; grid-template-columns: 1fr; border-right: 0; border-bottom: 1px solid var(--border-subtle); }
-  .home-nav-button, .devices-nav-button { width: auto; }
-  .sidebar nav { display: flex; overflow-x: auto; margin-top: 10px; padding-top: 10px; border-top: 0; }
-  .sidebar nav > span { display: none; }
-  .sidebar nav button, .data-nav-button, .settings-nav-button { flex: 0 0 auto; width: auto; white-space: nowrap; }
-  .home-nav-button.is-active::before, .devices-nav-button.is-active::before, .sidebar nav button.is-active::before, .data-nav-button.is-active::before, .settings-nav-button.is-active::before { left: 10px; right: 10px; top: auto; bottom: 0; width: auto; height: 3px; }
+  .home-nav-button, .devices-nav-button, .settings-nav-button { flex: 0 0 auto; width: auto; white-space: nowrap; }
+  .home-nav-button.is-active::before, .devices-nav-button.is-active::before, .settings-nav-button.is-active::before { left: 10px; right: 10px; top: auto; bottom: 0; width: auto; height: 3px; }
   .content-panel { min-height: 480px; }
 }

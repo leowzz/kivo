@@ -3,21 +3,11 @@ import { listen } from "@tauri-apps/api/event";
 import { open, save as saveFile } from "@tauri-apps/plugin-dialog";
 import {
   AlertTriangle,
-  ArchiveRestore,
-  DatabaseBackup,
-  Download,
-  FileInput,
-  Home,
-  Keyboard,
-  Plus,
-  Trash2,
-  Upload,
   Usb,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import brandIcon from "../src-tauri/icons/128x128.png";
-import { ActionEditor } from "./ActionEditor";
 import { AdvancedSettings } from "./AdvancedSettings";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { CreateDeviceProfileForm } from "./CreateDeviceProfileForm";
@@ -27,7 +17,6 @@ import { DeviceSetupWizard, type SetupInputEvent } from "./DeviceSetupWizard";
 import { hardwareProfilesAreValid } from "./HardwareMapping";
 import { resolveButton } from "./inputMapping";
 import { KeyboardWorkspace } from "./KeyboardWorkspace";
-import { Keypad } from "./Keypad";
 import { SharedProfileEditDialog } from "./SharedProfileEditDialog";
 import { SettingsWorkspace } from "./SettingsWorkspace";
 import { assignedProfile, selectDeviceId } from "./deviceSelection";
@@ -40,21 +29,20 @@ import type {
   ButtonAction,
   CreateDeviceProfileRequest,
   DeviceProfile,
-  HardwareProfile,
   HomeMetricsSnapshot,
   ImportPreview,
   InputSource,
   Language,
   LearningTarget,
   PhysicalInput,
-  RuntimeAssignment,
   RuntimeEvent,
+  RuntimeAssignment,
   StartupFailure,
   TriggerActions,
 } from "./types";
 import { SerializedSaveQueue, useAutosave } from "./useAutosave";
 
-type View = "home" | "devices" | "behavior" | "data" | "settings" | "advanced";
+type View = "keyboard" | "devices" | "settings" | "advanced";
 type Confirmation =
   | { kind: "import"; path: string; preview: ImportPreview }
   | { kind: "restore"; path: string; preview: BackupPreview }
@@ -220,7 +208,7 @@ export default function App() {
   });
   const [savedDeviceProfiles, setSavedDeviceProfiles] = useState<Record<string, string>>({});
   const [language, setLanguage] = useState<Language>("zh-CN");
-  const [view, setView] = useState<View>("home");
+  const [view, setView] = useState<View>("keyboard");
   const [homeMetrics, setHomeMetrics] = useState<AppSnapshot["homeMetrics"]>(null);
   const [deviceMetrics, setDeviceMetrics] = useState<{ deviceId: string; snapshot: HomeMetricsSnapshot } | null>(null);
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
@@ -285,7 +273,7 @@ export default function App() {
   const editorLearningActive = devices.some((device) =>
     device.learning?.deviceProfileId === editorProfileConfig?.profile.id
   );
-  const profileMutationTarget = view === "home" || view === "advanced" ? selectedDeviceProfile ?? editorProfileConfig : editorProfileConfig;
+  const profileMutationTarget = view === "keyboard" || view === "advanced" ? selectedDeviceProfile ?? editorProfileConfig : editorProfileConfig;
   const selectedProfileRelationshipKey = selectedDevice && profileMutationTarget
     ? `${selectedDevice.deviceId}:${profileMutationTarget.profile.id}`
     : null;
@@ -519,10 +507,6 @@ export default function App() {
     }
   }, [replaceRegistrySnapshot]);
 
-  const saveEditorProfile = useCallback(async (profile: DeviceProfile | undefined) => {
-    if (profile) await saveProfiles([profile]);
-  }, [saveProfiles]);
-
   const renameManagedDevice = useCallback(async (deviceId: string, name: string) => {
     try {
       const snapshot = await invoke<AppSnapshot>("rename_device", { deviceId, name });
@@ -539,22 +523,6 @@ export default function App() {
       if (mountedRef.current) replaceRegistrySnapshot(snapshot);
     } catch (operationError) {
       setError(`${t(language, "error.delete")}: ${errorMessage(operationError)}`);
-      throw operationError;
-    }
-  }, [language, replaceRegistrySnapshot]);
-
-  const saveManagedRuntimeAssignment = useCallback(async (
-    deviceId: string,
-    assignment: RuntimeAssignment,
-  ) => {
-    try {
-      const snapshot = await invoke<AppSnapshot>("save_runtime_assignment", {
-        deviceId,
-        assignment,
-      });
-      if (mountedRef.current) replaceRegistrySnapshot(snapshot);
-    } catch (operationError) {
-      setError(`${t(language, "error.save")}: ${errorMessage(operationError)}`);
       throw operationError;
     }
   }, [language, replaceRegistrySnapshot]);
@@ -580,24 +548,6 @@ export default function App() {
   const handleManagedMetricsChange = useCallback((deviceId: string | null) => {
     void refreshManagedDeviceMetrics(deviceId);
   }, [refreshManagedDeviceMetrics]);
-
-  const handleHardwareEditorSelection = useCallback((
-    hardwareProfileId: string | null,
-    deviceId: string | null,
-  ) => {
-    const managedDevice = deviceId ? devices.find((device) => device.deviceId === deviceId) : undefined;
-    const deviceProfileId = managedDevice?.runtimeAssignment?.device_profile_id ?? editorProfileConfig?.profile.id;
-    const next = hardwareProfileId && deviceProfileId
-      ? { deviceProfileId, hardwareProfileId, deviceId }
-      : null;
-    setHardwareEditorTarget((current) =>
-      current?.deviceProfileId === next?.deviceProfileId &&
-      current?.hardwareProfileId === next?.hardwareProfileId &&
-      current?.deviceId === next?.deviceId
-        ? current
-        : next
-    );
-  }, [devices, editorProfileConfig?.profile.id]);
 
   const dirtyProfiles = useMemo(() => deviceProfiles.filter((profile) =>
     savedDeviceProfiles[profile.profile.id] !== JSON.stringify(profile)
@@ -820,7 +770,7 @@ export default function App() {
   }, [applySnapshot, refreshManagedDeviceMetrics, refreshRegistry]);
 
   useEffect(() => {
-    if (view === "home") return;
+    if (view === "keyboard") return;
     const buttons = allButtons(editorProfileConfig);
     if (!buttons.some((button) => button.id === selectedButtonId)) {
       setSelectedButtonId(buttons[0]?.id ?? null);
@@ -828,7 +778,7 @@ export default function App() {
   }, [editorProfileConfig, selectedButtonId, view]);
 
   useEffect(() => {
-    if (view !== "home") return;
+    if (view !== "keyboard") return;
     const buttons = allButtons(selectedDeviceProfile);
     if (!buttons.some((button) => button.id === selectedButtonId)) {
       setSelectedButtonId(buttons[0]?.id ?? null);
@@ -857,28 +807,6 @@ export default function App() {
       };
     });
   }, [editorLearningActive, editorProfileConfig?.profile.id]);
-
-  const setSharedDraftPending = useCallback((profileId: string, pending: boolean) => {
-    setPendingSharedDraftProfileIds((current) => {
-      const next = new Set(current);
-      if (pending) next.add(profileId);
-      else next.delete(profileId);
-      return next;
-    });
-  }, []);
-
-  const changeManagedProfile = useCallback((profile: DeviceProfile) => {
-    updateProfile(profile.profile.id, () => profile);
-    const sharedDeviceCount = devices.filter(
-      (device) => device.runtimeAssignment?.device_profile_id === profile.profile.id,
-    ).length;
-    setSharedDraftPending(profile.profile.id, sharedDeviceCount > 1);
-  }, [devices, setSharedDraftPending, updateProfile]);
-
-  const saveManagedSharedProfile = useCallback(async (profile: DeviceProfile) => {
-    await autosave.flush();
-    await saveEditorProfile(profile);
-  }, [autosave.flush, saveEditorProfile]);
 
   const duplicateManagedProfileForDevice = useCallback(async ({ deviceId, sourceProfile: profile, name }: { deviceId: string; sourceProfile: DeviceProfile; name: string }) => {
     await autosave.flush();
@@ -1009,7 +937,7 @@ export default function App() {
       hardwareProfileId: assignment.hardware_profile_id,
     });
     setSetupOpen(false);
-    setView("home");
+    setView("keyboard");
   };
 
   const run = async (label: string, task: () => Promise<void>) => {
@@ -1116,11 +1044,6 @@ export default function App() {
     );
   };
 
-  const selectedButton = allButtons(editorProfileConfig).find((button) => button.id === selectedButtonId) ?? null;
-  const selectedActions = editorProfileConfig && selectedButtonId
-    ? editorProfileConfig.actions[selectedButtonId] ?? emptyTriggerActions()
-    : emptyTriggerActions();
-
   if (startupFailure) {
     const incompatible = startupFailure.code === "unsupported_profile_schema" ||
       startupFailure.code === "unsupported_settings_schema";
@@ -1181,29 +1104,18 @@ export default function App() {
         </div>
       )}
 
-      <div className={view === "devices" || view === "data" || view === "settings" || view === "advanced" ? "product-workspace is-home" : "product-workspace"}>
+      <div className={view === "keyboard" ? "product-workspace" : "product-workspace is-home"}>
         <aside className="sidebar">
-          <button className={`home-nav-button ${view === "home" ? "is-active" : ""}`} type="button" onClick={() => void navigate("home")}>
-            <Home size={17} />{t(language, "nav.home")}
+          <button className={`home-nav-button ${view === "keyboard" ? "is-active" : ""}`} type="button" onClick={() => void navigate("keyboard")}>
+            {t(language, "nav.keyboard")}
           </button>
 
           <button className={`devices-nav-button ${view === "devices" ? "is-active" : ""}`} type="button" onClick={() => void navigate("devices")}>
-            <Usb size={17} />{t(language, "nav.devices")}
-          </button>
-
-          <nav aria-label={t(language, "nav.configuration")}>
-            <span>{t(language, "nav.configuration")}</span>
-            <button className={view === "behavior" ? "is-active" : ""} type="button" onClick={() => void navigate("behavior")}>
-              <Keyboard size={17} />{t(language, "nav.behavior")}
-            </button>
-          </nav>
-
-          <button className={`data-nav-button ${view === "data" ? "is-active" : ""}`} type="button" onClick={() => void navigate("data")}>
-            <FileInput size={17} />{t(language, "nav.data")}
+            {t(language, "nav.devices")}
           </button>
 
           <button className={`settings-nav-button ${view === "settings" || view === "advanced" ? "is-active" : ""}`} type="button" onClick={() => void navigate("settings")}>
-            <DatabaseBackup size={17} />{t(language, "nav.settings")}
+            {t(language, "nav.settings")}
           </button>
 
         </aside>
@@ -1222,7 +1134,7 @@ export default function App() {
               onOpenAdvanced={() => void navigate("advanced")}
             />
           ) : view === "advanced" ? (
-            <AdvancedSettings
+            <><div className="advanced-back"><button type="button" onClick={() => void navigate("settings")}>{t(language, "common.back")}</button></div><AdvancedSettings
               language={language}
               profiles={deviceProfiles}
               editorProfileId={editorProfile}
@@ -1241,62 +1153,7 @@ export default function App() {
               }}
               onBeginLearning={beginManagedLearning}
               onEndLearning={endManagedLearning}
-            />
-          ) : view === "data" ? (
-            <div className="data-page">
-              <div className="content-heading">
-                <div>
-                  <h2>{t(language, "nav.data")}</h2>
-                  <p className="content-subtitle">{t(language, "data.subtitle")}</p>
-                </div>
-                <button className="primary-button" type="button" onClick={() => openProfileCreator()}>
-                  <Plus size={16} />{t(language, "profile.create")}
-                </button>
-              </div>
-              <div className="data-page-body">
-                <section className="profile-list" aria-label={t(language, "data.profileList")}>
-                  {deviceProfiles.length === 0 && <p className="empty-workspace-copy">{t(language, "model.empty")}</p>}
-                  {deviceProfiles.map((profile) => {
-                    const usage = devices.filter((device) => device.runtimeAssignment?.device_profile_id === profile.profile.id).length;
-                    return (
-                      <article className="profile-row" key={profile.profile.id}>
-                        <div className="profile-row-main">
-                          <div className="profile-row-title">
-                            <h3>{profile.profile.name}</h3>
-                            {profile.profile.id === editorProfile && <span className="profile-badge">{t(language, "data.editorBadge")}</span>}
-                          </div>
-                          <p>{t(language, "data.usedBy", { count: usage })}</p>
-                          <code>{profile.profile.id}</code>
-                        </div>
-                        <div className="profile-row-actions">
-                          <button type="button" aria-label={`${t(language, "data.exportProfile")} ${profile.profile.name}`} title={t(language, "data.exportProfile")} onClick={() => void exportProfile(profile)}>
-                            <Upload size={15} />{t(language, "data.exportProfile")}
-                          </button>
-                          <button type="button" aria-label={`${t(language, "data.duplicateProfile")} ${profile.profile.name}`} title={t(language, "data.duplicateProfile")} onClick={() => openProfileCreator(profile.profile.id)}>
-                            <Plus size={15} />{t(language, "data.duplicateProfile")}
-                          </button>
-                          <button className="is-danger" type="button" aria-label={`${t(language, "data.deleteProfile")} ${profile.profile.name}`} title={t(language, "data.deleteProfile")} onClick={() => setConfirmation({ kind: "delete", profile })}>
-                            <Trash2 size={15} />{t(language, "data.deleteProfile")}
-                          </button>
-                        </div>
-                      </article>
-                    );
-                  })}
-                </section>
-                <section className="data-card">
-                  <h3>{t(language, "data.groupTransfer")}</h3>
-                  <div className="data-menu">
-                    <button type="button" onClick={() => void chooseImport()}><FileInput size={16} />{t(language, "nav.import")}</button>
-                    <button type="button" disabled={deviceProfiles.length === 0} onClick={() => void run(t(language, "error.export"), async () => {
-                      await autosave.flush();
-                      const path = await saveFile({ defaultPath: "kivo-backup.yaml", filters: [{ name: "Kivo", extensions: ["yaml"] }] });
-                      if (path) await invoke("export_backup", { path });
-                    })}><DatabaseBackup size={16} />{t(language, "nav.backup")}</button>
-                    <button type="button" onClick={() => void chooseRestore()}><ArchiveRestore size={16} />{t(language, "nav.restore")}</button>
-                  </div>
-                </section>
-              </div>
-            </div>
+            /></>
           ) : view === "devices" ? (
             <DeviceManagement
               language={language}
@@ -1307,7 +1164,6 @@ export default function App() {
               metrics={deviceMetrics}
               onRename={renameManagedDevice}
               onForget={forgetManagedDevice}
-              onSaveRuntimeAssignment={saveManagedRuntimeAssignment}
               onMetricsChange={handleManagedMetricsChange}
               onOpenSetup={openSetup}
               onRetryCandidate={retrySetupCandidate}
@@ -1315,14 +1171,8 @@ export default function App() {
               selectedCandidateKey={selectedManagedCandidateKey}
               onSelectedDeviceChange={selectManagedDevice}
               onSelectedCandidateChange={setSelectedManagedCandidateKey}
-              onChangeProfile={changeManagedProfile}
-              onSaveSharedProfile={saveManagedSharedProfile}
-              onDuplicateProfileForDevice={duplicateManagedProfileForDevice}
-              onHardwareSelectionChange={handleHardwareEditorSelection}
-              onBeginLearning={beginManagedLearning}
-              onEndLearning={endManagedLearning}
             />
-          ) : view === "home" ? (
+          ) : (
             <KeyboardWorkspace
               language={language}
               device={selectedDevice}
@@ -1347,73 +1197,8 @@ export default function App() {
               }))}
               onOpenSetup={openSetup}
             />
-          ) : !editorProfileConfig ? (
-            <div className="empty-workspace">
-              <Download size={28} />
-              <h2>{t(language, "model.empty")}</h2>
-              <div><button className="primary-button" type="button" onClick={() => void chooseImport()}>{t(language, "model.import")}</button><button type="button" onClick={() => void chooseRestore()}>{t(language, "model.restore")}</button></div>
-            </div>
-          ) : (
-            <>
-              <div className="content-heading">
-                <div>
-                  {view === "behavior" && <label className="model-picker">
-                    <span>{t(language, "model.select")}</span>
-                    <select
-                      aria-label={t(language, "model.select")}
-                      value={editorProfile ?? ""}
-                      disabled={!loaded || deviceProfiles.length === 0}
-                      onChange={(event) => void run(t(language, "error.save"), () => saveSettings(event.target.value, language))}
-                    >
-                      {deviceProfiles.map((profile) => (
-                        <option value={profile.profile.id} key={profile.profile.id}>{profile.profile.name}</option>
-                      ))}
-                    </select>
-                  </label>}
-                  <span>{editorProfileConfig.profile.name}</span>
-                  <h2>{t(language, "behavior.title")}</h2>
-                </div>
-                {view === "behavior" && selectedButton && <span className="selected-crumb">{t(language, "behavior.selected", { label: selectedButton.label })}</span>}
-              </div>
-              <div className="keypad-stage">
-                <Keypad
-                  layout={editorProfileConfig.profile}
-                  actions={editorProfileConfig.actions}
-                  selectedButtonId={selectedButtonId}
-                  pressedButtonIds={pressedButtonIds}
-                  actionCountLabel={(count) => t(language, "model.actionCount", { count })}
-                  unconfiguredLabel={t(language, "workspace.unconfigured")}
-                  onSelect={setSelectedButtonId}
-                />
-              </div>
-            </>
           )}
         </section>
-
-        {view === "behavior" && <ActionEditor
-          language={language}
-          button={selectedButton}
-          actions={selectedActions}
-          onChange={(actions: TriggerActions) => selectedButtonId && requestDeviceProfileMutation((profile) => ({
-            ...profile,
-            actions: {
-              ...profile.actions,
-              [selectedButtonId]: actions,
-            },
-          }))}
-          onRename={(buttonId, label) => requestDeviceProfileMutation((profile) => ({
-            ...profile,
-            profile: {
-              ...profile.profile,
-              groups: profile.profile.groups.map((group) => ({
-                ...group,
-                buttons: group.buttons.map((button) => button.id === buttonId
-                  ? { ...button, label }
-                  : button),
-              })),
-            },
-          }))}
-        />}
       </div>
 
       {profileCreatorOpen && (
@@ -1449,7 +1234,7 @@ export default function App() {
                   await createDeviceProfile(request);
                   setProfileCreatorOpen(false);
                   setProfileCreatorSourceId(null);
-                  setView("data");
+                  setView("advanced");
                 }}
                 onCancel={() => {
                   setProfileCreatorOpen(false);

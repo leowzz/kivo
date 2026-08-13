@@ -3,9 +3,9 @@ import { messages, t } from "./i18n";
 
 describe("i18n", () => {
   test("defaults to complete Chinese product labels", () => {
-    expect(t("zh-CN", "nav.behavior")).toBe("按键行为");
+    expect(t("zh-CN", "nav.keyboard")).toBe("我的键盘");
     expect(t("zh-CN", "save.failed")).toBe("保存失败");
-    expect(t("en-US", "nav.behavior")).toBe("Button behavior");
+    expect(t("en-US", "nav.keyboard")).toBe("My keyboard");
   });
 
   test("keeps Chinese and English dictionaries structurally complete", () => {

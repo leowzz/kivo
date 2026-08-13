@@ -537,13 +537,8 @@
 .layout-editor-footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 58px; padding: 10px 14px; border-top: 1px solid var(--border-subtle); }
 .layout-editor-footer > button { min-height: 34px; border: 1px solid var(--border-strong); border-radius: var(--radius-8); padding: 0 12px; background: var(--bg-surface); }
 .layout-editor-error { margin: 0 auto 0 0; color: var(--red-text); font-size: var(--text-12); }
-.embedded-layout-editor { width: 100%; max-height: none; border: 0; border-radius: 0; box-shadow: none; background: var(--bg-raised); }
-.embedded-layout-editor .layout-editor-body { max-height: none; }
-.device-workspace { margin-top: var(--space-16); border-top: 1px solid var(--border-subtle); padding-top: var(--space-12); }
-.device-workspace-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-8); flex-wrap: wrap; }
-.device-workspace-tabs { display: flex; gap: 3px; border-bottom: 1px solid var(--border-default); }
-.device-workspace-tabs button { min-height: 32px; border: 0; border-bottom: 2px solid transparent; padding: 0 9px; color: var(--gray-10); background: transparent; }
-.device-workspace-tabs button[aria-selected="true"] { border-bottom-color: var(--accent-9); color: var(--gray-12); font-weight: var(--weight-semibold); }
+.advanced-back { padding: var(--space-12) var(--space-24) 0; }
+.advanced-back button { min-height: 34px; border: 1px solid var(--border-default); border-radius: var(--radius-6); padding: 0 10px; color: var(--gray-11); background: var(--bg-surface); }
 .shared-configuration-warning { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0; border: 1px solid var(--amber-border); border-radius: var(--radius-6); padding: 8px 10px; color: var(--amber-text); background: var(--amber-bg); font-size: var(--text-12); }
 .shared-configuration-warning button { min-height: 28px; border: 1px solid var(--amber-border); border-radius: var(--radius-6); padding: 0 8px; color: var(--amber-text); background: var(--bg-surface); }
 .required-hardware-resolver { display: grid; grid-template-columns: 1fr auto; gap: 7px; margin: 8px 0; border: 1px solid var(--amber-border); border-radius: var(--radius-6); padding: 8px; background: var(--amber-bg); }

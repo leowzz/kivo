@@ -1,13 +1,9 @@
 import { Check, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { ConfigurationSettingsDialog } from "./ConfigurationSettingsDialog";
-import { HardwareMapping } from "./HardwareMapping";
-import { LayoutEditor } from "./LayoutEditor";
 import {
   candidateDisplayLabel,
   compareDeviceAvailability,
-  compatibleHardwareProfiles,
   matchesDeviceFilter,
   primaryDeviceLabel,
   type DeviceFilter,
@@ -22,13 +18,10 @@ import type {
   DeviceStatus,
   HomeMetricsSnapshot,
   Language,
-  RuntimeAssignment,
-  TriggerSettings,
 } from "./types";
 
 type Selection = { kind: "device" | "candidate"; id: string };
 type Row = { selection: Selection };
-type AssignmentDraft = { deviceProfileId: string; hardwareProfileId: string };
 type OperationError = { owner: Selection; message: string };
 
 function errorMessage(error: unknown) {
@@ -86,10 +79,6 @@ interface DeviceManagementProps {
   metrics: { deviceId: string; snapshot: HomeMetricsSnapshot } | null;
   onRename(deviceId: string, name: string): void | Promise<void>;
   onForget(deviceId: string): void | Promise<void>;
-  onSaveRuntimeAssignment(
-    deviceId: string,
-    assignment: RuntimeAssignment,
-  ): void | Promise<void>;
   onMetricsChange(deviceId: string | null): void;
   onOpenSetup(targetId: string | null): void;
   onRetryCandidate(deviceId: string): void | Promise<void>;
@@ -97,12 +86,6 @@ interface DeviceManagementProps {
   selectedCandidateKey?: string | null;
   onSelectedDeviceChange?(deviceId: string | null): void;
   onSelectedCandidateChange?(candidateKey: string | null): void;
-  onChangeProfile?(profile: DeviceProfile): void;
-  onSaveSharedProfile?(profile: DeviceProfile): void | Promise<void>;
-  onDuplicateProfileForDevice?(request: { deviceId: string; sourceProfile: DeviceProfile; name: string }): Promise<void>;
-  onHardwareSelectionChange?(hardwareProfileId: string | null, deviceId: string | null): void;
-  onBeginLearning?(hardwareProfileId: string, deviceId: string, pins: number[]): void;
-  onEndLearning?(deviceId: string): void;
 }
 
 function assignmentLabel(device: DeviceStatus, profiles: DeviceProfile[]) {
@@ -167,7 +150,6 @@ export function DeviceManagement({
   metrics,
   onRename,
   onForget,
-  onSaveRuntimeAssignment,
   onMetricsChange,
   onOpenSetup,
   onRetryCandidate,
@@ -175,12 +157,6 @@ export function DeviceManagement({
   selectedCandidateKey,
   onSelectedDeviceChange,
   onSelectedCandidateChange,
-  onChangeProfile,
-  onSaveSharedProfile,
-  onDuplicateProfileForDevice,
-  onHardwareSelectionChange,
-  onBeginLearning,
-  onEndLearning,
 }: DeviceManagementProps) {
   const [filter, setFilter] = useState<DeviceFilter>("all");
   const [query, setQuery] = useState("");
@@ -191,18 +167,8 @@ export function DeviceManagement({
   const [error, setError] = useState<OperationError | null>(null);
   const [candidateRetrying, setCandidateRetrying] = useState(false);
   const [forgetting, setForgetting] = useState(false);
-  const [assignmentDraft, setAssignmentDraft] = useState<AssignmentDraft>({
-    deviceProfileId: "",
-    hardwareProfileId: "",
-  });
-  const [assignmentSaving, setAssignmentSaving] = useState(false);
-  const [workspaceTab, setWorkspaceTab] = useState<"overview" | "io" | "layout">("overview");
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
   const previous = useRef<Row[]>([]);
   const candidateRetryInFlight = useRef(false);
-  const pendingAssignment = useRef<RuntimeAssignment | null>(null);
-  const assignmentMutationInFlight = useRef(false);
   const boards = useMemo(
     () => new Map(boardProfiles.map((board) => [board.id, board])),
     [boardProfiles],
@@ -330,38 +296,6 @@ export function DeviceManagement({
     setName(selectedDevice?.name ?? "");
   }, [selectedDevice?.deviceId]);
   useEffect(() => {
-    const assignment = selectedDevice?.runtimeAssignment;
-    const profile = deviceProfiles.find(
-      (item) => item.profile.id === assignment?.device_profile_id,
-    );
-    const hardware = profile?.hardware_profiles.find(
-      (item) => item.id === assignment?.hardware_profile_id,
-    );
-    setAssignmentDraft(
-      profile && hardware && hardware.board_profile_id === selectedDevice?.boardProfileId
-        ? {
-            deviceProfileId: profile.profile.id,
-            hardwareProfileId: hardware.id,
-          }
-        : { deviceProfileId: "", hardwareProfileId: "" },
-    );
-    pendingAssignment.current = null;
-  }, [selectedDevice?.deviceId]);
-  useEffect(() => {
-    const assignment = selectedDevice?.runtimeAssignment;
-    const saved = pendingAssignment.current;
-    const saveConfirmed = saved &&
-      assignment?.device_profile_id === saved.device_profile_id &&
-      assignment.hardware_profile_id === saved.hardware_profile_id;
-    if (saveConfirmed) {
-      setAssignmentDraft({
-        deviceProfileId: assignment.device_profile_id,
-        hardwareProfileId: assignment.hardware_profile_id,
-      });
-      pendingAssignment.current = null;
-    }
-  }, [selectedDevice?.runtimeAssignment]);
-  useEffect(() => {
     if (confirmId && !confirmDevice) setConfirmId(null);
   }, [confirmDevice, confirmId]);
   const rename = async () => {
@@ -393,29 +327,6 @@ export function DeviceManagement({
       setForgetting(false);
     }
   };
-  const selectedDraftProfile = deviceProfiles.find(
-    (item) => item.profile.id === assignmentDraft.deviceProfileId,
-  );
-  const compatibleHardware = selectedDraftProfile
-    ? compatibleHardwareProfiles(
-        selectedDraftProfile.hardware_profiles,
-        selectedDevice?.boardProfileId ?? "",
-      )
-    : [];
-  const editingProfile = deviceProfiles.find((item) => item.profile.id === (assignmentDraft.deviceProfileId || selectedDevice?.runtimeAssignment?.device_profile_id));
-  const sharedDeviceCount = editingProfile
-    ? devices.filter((device) => device.runtimeAssignment?.device_profile_id === editingProfile.profile.id).length
-    : 0;
-  const updateEditingProfile = useCallback((next: DeviceProfile) => onChangeProfile?.(next), [onChangeProfile]);
-  const handleWorkspaceSelection = useCallback((hardwareProfileId: string | null, deviceId: string | null) => {
-    onHardwareSelectionChange?.(hardwareProfileId, deviceId);
-  }, [onHardwareSelectionChange]);
-  const handleBeginLearning = useCallback((hardwareProfileId: string, deviceId: string, pins: number[]) => {
-    onBeginLearning?.(hardwareProfileId, deviceId, pins);
-  }, [onBeginLearning]);
-  const handleEndLearning = useCallback((deviceId: string) => {
-    onEndLearning?.(deviceId);
-  }, [onEndLearning]);
   const selectedCandidateMessages = selectedCandidate
     ? candidateMessages[selectedCandidate.issue]
     : null;
@@ -444,76 +355,6 @@ export function DeviceManagement({
     } finally {
       candidateRetryInFlight.current = false;
       setCandidateRetrying(false);
-    }
-  };
-  const selectAssignment = async (deviceProfileId: string) => {
-    if (!deviceProfileId) return;
-    const profile = deviceProfiles.find(
-      (item) => item.profile.id === deviceProfileId,
-    );
-    const compatible = profile
-      ? compatibleHardwareProfiles(
-          profile.hardware_profiles,
-          selectedDevice?.boardProfileId ?? "",
-        )
-      : [];
-    const currentHardware = profile?.hardware_profiles.find(
-      (item) =>
-        item.id === selectedDevice?.runtimeAssignment?.hardware_profile_id &&
-        item.board_profile_id === selectedDevice.boardProfileId,
-    );
-    const nextDraft = {
-      deviceProfileId,
-      hardwareProfileId: currentHardware?.id ?? compatible[0]?.id ?? "",
-    };
-    setAssignmentDraft(nextDraft);
-
-    if (
-      assignmentMutationInFlight.current ||
-      !selectedDevice ||
-      !profile ||
-      !nextDraft.hardwareProfileId ||
-      (selectedDevice.runtimeAssignment?.device_profile_id === deviceProfileId &&
-        selectedDevice.runtimeAssignment.hardware_profile_id ===
-          nextDraft.hardwareProfileId)
-    ) return;
-    const assignment = {
-      device_profile_id: deviceProfileId,
-      hardware_profile_id: nextDraft.hardwareProfileId,
-    };
-    try {
-      assignmentMutationInFlight.current = true;
-      setAssignmentSaving(true);
-      setError(null);
-      pendingAssignment.current = assignment;
-      await onSaveRuntimeAssignment(selectedDevice.deviceId, assignment);
-    } catch (reason) {
-      pendingAssignment.current = null;
-      const currentProfile = deviceProfiles.find(
-        (item) =>
-          item.profile.id ===
-          selectedDevice.runtimeAssignment?.device_profile_id,
-      );
-      const currentHardwareProfile = currentProfile?.hardware_profiles.find(
-        (item) =>
-          item.id === selectedDevice.runtimeAssignment?.hardware_profile_id &&
-          item.board_profile_id === selectedDevice.boardProfileId,
-      );
-      setAssignmentDraft(
-        currentProfile && currentHardwareProfile
-          ? {
-              deviceProfileId: currentProfile.profile.id,
-              hardwareProfileId: currentHardwareProfile.id,
-            }
-          : { deviceProfileId: "", hardwareProfileId: "" },
-      );
-      setError({
-        owner: { kind: "device", id: selectedDevice.deviceId },
-        message: errorMessage(reason),
-      });
-    } finally {
-      assignmentMutationInFlight.current = false;
-      setAssignmentSaving(false);
     }
   };
   return (
@@ -780,62 +621,8 @@ export function DeviceManagement({
                   {t(language, "setup.continue")}
                 </button>
               )}
-            <section className="device-assignment" aria-label={t(language, "devices.assignment")}>
-              <label>
-                {t(language, "devices.useConfiguration")}
-                <select
-                  aria-label={t(language, "devices.useConfiguration")}
-                  value={assignmentDraft.deviceProfileId}
-                  disabled={assignmentSaving}
-                  onChange={(event) => void selectAssignment(event.target.value)}
-                >
-                  <option value="">{t(language, "model.select")}</option>
-                  {deviceProfiles.map((profile) => <option key={profile.profile.id} value={profile.profile.id}>{profile.profile.name}</option>)}
-                </select>
-              </label>
-              {!onChangeProfile && <label>
-                {t(language, "model.label")}
-                <select aria-label={t(language, "model.label")} value={assignmentDraft.deviceProfileId} disabled={assignmentSaving} onChange={(event) => void selectAssignment(event.target.value)}>
-                  <option value="">{t(language, "model.select")}</option>
-                  {deviceProfiles.map((profile) => <option key={profile.profile.id} value={profile.profile.id}>{profile.profile.name}</option>)}
-                </select>
-              </label>}
-              {selectedDraftProfile && compatibleHardware.length === 0 && (
-                <p className="field-error">{t(language, "devices.incompatibleProfile")}</p>
-              )}
-            </section>
-            {editingProfile && (
-              <section className="device-workspace" aria-label={t(language, "devices.configurationSettings")}>
-                {selectedDevice.connection === "offline" && <p className="form-hint">{t(language, "devices.offlineEditing")}</p>}
-                <div className="device-workspace-toolbar">
-                  <button className="secondary-button" type="button" aria-label={t(language, "devices.configurationSettings")} onClick={() => setSettingsOpen(true)}>{t(language, "devices.configurationSettings")}</button>
-                  <div className="device-workspace-tabs" role="tablist" aria-label={t(language, "devices.detail")}>
-                    <button type="button" role="tab" aria-selected={workspaceTab === "overview"} onClick={() => setWorkspaceTab("overview")}>{t(language, "devices.workspaceOverview")}</button>
-                    <button type="button" role="tab" aria-selected={workspaceTab === "layout"} onClick={() => setWorkspaceTab("layout")}>{t(language, "devices.workspaceLayout")}</button>
-                    <button type="button" role="tab" aria-selected={workspaceTab === "io"} onClick={() => setWorkspaceTab("io")}>{t(language, "devices.workspaceIo")}</button>
-                  </div>
-                </div>
-                {(workspaceTab === "io" || workspaceTab === "layout") && sharedDeviceCount > 1 && (
-                  <div className="shared-configuration-warning" role="status">
-                    {t(language, "devices.sharedWarning", { name: editingProfile.profile.name, count: sharedDeviceCount })}
-                    <button className="secondary-button" type="button" onClick={() => void onSaveSharedProfile?.(editingProfile)}>{t(language, "devices.saveShared")}</button>
-                    <button className="secondary-button" type="button" onClick={() => void onDuplicateProfileForDevice?.({ deviceId: selectedDevice.deviceId, sourceProfile: editingProfile, name: `${editingProfile.profile.name} (${selectedDevice.name})` })}>{t(language, "devices.duplicateForDevice")}</button>
-                  </div>
-                )}
-                {workspaceTab === "io" && <div role="tabpanel" aria-label={t(language, "devices.workspaceIo")}>
-                  <h3>{t(language, "hardware.title")}</h3>
-                  <HardwareMapping language={language} layout={editingProfile.profile} hardwareProfiles={editingProfile.hardware_profiles} boardProfiles={boardProfiles} devices={devices} learning={selectedDevice.learning} initialHardwareProfileId={assignmentDraft.hardwareProfileId || selectedDevice.runtimeAssignment?.hardware_profile_id} initialDeviceId={selectedDevice.deviceId} selectedButtonId={selectedButtonId} onSelectButton={setSelectedButtonId} onChange={(hardwareProfiles) => updateEditingProfile({ ...editingProfile, hardware_profiles: hardwareProfiles })} onSelectionChange={handleWorkspaceSelection} onBeginLearning={handleBeginLearning} onEndLearning={handleEndLearning} />
-                </div>}
-                {workspaceTab === "layout" && <div role="tabpanel" aria-label={t(language, "devices.workspaceLayout")}><LayoutEditor language={language} layout={editingProfile.profile} onChange={(layout) => updateEditingProfile({ ...editingProfile, profile: layout })} /></div>}
-              </section>
-            )}
-            {(!editingProfile || workspaceTab === "overview") && (
-              <div
-                role={editingProfile ? "tabpanel" : undefined}
-                aria-label={editingProfile ? t(language, "devices.workspaceOverview") : undefined}
-              >
-                {editingProfile && <p className="form-hint">{t(language, "devices.sharedWarning", { name: editingProfile.profile.name, count: sharedDeviceCount || 1 })}</p>}
-                <details className="device-technical-details" open>
+            <div>
+                <details className="device-technical-details">
                   <summary>{t(language, "setup.technicalDetails")}</summary>
                   <dl>
                     <TechnicalDetail
@@ -895,7 +682,6 @@ export function DeviceManagement({
                   </>
                 )}
               </div>
-            )}
             {selectedError && (
               <p className="field-error" role="alert">
                 {selectedError}
@@ -925,7 +711,6 @@ export function DeviceManagement({
           onConfirm={() => void forget()}
         />
       )}
-      {editingProfile && <ConfigurationSettingsDialog open={settingsOpen} language={language} profile={editingProfile} sharedDeviceCount={sharedDeviceCount} onCancel={() => setSettingsOpen(false)} onSave={(settings: TriggerSettings) => { updateEditingProfile({ ...editingProfile, trigger_settings: settings }); setSettingsOpen(false); void onSaveSharedProfile?.({ ...editingProfile, trigger_settings: settings }); }} onDraftChange={(settings) => updateEditingProfile({ ...editingProfile, trigger_settings: settings })} onDuplicate={async (name) => { if (selectedDevice) await onDuplicateProfileForDevice?.({ deviceId: selectedDevice.deviceId, sourceProfile: { ...editingProfile }, name }); setSettingsOpen(false); }} />}
     </div>
   );
 }

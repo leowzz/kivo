@@ -1,8 +1,8 @@
 export type Language = "zh-CN" | "en-US";
 
 const zhCN = {
-  "nav.home": "首页",
-  "nav.devices": "设备管理",
+  "nav.keyboard": "我的键盘",
+  "nav.devices": "设备",
   "nav.behavior": "按键行为",
   "nav.hardware": "硬件配置",
   "nav.layout": "按键布局",
@@ -14,6 +14,7 @@ const zhCN = {
   "nav.configuration": "配置",
   "nav.data": "配置文件",
   "nav.settings": "设置",
+  "common.back": "返回",
   "data.groupModel": "设备配置",
   "data.groupTransfer": "导入 / 导出",
   "data.groupDanger": "危险操作",
@@ -406,8 +407,8 @@ const zhCN = {
 export type MessageKey = keyof typeof zhCN;
 
 const enUS: Record<MessageKey, string> = {
-  "nav.home": "Home",
-  "nav.devices": "Device Management",
+  "nav.keyboard": "My keyboard",
+  "nav.devices": "Devices",
   "nav.behavior": "Button behavior",
   "nav.hardware": "Hardware mapping",
   "nav.layout": "Key layout",
@@ -419,6 +420,7 @@ const enUS: Record<MessageKey, string> = {
   "nav.configuration": "Configuration",
   "nav.data": "Configuration files",
   "nav.settings": "Settings",
+  "common.back": "Back",
   "data.groupModel": "Device model",
   "data.groupTransfer": "Import & export",
   "data.groupDanger": "Danger zone",
