@@ -30,14 +30,24 @@ const boards = [
 const profiles: DeviceProfile[] = [
   {
     schema_version: 3,
-    profile: { id: "rp-profile", name: "RP Profile", groups: [] },
+    profile: {
+      id: "rp-profile",
+      name: "RP Profile",
+      groups: [
+        {
+          id: "main",
+          columns: 1,
+          buttons: [{ id: "rp-key", label: "RP Key" }],
+        },
+      ],
+    },
     hardware_profiles: [
       {
         id: "rp-hardware",
         name: "RP Hardware",
         board_profile_id: "rp",
         debounce_ms: 30,
-        inputs: [],
+        inputs: [{ type: "direct", id: "buttons", keys: { "rp-key": 0 } }],
       },
     ],
     trigger_settings: { long_press_ms: 500, double_press_ms: 300 },
@@ -119,6 +129,7 @@ function renderWizard(overrides: Partial<DeviceSetupWizardProps> = {}) {
     candidates: [],
     boardProfiles: boards,
     deviceProfiles: profiles,
+    inputEvent: null,
     onTargetChange: vi.fn(),
     onRetryCandidate: vi.fn().mockResolvedValue(undefined),
     onCreateProfile: vi.fn().mockResolvedValue(snapshot()),
@@ -168,7 +179,7 @@ test("keeps the wizard open and advances when a Candidate becomes the same Devic
     />,
   );
 
-  expect(screen.getByRole("heading", { name: "选择键盘配置" })).toBeInTheDocument();
+  expect(screen.getByText("第 1 步，共 3 步")).toBeInTheDocument();
   expect(screen.getByText("RP2040 Pad")).toBeInTheDocument();
 });
 
@@ -192,7 +203,10 @@ test("firmware failure can enter independent profile creation", async () => {
 
   await user.click(screen.getByRole("button", { name: "先新建配置" }));
   await user.click(screen.getByRole("radio", { name: "空白配置" }));
-  await user.type(screen.getByRole("textbox", { name: "配置名称" }), "RP 离线配置");
+  await user.type(
+    screen.getByRole("textbox", { name: "配置名称" }),
+    "RP 离线配置",
+  );
   await user.click(screen.getByRole("button", { name: "创建配置" }));
   expect(onCreateProfile).toHaveBeenCalledWith({
     kind: "blank",
@@ -223,6 +237,7 @@ test("selects among multiple setup targets explicitly", async () => {
         candidates={candidates}
         boardProfiles={boards}
         deviceProfiles={profiles}
+        inputEvent={null}
         onTargetChange={setTargetId}
         onRetryCandidate={vi.fn().mockResolvedValue(undefined)}
         onCreateProfile={vi.fn().mockResolvedValue(snapshot(candidates))}
@@ -249,72 +264,101 @@ test("uses a friendly target label when a Candidate has no serial", () => {
   expect(within(target).queryByText(/\/dev\/cu\./)).toBeNull();
 });
 
-test("lists only exact-board profiles and completes one exact Device", async () => {
+test("recognizes an unassigned keyboard and recommends only compatible presets", async () => {
+  const user = userEvent.setup();
+  renderWizard({
+    targetId: "rp-device-id",
+    devices: [unassignedDevice()],
+  });
+
+  expect(screen.getByText("第 1 步，共 3 步")).toBeInTheDocument();
+  expect(screen.getByText("RP2040 Pad · 4E811C")).toBeInTheDocument();
+  expect(screen.getByText("RP Profile")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "继续设置" }));
+  expect(screen.getByText("第 2 步，共 3 步")).toBeInTheDocument();
+  expect(
+    screen.getByRole("option", { name: "RP Profile" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: "ESP Profile" })).toBeNull();
+  await user.click(screen.getByRole("button", { name: "下一步" }));
+  expect(screen.getByText("第 3 步，共 3 步")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /RP Key/ })).toBeInTheDocument();
+});
+
+test("shows setup input on the selected layout and completes with its exact assignment", async () => {
   const user = userEvent.setup();
   const onComplete = vi.fn().mockResolvedValue(undefined);
-  renderWizard({
-    targetId: "rp-device-id",
+  const { rerender, props } = renderWizard({
     devices: [unassignedDevice()],
     onComplete,
   });
-
-  expect(screen.getByRole("option", { name: "RP Profile" })).toBeInTheDocument();
-  expect(screen.queryByRole("option", { name: "ESP Profile" })).toBeNull();
-  await user.selectOptions(
-    screen.getByRole("combobox", { name: "键盘配置" }),
-    "rp-profile",
+  await user.click(screen.getByRole("button", { name: "继续设置" }));
+  await user.click(screen.getByRole("button", { name: "下一步" }));
+  rerender(
+    <DeviceSetupWizard
+      {...props}
+      devices={[unassignedDevice()]}
+      inputEvent={{
+        timestampMs: 1,
+        deviceId: "rp-device-id",
+        input: { type: "direct", gpio: 0 },
+        pressed: true,
+      }}
+    />,
   );
-  expect(screen.queryByRole("combobox", { name: "硬件配置" })).toBeNull();
-  await user.click(screen.getByRole("button", { name: "下一步" }));
-  await user.clear(screen.getByRole("textbox", { name: "键盘名称" }));
-  await user.type(screen.getByRole("textbox", { name: "键盘名称" }), "桌面 RP2040");
+  expect(screen.getByRole("button", { name: /RP Key/ })).toHaveClass(
+    "is-pressed",
+  );
+  rerender(
+    <DeviceSetupWizard
+      {...props}
+      devices={[unassignedDevice()]}
+      inputEvent={{
+        timestampMs: 2,
+        deviceId: "rp-device-id",
+        input: { type: "direct", gpio: 0 },
+        pressed: false,
+      }}
+    />,
+  );
+  expect(screen.getByRole("button", { name: /RP Key/ })).not.toHaveClass(
+    "is-pressed",
+  );
   await user.click(screen.getByRole("button", { name: "完成设置" }));
-
-  expect(onComplete).toHaveBeenCalledTimes(1);
-  expect(onComplete).toHaveBeenCalledWith("rp-device-id", "桌面 RP2040", {
-    device_profile_id: "rp-profile",
-    hardware_profile_id: "rp-hardware",
-  });
+  expect(onComplete).toHaveBeenCalledWith(
+    "rp-device-id",
+    "RP2040 Pad · 4E811C",
+    {
+      device_profile_id: "rp-profile",
+      hardware_profile_id: "rp-hardware",
+    },
+  );
 });
 
-test("preserves confirmation fields after setup failure", async () => {
-  const user = userEvent.setup();
-  const onComplete = vi.fn().mockRejectedValue(new Error("device_offline"));
-  renderWizard({
-    targetId: "rp-device-id",
-    devices: [unassignedDevice()],
-    onComplete,
-  });
-  await user.click(screen.getByRole("button", { name: "下一步" }));
-  await user.clear(screen.getByRole("textbox", { name: "键盘名称" }));
-  await user.type(screen.getByRole("textbox", { name: "键盘名称" }), "保留名称");
-  await user.click(screen.getByRole("button", { name: "完成设置" }));
-
-  expect(await screen.findByRole("alert")).toHaveTextContent("device_offline");
-  expect(screen.getByRole("textbox", { name: "键盘名称" })).toHaveValue("保留名称");
-});
-
-test("preserves confirmation fields when the same Device reconnects", async () => {
+test("skips the key test and resumes it after the same device reconnects", async () => {
   const user = userEvent.setup();
   const connected = unassignedDevice();
-  const { rerender, props } = renderWizard({ devices: [connected] });
+  const onComplete = vi.fn().mockResolvedValue(undefined);
+  const { rerender, props } = renderWizard({
+    devices: [connected],
+    onComplete,
+  });
+  await user.click(screen.getByRole("button", { name: "继续设置" }));
   await user.click(screen.getByRole("button", { name: "下一步" }));
-  await user.clear(screen.getByRole("textbox", { name: "键盘名称" }));
-  await user.type(
-    screen.getByRole("textbox", { name: "键盘名称" }),
-    "重连后保留",
-  );
-
   rerender(<DeviceSetupWizard {...props} devices={[]} />);
   expect(
     screen.getByRole("heading", { name: /键盘已断开/ }),
   ).toBeInTheDocument();
 
   rerender(<DeviceSetupWizard {...props} devices={[connected]} />);
-  expect(
-    screen.getByRole("heading", { name: "确认键盘设置" }),
-  ).toBeInTheDocument();
-  expect(screen.getByRole("textbox", { name: "键盘名称" })).toHaveValue(
-    "重连后保留",
+  expect(screen.getByText("第 3 步，共 3 步")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "跳过测试" }));
+  expect(onComplete).toHaveBeenCalledWith(
+    "rp-device-id",
+    "RP2040 Pad · 4E811C",
+    {
+      device_profile_id: "rp-profile",
+      hardware_profile_id: "rp-hardware",
+    },
   );
 });

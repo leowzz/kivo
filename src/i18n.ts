@@ -33,7 +33,8 @@ const zhCN = {
   "device.offline": "离线",
   "workspace.connectTitle": "连接你的键盘",
   "workspace.connectBody": "连接键盘后，Kivo 会自动检测并显示可配置的按键。",
-  "workspace.connectCandidate": "发现待处理的键盘。完成设置后即可开始配置按键。",
+  "workspace.connectCandidate":
+    "发现待处理的键盘。完成设置后即可开始配置按键。",
   "workspace.setupTitle": "完成键盘设置",
   "workspace.setupBody": "为这台键盘选择设备配置后，即可开始配置按键。",
   "workspace.repairTitle": "修复键盘设置",
@@ -80,7 +81,8 @@ const zhCN = {
   "devices.workspaceIo": "I/O 映射",
   "devices.workspaceLayout": "按键布局",
   "devices.useConfiguration": "使用配置",
-  "devices.sharedWarning": "{name} 正被 {count} 个设备使用。修改会影响这些设备。",
+  "devices.sharedWarning":
+    "{name} 正被 {count} 个设备使用。修改会影响这些设备。",
   "sharedEdit.title": "选择修改范围",
   "sharedEdit.body": "“{device}”正在使用“{profile}”。",
   "sharedEdit.warning": "修改会影响使用此设置的其他键盘",
@@ -251,7 +253,8 @@ const zhCN = {
   "hardware.duplicateProfile": "复制硬件配置",
   "hardware.renameProfile": "重命名硬件配置",
   "hardware.deleteProfile": "删除硬件配置",
-  "hardware.deleteProfileBody": "将删除硬件配置 {name}。设备的运行分配不会自动修复。",
+  "hardware.deleteProfileBody":
+    "将删除硬件配置 {name}。设备的运行分配不会自动修复。",
   "hardware.profileName": "硬件配置名称",
   "hardware.copySuffix": "副本",
   "hardware.boardProfile": "板型",
@@ -307,6 +310,13 @@ const zhCN = {
   "setup.waiting": "等待连接键盘",
   "setup.addKeyboard": "添加键盘",
   "setup.continue": "继续设置",
+  "setup.step": "第 {current} 步，共 {total} 步",
+  "setup.recognizedTitle": "已识别键盘",
+  "setup.recommendedProfile": "推荐配置",
+  "setup.noCompatibleProfile": "暂无兼容配置",
+  "setup.testTitle": "测试实体按键",
+  "setup.testBody": "按下键盘上的按键，确认对应按键高亮。",
+  "setup.skipTest": "跳过测试",
   "setup.retry": "重新检测",
   "setup.createFirst": "先新建配置",
   "setup.later": "稍后处理",
@@ -397,7 +407,8 @@ const enUS: Record<MessageKey, string> = {
   "data.groupModel": "Device model",
   "data.groupTransfer": "Import & export",
   "data.groupDanger": "Danger zone",
-  "data.subtitle": "Reusable configuration sets for assignment, sync, import, export, and sharing.",
+  "data.subtitle":
+    "Reusable configuration sets for assignment, sync, import, export, and sharing.",
   "data.profileList": "Configuration file list",
   "data.usedBy": "Used by {count} devices",
   "data.editorBadge": "Current editor",
@@ -413,15 +424,20 @@ const enUS: Record<MessageKey, string> = {
   "device.attention": "Needs Attention",
   "device.offline": "Offline",
   "workspace.connectTitle": "Connect your keyboard",
-  "workspace.connectBody": "Connect a keyboard and Kivo will detect it automatically so you can configure its keys.",
-  "workspace.connectCandidate": "A keyboard needs attention. Complete setup to start configuring its keys.",
+  "workspace.connectBody":
+    "Connect a keyboard and Kivo will detect it automatically so you can configure its keys.",
+  "workspace.connectCandidate":
+    "A keyboard needs attention. Complete setup to start configuring its keys.",
   "workspace.setupTitle": "Complete keyboard setup",
-  "workspace.setupBody": "Choose a device configuration for this keyboard to start configuring its keys.",
+  "workspace.setupBody":
+    "Choose a device configuration for this keyboard to start configuring its keys.",
   "workspace.repairTitle": "Repair keyboard setup",
-  "workspace.repairBody": "This keyboard's device configuration is unavailable. Repair setup to continue editing.",
+  "workspace.repairBody":
+    "This keyboard's device configuration is unavailable. Repair setup to continue editing.",
   "workspace.repair": "Repair setup",
   "workspace.disconnected": "Disconnected",
-  "workspace.offlineEditing": "Disconnected. You can keep editing; changes take effect after reconnecting.",
+  "workspace.offlineEditing":
+    "Disconnected. You can keep editing; changes take effect after reconnecting.",
   "workspace.unconfigured": "Unconfigured",
   "device.runtimeAssignment": "Runtime Assignment",
   "device.boardProfile": "Board Profile",
@@ -456,21 +472,25 @@ const enUS: Record<MessageKey, string> = {
   "devices.confirmRename": "Confirm rename",
   "devices.forget": "Forget device",
   "devices.forgetBody": "Forget offline device {name}.",
-  "devices.incompatibleProfile": "This configuration is not compatible with this device",
+  "devices.incompatibleProfile":
+    "This configuration is not compatible with this device",
   "devices.workspaceOverview": "Overview",
   "devices.workspaceIo": "I/O Mapping",
   "devices.workspaceLayout": "Key Layout",
   "devices.useConfiguration": "Use configuration",
-  "devices.sharedWarning": "{name} is used by {count} devices. Changes affect all of them.",
+  "devices.sharedWarning":
+    "{name} is used by {count} devices. Changes affect all of them.",
   "sharedEdit.title": "Choose edit scope",
   "sharedEdit.body": "{device} is using {profile}.",
-  "sharedEdit.warning": "Changes affect other keyboards using this configuration",
+  "sharedEdit.warning":
+    "Changes affect other keyboards using this configuration",
   "sharedEdit.device": "Only this keyboard",
   "sharedEdit.shared": "Update {count} keyboards",
   "devices.saveShared": "Save shared configuration",
   "devices.duplicateForDevice": "Duplicate and use only for this device",
   "devices.configurationSettings": "Configuration settings",
-  "devices.offlineEditing": "Device is offline. Configuration remains editable; live controls are unavailable.",
+  "devices.offlineEditing":
+    "Device is offline. Configuration remains editable; live controls are unavailable.",
   "devices.status.identityConflict": "Identity conflict",
   "devices.status.identityInvalid": "Invalid identity",
   "devices.status.assignmentInvalid": "Assignment needs repair",
@@ -632,7 +652,8 @@ const enUS: Record<MessageKey, string> = {
   "hardware.duplicateProfile": "Duplicate hardware profile",
   "hardware.renameProfile": "Rename hardware profile",
   "hardware.deleteProfile": "Delete hardware profile",
-  "hardware.deleteProfileBody": "Delete hardware profile {name}. Device runtime assignments will not be repaired automatically.",
+  "hardware.deleteProfileBody":
+    "Delete hardware profile {name}. Device runtime assignments will not be repaired automatically.",
   "hardware.profileName": "Hardware profile name",
   "hardware.copySuffix": "copy",
   "hardware.boardProfile": "Board Profile",
@@ -644,7 +665,8 @@ const enUS: Record<MessageKey, string> = {
   "hardware.oledFormat": "128x32 / 0x3C",
   "hardware.oledSda": "OLED SDA",
   "hardware.oledScl": "OLED SCL",
-  "hardware.oledUnsupported": "This Board Profile does not support SSD1306 OLED",
+  "hardware.oledUnsupported":
+    "This Board Profile does not support SSD1306 OLED",
   "hardware.direct": "Direct GPIO",
   "hardware.matrix": "Contact matrix",
   "hardware.advanced": "Adapt new device",
@@ -689,6 +711,14 @@ const enUS: Record<MessageKey, string> = {
   "setup.waiting": "Waiting for a keyboard",
   "setup.addKeyboard": "Add keyboard",
   "setup.continue": "Continue setup",
+  "setup.step": "Step {current} of {total}",
+  "setup.recognizedTitle": "Keyboard recognized",
+  "setup.recommendedProfile": "Recommended profile",
+  "setup.noCompatibleProfile": "No compatible profile",
+  "setup.testTitle": "Test physical keys",
+  "setup.testBody":
+    "Press a physical key to confirm the matching key highlights.",
+  "setup.skipTest": "Skip test",
   "setup.retry": "Check again",
   "setup.createFirst": "Create a profile first",
   "setup.later": "Handle later",
@@ -706,19 +736,16 @@ const enUS: Record<MessageKey, string> = {
   "candidate.validating.title": "Confirming device",
   "candidate.validating.body":
     "Kivo is validating the keyboard identity and firmware protocol.",
-  "candidate.firmware_not_responding.title":
-    "Kivo firmware is not responding",
+  "candidate.firmware_not_responding.title": "Kivo firmware is not responding",
   "candidate.firmware_not_responding.body":
     "The device may not have matching Kivo firmware, or its protocol version may be incompatible. Repair firmware outside Kivo and keep USB connected so Kivo can detect it again.",
-  "candidate.firmware_incompatible.title":
-    "Firmware is incompatible with Kivo",
+  "candidate.firmware_incompatible.title": "Firmware is incompatible with Kivo",
   "candidate.firmware_incompatible.body":
     "The device responded, but its protocol, controller, Board Profile, or capabilities do not match. Repair firmware outside Kivo, then check again.",
   "candidate.bootloader.title": "Device is in bootloader mode",
   "candidate.bootloader.body":
     "Bootloader mode cannot be used as a keyboard. Handle firmware outside Kivo, then reconnect the device.",
-  "candidate.port_unavailable.title":
-    "System communication port unavailable",
+  "candidate.port_unavailable.title": "System communication port unavailable",
   "candidate.port_unavailable.body":
     "The communication port cannot be opened or is busy in another application. Close the other application, then check again.",
   "candidate.invalid_identity.title": "Invalid device identity",

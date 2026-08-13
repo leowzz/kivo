@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CreateDeviceProfileForm } from "./CreateDeviceProfileForm";
 import { candidateDisplayLabel, serialSuffix } from "./deviceStatus";
 import { t, type MessageKey } from "./i18n";
+import { resolveButton } from "./inputMapping";
+import { Keypad } from "./Keypad";
 import type {
   AppSnapshot,
   BoardProfileSummary,
@@ -13,7 +15,15 @@ import type {
   DeviceStatus,
   Language,
   RuntimeAssignment,
+  PhysicalInput,
 } from "./types";
+
+export interface SetupInputEvent {
+  timestampMs: number;
+  deviceId: string;
+  input: PhysicalInput;
+  pressed: boolean;
+}
 
 export interface DeviceSetupWizardProps {
   open: boolean;
@@ -23,6 +33,7 @@ export interface DeviceSetupWizardProps {
   candidates: CandidateStatus[];
   boardProfiles: BoardProfileSummary[];
   deviceProfiles: DeviceProfile[];
+  inputEvent: SetupInputEvent | null;
   onTargetChange(targetId: string): void;
   onRetryCandidate(deviceId: string): Promise<void>;
   onCreateProfile(request: CreateDeviceProfileRequest): Promise<AppSnapshot>;
@@ -33,6 +44,8 @@ export interface DeviceSetupWizardProps {
   ): Promise<void>;
   onClose(): void;
 }
+
+type SetupStep = "recognized" | "preset" | "test";
 
 const issueMessages: Record<
   CandidateIssue,
@@ -113,6 +126,7 @@ export function DeviceSetupWizard({
   candidates,
   boardProfiles,
   deviceProfiles,
+  inputEvent,
   onTargetChange,
   onRetryCandidate,
   onCreateProfile,
@@ -120,18 +134,19 @@ export function DeviceSetupWizard({
   onClose,
 }: DeviceSetupWizardProps) {
   const [creatingProfile, setCreatingProfile] = useState(false);
-  const [confirming, setConfirming] = useState(false);
+  const [step, setStep] = useState<SetupStep>("recognized");
+  const [testPressedButtonIds, setTestPressedButtonIds] = useState<Set<string>>(
+    new Set(),
+  );
   const [deviceProfileId, setDeviceProfileId] = useState("");
   const [hardwareProfileId, setHardwareProfileId] = useState("");
-  const [name, setName] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const initializedDeviceId = useRef<string | null>(null);
   const eligibleDevices = useMemo(() => setupDevices(devices), [devices]);
   const selectedCandidate =
-    candidates.find(
-      (candidate) => candidateTargetId(candidate) === targetId,
-    ) ?? null;
+    candidates.find((candidate) => candidateTargetId(candidate) === targetId) ??
+    null;
   const selectedDevice =
     eligibleDevices.find((device) => device.deviceId === targetId) ?? null;
   const targets = useMemo(() => {
@@ -155,10 +170,12 @@ export function DeviceSetupWizard({
     [deviceProfiles, selectedDevice],
   );
   const selectedProfile =
-    compatible.find((profile) => profile.profile.id === deviceProfileId) ?? null;
+    compatible.find((profile) => profile.profile.id === deviceProfileId) ??
+    null;
   const compatibleHardware =
     selectedProfile?.hardware_profiles.filter(
-      (hardware) => hardware.board_profile_id === selectedDevice?.boardProfileId,
+      (hardware) =>
+        hardware.board_profile_id === selectedDevice?.boardProfileId,
     ) ?? [];
   const boardName = (boardProfileId: string) =>
     boardProfiles.find((board) => board.id === boardProfileId)?.displayName ??
@@ -173,13 +190,39 @@ export function DeviceSetupWizard({
       firstProfile?.hardware_profiles.filter(
         (item) => item.board_profile_id === selectedDevice.boardProfileId,
       ) ?? [];
-    setName(selectedDevice.name);
     setDeviceProfileId(firstProfile?.profile.id ?? "");
     setHardwareProfileId(hardware[0]?.id ?? "");
     setCreatingProfile(false);
-    setConfirming(false);
+    setStep("recognized");
+    setTestPressedButtonIds(new Set());
     setError(null);
   }, [selectedDevice?.deviceId]);
+
+  useEffect(() => {
+    if (
+      !inputEvent ||
+      step !== "test" ||
+      inputEvent.deviceId !== selectedDevice?.deviceId
+    )
+      return;
+    const hardware = compatibleHardware.find(
+      (item) => item.id === hardwareProfileId,
+    );
+    const buttonId = resolveButton(hardware, inputEvent.input);
+    if (!buttonId) return;
+    setTestPressedButtonIds((current) => {
+      const next = new Set(current);
+      if (inputEvent.pressed) next.add(buttonId);
+      else next.delete(buttonId);
+      return next;
+    });
+  }, [
+    compatibleHardware,
+    hardwareProfileId,
+    inputEvent,
+    selectedDevice?.deviceId,
+    step,
+  ]);
 
   if (!open) return null;
 
@@ -213,6 +256,7 @@ export function DeviceSetupWizard({
         setHardwareProfileId(hardware[0]?.id ?? "");
       }
       setCreatingProfile(false);
+      setStep("preset");
     } catch (operationError) {
       setError(errorMessage(operationError));
     } finally {
@@ -221,19 +265,13 @@ export function DeviceSetupWizard({
   }
 
   async function complete() {
-    if (
-      !selectedDevice ||
-      !deviceProfileId ||
-      !hardwareProfileId ||
-      !name.trim() ||
-      pending
-    ) {
+    if (!selectedDevice || !deviceProfileId || !hardwareProfileId || pending) {
       return;
     }
     setPending(true);
     setError(null);
     try {
-      await onComplete(selectedDevice.deviceId, name.trim(), {
+      await onComplete(selectedDevice.deviceId, selectedDevice.name, {
         device_profile_id: deviceProfileId,
         hardware_profile_id: hardwareProfileId,
       });
@@ -283,7 +321,8 @@ export function DeviceSetupWizard({
               boardProfiles={boardProfiles}
               deviceProfiles={deviceProfiles}
               fixedBoardProfileId={
-                selectedCandidate?.boardProfileId ?? selectedDevice?.boardProfileId
+                selectedCandidate?.boardProfileId ??
+                selectedDevice?.boardProfileId
               }
               onCreate={createProfile}
               onCancel={() => setCreatingProfile(false)}
@@ -310,7 +349,9 @@ export function DeviceSetupWizard({
             </section>
           ) : selectedCandidate ? (
             <section className="candidate-setup">
-              <h3>{t(language, issueMessages[selectedCandidate.issue].title)}</h3>
+              <h3>
+                {t(language, issueMessages[selectedCandidate.issue].title)}
+              </h3>
               <p>{t(language, issueMessages[selectedCandidate.issue].body)}</p>
               <div className="candidate-actions">
                 {canRetry ? (
@@ -358,46 +399,41 @@ export function DeviceSetupWizard({
             <section className="setup-empty">
               <h3>{t(language, "setup.disconnected")}</h3>
             </section>
-          ) : confirming ? (
-            <section className="setup-confirmation">
-              <h3>{t(language, "setup.confirmTitle")}</h3>
-              <label>
-                <span>{t(language, "setup.keyboardName")}</span>
-                <input
-                  aria-label={t(language, "setup.keyboardName")}
-                  value={name}
-                  disabled={pending}
-                  onChange={(event) => setName(event.target.value)}
-                />
-              </label>
+          ) : step === "recognized" ? (
+            <section className="setup-recognized">
+              <p className="setup-step">
+                {t(language, "setup.step", { current: 1, total: 3 })}
+              </p>
+              <h3>{t(language, "setup.recognizedTitle")}</h3>
               <dl>
+                <dt>{t(language, "devices.name")}</dt>
+                <dd>{selectedDevice.name}</dd>
                 <dt>{t(language, "devices.board")}</dt>
                 <dd>{boardName(selectedDevice.boardProfileId)}</dd>
                 <dt>{t(language, "devices.serial")}</dt>
                 <dd>{serialSuffix(selectedDevice.hardwareSerial)}</dd>
-                <dt>{t(language, "setup.deviceProfile")}</dt>
-                <dd>{selectedProfile?.profile.name ?? deviceProfileId}</dd>
+                <dt>{t(language, "setup.recommendedProfile")}</dt>
+                <dd>
+                  {compatible[0]?.profile.name ??
+                    t(language, "setup.noCompatibleProfile")}
+                </dd>
               </dl>
               <div className="device-setup-actions">
                 <button
-                  type="button"
-                  disabled={pending}
-                  onClick={() => setConfirming(false)}
-                >
-                  {t(language, "setup.back")}
-                </button>
-                <button
                   className="primary-button"
                   type="button"
-                  disabled={pending || !name.trim()}
-                  onClick={() => void complete()}
+                  disabled={pending}
+                  onClick={() => setStep("preset")}
                 >
-                  {t(language, "setup.complete")}
+                  {t(language, "setup.continue")}
                 </button>
               </div>
             </section>
-          ) : (
+          ) : step === "preset" ? (
             <section className="setup-profile-choice">
+              <p className="setup-step">
+                {t(language, "setup.step", { current: 2, total: 3 })}
+              </p>
               <h3>{t(language, "setup.selectProfile")}</h3>
               <p>{boardName(selectedDevice.boardProfileId)}</p>
               <label>
@@ -414,7 +450,8 @@ export function DeviceSetupWizard({
                     const hardware =
                       next?.hardware_profiles.filter(
                         (item) =>
-                          item.board_profile_id === selectedDevice.boardProfileId,
+                          item.board_profile_id ===
+                          selectedDevice.boardProfileId,
                       ) ?? [];
                     setDeviceProfileId(nextId);
                     setHardwareProfileId(hardware[0]?.id ?? "");
@@ -439,9 +476,45 @@ export function DeviceSetupWizard({
                   className="primary-button"
                   type="button"
                   disabled={!deviceProfileId || !hardwareProfileId || pending}
-                  onClick={() => setConfirming(true)}
+                  onClick={() => setStep("test")}
                 >
                   {t(language, "setup.next")}
+                </button>
+              </div>
+            </section>
+          ) : (
+            <section className="setup-test">
+              <p className="setup-step">
+                {t(language, "setup.step", { current: 3, total: 3 })}
+              </p>
+              <h3>{t(language, "setup.testTitle")}</h3>
+              <p>{t(language, "setup.testBody")}</p>
+              {selectedProfile ? (
+                <Keypad
+                  layout={selectedProfile.profile}
+                  actions={selectedProfile.actions}
+                  selectedButtonId={null}
+                  pressedButtonIds={testPressedButtonIds}
+                  actionCountLabel={() => ""}
+                  unconfiguredLabel=""
+                  onSelect={() => undefined}
+                />
+              ) : null}
+              <div className="device-setup-actions">
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => void complete()}
+                >
+                  {t(language, "setup.skipTest")}
+                </button>
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={pending}
+                  onClick={() => void complete()}
+                >
+                  {t(language, "setup.complete")}
                 </button>
               </div>
             </section>
