@@ -236,7 +236,7 @@ export default function App() {
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(() =>
     localStorage.getItem("kivo:selected-device-id"),
   );
-  const [managedCandidateSelected, setManagedCandidateSelected] = useState(false);
+  const [selectedManagedCandidateKey, setSelectedManagedCandidateKey] = useState<string | null>(null);
   const [hardwareEditorTarget, setHardwareEditorTarget] = useState<HardwareEditorTarget | null>(null);
   const [capturedDraftProfileIds, setCapturedDraftProfileIds] = useState<Set<string>>(() => new Set());
   const [pendingSharedDraftProfileIds, setPendingSharedDraftProfileIds] = useState<Set<string>>(() => new Set());
@@ -298,14 +298,13 @@ export default function App() {
 
   const selectPhysicalDevice = useCallback((deviceId: string) => {
     if (!devices.some((device) => device.deviceId === deviceId)) return;
-    setManagedCandidateSelected(false);
+    setSelectedManagedCandidateKey(null);
     setSelectedDeviceId(deviceId);
     localStorage.setItem("kivo:selected-device-id", deviceId);
   }, [devices]);
 
   const selectManagedDevice = useCallback((deviceId: string | null) => {
     if (deviceId) selectPhysicalDevice(deviceId);
-    else setManagedCandidateSelected(true);
   }, [selectPhysicalDevice]);
 
   useEffect(() => {
@@ -1175,8 +1174,10 @@ export default function App() {
               onMetricsChange={handleManagedMetricsChange}
               onOpenSetup={openSetup}
               onRetryCandidate={retrySetupCandidate}
-              selectedDeviceId={managedCandidateSelected ? null : selectedDeviceIdValue}
+              selectedDeviceId={selectedManagedCandidateKey ? null : selectedDeviceIdValue}
+              selectedCandidateKey={selectedManagedCandidateKey}
               onSelectedDeviceChange={selectManagedDevice}
+              onSelectedCandidateChange={setSelectedManagedCandidateKey}
               onChangeProfile={changeManagedProfile}
               onSaveSharedProfile={saveManagedSharedProfile}
               onDuplicateProfileForDevice={duplicateManagedProfileForDevice}

@@ -600,6 +600,9 @@ test("keeps a Device Management candidate detail selected without changing physi
   await user.click(screen.getByRole("button", { name: /001/ }));
 
   expect(screen.getByRole("heading", { name: "诊断信息" })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "首页" }));
+  await user.click(screen.getByRole("button", { name: "设备管理" }));
+  expect(screen.getByRole("heading", { name: "诊断信息" })).toBeInTheDocument();
   expect(keyboard).toHaveValue("device-front-desk");
   expect(localStorage.getItem("kivo:selected-device-id")).toBeNull();
   const invokedCommands = () => vi.mocked(invoke).mock.calls.map(([command]) => command);

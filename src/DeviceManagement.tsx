@@ -94,7 +94,9 @@ interface DeviceManagementProps {
   onOpenSetup(targetId: string | null): void;
   onRetryCandidate(deviceId: string): void | Promise<void>;
   selectedDeviceId?: string | null;
+  selectedCandidateKey?: string | null;
   onSelectedDeviceChange?(deviceId: string | null): void;
+  onSelectedCandidateChange?(candidateKey: string | null): void;
   onChangeProfile?(profile: DeviceProfile): void;
   onSaveSharedProfile?(profile: DeviceProfile): void | Promise<void>;
   onDuplicateProfileForDevice?(request: { deviceId: string; sourceProfile: DeviceProfile; name: string }): Promise<void>;
@@ -170,7 +172,9 @@ export function DeviceManagement({
   onOpenSetup,
   onRetryCandidate,
   selectedDeviceId: controlledDeviceId,
+  selectedCandidateKey,
   onSelectedDeviceChange,
+  onSelectedCandidateChange,
   onChangeProfile,
   onSaveSharedProfile,
   onDuplicateProfileForDevice,
@@ -254,7 +258,9 @@ export function DeviceManagement({
   );
   const requestedSelection: Selection | null = controlledDeviceId
     ? { kind: "device", id: controlledDeviceId }
-    : selection;
+    : selectedCandidateKey
+      ? { kind: "candidate", id: selectedCandidateKey }
+      : selection;
   const requestedExists =
     requestedSelection &&
     rows.some(
@@ -286,16 +292,15 @@ export function DeviceManagement({
     activeSelection?.kind === "device"
       ? (devices.find((device) => device.deviceId === activeSelection.id) ?? null)
       : null;
-  const activeDeviceId =
-    activeSelection?.kind === "device" ? activeSelection.id : null;
   useEffect(() => {
-    if (activeDeviceId !== (controlledDeviceId ?? null)) {
-      onSelectedDeviceChange?.(activeDeviceId);
+    if (selectedCandidateKey && !candidates.some(({ key }) => key === selectedCandidateKey)) {
+      onSelectedCandidateChange?.(null);
     }
-  }, [activeDeviceId, controlledDeviceId, onSelectedDeviceChange]);
+  }, [candidates, onSelectedCandidateChange, selectedCandidateKey]);
   const selectRow = (next: Selection) => {
     setSelection(next);
     onSelectedDeviceChange?.(next.kind === "device" ? next.id : null);
+    onSelectedCandidateChange?.(next.kind === "candidate" ? next.id : null);
   };
   const selectedCandidate =
     activeSelection?.kind === "candidate"

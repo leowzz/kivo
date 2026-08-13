@@ -251,13 +251,29 @@ test("applies a controlled non-first device before publishing selection", () => 
 test("publishes explicit device and candidate row selections", async () => {
   const user = userEvent.setup();
   const onSelectedDeviceChange = vi.fn();
-  renderManagement({ onSelectedDeviceChange });
+  const onSelectedCandidateChange = vi.fn();
+  renderManagement({ onSelectedDeviceChange, onSelectedCandidateChange });
 
   await user.click(screen.getByRole("button", { name: /RP2040 B/ }));
   expect(onSelectedDeviceChange).toHaveBeenLastCalledWith("rp-b");
 
   await user.click(screen.getByRole("button", { name: /AD-001/ }));
   expect(onSelectedDeviceChange).toHaveBeenLastCalledWith(null);
+  expect(onSelectedCandidateChange).toHaveBeenLastCalledWith("candidate:esp32-pad:bad-serial:/dev/cu.bad");
+});
+
+test("does not publish an automatic physical fallback for a missing controlled candidate", () => {
+  const onSelectedDeviceChange = vi.fn();
+  const onSelectedCandidateChange = vi.fn();
+  renderManagement({
+    selectedCandidateKey: "candidate:missing",
+    onSelectedDeviceChange,
+    onSelectedCandidateChange,
+  });
+
+  expect(screen.getByRole("button", { name: /RP2040 A/ })).toHaveAttribute("aria-pressed", "true");
+  expect(onSelectedDeviceChange).not.toHaveBeenCalled();
+  expect(onSelectedCandidateChange).toHaveBeenCalledWith(null);
 });
 
 test("moves candidate selection to the nearest remaining row when its observation disappears", () => {
