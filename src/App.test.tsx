@@ -584,6 +584,30 @@ test("switches physical keyboard context without persisting settings or assignme
   expect(invokedCommands()).not.toContain("clear_runtime_assignment");
 });
 
+test("keeps a Device Management candidate detail selected without changing physical keyboard context", async () => {
+  currentSnapshot.candidates = [rpCandidate({
+    issue: "firmware_not_responding",
+    rawSerial: "CANDIDATE-001",
+  })];
+  currentSnapshot.boardProfiles.push(rpBoard);
+  const user = userEvent.setup();
+  render(<App />);
+
+  const keyboard = await screen.findByRole("combobox", { name: "当前键盘" });
+  expect(keyboard).toHaveValue("device-front-desk");
+  expect(localStorage.getItem("kivo:selected-device-id")).toBeNull();
+  await user.click(screen.getByRole("button", { name: "设备管理" }));
+  await user.click(screen.getByRole("button", { name: /001/ }));
+
+  expect(screen.getByRole("heading", { name: "诊断信息" })).toBeInTheDocument();
+  expect(keyboard).toHaveValue("device-front-desk");
+  expect(localStorage.getItem("kivo:selected-device-id")).toBeNull();
+  const invokedCommands = () => vi.mocked(invoke).mock.calls.map(([command]) => command);
+  expect(invokedCommands()).not.toContain("save_settings");
+  expect(invokedCommands()).not.toContain("save_runtime_assignment");
+  expect(invokedCommands()).not.toContain("clear_runtime_assignment");
+});
+
 test("uses the authoritative profile-save snapshot for the device status transition", async () => {
   currentSnapshot.devices[0].runtime = "configuring";
   vi.mocked(invoke).mockImplementation(async (command, args) => {

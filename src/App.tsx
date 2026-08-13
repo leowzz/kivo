@@ -236,6 +236,7 @@ export default function App() {
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(() =>
     localStorage.getItem("kivo:selected-device-id"),
   );
+  const [managedCandidateSelected, setManagedCandidateSelected] = useState(false);
   const [hardwareEditorTarget, setHardwareEditorTarget] = useState<HardwareEditorTarget | null>(null);
   const [capturedDraftProfileIds, setCapturedDraftProfileIds] = useState<Set<string>>(() => new Set());
   const [pendingSharedDraftProfileIds, setPendingSharedDraftProfileIds] = useState<Set<string>>(() => new Set());
@@ -297,13 +298,14 @@ export default function App() {
 
   const selectPhysicalDevice = useCallback((deviceId: string) => {
     if (!devices.some((device) => device.deviceId === deviceId)) return;
+    setManagedCandidateSelected(false);
     setSelectedDeviceId(deviceId);
     localStorage.setItem("kivo:selected-device-id", deviceId);
   }, [devices]);
 
   const selectManagedDevice = useCallback((deviceId: string | null) => {
     if (deviceId) selectPhysicalDevice(deviceId);
-    else setSelectedDeviceId(null);
+    else setManagedCandidateSelected(true);
   }, [selectPhysicalDevice]);
 
   useEffect(() => {
@@ -1173,7 +1175,7 @@ export default function App() {
               onMetricsChange={handleManagedMetricsChange}
               onOpenSetup={openSetup}
               onRetryCandidate={retrySetupCandidate}
-              selectedDeviceId={selectedDeviceIdValue}
+              selectedDeviceId={managedCandidateSelected ? null : selectedDeviceIdValue}
               onSelectedDeviceChange={selectManagedDevice}
               onChangeProfile={changeManagedProfile}
               onSaveSharedProfile={saveManagedSharedProfile}
