@@ -21,11 +21,12 @@ import { ActionEditor } from "./ActionEditor";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { CreateDeviceProfileForm } from "./CreateDeviceProfileForm";
 import { DeviceManagement } from "./DeviceManagement";
+import { DeviceSwitcher } from "./DeviceSwitcher";
 import { DeviceSetupWizard } from "./DeviceSetupWizard";
 import { hardwareProfilesAreValid } from "./HardwareMapping";
 import { HomeDashboard } from "./HomeDashboard";
 import { Keypad } from "./Keypad";
-import { deviceSummary } from "./deviceStatus";
+import { assignedProfile, selectDeviceId } from "./deviceSelection";
 import { reconcileSetupSession, setupPresence } from "./deviceSetupSession";
 import { t } from "./i18n";
 import { DEFAULT_DOUBLE_PRESS_MS, DEFAULT_LONG_PRESS_MS } from "./types";
@@ -200,8 +201,11 @@ function learnInput(profile: DeviceProfile, hardwareProfileId: string, buttonId:
   };
 }
 
-function pressedButtons(owners: Map<string, PressedOwner>) {
-  return new Set([...owners.values()].flatMap((owner) => [...owner.buttonIds]));
+function pressedButtonsForDevice(
+  owners: Map<string, PressedOwner>,
+  selectedDeviceId: string | null,
+) {
+  return new Set(selectedDeviceId ? owners.get(selectedDeviceId)?.buttonIds ?? [] : []);
 }
 
 function learningTargetsMatch(left: LearningTarget, right: LearningTarget) {
@@ -229,7 +233,9 @@ export default function App() {
   const [homeMetrics, setHomeMetrics] = useState<AppSnapshot["homeMetrics"]>(null);
   const [deviceMetrics, setDeviceMetrics] = useState<{ deviceId: string; snapshot: HomeMetricsSnapshot } | null>(null);
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
-  const [selectedManagedDeviceId, setSelectedManagedDeviceId] = useState<string | null>(null);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(() =>
+    localStorage.getItem("kivo:selected-device-id"),
+  );
   const [hardwareEditorTarget, setHardwareEditorTarget] = useState<HardwareEditorTarget | null>(null);
   const [capturedDraftProfileIds, setCapturedDraftProfileIds] = useState<Set<string>>(() => new Set());
   const [pendingSharedDraftProfileIds, setPendingSharedDraftProfileIds] = useState<Set<string>>(() => new Set());
@@ -252,7 +258,7 @@ export default function App() {
   const fullSnapshotRequiredRef = useRef(true);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const loadErrorMessageRef = useRef<string | null>(null);
-  const selectedManagedDeviceIdRef = useRef<string | null>(null);
+  const selectedDeviceIdRef = useRef<string | null>(null);
   const managedMetricsGenerationRef = useRef(0);
   const hardwareEditorTargetRef = useRef<HardwareEditorTarget | null>(null);
   const learningEditingRevisionRef = useRef(0);
@@ -262,6 +268,9 @@ export default function App() {
   const setupSeenRef = useRef<Set<string>>(new Set());
 
   const { deviceProfiles, editorProfile, boardProfiles, devices, candidates } = registry;
+  const selectedDeviceIdValue = selectDeviceId(selectedDeviceId, devices);
+  const selectedDevice = devices.find(({ deviceId }) => deviceId === selectedDeviceIdValue) ?? null;
+  const selectedDeviceProfile = assignedProfile(selectedDevice, deviceProfiles);
   const profileById = useCallback((profileId: string | null) => {
     if (!profileId) return undefined;
     return profileDraftsRef.current.get(profileId) ??
@@ -277,12 +286,20 @@ export default function App() {
   const editorLearningActive = devices.some((device) =>
     device.learning?.deviceProfileId === editorProfileConfig?.profile.id
   );
-  const summary = deviceSummary(devices);
-  const attentionCount = summary.attention + candidates.length;
   const currentSetupPresence = useMemo(
     () => setupPresence(devices, candidates),
     [devices, candidates],
   );
+
+  useEffect(() => {
+    setPressedButtonIds(pressedButtonsForDevice(pressedOwnersRef.current, selectedDeviceIdValue));
+  }, [selectedDeviceIdValue]);
+
+  const selectPhysicalDevice = useCallback((deviceId: string) => {
+    if (!devices.some((device) => device.deviceId === deviceId)) return;
+    setSelectedDeviceId(deviceId);
+    localStorage.setItem("kivo:selected-device-id", deviceId);
+  }, [devices]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -322,7 +339,7 @@ export default function App() {
       }
     }
     pressedOwnersRef.current = nextOwners;
-    setPressedButtonIds(pressedButtons(nextOwners));
+    setPressedButtonIds(pressedButtonsForDevice(nextOwners, selectedDeviceIdRef.current));
   }, []);
 
   const applySnapshot = useCallback((snapshot: AppSnapshot, preserveDrafts = false) => {
@@ -510,7 +527,7 @@ export default function App() {
   }, [language, replaceRegistrySnapshot]);
 
   const refreshManagedDeviceMetrics = useCallback(async (deviceId: string | null) => {
-    selectedManagedDeviceIdRef.current = deviceId;
+    selectedDeviceIdRef.current = deviceId;
     const generation = ++managedMetricsGenerationRef.current;
     if (!deviceId) {
       setDeviceMetrics(null);
@@ -519,11 +536,11 @@ export default function App() {
     setDeviceMetrics(null);
     try {
       const metrics = await invoke<AppSnapshot["homeMetrics"]>("get_device_metrics", { deviceId });
-      if (mountedRef.current && selectedManagedDeviceIdRef.current === deviceId && generation === managedMetricsGenerationRef.current) {
+      if (mountedRef.current && selectedDeviceIdRef.current === deviceId && generation === managedMetricsGenerationRef.current) {
         setDeviceMetrics(metrics && "logs" in metrics ? { deviceId, snapshot: metrics } : null);
       }
     } catch {
-      if (mountedRef.current && selectedManagedDeviceIdRef.current === deviceId && generation === managedMetricsGenerationRef.current) setDeviceMetrics(null);
+      if (mountedRef.current && selectedDeviceIdRef.current === deviceId && generation === managedMetricsGenerationRef.current) setDeviceMetrics(null);
     }
   }, []);
 
@@ -630,6 +647,7 @@ export default function App() {
   profileRef.current = editorProfileConfig;
   profilesRef.current = deviceProfiles;
   devicesRef.current = devices;
+  selectedDeviceIdRef.current = selectedDeviceIdValue;
   hardwareEditorTargetRef.current = hardwareEditorTarget;
   selectedRef.current = selectedButtonId;
   viewRef.current = view;
@@ -660,7 +678,7 @@ export default function App() {
           if (payload.homeUpdate && payload.deviceProfileId === profileRef.current?.profile.id) {
             setHomeMetrics(payload.homeUpdate);
           }
-          if (payload.deviceId === selectedManagedDeviceIdRef.current) void refreshManagedDeviceMetrics(payload.deviceId);
+          if (payload.deviceId === selectedDeviceIdRef.current) void refreshManagedDeviceMetrics(payload.deviceId);
           if (payload.input && payload.pressed !== null) {
             const editorSnapshot = profileRef.current;
             const currentEditorTarget = hardwareEditorTargetRef.current;
@@ -721,7 +739,7 @@ export default function App() {
                 if (buttonIds.size > 0) nextOwners.set(payload.deviceId, { ...owner, buttonIds });
                 else nextOwners.delete(payload.deviceId);
                 pressedOwnersRef.current = nextOwners;
-                setPressedButtonIds(pressedButtons(nextOwners));
+                setPressedButtonIds(pressedButtonsForDevice(nextOwners, selectedDeviceIdRef.current));
               }
             }
           }
@@ -878,7 +896,7 @@ export default function App() {
         );
       }
     }
-    setSelectedManagedDeviceId(deviceId);
+    setSelectedDeviceId(deviceId);
     setHardwareEditorTarget({
       deviceId,
       deviceProfileId: assignment.device_profile_id,
@@ -1033,13 +1051,12 @@ export default function App() {
     <main className="product-shell">
       <header className="topbar">
         <div className="brand"><img src={brandIcon} alt="" /><h1>Kivo</h1></div>
-        <div className="device-summary" aria-label={t(language, "device.summary")}>
-          <span className="summary-ready"><i />{summary.ready} {t(language, "device.ready")}</span>
-          <b aria-hidden="true">{" · "}</b>
-          <span className="summary-attention"><i />{attentionCount} {t(language, "device.attention")}</span>
-          <b aria-hidden="true">{" · "}</b>
-          <span className="summary-offline"><i />{summary.offline} {t(language, "device.offline")}</span>
-        </div>
+        <DeviceSwitcher
+          devices={devices}
+          selectedDeviceId={selectedDeviceIdValue}
+          language={language}
+          onChange={selectPhysicalDevice}
+        />
         <div className={`save-state is-${autosave.status}`} aria-live="polite">
           {autosave.status === "saving" && t(language, "save.saving")}
           {autosave.status === "saved" && t(language, "save.saved")}
@@ -1151,8 +1168,8 @@ export default function App() {
               onMetricsChange={handleManagedMetricsChange}
               onOpenSetup={openSetup}
               onRetryCandidate={retrySetupCandidate}
-              selectedDeviceId={selectedManagedDeviceId}
-              onSelectedDeviceChange={setSelectedManagedDeviceId}
+              selectedDeviceId={selectedDeviceIdValue}
+              onSelectedDeviceChange={setSelectedDeviceId}
               onChangeProfile={changeManagedProfile}
               onSaveSharedProfile={saveManagedSharedProfile}
               onDuplicateProfileForDevice={duplicateManagedProfileForDevice}

@@ -29,4 +29,10 @@ describe("i18n", () => {
     expect(t("zh-CN", "device.boardProfile")).toBe("板型");
     expect(Object.values(messages["zh-CN"]).join(" ")).not.toContain("型号");
   });
+
+  test("includes physical keyboard switcher labels", () => {
+    expect(t("zh-CN", "device.current")).toBe("当前键盘");
+    expect(t("zh-CN", "device.connect")).toBe("连接键盘");
+    expect(t("en-US", "device.current")).toBe("Current keyboard");
+  });
 });

@@ -25,12 +25,9 @@
 @keyframes pulse-dot { 0%, 100% { box-shadow: 0 0 0 0 rgba(23, 116, 87, .35); } 50% { box-shadow: 0 0 0 4px rgba(23, 116, 87, 0); } }
 .connection code { max-width: 280px; overflow: hidden; text-overflow: ellipsis; color: var(--gray-9); font-size: var(--text-11); white-space: nowrap; }
 
-.device-summary { justify-self: start; height: 32px; display: flex; align-items: center; gap: 9px; padding: 0 var(--space-16); color: var(--gray-10); font-size: var(--text-12); white-space: nowrap; }
-.device-summary span { min-width: 76px; display: flex; align-items: center; gap: 6px; }
-.device-summary b { color: var(--gray-7); font-weight: var(--weight-regular); }
-.device-summary i { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--gray-8); }
-.device-summary .summary-ready i { background: var(--green-9); }
-.device-summary .summary-attention i { background: var(--amber-text); }
+.device-switcher, .device-switcher-empty { justify-self: start; display: flex; align-items: center; gap: 8px; min-width: 0; margin-left: var(--space-8); color: var(--gray-10); font-size: var(--text-12); white-space: nowrap; }
+.device-switcher select { width: min(280px, 34vw); height: 30px; border: 1px solid var(--border-default); border-radius: var(--radius-6); padding: 0 28px 0 8px; color: var(--gray-11); background: var(--bg-app); font: inherit; }
+.device-switcher select:focus-visible { outline: 2px solid var(--green-8); outline-offset: 1px; }
 
 .save-state { min-width: 130px; display: flex; align-items: center; justify-content: flex-end; padding-right: var(--space-16); color: var(--gray-9); font-size: var(--text-12); }
 .save-state.is-saving::before { content: ""; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--gray-8); animation: pulse-dot 1.2s ease-in-out infinite; }
@@ -118,8 +115,9 @@
 @media (max-width: 680px) {
   .product-shell { grid-template-rows: auto minmax(0, 1fr); }
   .topbar { min-height: 48px; grid-template-columns: 120px 1fr; }
-  .device-summary { justify-self: end; gap: 5px; padding: 0 var(--space-12); font-size: var(--text-11); }
-  .device-summary span { min-width: auto; }
+  .device-switcher, .device-switcher-empty { justify-self: end; margin-left: 0; padding: 0 var(--space-12); font-size: var(--text-11); }
+  .device-switcher > span { display: none; }
+  .device-switcher select { width: min(220px, 54vw); }
   .save-state { grid-column: 1 / -1; min-height: 0; padding: 0 var(--space-12) 6px; }
   .product-workspace { display: block; }
   .sidebar { display: grid; grid-template-columns: 1fr; border-right: 0; border-bottom: 1px solid var(--border-subtle); }

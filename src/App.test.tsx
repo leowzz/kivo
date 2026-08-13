@@ -252,6 +252,7 @@ function runtimeEvent(overrides: Partial<RuntimeEvent> = {}): RuntimeEvent {
 beforeEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
+  localStorage.removeItem("kivo:selected-device-id");
   currentSnapshot = structuredClone(baseSnapshot);
   HTMLDialogElement.prototype.showModal = function showModal() {
     this.setAttribute("open", "");
@@ -497,16 +498,15 @@ test("home connection status names the keyboard without exposing its system port
   expect(screen.queryByText("/dev/cu.test")).toBeNull();
 });
 
-test("summarizes an empty device registry", async () => {
+test("prompts to connect a keyboard when the device registry is empty", async () => {
   currentSnapshot.devices = [];
   render(<App />);
 
-  expect(await screen.findByLabelText("设备状态汇总")).toHaveTextContent(
-    "0 就绪 · 0 需处理 · 0 离线",
-  );
+  expect(await screen.findByText("连接键盘")).toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "当前键盘" })).toBeNull();
 });
 
-test("summarizes mixed devices and adds candidates only to attention", async () => {
+test("shows all physical keyboards in the top switcher", async () => {
   currentSnapshot.devices = [
     device(),
     device({
@@ -537,9 +537,38 @@ test("summarizes mixed devices and adds candidates only to attention", async () 
   ];
   render(<App />);
 
-  expect(await screen.findByLabelText("设备状态汇总")).toHaveTextContent(
-    "1 就绪 · 2 需处理 · 1 离线",
-  );
+  expect(await screen.findByRole("combobox", { name: "当前键盘" })).toHaveValue("device-front-desk");
+  expect(screen.getByRole("option", { name: "前台键盘 · 分配需要修复" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "前台键盘 · 离线" })).toBeInTheDocument();
+});
+
+test("switches physical keyboard context without persisting settings or assignments", async () => {
+  const alternateProfile: DeviceProfile = {
+    ...structuredClone(deviceProfile),
+    profile: { ...deviceProfile.profile, id: "alternate-profile", name: "备用配置" },
+  };
+  currentSnapshot.deviceProfiles.push(alternateProfile);
+  currentSnapshot.devices.push(device({
+    deviceId: "device-second",
+    name: "备用键盘",
+    hardwareSerial: "SECOND",
+    runtimeAssignment: {
+      device_profile_id: alternateProfile.profile.id,
+      hardware_profile_id: "front-desk",
+    },
+  }));
+  const user = userEvent.setup();
+  render(<App />);
+
+  const keyboard = await screen.findByRole("combobox", { name: "当前键盘" });
+  await user.selectOptions(keyboard, "device-second");
+
+  expect(keyboard).toHaveValue("device-second");
+  expect(localStorage.getItem("kivo:selected-device-id")).toBe("device-second");
+  const invokedCommands = () => vi.mocked(invoke).mock.calls.map(([command]) => command);
+  expect(invokedCommands()).not.toContain("save_settings");
+  expect(invokedCommands()).not.toContain("save_runtime_assignment");
+  expect(invokedCommands()).not.toContain("clear_runtime_assignment");
 });
 
 test("uses the authoritative profile-save snapshot for the device status transition", async () => {
@@ -554,26 +583,20 @@ test("uses the authoritative profile-save snapshot for the device status transit
   });
   const user = userEvent.setup();
   render(<App />);
-  expect(await screen.findByLabelText("设备状态汇总")).toHaveTextContent(
-    "0 就绪 · 0 需处理 · 0 离线",
-  );
+  expect(await screen.findByRole("combobox", { name: "当前键盘" })).toHaveValue("device-front-desk");
   await user.click(screen.getByRole("button", { name: "按键行为" }));
   await addHotkeyAction(user);
 
   await waitFor(
     () =>
-      expect(screen.getByLabelText("设备状态汇总")).toHaveTextContent(
-        "1 就绪 · 0 需处理 · 0 离线",
-      ),
+      expect(screen.getByRole("option", { name: "前台键盘 · 就绪" })).toBeInTheDocument(),
     { timeout: 1600 },
   );
 });
 
 test("refreshes authoritative registry state after a runtime event", async () => {
   render(<App />);
-  expect(await screen.findByLabelText("设备状态汇总")).toHaveTextContent(
-    "1 就绪 · 0 需处理 · 0 离线",
-  );
+  expect(await screen.findByRole("option", { name: "前台键盘 · 就绪" })).toBeInTheDocument();
   currentSnapshot.devices[0] = device({
     connection: "offline",
     mode: null,
@@ -588,9 +611,7 @@ test("refreshes authoritative registry state after a runtime event", async () =>
   );
 
   await waitFor(() =>
-    expect(screen.getByLabelText("设备状态汇总")).toHaveTextContent(
-      "0 就绪 · 0 需处理 · 1 离线",
-    ),
+    expect(screen.getByRole("option", { name: "前台键盘 · 离线" })).toBeInTheDocument(),
   );
 });
 
@@ -598,9 +619,7 @@ test("periodically refreshes candidates that produce no runtime event", async ()
   vi.useFakeTimers();
   render(<App />);
   await act(async () => undefined);
-  expect(screen.getByLabelText("设备状态汇总")).toHaveTextContent(
-    "1 就绪 · 0 需处理 · 0 离线",
-  );
+  expect(screen.getByRole("combobox", { name: "当前键盘" })).toHaveValue("device-front-desk");
   currentSnapshot.candidates = [
     {
       key: "candidate-runtime",
@@ -618,9 +637,7 @@ test("periodically refreshes candidates that produce no runtime event", async ()
 
   await act(async () => vi.advanceTimersByTimeAsync(2_000));
 
-  expect(screen.getByLabelText("设备状态汇总")).toHaveTextContent(
-    "1 就绪 · 1 需处理 · 0 离线",
-  );
+  expect(screen.getByRole("option", { name: "前台键盘 · 就绪" })).toBeInTheDocument();
 });
 
 test("auto-opens one new Candidate once and stays dismissed for the insertion", async () => {
@@ -1349,12 +1366,13 @@ test("shows Home as connected when an online matching Device follows an offline 
   expect(screen.queryByText("等待设备")).toBeNull();
 });
 
-test("isolates a shared pressed button by emitting Device", async () => {
+test("projects pressed feedback to the selected physical Device", async () => {
   currentSnapshot.devices.push(
     device({ deviceId: "device-second", hardwareSerial: "SECOND" }),
   );
   const user = userEvent.setup();
   render(<App />);
+  await user.selectOptions(await screen.findByRole("combobox", { name: "当前键盘" }), "device-second");
   await user.click(await screen.findByRole("button", { name: "按键行为" }));
   const enter = screen.getByRole("button", { name: "确认，0 项行为" });
 
@@ -1370,11 +1388,6 @@ test("isolates a shared pressed button by emitting Device", async () => {
         rawSerial: "SECOND",
         pressed: true,
       }),
-    ),
-  );
-  await act(async () =>
-    emitRuntimeEvent(
-      runtimeEvent({ deviceId: "device-front-desk", pressed: false }),
     ),
   );
   expect(enter).toHaveClass("is-pressed");
@@ -1476,7 +1489,7 @@ test("keeps Home scoped to the Editor Profile while retaining Device metrics and
   const user = userEvent.setup();
   render(<App />);
   await user.click(await screen.findByRole("button", { name: "设备管理" }));
-  await user.click(screen.getByRole("button", { name: /其他设备/ }));
+  await user.selectOptions(screen.getByRole("combobox", { name: "当前键盘" }), "device-other-profile");
   await waitFor(() => expect(metricRequests).toBe(2));
   await user.click(await screen.findByRole("button", { name: "按键行为" }));
   const enter = screen.getByRole("button", { name: "确认，0 项行为" });
@@ -1497,6 +1510,7 @@ test("keeps Home scoped to the Editor Profile while retaining Device metrics and
   expect(screen.queryByText("other-profile activity")).toBeNull();
 
   await user.click(screen.getByRole("button", { name: "按键行为" }));
+  await user.selectOptions(screen.getByRole("combobox", { name: "当前键盘" }), "device-front-desk");
   await act(async () => emitRuntimeEvent(runtimeEvent()));
   expect(screen.getByRole("button", { name: "确认，0 项行为" })).toHaveClass("is-pressed");
 });
