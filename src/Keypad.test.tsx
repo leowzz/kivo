@@ -26,6 +26,7 @@ test("sizes keypad groups by their row and column counts", () => {
       selectedButtonId={null}
       pressedButtonIds={new Set()}
       actionCountLabel={(count) => `${count}`}
+      unconfiguredLabel="Unconfigured"
       onSelect={vi.fn()}
     />,
   );
@@ -57,9 +58,33 @@ test("counts actions in every trigger group", () => {
       selectedButtonId={null}
       pressedButtonIds={new Set()}
       actionCountLabel={(count) => `${count} actions`}
+      unconfiguredLabel="Unconfigured"
       onSelect={vi.fn()}
     />,
   );
 
   expect(getByRole("button", { name: "A，2 actions" })).toBeInTheDocument();
+});
+
+test("marks unconfigured keys without replacing their labels", () => {
+  const layout: ModelLayout = {
+    id: "test",
+    name: "Test",
+    groups: [{ id: "keys", columns: 1, buttons: [{ id: "A", label: "Copy" }] }],
+  };
+  const { getByRole, getByText } = render(
+    <Keypad
+      layout={layout}
+      actions={{}}
+      selectedButtonId={null}
+      pressedButtonIds={new Set()}
+      actionCountLabel={(count) => `${count} actions`}
+      unconfiguredLabel="Unconfigured"
+      onSelect={vi.fn()}
+    />,
+  );
+
+  expect(getByRole("button", { name: "Copy，0 actions" })).toHaveClass("is-unconfigured");
+  expect(getByText("Copy")).toBeInTheDocument();
+  expect(getByText("Unconfigured")).toBeInTheDocument();
 });

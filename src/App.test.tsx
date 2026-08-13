@@ -406,7 +406,7 @@ test("shows an incompatible-workspace startup screen without loading runtime sta
 test("does not override the WebView viewport height", async () => {
   render(<App />);
 
-  await screen.findByRole("heading", { name: "按键概览" });
+  await screen.findByRole("heading", { name: "碳膜电话键盘" });
   expect(document.documentElement.style.getPropertyValue("--app-height")).toBe(
     "",
   );
@@ -422,7 +422,7 @@ test("fills default trigger settings when a stale profile omits them", async () 
   const user = userEvent.setup();
   render(<App />);
 
-  expect(await screen.findByRole("heading", { name: "按键概览" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "碳膜电话键盘" })).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "按键行为" }));
   await addPasteAction(user, "默认计时");
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_device_profile", expect.anything()));
@@ -491,9 +491,9 @@ test("waits for an autosave before changing pages", async () => {
   expect(await screen.findByRole("heading", { name: "设备管理" })).toBeInTheDocument();
 });
 
-test("home connection status names the keyboard without exposing its system port", async () => {
+test("default workspace names the selected keyboard without exposing its system port", async () => {
   render(<App />);
-  await screen.findByRole("heading", { name: "按键概览" });
+  await screen.findByRole("heading", { name: "碳膜电话键盘" });
   expect(screen.getByText("前台键盘")).toBeInTheDocument();
   expect(screen.queryByText("/dev/cu.test")).toBeNull();
 });
@@ -502,7 +502,7 @@ test("prompts to connect a keyboard when the device registry is empty", async ()
   currentSnapshot.devices = [];
   render(<App />);
 
-  expect(await screen.findByText("连接键盘")).toBeInTheDocument();
+  expect(await screen.findByText("连接你的键盘")).toBeInTheDocument();
   expect(screen.queryByRole("combobox", { name: "当前键盘" })).toBeNull();
 });
 
@@ -766,7 +766,7 @@ test("configuration page creates a profile while no device is usable", async () 
   expect(currentSnapshot.devices).toHaveLength(0);
 });
 
-test("completes one exact Device and navigates to its Hardware Profile", async () => {
+test("completes one exact Device and navigates to its keyboard workspace", async () => {
   const user = userEvent.setup();
   currentSnapshot.devices = [
     rpUnassignedDevice(),
@@ -801,7 +801,7 @@ test("completes one exact Device and navigates to its Hardware Profile", async (
     currentSnapshot.devices.find((item) => item.deviceId === "other-rp")
       ?.runtimeAssignment,
   ).toBeNull();
-  expect(await screen.findByRole("heading", { name: "设备管理" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "RP Profile" })).toBeInTheDocument();
   expect(screen.queryByRole("combobox", { name: "硬件配置" })).toBeNull();
 });
 
@@ -831,7 +831,7 @@ test("keeps completed setup successful when saving the Editor Profile fails", as
     await screen.findByText("保存失败: settings_write_failed"),
   ).toHaveClass("error-banner");
   expect(screen.queryByRole("dialog", { name: "添加键盘" })).toBeNull();
-  expect(screen.getByRole("heading", { name: "设备管理" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "RP Profile" })).toBeInTheDocument();
   expect(screen.queryByRole("combobox", { name: "硬件配置" })).toBeNull();
 });
 
@@ -911,11 +911,11 @@ test("retries a failed bootstrap as a full snapshot and clears its load error", 
   expect(screen.getByRole("alert")).toHaveTextContent(
     "载入失败: temporary snapshot failure",
   );
-  expect(screen.getByText("等待设备")).toBeInTheDocument();
+  expect(screen.getByText("连接你的键盘")).toBeInTheDocument();
 
   await act(async () => vi.advanceTimersByTimeAsync(2_000));
 
-  expect(screen.getByText("设备已连接")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "碳膜电话键盘" })).toBeInTheDocument();
   expect(screen.getByText("前台键盘")).toBeInTheDocument();
   expect(screen.queryByRole("alert")).toBeNull();
 });
@@ -944,7 +944,7 @@ test("keeps device management and configuration-file actions as separate work de
   render(<App />);
 
   expect(
-    await screen.findByRole("heading", { name: "按键概览" }),
+    await screen.findByRole("heading", { name: "碳膜电话键盘" }),
   ).toBeInTheDocument();
   const navigation = screen.getByRole("navigation", { name: "配置" });
   expect(navigation).not.toContainElement(
@@ -1308,7 +1308,7 @@ test("keeps the interface in Simplified Chinese without a language selector", as
   expect(screen.queryByLabelText("语言")).toBeNull();
 });
 
-test("renders seven-day metrics in model order with Chinese logs", async () => {
+test("renders the assigned keyboard layout in model order", async () => {
   currentSnapshot.deviceProfiles[0].profile.groups = [
     {
       id: "digits",
@@ -1320,22 +1320,11 @@ test("renders seven-day metrics in model order with Chinese logs", async () => {
     },
     { id: "actions", columns: 1, buttons: [{ id: "ENTER", label: "确认" }] },
   ];
-  currentSnapshot.homeMetrics = {
-    ...baseSnapshot.homeMetrics!,
-    heatmap: [{ buttonId: "DIGIT_5", day: "2026-07-30", presses: 3 }],
-    logs: [
-      {
-        ...baseSnapshot.homeMetrics!.logs[0],
-        message: "DIGIT_5 pressed",
-        buttonId: "DIGIT_5",
-      },
-    ],
-  };
   render(<App />);
 
-  await screen.findByRole("heading", { name: "按键概览" });
+  await screen.findByRole("heading", { name: "碳膜电话键盘" });
   expect(
-    [...document.querySelectorAll(".heat-cell")].map(
+    [...document.querySelectorAll(".key-button")].map(
       (item) => item.textContent,
     ),
   ).toEqual([
@@ -1343,12 +1332,11 @@ test("renders seven-day metrics in model order with Chinese logs", async () => {
     expect.stringContaining("5"),
     expect.stringContaining("确认"),
   ]);
-  expect(screen.getByText("按下 DIGIT_5")).toBeInTheDocument();
   expect(screen.queryByLabelText("当前编辑配置")).toBeNull();
   expect(screen.queryByLabelText("语言")).toBeNull();
 });
 
-test("shows Home as searching when only another profile's Device is online", async () => {
+test("shows the selected keyboard when only another profile's Device is online", async () => {
   const secondProfile: DeviceProfile = {
     ...structuredClone(deviceProfile),
     profile: {
@@ -1377,12 +1365,11 @@ test("shows Home as searching when only another profile's Device is online", asy
 
   render(<App />);
 
-  expect(await screen.findByText("等待设备")).toBeInTheDocument();
-  expect(screen.queryByText("设备已连接")).toBeNull();
+  expect(await screen.findByRole("heading", { name: "接线员控制台" })).toBeInTheDocument();
   expect(screen.queryByText("/dev/cu.unrelated")).toBeNull();
 });
 
-test("shows Home as connected when an online matching Device follows an offline one", async () => {
+test("selects the ready keyboard over an offline keyboard", async () => {
   currentSnapshot.devices = [
     device({
       deviceId: "device-offline",
@@ -1400,10 +1387,9 @@ test("shows Home as connected when an online matching Device follows an offline 
 
   render(<App />);
 
-  expect(await screen.findByText("设备已连接")).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "碳膜电话键盘" })).toBeInTheDocument();
   expect(screen.getByText("前台键盘")).toBeInTheDocument();
   expect(screen.queryByText("/dev/cu.online")).toBeNull();
-  expect(screen.queryByText("等待设备")).toBeNull();
 });
 
 test("projects pressed feedback to the selected physical Device", async () => {
@@ -1492,7 +1478,7 @@ test("clears pressed feedback only for the disconnected Device regardless of the
   await waitFor(() => expect(enter).not.toHaveClass("is-pressed"));
 });
 
-test("keeps Home scoped to the Editor Profile while retaining Device metrics and runtime attribution", async () => {
+test("keeps Home scoped to the selected Device profile while retaining runtime attribution", async () => {
   const otherProfile: DeviceProfile = {
     ...structuredClone(deviceProfile),
     profile: { ...deviceProfile.profile, id: "other-profile", name: "其他键盘" },
@@ -1540,13 +1526,11 @@ test("keeps Home scoped to the Editor Profile while retaining Device metrics and
     deviceProfileId: otherProfile.profile.id,
     homeUpdate: otherMetrics,
   })));
-  expect(enter).not.toHaveClass("is-pressed");
+  expect(enter).toHaveClass("is-pressed");
   await waitFor(() => expect(metricRequests).toBe(3));
 
   await user.click(screen.getByRole("button", { name: "首页" }));
-  expect(screen.getByText("累计按下: 12")).toBeInTheDocument();
-  expect(screen.getByText("按下 DIGIT_2")).toBeInTheDocument();
-  expect(screen.queryByText("累计按下: 99")).toBeNull();
+  expect(screen.getByRole("heading", { name: "其他键盘" })).toBeInTheDocument();
   expect(screen.queryByText("other-profile activity")).toBeNull();
 
   await user.click(screen.getByRole("button", { name: "按键行为" }));

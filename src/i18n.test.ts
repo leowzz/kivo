@@ -35,4 +35,10 @@ describe("i18n", () => {
     expect(t("zh-CN", "device.connect")).toBe("连接键盘");
     expect(t("en-US", "device.current")).toBe("Current keyboard");
   });
+
+  test("includes default keyboard workspace states", () => {
+    expect(t("zh-CN", "workspace.connectTitle")).toBe("连接你的键盘");
+    expect(t("zh-CN", "workspace.unconfigured")).toBe("未配置");
+    expect(t("en-US", "workspace.repair")).toBe("Repair setup");
+  });
 });

@@ -82,6 +82,21 @@
 .key-button.is-pressed { color: #fff; background: var(--green-9); transform: translateY(1px); box-shadow: 0 1px 0 var(--green-11); transition: transform .12s cubic-bezier(.34, 1.56, .64, 1), background .12s ease; }
 .key-button small { position: absolute; top: 5px; right: 5px; min-width: 18px; height: 18px; display: grid; place-items: center; border-radius: 9px; color: #fff; background: var(--green-9); font-size: 10px; font-variant-numeric: tabular-nums; }
 .key-button.is-pressed small { color: var(--green-9); background: #fff; }
+.key-button.is-unconfigured { border-style: dashed; }
+.key-button .key-state { width: auto; padding: 0 5px; color: var(--amber-text); background: var(--amber-bg); }
+
+/* ===== 默认键盘工作区 ===== */
+.keyboard-workspace { min-width: 0; min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 380px); grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+.keyboard-workspace-heading { grid-column: 1 / -1; min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: var(--space-16); padding: 10px var(--space-24); border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); }
+.keyboard-workspace-heading > div > span { display: block; margin-bottom: 2px; color: var(--gray-9); font-size: var(--text-11); }
+.keyboard-workspace-heading h2 { margin: 0; color: var(--gray-12); font-size: var(--text-17); }
+.keyboard-connection { display: inline-flex; align-items: center; gap: 6px; color: var(--gray-10); font-size: var(--text-12); }
+.keyboard-connection.is-offline { color: var(--amber-text); }
+.keyboard-workspace .keypad-stage { grid-column: 1; grid-row: 2; }
+.keyboard-workspace .action-panel { grid-column: 2; grid-row: 2; }
+.keyboard-empty-state { min-height: 0; flex: 1; display: grid; place-items: center; align-content: center; gap: var(--space-12); padding: var(--space-32); color: var(--gray-10); text-align: center; }
+.keyboard-empty-state h2 { margin: 0; color: var(--gray-12); font-size: var(--text-17); }
+.keyboard-empty-state p { max-width: 440px; margin: 0; font-size: var(--text-13); line-height: 1.55; }
 
 /* ===== 动作面板 ===== */
 .action-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-left: 1px solid var(--border-subtle); background: var(--bg-surface); }
@@ -156,6 +171,9 @@
 .add-actions button:hover { border-color: var(--green-7); border-style: dashed; color: var(--green-11); background: var(--green-1); box-shadow: none; }
 
 @media (max-width: 980px) {
+  .keyboard-workspace { display: flex; flex-direction: column; overflow: auto; }
+  .keyboard-workspace .keypad-stage { flex: 1 0 420px; }
+  .keyboard-workspace .action-panel { min-height: 440px; border-top: 1px solid var(--border-subtle); border-left: 0; }
   .add-actions { grid-auto-flow: column; grid-auto-columns: minmax(126px, 1fr); grid-template-columns: none; overflow-x: auto; }
   .add-actions button { white-space: nowrap; }
 }

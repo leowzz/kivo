@@ -6,6 +6,7 @@ interface KeypadProps {
   selectedButtonId: string | null;
   pressedButtonIds: Set<string>;
   actionCountLabel(count: number): string;
+  unconfiguredLabel: string;
   onSelect(buttonId: string): void;
 }
 
@@ -15,6 +16,7 @@ export function Keypad({
   selectedButtonId,
   pressedButtonIds,
   actionCountLabel,
+  unconfiguredLabel,
   onSelect,
 }: KeypadProps) {
   return (
@@ -44,6 +46,7 @@ export function Keypad({
                   "key-button",
                   selectedButtonId === button.id ? "is-selected" : "",
                   pressedButtonIds.has(button.id) ? "is-pressed" : "",
+                  count === 0 ? "is-unconfigured" : "",
                 ].filter(Boolean).join(" ")}
                 type="button"
                 aria-pressed={selectedButtonId === button.id}
@@ -52,7 +55,9 @@ export function Keypad({
                 onClick={() => onSelect(button.id)}
               >
                 <span>{button.label}</span>
-                {count > 0 && <small aria-hidden="true">{count}</small>}
+                {count === 0
+                  ? <small className="key-state" aria-hidden="true">{unconfiguredLabel}</small>
+                  : <small aria-hidden="true">{count}</small>}
               </button>
             );
           })}

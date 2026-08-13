@@ -24,7 +24,7 @@ import { DeviceManagement } from "./DeviceManagement";
 import { DeviceSwitcher } from "./DeviceSwitcher";
 import { DeviceSetupWizard } from "./DeviceSetupWizard";
 import { hardwareProfilesAreValid } from "./HardwareMapping";
-import { HomeDashboard } from "./HomeDashboard";
+import { KeyboardWorkspace } from "./KeyboardWorkspace";
 import { Keypad } from "./Keypad";
 import { assignedProfile, selectDeviceId } from "./deviceSelection";
 import { reconcileSetupSession, setupPresence } from "./deviceSetupSession";
@@ -687,6 +687,12 @@ export default function App() {
           if (payload.deviceId === selectedDeviceIdRef.current) void refreshManagedDeviceMetrics(payload.deviceId);
           if (payload.input && payload.pressed !== null) {
             const editorSnapshot = profileRef.current;
+            const selectedWorkspaceProfile = selectedDeviceIdRef.current
+              ? assignedProfile(
+                devicesRef.current.find(({ deviceId }) => deviceId === selectedDeviceIdRef.current) ?? null,
+                profilesRef.current,
+              )
+              : undefined;
             const currentEditorTarget = hardwareEditorTargetRef.current;
             const activeLearningTarget = devicesRef.current.find(
               ({ deviceId }) => deviceId === currentEditorTarget?.deviceId,
@@ -719,12 +725,12 @@ export default function App() {
             }
             const emittingDevice = devicesRef.current.find((device) => device.deviceId === payload.deviceId);
             const assignment = emittingDevice?.runtimeAssignment;
-            if (payload.code === "input_state" && editorSnapshot
-              && payload.deviceProfileId === editorSnapshot.profile.id
+            if (payload.code === "input_state" && selectedWorkspaceProfile
+              && payload.deviceProfileId === selectedWorkspaceProfile.profile.id
               && payload.hardwareProfileId
               && assignment?.device_profile_id === payload.deviceProfileId
               && assignment.hardware_profile_id === payload.hardwareProfileId) {
-              const eventHardware = editorSnapshot.hardware_profiles.find((hardware) =>
+              const eventHardware = selectedWorkspaceProfile.hardware_profiles.find((hardware) =>
                 hardware.id === payload.hardwareProfileId
               );
               const buttonId = resolveButton(eventHardware, payload.input);
@@ -909,7 +915,7 @@ export default function App() {
       hardwareProfileId: assignment.hardware_profile_id,
     });
     setSetupOpen(false);
-    setView("devices");
+    setView("home");
   };
 
   const run = async (label: string, task: () => Promise<void>) => {
@@ -1081,7 +1087,7 @@ export default function App() {
         </div>
       )}
 
-      <div className={view === "home" || view === "devices" || view === "data" ? "product-workspace is-home" : "product-workspace"}>
+      <div className={view === "devices" || view === "data" ? "product-workspace is-home" : "product-workspace"}>
         <aside className="sidebar">
           <button className={`home-nav-button ${view === "home" ? "is-active" : ""}`} type="button" onClick={() => void navigate("home")}>
             <Home size={17} />{t(language, "nav.home")}
@@ -1186,11 +1192,29 @@ export default function App() {
               onEndLearning={endManagedLearning}
             />
           ) : view === "home" ? (
-            <HomeDashboard
-              devices={devices}
+            <KeyboardWorkspace
               language={language}
-              metrics={homeMetrics}
-              profile={editorProfileConfig}
+              device={selectedDevice}
+              profile={selectedDeviceProfile}
+              hasCandidates={candidates.length > 0}
+              selectedButtonId={selectedButtonId}
+              pressedButtonIds={pressedButtonIds}
+              onSelectButton={setSelectedButtonId}
+              onChangeActions={(buttonId, actions) => selectedDeviceProfile && updateProfile(selectedDeviceProfile.profile.id, (profile) => ({
+                ...profile,
+                actions: { ...profile.actions, [buttonId]: actions },
+              }))}
+              onRenameButton={(buttonId, label) => selectedDeviceProfile && updateProfile(selectedDeviceProfile.profile.id, (profile) => ({
+                ...profile,
+                profile: {
+                  ...profile.profile,
+                  groups: profile.profile.groups.map((group) => ({
+                    ...group,
+                    buttons: group.buttons.map((button) => button.id === buttonId ? { ...button, label } : button),
+                  })),
+                },
+              }))}
+              onOpenSetup={openSetup}
             />
           ) : !editorProfileConfig ? (
             <div className="empty-workspace">
@@ -1227,6 +1251,7 @@ export default function App() {
                   selectedButtonId={selectedButtonId}
                   pressedButtonIds={pressedButtonIds}
                   actionCountLabel={(count) => t(language, "model.actionCount", { count })}
+                  unconfiguredLabel={t(language, "workspace.unconfigured")}
                   onSelect={setSelectedButtonId}
                 />
               </div>
