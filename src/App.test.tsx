@@ -390,8 +390,8 @@ test("keeps ordinary navigation to keyboard, devices, and settings, with Advance
   const sidebarButtons = Array.from(document.querySelectorAll(".sidebar > button"))
     .map((button) => button.textContent?.trim());
   expect(sidebarButtons).toEqual(["我的键盘", "设备", "设置"]);
-  expect(screen.queryByRole("button", { name: "我的键盘" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "我的键盘" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "首页" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "按键行为" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "配置文件" })).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "设置" }));
@@ -431,7 +431,7 @@ test("does not override the WebView viewport height", async () => {
   );
 });
 
-test.skip("fills default trigger settings when a stale profile omits them", async () => {
+test("fills default trigger settings when a stale profile omits them", async () => {
   const staleProfile = structuredClone(currentSnapshot.deviceProfiles[0]) as Omit<DeviceProfile, "trigger_settings"> & {
     trigger_settings?: DeviceProfile["trigger_settings"];
   };
@@ -442,8 +442,10 @@ test.skip("fills default trigger settings when a stale profile omits them", asyn
   render(<App />);
 
   expect(await screen.findByRole("heading", { name: "碳膜电话键盘" })).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "我的键盘" }));
-  await addPasteAction(user, "默认计时");
+  await user.click(screen.getByRole("button", { name: "设置" }));
+  await user.click(screen.getByRole("button", { name: "高级设置" }));
+  await user.click(screen.getByRole("tab", { name: "按键布局" }));
+  await user.click(screen.getByRole("button", { name: "添加按键" }));
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_device_profile", expect.anything()));
   const saved = vi.mocked(invoke).mock.calls.find(([command]) => command === "save_device_profile")?.[1] as {
     profile: DeviceProfile;
@@ -451,7 +453,7 @@ test.skip("fills default trigger settings when a stale profile omits them", asyn
   expect(saved?.profile.trigger_settings).toEqual({ long_press_ms: 500, double_press_ms: 300 });
 });
 
-test.skip("keeps the editor configuration independent from the device assignment", async () => {
+test("keeps the editor configuration independent from the device assignment", async () => {
   const secondProfile: DeviceProfile = {
     ...structuredClone(deviceProfile),
     profile: {
@@ -464,29 +466,21 @@ test.skip("keeps the editor configuration independent from the device assignment
   const user = userEvent.setup();
   render(<App />);
 
-  await user.click(await screen.findByRole("button", { name: "我的键盘" }));
-  await user.selectOptions(screen.getByLabelText("当前编辑配置"), "profile-b");
+  const keyboard = await screen.findByRole("combobox", { name: "当前键盘" });
+  expect(keyboard).toHaveValue("device-front-desk");
+  await user.click(screen.getByRole("button", { name: "设置" }));
+  await user.click(screen.getByRole("button", { name: "高级设置" }));
+  await user.click(screen.getByRole("button", { name: "选择 备用配置" }));
 
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_settings", {
     settings: expect.objectContaining({ editor_profile: "profile-b" }),
   }));
-  await user.click(screen.getByRole("button", { name: "2，0 项行为" }));
-  await addPasteAction(user, "配置 B");
-  await user.click(await screen.findByRole("button", { name: "同步修改 0 台键盘" }));
-  await user.click(screen.getByRole("button", { name: "设备" }));
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_device_profile", {
-    profile: expect.objectContaining({
-      profile: expect.objectContaining({ id: "profile-b" }),
-      actions: expect.objectContaining({
-        DIGIT_2: expect.objectContaining({ press: [{ type: "paste", text: "配置 B" }] }),
-      }),
-    }),
-  }));
-  await waitFor(() => expect(screen.getByLabelText("使用配置")).toHaveValue(deviceProfile.profile.id));
+  expect(screen.getByText("当前编辑配置")).toBeInTheDocument();
+  expect(keyboard).toHaveValue("device-front-desk");
   expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_runtime_assignment")).toBe(false);
 });
 
-test.skip("autosaves advanced offline editor layout changes without a selected device", async () => {
+test("autosaves advanced offline editor layout changes without a selected device", async () => {
   currentSnapshot.devices = [];
   const user = userEvent.setup();
   render(<App />);
@@ -509,7 +503,7 @@ test.skip("autosaves advanced offline editor layout changes without a selected d
   expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "duplicate_profile_for_device")).toBe(false);
 });
 
-test.skip("does not duplicate an unrelated editor profile for an unassigned selected device", async () => {
+test("does not duplicate an unrelated editor profile for an unassigned selected device", async () => {
   currentSnapshot.devices[0] = device({ assignment: "unassigned", runtimeAssignment: null });
   const user = userEvent.setup();
   render(<App />);
@@ -517,12 +511,10 @@ test.skip("does not duplicate an unrelated editor profile for an unassigned sele
   await user.click(await screen.findByRole("button", { name: "设置" }));
   await user.click(screen.getByRole("button", { name: "高级设置" }));
   await user.click(screen.getByRole("tab", { name: "按键布局" }));
-  await user.click(screen.getByRole("button", { name: "配置设置" }));
-  expect(screen.queryByRole("button", { name: "复制并仅用于此设备" })).toBeNull();
   expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "duplicate_profile_for_device")).toBe(false);
 });
 
-test.skip("saves a uniquely used editor profile directly when the selected device is unassigned", async () => {
+test("saves a uniquely used editor profile directly when the selected device is unassigned", async () => {
   currentSnapshot.devices[0] = device({ assignment: "unassigned", runtimeAssignment: null });
   const user = userEvent.setup();
   render(<App />);
@@ -576,7 +568,7 @@ test("waits for an autosave before changing pages", async () => {
 
   await user.click(screen.getByRole("button", { name: "设备" }));
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_device_profile", expect.anything()));
-  expect(screen.getByRole("heading", { name: "我的键盘" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "碳膜电话键盘" })).toBeInTheDocument();
 
   pendingSave.resolve(structuredClone(currentSnapshot));
   expect(await screen.findByRole("heading", { name: "设备" })).toBeInTheDocument();
@@ -822,11 +814,8 @@ test("switches physical keyboard context without persisting settings or assignme
   const keyboard = await screen.findByRole("combobox", { name: "当前键盘" });
   expect(keyboard).toHaveValue("device-front-desk");
   expect(localStorage.getItem("kivo:selected-device-id")).toBeNull();
-  await user.click(screen.getByRole("button", { name: "设备" }));
-  await user.click(screen.getByRole("button", { name: /备用键盘/ }));
-  expect(screen.getByRole("heading", { name: "备用键盘" })).toBeInTheDocument();
-  await user.click(screen.getByRole("tab", { name: "按键布局" }));
-  expect(within(screen.getByRole("tabpanel", { name: "按键布局" })).getByDisplayValue("备用确认")).toBeInTheDocument();
+  await user.selectOptions(keyboard, "device-second");
+  expect(await screen.findByRole("button", { name: "备用确认，0 项行为" })).toBeInTheDocument();
   expect(keyboard).toHaveValue("device-second");
   expect(localStorage.getItem("kivo:selected-device-id")).toBe("device-second");
   const invokedCommands = () => vi.mocked(invoke).mock.calls.map(([command]) => command);
@@ -1033,7 +1022,7 @@ test("does not reopen when Candidate becomes the same unassigned Device", async 
   expect(screen.getAllByRole("dialog", { name: "添加键盘" })).toHaveLength(1);
 });
 
-test.skip("configuration page creates a profile while no device is usable", async () => {
+test("advanced settings creates a profile while no device is usable", async () => {
   const user = userEvent.setup();
   currentSnapshot.devices = [];
   currentSnapshot.candidates = [
@@ -1042,7 +1031,8 @@ test.skip("configuration page creates a profile while no device is usable", asyn
   currentSnapshot.boardProfiles = [rpBoard];
   render(<App />);
   await user.click(await screen.findByRole("button", { name: "稍后处理" }));
-  await user.click(screen.getByRole("button", { name: "配置文件" }));
+  await user.click(screen.getByRole("button", { name: "设置" }));
+  await user.click(screen.getByRole("button", { name: "高级设置" }));
   await user.click(screen.getByRole("button", { name: "新建配置" }));
   await user.click(screen.getByRole("radio", { name: "空白配置" }));
   await user.type(screen.getByRole("textbox", { name: "配置名称" }), "Offline RP");
@@ -1058,7 +1048,7 @@ test.skip("configuration page creates a profile while no device is usable", asyn
       },
     }),
   );
-  expect(await screen.findByRole("heading", { name: "配置文件" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "高级设置" })).toBeInTheDocument();
   expect(screen.getByText("Offline RP")).toBeInTheDocument();
   expect(screen.queryByLabelText("当前编辑配置")).not.toBeInTheDocument();
   expect(currentSnapshot.devices).toHaveLength(0);
@@ -1315,33 +1305,6 @@ test("preserves a dirty Device Profile draft across a registry refresh", async (
   expect(
     screen.getByRole("button", { name: "2，1 项行为" }),
   ).toBeInTheDocument();
-});
-
-test.skip("keeps device management and configuration-file actions as separate work destinations", async () => {
-  render(<App />);
-
-  expect(
-    await screen.findByRole("heading", { name: "碳膜电话键盘" }),
-  ).toBeInTheDocument();
-  const navigation = screen.getByRole("navigation", { name: "配置" });
-  expect(navigation).not.toContainElement(
-    screen.getByRole("button", { name: "我的键盘" }),
-  );
-  expect(screen.getByRole("button", { name: "我的键盘" })).toHaveClass("is-active");
-  const devicesButton = screen.getByRole("button", { name: "设备" });
-  expect(devicesButton.querySelector(".lucide-usb")).not.toBeNull();
-  await userEvent.setup().click(devicesButton);
-  expect(screen.getByRole("heading", { name: "设备" })).toBeInTheDocument();
-  expect(screen.queryByLabelText("当前编辑配置")).toBeNull();
-  await userEvent
-    .setup()
-    .click(screen.getByRole("button", { name: "配置文件" }));
-  expect(screen.queryByLabelText("当前编辑配置")).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /删除.*碳膜电话键盘/ })).toBeInTheDocument();
-  expect(
-    screen.queryByRole("button", { name: /^保存$/ }),
-  ).not.toBeInTheDocument();
-  expect(document.body).not.toHaveTextContent("型号");
 });
 
 test("fetches selected Device metrics with an exact ID and renders its activity", async () => {
@@ -2438,7 +2401,7 @@ test("keeps a failed autosave and exposes retry", async () => {
   );
 });
 
-test.skip("previews a device profile before importing it", async () => {
+test("previews a device profile before importing it from advanced settings", async () => {
   const user = userEvent.setup();
   vi.mocked(open).mockResolvedValue("/tmp/device-profile.yaml");
   vi.mocked(invoke).mockImplementation(async (command) => {
@@ -2454,10 +2417,10 @@ test.skip("previews a device profile before importing it", async () => {
     return structuredClone(currentSnapshot);
   });
   render(<App />);
-  await screen.findByText("配置文件");
-
-  await user.click(screen.getByRole("button", { name: "配置文件" }));
-  await user.click(screen.getByRole("button", { name: "导入设备配置" }));
+  await screen.findByRole("button", { name: "设置" });
+  await user.click(screen.getByRole("button", { name: "设置" }));
+  await user.click(screen.getByRole("button", { name: "高级设置" }));
+  await user.click(screen.getByRole("button", { name: "导入配置" }));
   const dialog = await screen.findByRole("dialog", {
     name: "替换现有设备配置",
   });
@@ -2476,7 +2439,7 @@ test.skip("previews a device profile before importing it", async () => {
   );
 });
 
-test.skip("previews a full backup before restoring it", async () => {
+test("previews a full backup before restoring it from settings", async () => {
   const user = userEvent.setup();
   vi.mocked(open).mockResolvedValue("/tmp/backup.yaml");
   vi.mocked(invoke).mockImplementation(async (command) => {
@@ -2494,10 +2457,9 @@ test.skip("previews a full backup before restoring it", async () => {
     return structuredClone(currentSnapshot);
   });
   render(<App />);
-  await screen.findByText("配置文件");
-
-  await user.click(screen.getByRole("button", { name: "配置文件" }));
-  await user.click(screen.getByRole("button", { name: "恢复备份" }));
+  await screen.findByRole("button", { name: "设置" });
+  await user.click(screen.getByRole("button", { name: "设置" }));
+  await user.click(screen.getByRole("button", { name: "恢复" }));
   const dialog = await screen.findByRole("dialog", { name: "恢复全量备份" });
   expect(
     within(dialog).getByText(
@@ -2513,23 +2475,21 @@ test.skip("previews a full backup before restoring it", async () => {
   );
 });
 
-test.skip("deletes the last device profile and keeps configuration-file actions available", async () => {
+test("deletes the last device profile and keeps advanced profile actions available", async () => {
   const user = userEvent.setup();
   render(<App />);
-  await screen.findByText("配置文件");
-
-  await user.click(screen.getByRole("button", { name: "配置文件" }));
+  await screen.findByRole("button", { name: "设置" });
+  await user.click(screen.getByRole("button", { name: "设置" }));
+  await user.click(screen.getByRole("button", { name: "高级设置" }));
   await user.click(screen.getByRole("button", { name: /删除.*碳膜电话键盘/ }));
   const dialog = await screen.findByRole("dialog", { name: "删除设备配置" });
   await user.click(within(dialog).getByRole("button", { name: "确认" }));
 
   expect(await screen.findByText("还没有设备配置")).toBeInTheDocument();
   expect(
-    screen.getAllByRole("button", { name: "导入设备配置" }).length,
+    screen.getAllByRole("button", { name: "导入配置" }).length,
   ).toBeGreaterThan(0);
-  expect(
-    screen.getAllByRole("button", { name: "恢复备份" }).length,
-  ).toBeGreaterThan(0);
+  expect(screen.queryByRole("button", { name: "恢复" })).toBeNull();
 });
 
 test("keeps key learning secondary and collapsed by default", async () => {

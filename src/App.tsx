@@ -1160,7 +1160,6 @@ export default function App() {
               devices={devices}
               candidates={candidates}
               boardProfiles={boardProfiles}
-              deviceProfiles={deviceProfiles}
               metrics={deviceMetrics}
               onRename={renameManagedDevice}
               onForget={forgetManagedDevice}

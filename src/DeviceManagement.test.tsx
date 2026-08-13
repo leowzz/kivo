@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { DeviceManagement } from "./DeviceManagement";
-import type { BoardProfileSummary, CandidateStatus, DeviceProfile, DeviceStatus, HomeMetricsSnapshot } from "./types";
+import type { BoardProfileSummary, CandidateStatus, DeviceStatus, HomeMetricsSnapshot } from "./types";
 
 
 const boards: BoardProfileSummary[] = [
@@ -57,12 +57,6 @@ const metrics: HomeMetricsSnapshot = {
   logs: [{ timestampMs: 1, kind: "button", message: "A pressed", deviceId: "rp-a", deviceName: "RP2040 A", deviceProfileId: "profile-a", hardwareProfileId: "hardware-a", buttonId: "A" }],
 };
 
-const profiles: DeviceProfile[] = [
-  { schema_version: 3, profile: { id: "profile-a", name: "Counter Profile", groups: [] }, trigger_settings: { long_press_ms: 500, double_press_ms: 300 }, hardware_profiles: [{ id: "hardware-a", name: "Counter Hardware", board_profile_id: "rp2040-pad", debounce_ms: 20, inputs: [] }], actions: {} },
-  { schema_version: 3, profile: { id: "profile-b", name: "Timer Profile", groups: [] }, trigger_settings: { long_press_ms: 500, double_press_ms: 300 }, hardware_profiles: [{ id: "hardware-b", name: "Timer Hardware", board_profile_id: "rp2040-pad", debounce_ms: 20, inputs: [] }, { id: "hardware-b-alt", name: "Timer Hardware Alt", board_profile_id: "rp2040-pad", debounce_ms: 20, inputs: [] }, { id: "hardware-esp", name: "ESP Hardware", board_profile_id: "esp32-pad", debounce_ms: 20, inputs: [] }], actions: {} },
-  { schema_version: 3, profile: { id: "profile-esp", name: "ESP Profile", groups: [] }, trigger_settings: { long_press_ms: 500, double_press_ms: 300 }, hardware_profiles: [{ id: "hardware-esp-only", name: "ESP Only Hardware", board_profile_id: "esp32-pad", debounce_ms: 20, inputs: [] }], actions: {} },
-];
-
 function renderManagement(overrides: Partial<React.ComponentProps<typeof DeviceManagement>> = {}) {
   const props: React.ComponentProps<typeof DeviceManagement> = {
     language: "zh-CN",
@@ -74,7 +68,6 @@ function renderManagement(overrides: Partial<React.ComponentProps<typeof DeviceM
     ],
     candidates: [candidate()],
     boardProfiles: boards,
-    deviceProfiles: profiles,
     metrics: { deviceId: "rp-a", snapshot: metrics },
     onRename: vi.fn(),
     onForget: vi.fn(),
@@ -118,6 +111,8 @@ test("keeps professional configuration controls out of ordinary device details",
   expect(screen.queryByRole("tab", { name: "按键布局" })).not.toBeInTheDocument();
   expect(screen.queryByRole("tab", { name: "I/O 映射" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "配置设置" })).not.toBeInTheDocument();
+  expect(screen.queryByText("Counter Profile")).not.toBeInTheDocument();
+  expect(screen.queryByText("运行分配")).not.toBeInTheDocument();
   expect(screen.getByText("查看技术详情").closest("details")).not.toHaveAttribute("open");
 });
 
@@ -175,7 +170,7 @@ test("composes visible Board Profile search with non-All filters", async () => {
   expect(screen.getByRole("button", { name: /AD-001/ })).toBeInTheDocument();
 });
 
-test("shows compact selected-Device metrics with event-time activity attribution", () => {
+test("shows compact selected-Device metrics with profile-free activity attribution", () => {
   renderManagement({
     devices: [device({
       name: "Current Device Name",
@@ -208,11 +203,11 @@ test("shows compact selected-Device metrics with event-time activity attribution
   expect(summary).toHaveTextContent("最常用A");
   const activity = screen.getByText("A pressed before rename").closest("tr");
   expect(activity).toHaveTextContent("Event-time Device Name");
-  expect(activity).toHaveTextContent("profile-a");
-  expect(activity).toHaveTextContent("hardware-a");
   expect(activity).not.toHaveTextContent("Current Device Name");
   expect(activity).not.toHaveTextContent("profile-b");
   expect(activity).not.toHaveTextContent("hardware-b");
+  expect(activity).not.toHaveTextContent("profile-a");
+  expect(activity).not.toHaveTextContent("hardware-a");
 });
 
 test("preserves selected device identity across live replacements", () => {
@@ -485,7 +480,7 @@ test("closes stale forget confirmation when the device reconnects", async () => 
 });
 
 
-test("retains both raw IDs when only the stored Hardware Profile is missing", () => {
+test("shows invalid assignment as a status without exposing stored profile IDs", () => {
   renderManagement({
     devices: [device({
       assignment: "invalid_assignment",
@@ -496,10 +491,12 @@ test("retains both raw IDs when only the stored Hardware Profile is missing", ()
     })],
   });
 
-  expect(screen.getAllByText("profile-a")).toHaveLength(3);
+  expect(screen.getAllByText("分配需要修复")).toHaveLength(2);
+  expect(screen.queryByText("profile-a")).not.toBeInTheDocument();
+  expect(screen.queryByText("missing-hardware")).not.toBeInTheDocument();
 });
 
-test("retains both raw IDs when the stored Hardware Profile has the wrong Board Profile", () => {
+test("keeps assignment diagnostics profile-free when stored hardware targets another board", () => {
   renderManagement({
     devices: [device({
       assignment: "invalid_assignment",
@@ -510,5 +507,7 @@ test("retains both raw IDs when the stored Hardware Profile has the wrong Board 
     })],
   });
 
-  expect(screen.getAllByText("profile-b")).toHaveLength(2);
+  expect(screen.getAllByText("分配需要修复")).toHaveLength(2);
+  expect(screen.queryByText("profile-b")).not.toBeInTheDocument();
+  expect(screen.queryByText("hardware-esp")).not.toBeInTheDocument();
 });

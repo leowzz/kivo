@@ -14,7 +14,6 @@ import type {
   BoardProfileSummary,
   CandidateIssue,
   CandidateStatus,
-  DeviceProfile,
   DeviceStatus,
   HomeMetricsSnapshot,
   Language,
@@ -75,7 +74,6 @@ interface DeviceManagementProps {
   devices: DeviceStatus[];
   candidates: CandidateStatus[];
   boardProfiles: BoardProfileSummary[];
-  deviceProfiles: DeviceProfile[];
   metrics: { deviceId: string; snapshot: HomeMetricsSnapshot } | null;
   onRename(deviceId: string, name: string): void | Promise<void>;
   onForget(deviceId: string): void | Promise<void>;
@@ -88,16 +86,6 @@ interface DeviceManagementProps {
   onSelectedCandidateChange?(candidateKey: string | null): void;
 }
 
-function assignmentLabel(device: DeviceStatus, profiles: DeviceProfile[]) {
-  if (!device.runtimeAssignment) return "-";
-  const profile = profiles.find(
-    (item) => item.profile.id === device.runtimeAssignment?.device_profile_id,
-  );
-  if (device.assignment === "invalid_assignment") {
-    return device.runtimeAssignment.device_profile_id;
-  }
-  return profile?.profile.name ?? device.runtimeAssignment.device_profile_id;
-}
 function matches(values: string[], query: string) {
   const term = query.trim().toLocaleLowerCase();
   return (
@@ -146,7 +134,6 @@ export function DeviceManagement({
   devices,
   candidates,
   boardProfiles,
-  deviceProfiles,
   metrics,
   onRename,
   onForget,
@@ -405,7 +392,6 @@ export function DeviceManagement({
             <span>{t(language, "devices.name")}</span>
             <span>{t(language, "devices.board")}</span>
             <span>{t(language, "devices.status")}</span>
-            <span>{t(language, "devices.assignment")}</span>
           </div>
           <ul>
             {visibleDevices.map((device) => (
@@ -427,7 +413,6 @@ export function DeviceManagement({
                       device.boardProfileId}
                   </span>
                   <span title={status(device, language)}>{status(device, language)}</span>
-                  <span title={assignmentLabel(device, deviceProfiles)}>{assignmentLabel(device, deviceProfiles)}</span>
                 </button>
               </li>
             ))}
@@ -605,10 +590,6 @@ export function DeviceManagement({
               label={t(language, "devices.status")}
               value={status(selectedDevice, language)}
             />
-            <Detail
-              label={t(language, "devices.assignment")}
-              value={assignmentLabel(selectedDevice, deviceProfiles)}
-            />
             {selectedDevice.connection === "online" &&
               selectedDevice.mode === "runtime" &&
               selectedDevice.identity === "valid" &&
@@ -671,8 +652,6 @@ export function DeviceManagement({
                             <tr key={`${log.timestampMs}:${log.deviceId}:${log.deviceProfileId}:${log.hardwareProfileId}:${log.message}`}>
                               <td><time>{new Date(log.timestampMs).toLocaleTimeString()}</time></td>
                               <td>{log.deviceName}</td>
-                              <td>{log.deviceProfileId}</td>
-                              <td>{log.hardwareProfileId}</td>
                               <td>{log.message}</td>
                             </tr>
                           ))}
