@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { expect, test, vi } from "vitest";
@@ -129,6 +129,15 @@ function renderWizard(overrides: Partial<DeviceSetupWizardProps> = {}) {
   };
   return { ...render(<DeviceSetupWizard {...props} />), props };
 }
+
+test("focuses the close control and closes with Escape", () => {
+  const onClose = vi.fn();
+  renderWizard({ onClose });
+
+  expect(screen.getByRole("button", { name: "关闭" })).toHaveFocus();
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(onClose).toHaveBeenCalledOnce();
+});
 
 test("explains firmware failure, hides cu port until expanded, and retries the exact ID", async () => {
   const user = userEvent.setup();

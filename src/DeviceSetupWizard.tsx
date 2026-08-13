@@ -140,7 +140,9 @@ export function DeviceSetupWizard({
   const [hardwareProfileId, setHardwareProfileId] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
   const initializedDeviceId = useRef<string | null>(null);
+  const handledInputEvent = useRef<SetupInputEvent | null>(null);
   const eligibleDevices = useMemo(() => setupDevices(devices), [devices]);
   const selectedCandidate =
     candidates.find(
@@ -168,12 +170,16 @@ export function DeviceSetupWizard({
         : [],
     [deviceProfiles, selectedDevice],
   );
-  const selectedProfile =
-    compatible.find((profile) => profile.profile.id === deviceProfileId) ?? null;
-  const compatibleHardware =
-    selectedProfile?.hardware_profiles.filter(
+  const selectedProfile = useMemo(
+    () => compatible.find((profile) => profile.profile.id === deviceProfileId) ?? null,
+    [compatible, deviceProfileId],
+  );
+  const compatibleHardware = useMemo(
+    () => selectedProfile?.hardware_profiles.filter(
       (hardware) => hardware.board_profile_id === selectedDevice?.boardProfileId,
-    ) ?? [];
+    ) ?? [],
+    [selectedDevice?.boardProfileId, selectedProfile],
+  );
   const boardName = (boardProfileId: string) =>
     boardProfiles.find((board) => board.id === boardProfileId)?.displayName ??
     boardProfileId;
@@ -200,7 +206,9 @@ export function DeviceSetupWizard({
   }, [selectedDevice, targetId]);
 
   useEffect(() => {
-    if (!inputEvent || step !== "test" || inputEvent.deviceId !== selectedDevice?.deviceId) return;
+    if (!inputEvent || handledInputEvent.current === inputEvent) return;
+    handledInputEvent.current = inputEvent;
+    if (step !== "test" || inputEvent.deviceId !== selectedDevice?.deviceId) return;
     const hardware = compatibleHardware.find((item) => item.id === hardwareProfileId);
     const buttonId = resolveButton(hardware, inputEvent.input);
     if (!buttonId) return;
@@ -211,6 +219,22 @@ export function DeviceSetupWizard({
       return next;
     });
   }, [compatibleHardware, hardwareProfileId, inputEvent, selectedDevice?.deviceId, step]);
+
+  useEffect(() => {
+    if (!open) return;
+    closeButtonRef.current?.focus();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || pending) return;
+      event.preventDefault();
+      onClose();
+    };
+    window.addEventListener("keydown", handleEscape, true);
+    return () => window.removeEventListener("keydown", handleEscape, true);
+  }, [onClose, open, pending]);
 
   if (!open) return null;
 
@@ -297,6 +321,7 @@ export function DeviceSetupWizard({
         <header className="device-setup-header">
           <h2 id="device-setup-title">{t(language, "setup.title")}</h2>
           <button
+            ref={closeButtonRef}
             className="icon-button"
             type="button"
             aria-label={t(language, "common.close")}

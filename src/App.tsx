@@ -549,6 +549,24 @@ export default function App() {
     void refreshManagedDeviceMetrics(deviceId);
   }, [refreshManagedDeviceMetrics]);
 
+  const handleHardwareEditorSelection = useCallback((
+    hardwareProfileId: string | null,
+    deviceId: string | null,
+  ) => {
+    const device = deviceId ? devices.find((item) => item.deviceId === deviceId) : undefined;
+    const deviceProfileId = device?.runtimeAssignment?.device_profile_id ?? editorProfileConfig?.profile.id;
+    const next = hardwareProfileId && deviceProfileId
+      ? { deviceProfileId, hardwareProfileId, deviceId }
+      : null;
+    setHardwareEditorTarget((current) =>
+      current?.deviceProfileId === next?.deviceProfileId &&
+      current?.hardwareProfileId === next?.hardwareProfileId &&
+      current?.deviceId === next?.deviceId
+        ? current
+        : next,
+    );
+  }, [devices, editorProfileConfig?.profile.id]);
+
   const dirtyProfiles = useMemo(() => deviceProfiles.filter((profile) =>
     savedDeviceProfiles[profile.profile.id] !== JSON.stringify(profile)
   ), [deviceProfiles, savedDeviceProfiles]);
@@ -678,7 +696,7 @@ export default function App() {
               ? profileDraftsRef.current.get(activeLearningTarget.deviceProfileId) ?? profilesRef.current.find((profile) => profile.profile.id === activeLearningTarget.deviceProfileId)
               : editorSnapshot;
             if (payload.code === "learning_input" && payload.pressed && payload.learningTarget
-              && selectedRef.current && viewRef.current === "devices" && currentProfile && currentEditorTarget?.deviceId
+              && selectedRef.current && viewRef.current === "advanced" && currentProfile && currentEditorTarget?.deviceId
               && activeLearningTarget && learningTargetsMatch(payload.learningTarget, activeLearningTarget)
               && payload.deviceId === activeLearningTarget.deviceId
               && activeLearningTarget.deviceId === currentEditorTarget.deviceId
@@ -1104,7 +1122,7 @@ export default function App() {
         </div>
       )}
 
-      <div className={view === "keyboard" ? "product-workspace" : "product-workspace is-home"}>
+      <div className="product-workspace">
         <aside className="sidebar">
           <button className={`home-nav-button ${view === "keyboard" ? "is-active" : ""}`} type="button" onClick={() => void navigate("keyboard")}>
             {t(language, "nav.keyboard")}
@@ -1147,6 +1165,8 @@ export default function App() {
               onExport={(profile) => void exportProfile(profile)}
               onDelete={(profile) => setConfirmation({ kind: "delete", profile })}
               onRequestProfileMutation={requestDeviceProfileMutation}
+              onHardwareSelectionChange={handleHardwareEditorSelection}
+              onSelectButton={setSelectedButtonId}
               onDuplicateForDevice={async (profile, name) => {
                 if (!selectedDevice) return;
                 await duplicateManagedProfileForDevice({ deviceId: selectedDevice.deviceId, sourceProfile: profile, name });

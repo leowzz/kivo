@@ -96,6 +96,12 @@ test("keeps the keyboard editor geometry stable across desktop and narrow layout
   );
 });
 
+test("keeps narrow keypad labels readable while preserving configured counts", () => {
+  expect(viewCss).toMatch(
+    /@media \(max-width: 680px\)[\s\S]*?\.key-button \.key-state\s*\{[^}]*display:\s*none[^}]*\}/,
+  );
+});
+
 test("continues setup for an unassigned keyboard", () => {
   expect(renderWorkspace({
     device: device({ assignment: "unassigned", runtime: "inactive", runtimeAssignment: null }),

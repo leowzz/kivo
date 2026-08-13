@@ -183,6 +183,7 @@
 
 @media (max-width: 680px) {
   .keypad-stage { padding: 20px 14px; }
+  .key-button .key-state { display: none; }
   .action-panel { min-height: 440px; }
   .action-row-main { font-size: var(--text-11); }
 }

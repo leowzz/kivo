@@ -306,12 +306,12 @@ export const previewSnapshot: AppSnapshot = {
   candidates: [
     {
       key: "bootloader:1:7",
-      deviceId: "16:vccgnd-yd-rp2040E0C9125B0D9B",
-      mode: "runtime",
-      identity: "valid",
-      issue: "firmware_not_responding",
-      rawSerial: "E0C9125B0D9B",
-      port: "/dev/cu.usbmodem-rp-workbench",
+      deviceId: null,
+      mode: "bootloader",
+      identity: "invalid_identity",
+      issue: "invalid_identity",
+      rawSerial: null,
+      port: null,
       controllerFamilyId: "rp2040",
       boardProfileId: "vccgnd-yd-rp2040",
       latestError: null,

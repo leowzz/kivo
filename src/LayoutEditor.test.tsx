@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { expect, test } from "vitest";
+import { useState } from "react";
+import { expect, test, vi } from "vitest";
 import { LayoutEditor } from "./LayoutEditor";
 import type { ModelLayout } from "./types";
 
@@ -26,4 +27,19 @@ test("generates unique IDs and labels for new groups and buttons", async () => {
 
   await user.click(screen.getByRole("button", { name: "添加按键组" }));
   expect(screen.getAllByRole("textbox", { name: "按键组 ID" }).at(-1)).toHaveValue("GROUP_2");
+});
+
+test("notifies an embedded parent outside the state updater", async () => {
+  const user = userEvent.setup();
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  function Harness() {
+    const [current, setCurrent] = useState(layout);
+    return <LayoutEditor layout={current} language="zh-CN" onChange={setCurrent} />;
+  }
+
+  render(<Harness />);
+  await user.click(screen.getByRole("button", { name: "添加按键" }));
+
+  expect(consoleError.mock.calls.flat().join(" ")).not.toContain("Cannot update a component");
+  consoleError.mockRestore();
 });

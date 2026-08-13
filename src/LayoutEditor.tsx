@@ -68,10 +68,15 @@ export function LayoutEditor({ layout, language, open, onCancel = () => undefine
   const embedded = open === undefined;
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [draft, setDraft] = useState<DraftLayout | null>(null);
+  const draftRef = useRef<DraftLayout | null>(null);
   const zh = language === "zh-CN";
   const label = (chinese: string, english: string) => zh ? chinese : english;
   useEffect(() => {
-    if (embedded || open) setDraft(layout ? { ...layout, groups: layout.groups.map((group) => ({ ...group, buttons: group.buttons.map((button) => ({ ...button })) })) } : null);
+    if (embedded || open) {
+      const next = layout ? { ...layout, groups: layout.groups.map((group) => ({ ...group, buttons: group.buttons.map((button) => ({ ...button })) })) } : null;
+      draftRef.current = next;
+      setDraft(next);
+    }
   }, [embedded, layout, open]);
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -80,12 +85,14 @@ export function LayoutEditor({ layout, language, open, onCancel = () => undefine
     if (!open && dialog.open) dialog.close();
   }, [embedded, open]);
   const error = useMemo(() => validationError(draft, language), [draft, language]);
-  const updateDraft = (update: (current: DraftLayout) => DraftLayout) => setDraft((current) => {
+  const updateDraft = (update: (current: DraftLayout) => DraftLayout) => {
+    const current = draftRef.current;
     if (!current) return current;
     const next = update(current);
+    draftRef.current = next;
+    setDraft(next);
     if (embedded && !validationError(next, language)) onChange?.(toLayout(next));
-    return next;
-  });
+  };
   const updateGroup = (groupIndex: number, update: (group: DraftGroup) => DraftGroup) => updateDraft((current) => ({ ...current, groups: current.groups.map((group, index) => index === groupIndex ? update(group) : group) }));
   const apply = () => {
     if (!draft || error) return;

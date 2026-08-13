@@ -12,7 +12,7 @@ const device: DeviceStatus = { deviceId: "device-a", name: "Desk", connection: "
 
 test("keeps advanced sections in a fixed order and shows selected device details", async () => {
   const user = userEvent.setup();
-  render(<AdvancedSettings language="zh-CN" profiles={[profile]} editorProfileId="profile-a" devices={[device]} selectedDevice={device} boardProfiles={[board]} onCreate={vi.fn()} onSelectProfile={vi.fn()} onImport={vi.fn()} onExport={vi.fn()} onDelete={vi.fn()} onRequestProfileMutation={vi.fn()} onDuplicateForDevice={vi.fn()} onBeginLearning={vi.fn()} onEndLearning={vi.fn()} />);
+  render(<AdvancedSettings language="zh-CN" profiles={[profile]} editorProfileId="profile-a" devices={[device]} selectedDevice={device} boardProfiles={[board]} onCreate={vi.fn()} onSelectProfile={vi.fn()} onImport={vi.fn()} onExport={vi.fn()} onDelete={vi.fn()} onRequestProfileMutation={vi.fn()} onDuplicateForDevice={vi.fn()} onHardwareSelectionChange={vi.fn()} onBeginLearning={vi.fn()} onEndLearning={vi.fn()} />);
 
   expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["配置文件", "按键布局", "I/O 映射", "技术信息"]);
   await user.click(screen.getByRole("tab", { name: "技术信息" }));
@@ -26,7 +26,7 @@ test("keeps advanced sections in a fixed order and shows selected device details
 test("uses the gated mutation callback for layout edits", async () => {
   const user = userEvent.setup();
   const onRequestProfileMutation = vi.fn();
-  render(<AdvancedSettings language="zh-CN" profiles={[profile]} editorProfileId="profile-a" devices={[device]} selectedDevice={device} boardProfiles={[board]} onCreate={vi.fn()} onSelectProfile={vi.fn()} onImport={vi.fn()} onExport={vi.fn()} onDelete={vi.fn()} onRequestProfileMutation={onRequestProfileMutation} onDuplicateForDevice={vi.fn()} onBeginLearning={vi.fn()} onEndLearning={vi.fn()} />);
+  render(<AdvancedSettings language="zh-CN" profiles={[profile]} editorProfileId="profile-a" devices={[device]} selectedDevice={device} boardProfiles={[board]} onCreate={vi.fn()} onSelectProfile={vi.fn()} onImport={vi.fn()} onExport={vi.fn()} onDelete={vi.fn()} onRequestProfileMutation={onRequestProfileMutation} onDuplicateForDevice={vi.fn()} onHardwareSelectionChange={vi.fn()} onBeginLearning={vi.fn()} onEndLearning={vi.fn()} />);
 
   await user.click(screen.getByRole("tab", { name: "按键布局" }));
   await user.click(screen.getByRole("button", { name: "添加按键" }));
@@ -35,7 +35,7 @@ test("uses the gated mutation callback for layout edits", async () => {
 
 test("keeps device technical details unavailable without a runtime assignment", async () => {
   const user = userEvent.setup();
-  render(<AdvancedSettings language="zh-CN" profiles={[profile]} editorProfileId="profile-a" devices={[device]} selectedDevice={{ ...device, runtimeAssignment: null }} boardProfiles={[board]} onCreate={vi.fn()} onSelectProfile={vi.fn()} onImport={vi.fn()} onExport={vi.fn()} onDelete={vi.fn()} onRequestProfileMutation={vi.fn()} onDuplicateForDevice={vi.fn()} onBeginLearning={vi.fn()} onEndLearning={vi.fn()} />);
+  render(<AdvancedSettings language="zh-CN" profiles={[profile]} editorProfileId="profile-a" devices={[device]} selectedDevice={{ ...device, runtimeAssignment: null }} boardProfiles={[board]} onCreate={vi.fn()} onSelectProfile={vi.fn()} onImport={vi.fn()} onExport={vi.fn()} onDelete={vi.fn()} onRequestProfileMutation={vi.fn()} onDuplicateForDevice={vi.fn()} onHardwareSelectionChange={vi.fn()} onBeginLearning={vi.fn()} onEndLearning={vi.fn()} />);
 
   await user.click(screen.getByRole("tab", { name: "技术信息" }));
   expect(screen.getByText("请选择一台已分配设备以查看技术信息。")).toBeInTheDocument();
@@ -45,7 +45,7 @@ test("keeps device technical details unavailable without a runtime assignment", 
 test("edits the selected editor profile offline through the mutation callback", async () => {
   const user = userEvent.setup();
   const onRequestProfileMutation = vi.fn();
-  render(<AdvancedSettings language="zh-CN" profiles={[profile]} editorProfileId="profile-a" devices={[]} selectedDevice={null} boardProfiles={[board]} onCreate={vi.fn()} onSelectProfile={vi.fn()} onImport={vi.fn()} onExport={vi.fn()} onDelete={vi.fn()} onRequestProfileMutation={onRequestProfileMutation} onDuplicateForDevice={vi.fn()} onBeginLearning={vi.fn()} onEndLearning={vi.fn()} />);
+  render(<AdvancedSettings language="zh-CN" profiles={[profile]} editorProfileId="profile-a" devices={[]} selectedDevice={null} boardProfiles={[board]} onCreate={vi.fn()} onSelectProfile={vi.fn()} onImport={vi.fn()} onExport={vi.fn()} onDelete={vi.fn()} onRequestProfileMutation={onRequestProfileMutation} onDuplicateForDevice={vi.fn()} onHardwareSelectionChange={vi.fn()} onBeginLearning={vi.fn()} onEndLearning={vi.fn()} />);
 
   await user.click(screen.getByRole("tab", { name: "按键布局" }));
   await user.click(screen.getByRole("button", { name: "添加按键" }));
@@ -55,10 +55,19 @@ test("edits the selected editor profile offline through the mutation callback", 
   expect(screen.getByRole("button", { name: "开始学习" })).toBeDisabled();
 });
 
+test("reports the active hardware and device from the I/O panel", async () => {
+  const user = userEvent.setup();
+  const onHardwareSelectionChange = vi.fn();
+  render(<AdvancedSettings language="zh-CN" profiles={[profile]} editorProfileId="profile-a" devices={[device]} selectedDevice={device} boardProfiles={[board]} onCreate={vi.fn()} onSelectProfile={vi.fn()} onImport={vi.fn()} onExport={vi.fn()} onDelete={vi.fn()} onRequestProfileMutation={vi.fn()} onDuplicateForDevice={vi.fn()} onHardwareSelectionChange={onHardwareSelectionChange} onBeginLearning={vi.fn()} onEndLearning={vi.fn()} />);
+
+  await user.click(screen.getByRole("tab", { name: "I/O 映射" }));
+  expect(onHardwareSelectionChange).toHaveBeenLastCalledWith("hardware-a", "device-a");
+});
+
 test("routes offline trigger thresholds through the mutation callback", async () => {
   const user = userEvent.setup();
   const onRequestProfileMutation = vi.fn();
-  render(<AdvancedSettings language="zh-CN" profiles={[profile]} editorProfileId="profile-a" devices={[]} selectedDevice={null} boardProfiles={[board]} onCreate={vi.fn()} onSelectProfile={vi.fn()} onImport={vi.fn()} onExport={vi.fn()} onDelete={vi.fn()} onRequestProfileMutation={onRequestProfileMutation} onDuplicateForDevice={vi.fn()} onBeginLearning={vi.fn()} onEndLearning={vi.fn()} />);
+  render(<AdvancedSettings language="zh-CN" profiles={[profile]} editorProfileId="profile-a" devices={[]} selectedDevice={null} boardProfiles={[board]} onCreate={vi.fn()} onSelectProfile={vi.fn()} onImport={vi.fn()} onExport={vi.fn()} onDelete={vi.fn()} onRequestProfileMutation={onRequestProfileMutation} onDuplicateForDevice={vi.fn()} onHardwareSelectionChange={vi.fn()} onBeginLearning={vi.fn()} onEndLearning={vi.fn()} />);
 
   await user.click(screen.getByRole("tab", { name: "按键布局" }));
   await user.click(screen.getByRole("button", { name: "配置设置" }));
@@ -71,7 +80,7 @@ test("routes offline trigger thresholds through the mutation callback", async ()
 test("does not invoke device duplication for an unassigned selected device", async () => {
   const user = userEvent.setup();
   const onDuplicateForDevice = vi.fn();
-  render(<AdvancedSettings language="zh-CN" profiles={[profile]} editorProfileId="profile-a" devices={[device]} selectedDevice={{ ...device, assignment: "unassigned", runtimeAssignment: null }} boardProfiles={[board]} onCreate={vi.fn()} onSelectProfile={vi.fn()} onImport={vi.fn()} onExport={vi.fn()} onDelete={vi.fn()} onRequestProfileMutation={vi.fn()} onDuplicateForDevice={onDuplicateForDevice} onBeginLearning={vi.fn()} onEndLearning={vi.fn()} />);
+  render(<AdvancedSettings language="zh-CN" profiles={[profile]} editorProfileId="profile-a" devices={[device]} selectedDevice={{ ...device, assignment: "unassigned", runtimeAssignment: null }} boardProfiles={[board]} onCreate={vi.fn()} onSelectProfile={vi.fn()} onImport={vi.fn()} onExport={vi.fn()} onDelete={vi.fn()} onRequestProfileMutation={vi.fn()} onDuplicateForDevice={onDuplicateForDevice} onHardwareSelectionChange={vi.fn()} onBeginLearning={vi.fn()} onEndLearning={vi.fn()} />);
 
   await user.click(screen.getByRole("tab", { name: "按键布局" }));
   await user.click(screen.getByRole("button", { name: "配置设置" }));

@@ -172,9 +172,8 @@ grep -Fq -- '--firmware .pio/build/rp2040/firmware.uf2' <<<"$rp2040_upload_body"
 grep -Fq 'runtime_serial=' <<<"$rp2040_upload_body"
 test "$(grep -n -- 'scripts/upload_rp2040.py' <<<"$rp2040_upload_body" | cut -d: -f1)" -lt "$(grep -n 'verify_runtime_firmware.py' <<<"$rp2040_upload_body" | cut -d: -f1)"
 
-grep -Eq '^upload:[[:space:]]*$' "$MAKEFILE"
+grep -Eq '^upload:[[:space:]]+upload-rp2040[[:space:]]*$' "$MAKEFILE"
 upload_body="$(target_body upload)"
-grep -Fq 'exit 2' <<<"$upload_body"
 ! grep -Fq 'SERIAL=' <<<"$upload_body"
 ! grep -Eq '(upload-esp32s3|upload-rp2040|enter_download_mode|picotool)' <<<"$upload_body"
 
