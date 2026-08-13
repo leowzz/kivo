@@ -205,7 +205,7 @@ function deferred<Value>() {
 }
 
 async function openActionDialog(user: ReturnType<typeof userEvent.setup>, type: "paste" | "hotkey" = "hotkey") {
-  await user.click(screen.getByRole("button", { name: "添加行为" }));
+  await user.click(screen.getByRole("button", { name: "添加其他行为" }));
   await user.selectOptions(screen.getByLabelText("行为类型"), type);
 }
 
