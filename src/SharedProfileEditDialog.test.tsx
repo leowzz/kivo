@@ -47,3 +47,21 @@ test("only offers the shared scope when the profile is not assigned to the curre
   expect(screen.queryByRole("button", { name: "仅修改这台键盘" })).toBeNull();
   expect(screen.getByRole("button", { name: "同步修改 2 台键盘" })).toBeInTheDocument();
 });
+
+test("disables every scope choice and dismissal control while submitting", () => {
+  render(
+    <SharedProfileEditDialog
+      language="zh-CN"
+      deviceName="前台键盘"
+      profileName="碳膜电话键盘"
+      affectedDeviceCount={2}
+      allowDeviceScope
+      submitting
+      onChoose={vi.fn()}
+      onCancel={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByRole("dialog")).toHaveAttribute("aria-busy", "true");
+  for (const button of screen.getAllByRole("button")) expect(button).toBeDisabled();
+});

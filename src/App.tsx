@@ -259,6 +259,7 @@ export default function App() {
   const [profileCreatorSourceId, setProfileCreatorSourceId] = useState<string | null>(null);
   const [pendingProfileMutation, setPendingProfileMutation] = useState<PendingProfileMutation | null>(null);
   const [confirmedSharedRelationship, setConfirmedSharedRelationship] = useState<string | null>(null);
+  const [sharedProfileEditSubmitting, setSharedProfileEditSubmitting] = useState(false);
   const pressedOwnersRef = useRef<Map<string, PressedOwner>>(new Map());
   const mountedRef = useRef(true);
   const registryEpochRef = useRef(0);
@@ -276,6 +277,7 @@ export default function App() {
   const autosaveTargetRef = useRef<ProfileAutosaveTarget>({ profiles: [] });
   const persistedProfileSavesRef = useRef<Map<string, PersistedProfileSave>>(new Map());
   const setupSeenRef = useRef<Set<string>>(new Set());
+  const sharedProfileEditSubmittingRef = useRef(false);
 
   const { deviceProfiles, editorProfile, boardProfiles, devices, candidates } = registry;
   const selectedDeviceIdValue = selectDeviceId(selectedDeviceId, devices);
@@ -313,6 +315,8 @@ export default function App() {
   useEffect(() => {
     setConfirmedSharedRelationship(null);
     setPendingProfileMutation(null);
+    sharedProfileEditSubmittingRef.current = false;
+    setSharedProfileEditSubmitting(false);
   }, [profileMutationContextKey]);
 
   const selectPhysicalDevice = useCallback((deviceId: string) => {
@@ -912,6 +916,7 @@ export default function App() {
   }, [confirmedSharedRelationship, devices, profileMutationTarget, selectedDevice, updateProfile]);
 
   const chooseSharedProfileEditScope = useCallback(async (scope: "device" | "shared") => {
+    if (sharedProfileEditSubmittingRef.current) return;
     const pending = pendingProfileMutation;
     if (!pending) return;
     const profile = profileById(pending.profileId);
@@ -920,13 +925,15 @@ export default function App() {
       setPendingProfileMutation(null);
       return;
     }
-    if (scope === "shared") {
-      setConfirmedSharedRelationship(`${pending.deviceId}:${pending.profileId}`);
-      setPendingProfileMutation(null);
-      updateProfile(pending.profileId, pending.apply);
-      return;
-    }
+    sharedProfileEditSubmittingRef.current = true;
+    setSharedProfileEditSubmitting(true);
     try {
+      if (scope === "shared") {
+        setConfirmedSharedRelationship(`${pending.deviceId}:${pending.profileId}`);
+        setPendingProfileMutation(null);
+        updateProfile(pending.profileId, pending.apply);
+        return;
+      }
       await duplicateManagedProfileForDevice({
         deviceId: pending.deviceId,
         sourceProfile: pending.apply(profile),
@@ -935,6 +942,9 @@ export default function App() {
       setPendingProfileMutation(null);
     } catch (duplicateError) {
       setError(`${t(language, "error.save")}: ${errorMessage(duplicateError)}`);
+    } finally {
+      sharedProfileEditSubmittingRef.current = false;
+      setSharedProfileEditSubmitting(false);
     }
   }, [devices, duplicateManagedProfileForDevice, language, pendingProfileMutation, profileById, updateProfile]);
 
@@ -1411,8 +1421,11 @@ export default function App() {
           profileName={profile.profile.name}
           affectedDeviceCount={affectedDeviceCount}
           allowDeviceScope={device.runtimeAssignment?.device_profile_id === pendingProfileMutation.profileId}
+          submitting={sharedProfileEditSubmitting}
           onChoose={(scope) => void chooseSharedProfileEditScope(scope)}
-          onCancel={() => setPendingProfileMutation(null)}
+          onCancel={() => {
+            if (!sharedProfileEditSubmitting) setPendingProfileMutation(null);
+          }}
         />;
       })()}
 

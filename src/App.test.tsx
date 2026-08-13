@@ -607,8 +607,9 @@ test("duplicates the edited shared profile for the current keyboard", async () =
 
 test("keeps the original assignment and allows retrying a failed device-only copy", async () => {
   currentSnapshot.devices.push(device({ deviceId: "device-second", name: "后台键盘" }));
+  let copyFailures = 1;
   vi.mocked(invoke).mockImplementation(async (command) => {
-    if (command === "duplicate_profile_for_device") throw new Error("copy failed");
+    if (command === "duplicate_profile_for_device" && copyFailures-- > 0) throw new Error("copy failed");
     return structuredClone(currentSnapshot);
   });
   const user = userEvent.setup();
@@ -623,8 +624,39 @@ test("keeps the original assignment and allows retrying a failed device-only cop
 
   expect(await screen.findByText(/保存失败: copy failed/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "仅修改这台键盘" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "仅修改这台键盘" })).toBeEnabled();
   expect(screen.getByRole("button", { name: "确认，0 项行为" })).toBeInTheDocument();
   expect(currentSnapshot.devices[0].runtimeAssignment?.device_profile_id).toBe(deviceProfile.profile.id);
+  await user.click(screen.getByRole("button", { name: "仅修改这台键盘" }));
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "duplicate_profile_for_device")).toHaveLength(2));
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("submits a device-only shared-profile copy once and enables retry after failure", async () => {
+  currentSnapshot.devices.push(device({ deviceId: "device-second", name: "后台键盘" }));
+  const pendingCopy = deferred<AppSnapshot>();
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "duplicate_profile_for_device") {
+      return pendingCopy.promise;
+    }
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(await screen.findByRole("button", { name: "确认，0 项行为" }));
+  await user.click(screen.getByRole("button", { name: "重命名按键 确认" }));
+  await user.clear(screen.getByRole("textbox", { name: "按键名称" }));
+  await user.type(screen.getByRole("textbox", { name: "按键名称" }), "单次复制");
+  await user.click(screen.getByRole("button", { name: "确认重命名" }));
+  const deviceOnly = await screen.findByRole("button", { name: "仅修改这台键盘" });
+  await user.dblClick(deviceOnly);
+
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "duplicate_profile_for_device")).toHaveLength(1));
+  expect(screen.getByRole("dialog")).toHaveAttribute("aria-busy", "true");
+  expect(deviceOnly).toBeDisabled();
+  pendingCopy.resolve(structuredClone(currentSnapshot));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });
 
 test("prompts to connect a keyboard when the device registry is empty", async () => {

@@ -8,6 +8,7 @@ interface SharedProfileEditDialogProps {
   profileName: string;
   affectedDeviceCount: number;
   allowDeviceScope: boolean;
+  submitting?: boolean;
   onChoose(scope: "device" | "shared"): void;
   onCancel(): void;
 }
@@ -18,19 +19,20 @@ export function SharedProfileEditDialog({
   profileName,
   affectedDeviceCount,
   allowDeviceScope,
+  submitting = false,
   onChoose,
   onCancel,
 }: SharedProfileEditDialogProps) {
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
-    if (event.target === event.currentTarget) onCancel();
+    if (!submitting && event.target === event.currentTarget) onCancel();
   }}>
-    <section className="shared-profile-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="shared-profile-edit-title">
+    <section className="shared-profile-edit-dialog" role="dialog" aria-modal="true" aria-busy={submitting} aria-labelledby="shared-profile-edit-title">
       <header className="shared-profile-edit-header">
         <div>
           <Info size={18} aria-hidden="true" />
           <h2 id="shared-profile-edit-title">{t(language, "sharedEdit.title")}</h2>
         </div>
-        <button className="icon-button" type="button" aria-label={t(language, "common.close")} title={t(language, "common.close")} onClick={onCancel}>
+        <button className="icon-button" type="button" aria-label={t(language, "common.close")} title={t(language, "common.close")} disabled={submitting} onClick={onCancel}>
           <X size={17} />
         </button>
       </header>
@@ -39,11 +41,11 @@ export function SharedProfileEditDialog({
         <p className="shared-profile-edit-warning">{t(language, "sharedEdit.warning")}</p>
       </div>
       <footer className="shared-profile-edit-actions">
-        <button type="button" onClick={onCancel}>{t(language, "common.cancel")}</button>
-        {allowDeviceScope && <button className="primary-button" type="button" onClick={() => onChoose("device")}>
+        <button type="button" disabled={submitting} onClick={onCancel}>{t(language, "common.cancel")}</button>
+        {allowDeviceScope && <button className="primary-button" type="button" disabled={submitting} onClick={() => onChoose("device")}>
           {t(language, "sharedEdit.device")}
         </button>}
-        <button type="button" onClick={() => onChoose("shared")}>
+        <button type="button" disabled={submitting} onClick={() => onChoose("shared")}>
           {t(language, "sharedEdit.shared", { count: affectedDeviceCount })}
         </button>
       </footer>
