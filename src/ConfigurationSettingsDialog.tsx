@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
 import { t } from "./i18n";
 import type { DeviceProfile, Language, TriggerSettings } from "./types";
+import { useModalFocus } from "./useModalFocus";
 
 export interface ConfigurationSettingsDialogProps {
   open: boolean;
@@ -31,6 +32,7 @@ export function ConfigurationSettingsDialog({
   const [settings, setSettings] = useState<TriggerSettings>(profile.trigger_settings);
   const [copyName, setCopyName] = useState(profile.profile.name);
   const [busy, setBusy] = useState(false);
+  const dialogRef = useModalFocus(open, busy, onCancel);
 
   useEffect(() => {
     if (!open) return;
@@ -52,7 +54,7 @@ export function ConfigurationSettingsDialog({
 
   return (
     <div className="modal-backdrop" role="presentation">
-      <section className="device-setup-dialog configuration-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="configuration-settings-title">
+      <section ref={dialogRef} className="device-setup-dialog configuration-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="configuration-settings-title">
         <header className="device-setup-header">
           <h2 id="configuration-settings-title">{t(language, "settings.title")}</h2>
           <button className="icon-button" type="button" aria-label={t(language, "common.close")} title={t(language, "common.close")} onClick={onCancel}><X size={17} aria-hidden="true" /></button>

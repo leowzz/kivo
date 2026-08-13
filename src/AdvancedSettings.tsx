@@ -10,6 +10,7 @@ export type AdvancedSection = "profiles" | "layout" | "io" | "technical";
 type ProfileMutation = (profile: DeviceProfile) => DeviceProfile;
 
 export interface AdvancedSettingsProps {
+  initialSection?: AdvancedSection;
   language: Language;
   profiles: DeviceProfile[];
   editorProfileId: string | null;
@@ -32,7 +33,7 @@ export interface AdvancedSettingsProps {
 const sections: AdvancedSection[] = ["profiles", "layout", "io", "technical"];
 
 export function AdvancedSettings(props: AdvancedSettingsProps) {
-  const [section, setSection] = useState<AdvancedSection>("profiles");
+  const [section, setSection] = useState<AdvancedSection>(props.initialSection ?? "profiles");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
   const target = useMemo(() => {

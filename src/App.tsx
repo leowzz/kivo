@@ -41,6 +41,7 @@ import type {
   TriggerActions,
 } from "./types";
 import { SerializedSaveQueue, useAutosave } from "./useAutosave";
+import { useModalFocus } from "./useModalFocus";
 
 type View = "keyboard" | "devices" | "settings" | "advanced";
 type Confirmation =
@@ -209,6 +210,7 @@ export default function App() {
   const [savedDeviceProfiles, setSavedDeviceProfiles] = useState<Record<string, string>>({});
   const [language, setLanguage] = useState<Language>("zh-CN");
   const [view, setView] = useState<View>("keyboard");
+  const [advancedInitialSection, setAdvancedInitialSection] = useState<"profiles" | "io">("profiles");
   const [homeMetrics, setHomeMetrics] = useState<AppSnapshot["homeMetrics"]>(null);
   const [deviceMetrics, setDeviceMetrics] = useState<{ deviceId: string; snapshot: HomeMetricsSnapshot } | null>(null);
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
@@ -230,6 +232,11 @@ export default function App() {
   const [setupInputEvent, setSetupInputEvent] = useState<SetupInputEvent | null>(null);
   const [profileCreatorOpen, setProfileCreatorOpen] = useState(false);
   const [profileCreatorSourceId, setProfileCreatorSourceId] = useState<string | null>(null);
+  const closeProfileCreator = useCallback(() => {
+    setProfileCreatorOpen(false);
+    setProfileCreatorSourceId(null);
+  }, []);
+  const profileCreatorDialogRef = useModalFocus(profileCreatorOpen, false, closeProfileCreator);
   const [pendingProfileMutation, setPendingProfileMutation] = useState<PendingProfileMutation | null>(null);
   const [confirmedSharedRelationship, setConfirmedSharedRelationship] = useState<string | null>(null);
   const [sharedProfileEditSubmitting, setSharedProfileEditSubmitting] = useState(false);
@@ -926,6 +933,7 @@ export default function App() {
     deviceId: string,
     name: string,
     assignment: RuntimeAssignment,
+    destination: "keyboard" | "advanced" = "keyboard",
   ) => {
     await autosave.flush();
     const completed = await invoke<AppSnapshot>("complete_device_setup", {
@@ -955,7 +963,9 @@ export default function App() {
       hardwareProfileId: assignment.hardware_profile_id,
     });
     setSetupOpen(false);
-    setView("keyboard");
+    setSetupInputEvent(null);
+    if (destination === "advanced") setAdvancedInitialSection("io");
+    setView(destination);
   };
 
   const run = async (label: string, task: () => Promise<void>) => {
@@ -1149,10 +1159,14 @@ export default function App() {
                 if (path) await invoke("export_backup", { path });
               })}
               onRestore={() => void chooseRestore()}
-              onOpenAdvanced={() => void navigate("advanced")}
+              onOpenAdvanced={() => {
+                setAdvancedInitialSection("profiles");
+                void navigate("advanced");
+              }}
             />
           ) : view === "advanced" ? (
             <><div className="advanced-back"><button type="button" onClick={() => void navigate("settings")}>{t(language, "common.back")}</button></div><AdvancedSettings
+              initialSection={advancedInitialSection}
               language={language}
               profiles={deviceProfiles}
               editorProfileId={editorProfile}
@@ -1223,6 +1237,7 @@ export default function App() {
       {profileCreatorOpen && (
         <div className="modal-backdrop" role="presentation">
           <section
+            ref={profileCreatorDialogRef}
             className="device-setup-dialog profile-create-dialog"
             role="dialog"
             aria-modal="true"
@@ -1235,10 +1250,7 @@ export default function App() {
                 type="button"
                 aria-label={t(language, "common.close")}
                 title={t(language, "common.close")}
-                onClick={() => {
-                  setProfileCreatorOpen(false);
-                  setProfileCreatorSourceId(null);
-                }}
+                onClick={closeProfileCreator}
               >
                 <X size={17} />
               </button>
@@ -1255,10 +1267,7 @@ export default function App() {
                   setProfileCreatorSourceId(null);
                   setView("advanced");
                 }}
-                onCancel={() => {
-                  setProfileCreatorOpen(false);
-                  setProfileCreatorSourceId(null);
-                }}
+                onCancel={closeProfileCreator}
               />
             </div>
           </section>
@@ -1303,6 +1312,13 @@ export default function App() {
         onRetryCandidate={retrySetupCandidate}
         onCreateProfile={createDeviceProfile}
         onComplete={completeDeviceSetup}
+        onOpenAdvanced={(deviceId, deviceProfileId, hardwareProfileId) => void run(
+          t(language, "setup.openAdvancedIo"),
+          () => completeDeviceSetup(deviceId, devices.find((device) => device.deviceId === deviceId)?.name ?? t(language, "setup.newKeyboard"), {
+            device_profile_id: deviceProfileId,
+            hardware_profile_id: hardwareProfileId,
+          }, "advanced"),
+        )}
         onClose={() => {
           setSetupOpen(false);
           setSetupInputEvent(null);

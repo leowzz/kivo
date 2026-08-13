@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { SharedProfileEditDialog } from "./SharedProfileEditDialog";
@@ -64,4 +64,20 @@ test("disables every scope choice and dismissal control while submitting", () =>
 
   expect(screen.getByRole("dialog")).toHaveAttribute("aria-busy", "true");
   for (const button of screen.getAllByRole("button")) expect(button).toBeDisabled();
+});
+
+test("keeps focus inside and closes with Escape", async () => {
+  const user = userEvent.setup();
+  const onCancel = vi.fn();
+  render(
+    <SharedProfileEditDialog language="zh-CN" deviceName="前台键盘" profileName="共享配置" affectedDeviceCount={2} allowDeviceScope onChoose={vi.fn()} onCancel={onCancel} />,
+  );
+  const buttons = screen.getAllByRole("button");
+  expect(buttons[0]).toHaveFocus();
+  await user.tab({ shift: true });
+  expect(buttons[buttons.length - 1]).toHaveFocus();
+  await user.tab();
+  expect(buttons[0]).toHaveFocus();
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(onCancel).toHaveBeenCalledOnce();
 });

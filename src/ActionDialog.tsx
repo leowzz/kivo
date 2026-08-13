@@ -3,6 +3,7 @@ import { HotkeyPicker, hotkeyValidationMessage } from "./HotkeyPicker";
 import { validateHotkey } from "./hotkey";
 import { t, type MessageKey } from "./i18n";
 import type { ActionTrigger, ButtonAction, Language, MediaCommand } from "./types";
+import { useModalFocus } from "./useModalFocus";
 
 export type ActionDraft = { trigger: ActionTrigger; action: ButtonAction };
 
@@ -71,17 +72,7 @@ export function ActionDialog({ open, language, mode, initial, onSave, onDelete, 
     setError(null);
   }, [initial, open]);
 
-  useEffect(() => {
-    if (!open) return;
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      if (recording) return;
-      event.preventDefault();
-      onCancel();
-    };
-    window.addEventListener("keydown", handleEscape, true);
-    return () => window.removeEventListener("keydown", handleEscape, true);
-  }, [onCancel, open, recording]);
+  const dialogRef = useModalFocus(open, recording, onCancel);
 
   if (!open) return null;
 
@@ -102,7 +93,7 @@ export function ActionDialog({ open, language, mode, initial, onSave, onDelete, 
 
   return (
     <div className="dialog-backdrop" role="presentation">
-      <section className="action-dialog" role="dialog" aria-modal="true" aria-labelledby="action-dialog-title">
+      <section ref={dialogRef} className="action-dialog" role="dialog" aria-modal="true" aria-labelledby="action-dialog-title">
         <div className="dialog-heading">
           <h2 id="action-dialog-title">{t(language, mode === "edit" ? "behavior.editAction" : "behavior.add")}</h2>
         </div>

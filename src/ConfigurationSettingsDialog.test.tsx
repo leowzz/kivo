@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 // Vitest runs this source assertion in Node, while the production tsconfig excludes Node globals.
 // @ts-expect-error Test-only Node module.
@@ -67,4 +67,21 @@ test("rejects non-integer timing values", async () => {
   await user.type(screen.getByRole("spinbutton", { name: "双击阈值" }), "12.5");
   expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
   expect(screen.getByRole("alert")).toHaveTextContent("整数");
+});
+
+test("keeps focus inside and closes with Escape", async () => {
+  const user = userEvent.setup();
+  const onCancel = vi.fn();
+  render(
+    <ConfigurationSettingsDialog open profile={profile} sharedDeviceCount={1} onSave={vi.fn()} onDuplicate={vi.fn()} onCancel={onCancel} />,
+  );
+  const close = screen.getByRole("button", { name: "关闭" });
+  const last = screen.getByRole("button", { name: "复制并仅用于此设备" });
+  expect(close).toHaveFocus();
+  await user.tab({ shift: true });
+  expect(last).toHaveFocus();
+  await user.tab();
+  expect(close).toHaveFocus();
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(onCancel).toHaveBeenCalledOnce();
 });

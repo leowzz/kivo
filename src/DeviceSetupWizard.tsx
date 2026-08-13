@@ -1,7 +1,7 @@
 import { RefreshCw, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CreateDeviceProfileForm } from "./CreateDeviceProfileForm";
-import { candidateDisplayLabel, serialSuffix } from "./deviceStatus";
+import { candidateDisplayLabel } from "./deviceStatus";
 import { t, type MessageKey } from "./i18n";
 import { resolveButton } from "./inputMapping";
 import { Keypad } from "./Keypad";
@@ -17,6 +17,7 @@ import type {
   RuntimeAssignment,
   PhysicalInput,
 } from "./types";
+import { useModalFocus } from "./useModalFocus";
 
 export interface SetupInputEvent {
   timestampMs: number;
@@ -42,6 +43,11 @@ export interface DeviceSetupWizardProps {
     name: string,
     assignment: RuntimeAssignment,
   ): Promise<void>;
+  onOpenAdvanced(
+    deviceId: string,
+    deviceProfileId: string,
+    hardwareProfileId: string,
+  ): void;
   onClose(): void;
 }
 
@@ -131,6 +137,7 @@ export function DeviceSetupWizard({
   onRetryCandidate,
   onCreateProfile,
   onComplete,
+  onOpenAdvanced,
   onClose,
 }: DeviceSetupWizardProps) {
   const [creatingProfile, setCreatingProfile] = useState(false);
@@ -140,7 +147,6 @@ export function DeviceSetupWizard({
   const [hardwareProfileId, setHardwareProfileId] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
   const initializedDeviceId = useRef<string | null>(null);
   const handledInputEvent = useRef<SetupInputEvent | null>(null);
   const eligibleDevices = useMemo(() => setupDevices(devices), [devices]);
@@ -220,21 +226,7 @@ export function DeviceSetupWizard({
     });
   }, [compatibleHardware, hardwareProfileId, inputEvent, selectedDevice?.deviceId, step]);
 
-  useEffect(() => {
-    if (!open) return;
-    closeButtonRef.current?.focus();
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || pending) return;
-      event.preventDefault();
-      onClose();
-    };
-    window.addEventListener("keydown", handleEscape, true);
-    return () => window.removeEventListener("keydown", handleEscape, true);
-  }, [onClose, open, pending]);
+  const dialogRef = useModalFocus(open, pending, onClose);
 
   if (!open) return null;
 
@@ -313,6 +305,7 @@ export function DeviceSetupWizard({
   return (
     <div className="modal-backdrop" role="presentation">
       <section
+        ref={dialogRef}
         className="device-setup-dialog"
         role="dialog"
         aria-modal="true"
@@ -321,7 +314,6 @@ export function DeviceSetupWizard({
         <header className="device-setup-header">
           <h2 id="device-setup-title">{t(language, "setup.title")}</h2>
           <button
-            ref={closeButtonRef}
             className="icon-button"
             type="button"
             aria-label={t(language, "common.close")}
@@ -420,11 +412,7 @@ export function DeviceSetupWizard({
               <h3>{t(language, "setup.recognizedTitle")}</h3>
               <dl>
                 <dt>{t(language, "devices.name")}</dt>
-                <dd>{selectedDevice.name}</dd>
-                <dt>{t(language, "devices.board")}</dt>
-                <dd>{boardName(selectedDevice.boardProfileId)}</dd>
-                <dt>{t(language, "devices.serial")}</dt>
-                <dd>{serialSuffix(selectedDevice.hardwareSerial)}</dd>
+                <dd>{t(language, "setup.newKeyboard")}</dd>
                 <dt>{t(language, "setup.recommendedProfile")}</dt>
                 <dd>{compatible[0]?.profile.name ?? t(language, "setup.noCompatibleProfile")}</dd>
               </dl>
@@ -443,7 +431,6 @@ export function DeviceSetupWizard({
             <section className="setup-profile-choice">
               <p className="setup-step">{t(language, "setup.step", { current: 2, total: 3 })}</p>
               <h3>{t(language, "setup.selectProfile")}</h3>
-              <p>{boardName(selectedDevice.boardProfileId)}</p>
               <label>
                 <span>{t(language, "setup.deviceProfile")}</span>
                 <select
@@ -506,6 +493,14 @@ export function DeviceSetupWizard({
                 />
               ) : null}
               <div className="device-setup-actions">
+                <button type="button" disabled={pending} onClick={() => {
+                  setTestPressedButtonIds(new Set());
+                }}>{t(language, "setup.retry")}</button>
+                <button type="button" disabled={pending} onClick={() => onOpenAdvanced(
+                  selectedDevice.deviceId,
+                  deviceProfileId,
+                  hardwareProfileId,
+                )}>{t(language, "setup.openAdvancedIo")}</button>
                 <button type="button" disabled={pending} onClick={() => void complete()}>{t(language, "setup.skipTest")}</button>
                 <button className="primary-button" type="button" disabled={pending} onClick={() => void complete()}>{t(language, "setup.complete")}</button>
               </div>

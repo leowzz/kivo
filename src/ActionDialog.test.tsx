@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { ActionDialog } from "./ActionDialog";
@@ -13,6 +13,19 @@ test("new Action defaults to Press and commits only on Save", async () => {
   expect(onSave).not.toHaveBeenCalled();
   await user.click(screen.getByRole("button", { name: "Save" }));
   expect(onSave).toHaveBeenCalledWith({ trigger: "press", action: { type: "hotkey", keys: ["cmd"] } });
+});
+
+test("keeps keyboard focus inside the action dialog", async () => {
+  const user = userEvent.setup();
+  render(<ActionDialog open mode="create" language="en-US" onSave={vi.fn()} onCancel={vi.fn()} />);
+  const dialog = screen.getByRole("dialog");
+  const focusable = [
+    ...within(dialog).getAllByRole("combobox"),
+    ...within(dialog).getAllByRole("button"),
+  ];
+  expect(screen.getByLabelText("Trigger")).toHaveFocus();
+  await user.tab({ shift: true });
+  expect(focusable[focusable.length - 1]).toHaveFocus();
 });
 
 test("resets a create dialog from its supplied initial draft when reopened", () => {

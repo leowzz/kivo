@@ -124,19 +124,38 @@ function renderWizard(overrides: Partial<DeviceSetupWizardProps> = {}) {
     onRetryCandidate: vi.fn().mockResolvedValue(undefined),
     onCreateProfile: vi.fn().mockResolvedValue(snapshot()),
     onComplete: vi.fn().mockResolvedValue(undefined),
+    onOpenAdvanced: vi.fn(),
     onClose: vi.fn(),
     ...overrides,
   };
   return { ...render(<DeviceSetupWizard {...props} />), props };
 }
 
-test("focuses the close control and closes with Escape", () => {
+test("traps keyboard focus, restores it, and closes with Escape", async () => {
+  const user = userEvent.setup();
   const onClose = vi.fn();
-  renderWizard({ onClose });
+  const background = document.createElement("button");
+  background.textContent = "背景操作";
+  document.body.appendChild(background);
+  background.focus();
+  const { unmount } = renderWizard({
+    targetId: null,
+    candidates: [candidate()],
+    onClose,
+  });
 
-  expect(screen.getByRole("button", { name: "关闭" })).toHaveFocus();
+  const close = screen.getByRole("button", { name: "关闭" });
+  const last = screen.getByRole("button", { name: /4E811C/ });
+  expect(close).toHaveFocus();
+  await user.tab({ shift: true });
+  expect(last).toHaveFocus();
+  await user.tab();
+  expect(close).toHaveFocus();
   fireEvent.keyDown(window, { key: "Escape" });
   expect(onClose).toHaveBeenCalledOnce();
+  unmount();
+  expect(background).toHaveFocus();
+  background.remove();
 });
 
 test("explains firmware failure, hides cu port until expanded, and retries the exact ID", async () => {
@@ -179,7 +198,7 @@ test("keeps the wizard open and advances when a Candidate becomes the same Devic
   );
 
   expect(screen.getByText("第 1 步，共 3 步")).toBeInTheDocument();
-  expect(screen.getByText("RP2040 Pad")).toBeInTheDocument();
+  expect(screen.getByText("新键盘")).toBeInTheDocument();
 });
 
 test("firmware failure can enter independent profile creation", async () => {
@@ -238,6 +257,7 @@ test("selects among multiple setup targets explicitly", async () => {
         onRetryCandidate={vi.fn().mockResolvedValue(undefined)}
         onCreateProfile={vi.fn().mockResolvedValue(snapshot(candidates))}
         onComplete={vi.fn().mockResolvedValue(undefined)}
+        onOpenAdvanced={vi.fn()}
         onClose={vi.fn()}
       />
     );
@@ -268,15 +288,42 @@ test("recognizes an unassigned keyboard and recommends only compatible presets",
   });
 
   expect(screen.getByText("第 1 步，共 3 步")).toBeInTheDocument();
-  expect(screen.getByText("RP2040 Pad · 4E811C")).toBeInTheDocument();
+  expect(screen.getByText("新键盘")).toBeInTheDocument();
+  expect(screen.queryByText("RP2040 Pad")).toBeNull();
+  expect(screen.queryByText("4E811C")).toBeNull();
   expect(screen.getByText("RP Profile")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "继续设置" }));
   expect(screen.getByText("第 2 步，共 3 步")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "选择按键布局" })).toBeInTheDocument();
+  expect(screen.getByRole("combobox", { name: "按键布局" })).toBeInTheDocument();
+  expect(screen.queryByText(/键盘配置|硬件配置|运行分配/)).toBeNull();
   expect(screen.getByRole("option", { name: "RP Profile" })).toBeInTheDocument();
   expect(screen.queryByRole("option", { name: "ESP Profile" })).toBeNull();
   await user.click(screen.getByRole("button", { name: "下一步" }));
   expect(screen.getByText("第 3 步，共 3 步")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /RP Key/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "重新检测" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "高级 I/O 设置" })).toBeInTheDocument();
+});
+
+test("restarts key detection or opens advanced I/O from the test step", async () => {
+  const user = userEvent.setup();
+  const onOpenAdvanced = vi.fn();
+  const { props } = renderWizard({
+    devices: [unassignedDevice()],
+    onOpenAdvanced,
+  });
+  await user.click(screen.getByRole("button", { name: "继续设置" }));
+  await user.click(screen.getByRole("button", { name: "下一步" }));
+  await user.click(screen.getByRole("button", { name: "高级 I/O 设置" }));
+  expect(onOpenAdvanced).toHaveBeenCalledWith(
+    "rp-device-id",
+    "rp-profile",
+    "rp-hardware",
+  );
+
+  await user.click(screen.getByRole("button", { name: "重新检测" }));
+  expect(screen.getByText("第 3 步，共 3 步")).toBeInTheDocument();
 });
 
 test("shows setup input on the selected layout and completes with its exact assignment", async () => {

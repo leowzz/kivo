@@ -1,6 +1,7 @@
 import { Info, X } from "lucide-react";
 import { t } from "./i18n";
 import type { Language } from "./types";
+import { useModalFocus } from "./useModalFocus";
 
 interface SharedProfileEditDialogProps {
   language: Language;
@@ -23,10 +24,11 @@ export function SharedProfileEditDialog({
   onChoose,
   onCancel,
 }: SharedProfileEditDialogProps) {
+  const dialogRef = useModalFocus(true, submitting, onCancel);
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
     if (!submitting && event.target === event.currentTarget) onCancel();
   }}>
-    <section className="shared-profile-edit-dialog" role="dialog" aria-modal="true" aria-busy={submitting} aria-labelledby="shared-profile-edit-title">
+    <section ref={dialogRef} className="shared-profile-edit-dialog" role="dialog" aria-modal="true" aria-busy={submitting} aria-labelledby="shared-profile-edit-title">
       <header className="shared-profile-edit-header">
         <div>
           <Info size={18} aria-hidden="true" />

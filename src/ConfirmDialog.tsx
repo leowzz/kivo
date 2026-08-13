@@ -1,5 +1,6 @@
 import { Info, TriangleAlert, X } from "lucide-react";
 import type { ReactNode } from "react";
+import { useModalFocus } from "./useModalFocus";
 
 interface ConfirmDialogProps {
   title: string;
@@ -24,11 +25,12 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  const dialogRef = useModalFocus(true, pending, onCancel);
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
       if (!pending && event.target === event.currentTarget) onCancel();
     }}>
-      <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+      <section ref={dialogRef} className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
         <div className="confirm-header">
           <div className={danger ? "confirm-title is-danger" : "confirm-title"}>
             {danger ? <TriangleAlert size={17} /> : <Info size={17} />}

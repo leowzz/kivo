@@ -1055,6 +1055,11 @@ test("advanced settings creates a profile while no device is usable", async () =
   await user.click(screen.getByRole("button", { name: "设置" }));
   await user.click(screen.getByRole("button", { name: "高级设置" }));
   await user.click(screen.getByRole("button", { name: "新建配置" }));
+  const profileDialog = screen.getByRole("dialog", { name: "新建配置" });
+  const profileClose = within(profileDialog).getByRole("button", { name: "关闭" });
+  expect(profileClose).toHaveFocus();
+  await user.tab({ shift: true });
+  expect(within(profileDialog).getByRole("button", { name: "创建配置" })).toHaveFocus();
   await user.click(screen.getByRole("radio", { name: "空白配置" }));
   await user.type(screen.getByRole("textbox", { name: "配置名称" }), "Offline RP");
   await user.selectOptions(screen.getByRole("combobox", { name: "板型" }), "rp");
@@ -1109,6 +1114,31 @@ test("completes one exact Device and navigates to its keyboard workspace", async
   ).toBeNull();
   expect(await screen.findByRole("heading", { name: "RP Profile" })).toBeInTheDocument();
   expect(screen.queryByRole("combobox", { name: "硬件配置" })).toBeNull();
+});
+
+test("assigns the selected preset before opening advanced I/O from setup", async () => {
+  const user = userEvent.setup();
+  currentSnapshot.devices = [rpUnassignedDevice()];
+  currentSnapshot.candidates = [];
+  currentSnapshot.boardProfiles = [rpBoard];
+  currentSnapshot.deviceProfiles = [rpProfile];
+  currentSnapshot.editorProfile = rpProfile.profile.id;
+  render(<App />);
+  const dialog = await screen.findByRole("dialog", { name: "添加键盘" });
+  await user.click(within(dialog).getByRole("button", { name: "继续设置" }));
+  await user.click(within(dialog).getByRole("button", { name: "下一步" }));
+  await user.click(within(dialog).getByRole("button", { name: "高级 I/O 设置" }));
+
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("complete_device_setup", {
+    deviceId: "stable-rp",
+    name: expect.any(String),
+    assignment: {
+      device_profile_id: "rp-profile",
+      hardware_profile_id: "rp-other",
+    },
+  }));
+  expect(await screen.findByRole("tab", { name: "I/O 映射" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("button", { name: "开始学习" })).toBeEnabled();
 });
 
 test("forwards unassigned input_state only to the open setup target", async () => {
