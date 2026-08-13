@@ -18,6 +18,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import brandIcon from "../src-tauri/icons/128x128.png";
 import { ActionEditor } from "./ActionEditor";
+import { AdvancedSettings } from "./AdvancedSettings";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { CreateDeviceProfileForm } from "./CreateDeviceProfileForm";
 import { DeviceManagement } from "./DeviceManagement";
@@ -28,6 +29,7 @@ import { resolveButton } from "./inputMapping";
 import { KeyboardWorkspace } from "./KeyboardWorkspace";
 import { Keypad } from "./Keypad";
 import { SharedProfileEditDialog } from "./SharedProfileEditDialog";
+import { SettingsWorkspace } from "./SettingsWorkspace";
 import { assignedProfile, selectDeviceId } from "./deviceSelection";
 import { reconcileSetupSession, setupPresence } from "./deviceSetupSession";
 import { t } from "./i18n";
@@ -52,7 +54,7 @@ import type {
 } from "./types";
 import { SerializedSaveQueue, useAutosave } from "./useAutosave";
 
-type View = "home" | "devices" | "behavior" | "data";
+type View = "home" | "devices" | "behavior" | "data" | "settings" | "advanced";
 type Confirmation =
   | { kind: "import"; path: string; preview: ImportPreview }
   | { kind: "restore"; path: string; preview: BackupPreview }
@@ -283,7 +285,7 @@ export default function App() {
   const editorLearningActive = devices.some((device) =>
     device.learning?.deviceProfileId === editorProfileConfig?.profile.id
   );
-  const profileMutationTarget = view === "home" ? selectedDeviceProfile : editorProfileConfig;
+  const profileMutationTarget = view === "home" || view === "advanced" ? selectedDeviceProfile ?? editorProfileConfig : editorProfileConfig;
   const selectedProfileRelationshipKey = selectedDevice && profileMutationTarget
     ? `${selectedDevice.deviceId}:${profileMutationTarget.profile.id}`
     : null;
@@ -1177,7 +1179,7 @@ export default function App() {
         </div>
       )}
 
-      <div className={view === "devices" || view === "data" ? "product-workspace is-home" : "product-workspace"}>
+      <div className={view === "devices" || view === "data" || view === "settings" || view === "advanced" ? "product-workspace is-home" : "product-workspace"}>
         <aside className="sidebar">
           <button className={`home-nav-button ${view === "home" ? "is-active" : ""}`} type="button" onClick={() => void navigate("home")}>
             <Home size={17} />{t(language, "nav.home")}
@@ -1198,10 +1200,47 @@ export default function App() {
             <FileInput size={17} />{t(language, "nav.data")}
           </button>
 
+          <button className={`settings-nav-button ${view === "settings" || view === "advanced" ? "is-active" : ""}`} type="button" onClick={() => void navigate("settings")}>
+            <DatabaseBackup size={17} />{t(language, "nav.settings")}
+          </button>
+
         </aside>
 
         <section className="content-panel">
-          {view === "data" ? (
+          {view === "settings" ? (
+            <SettingsWorkspace
+              language={language}
+              onLanguageChange={(nextLanguage) => void run(t(language, "error.save"), () => saveSettings(editorProfile, nextLanguage))}
+              onBackup={() => void run(t(language, "error.export"), async () => {
+                await autosave.flush();
+                const path = await saveFile({ defaultPath: "kivo-backup.yaml", filters: [{ name: "Kivo", extensions: ["yaml"] }] });
+                if (path) await invoke("export_backup", { path });
+              })}
+              onRestore={() => void chooseRestore()}
+              onOpenAdvanced={() => void navigate("advanced")}
+            />
+          ) : view === "advanced" ? (
+            <AdvancedSettings
+              language={language}
+              profiles={deviceProfiles}
+              editorProfileId={editorProfile}
+              devices={devices}
+              selectedDevice={selectedDevice}
+              boardProfiles={boardProfiles}
+              onCreate={(sourceProfileId) => openProfileCreator(sourceProfileId ?? null)}
+              onSelectProfile={(profileId) => void run(t(language, "error.save"), () => saveSettings(profileId, language))}
+              onImport={() => void chooseImport()}
+              onExport={(profile) => void exportProfile(profile)}
+              onDelete={(profile) => setConfirmation({ kind: "delete", profile })}
+              onRequestProfileMutation={requestDeviceProfileMutation}
+              onDuplicateForDevice={async (profile, name) => {
+                if (!selectedDevice) return;
+                await duplicateManagedProfileForDevice({ deviceId: selectedDevice.deviceId, sourceProfile: profile, name });
+              }}
+              onBeginLearning={beginManagedLearning}
+              onEndLearning={endManagedLearning}
+            />
+          ) : view === "data" ? (
             <div className="data-page">
               <div className="content-heading">
                 <div>

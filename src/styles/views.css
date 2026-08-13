@@ -462,10 +462,40 @@
 .data-menu button.is-danger { color: var(--red-text); }
 .data-menu button.is-danger:hover { border-color: var(--red-text); background: var(--bg-surface); }
 
+/* ===== 设置 ===== */
+.settings-workspace, .advanced-settings { min-height: 0; flex: 1; overflow: auto; }
+.settings-section { display: grid; gap: var(--space-12); padding: var(--space-20) var(--space-24); border-bottom: 1px solid var(--border-subtle); }
+.settings-section label { width: min(360px, 100%); display: grid; gap: 6px; color: var(--gray-10); font-size: var(--text-12); }
+.settings-section select { min-height: 36px; padding: 0 8px; }
+.settings-commands { grid-template-columns: repeat(2, minmax(0, 220px)); }
+.settings-commands button, .settings-advanced-entry button, .profile-manager-transfer button, .advanced-editor-toolbar button { min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--border-default); border-radius: var(--radius-6); padding: 6px 10px; color: var(--gray-11); background: var(--bg-surface); }
+.settings-advanced-entry { margin-top: var(--space-20); border-top: 1px solid var(--border-subtle); }
+.settings-advanced-entry button { justify-content: flex-start; }
+.advanced-tabs { display: flex; gap: 3px; overflow-x: auto; padding: 0 var(--space-24); border-bottom: 1px solid var(--border-default); background: var(--bg-surface); }
+.advanced-tabs button { min-width: max-content; min-height: 38px; border: 0; border-bottom: 2px solid transparent; padding: 0 10px; color: var(--gray-10); background: transparent; }
+.advanced-tabs button[aria-selected="true"] { border-bottom-color: var(--accent-9); color: var(--gray-12); font-weight: var(--weight-semibold); }
+.profile-manager, .advanced-editor, .advanced-technical, .advanced-empty { width: min(100%, 920px); margin: 0 auto; padding: var(--space-20) var(--space-24); }
+.profile-manager { display: grid; gap: var(--space-16); }
+.profile-manager-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); }
+.profile-manager-header h2 { margin: 0; color: var(--gray-12); font-size: var(--text-17); }
+.profile-manager-transfer { display: flex; gap: var(--space-8); }
+.advanced-editor { min-width: 0; }
+.advanced-editor-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); flex-wrap: wrap; margin-bottom: var(--space-12); }
+.advanced-editor-toolbar p, .advanced-offline-note, .advanced-empty { color: var(--gray-10); font-size: var(--text-12); line-height: 1.5; }
+.advanced-technical dl { display: grid; grid-template-columns: 150px minmax(0, 1fr); margin: 0; }
+.advanced-technical dt, .advanced-technical dd { margin: 0; border-bottom: 1px solid var(--border-subtle); padding: var(--space-8) 0; overflow-wrap: anywhere; font-size: var(--text-12); }
+.advanced-technical dt { color: var(--gray-9); }
+.advanced-technical dd { color: var(--gray-12); }
+
 @media (max-width: 760px) {
   .profile-row { align-items: stretch; flex-direction: column; }
   .profile-row-actions { justify-content: flex-start; }
   .data-page-body { padding: var(--space-16); }
+  .settings-section, .profile-manager, .advanced-editor, .advanced-technical, .advanced-empty { padding-right: var(--space-16); padding-left: var(--space-16); }
+  .settings-commands { grid-template-columns: 1fr; }
+  .advanced-tabs { padding: 0 var(--space-16); }
+  .advanced-technical dl { grid-template-columns: 1fr; }
+  .advanced-technical dt { border-bottom: 0; padding-bottom: 0; }
 }
 
 /* ===== 确认弹窗 ===== */

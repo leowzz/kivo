@@ -1595,6 +1595,20 @@ test("keeps the interface in Simplified Chinese without a language selector", as
   expect(screen.queryByLabelText("语言")).toBeNull();
 });
 
+test("moves language and backup controls into the ordinary settings workspace", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "设置" }));
+
+  expect(screen.getByRole("heading", { name: "设置" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "高级设置" })).toBeInTheDocument();
+  await user.selectOptions(screen.getByRole("combobox", { name: "语言" }), "en-US");
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_settings", {
+    settings: { schema_version: 2, editor_profile: deviceProfile.profile.id, language: "en-US" },
+  }));
+  expect(currentSnapshot.devices[0].runtimeAssignment).toEqual(baseSnapshot.devices[0].runtimeAssignment);
+});
+
 test("renders the assigned keyboard layout in model order", async () => {
   currentSnapshot.deviceProfiles[0].profile.groups = [
     {
