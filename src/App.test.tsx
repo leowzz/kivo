@@ -453,6 +453,7 @@ test("keeps the editor configuration independent from the device assignment", as
   }));
   await user.click(screen.getByRole("button", { name: "2，0 项行为" }));
   await addPasteAction(user, "配置 B");
+  await user.click(await screen.findByRole("button", { name: "同步修改 0 台键盘" }));
   await user.click(screen.getByRole("button", { name: "设备管理" }));
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_device_profile", {
     profile: expect.objectContaining({
@@ -496,6 +497,134 @@ test("default workspace names the selected keyboard without exposing its system 
   await screen.findByRole("heading", { name: "碳膜电话键盘" });
   expect(screen.getByText("前台键盘")).toBeInTheDocument();
   expect(screen.queryByText("/dev/cu.test")).toBeNull();
+});
+
+test("does not mutate or autosave a shared profile until the edit scope is chosen", async () => {
+  currentSnapshot.devices.push(device({
+    deviceId: "device-second",
+    name: "后台键盘",
+  }));
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(await screen.findByRole("button", { name: "确认，0 项行为" }));
+  await user.click(screen.getByRole("button", { name: "重命名按键 确认" }));
+  await user.clear(screen.getByRole("textbox", { name: "按键名称" }));
+  await user.type(screen.getByRole("textbox", { name: "按键名称" }), "新的确认");
+  await user.click(screen.getByRole("button", { name: "确认重命名" }));
+
+  expect(await screen.findByRole("heading", { name: "选择修改范围" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "确认" })).toBeInTheDocument();
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_device_profile")).toBe(false);
+});
+
+test("cancelling a shared profile edit leaves the profile unchanged", async () => {
+  currentSnapshot.devices.push(device({ deviceId: "device-second", name: "后台键盘" }));
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(await screen.findByRole("button", { name: "确认，0 项行为" }));
+  await user.click(screen.getByRole("button", { name: "重命名按键 确认" }));
+  await user.clear(screen.getByRole("textbox", { name: "按键名称" }));
+  await user.type(screen.getByRole("textbox", { name: "按键名称" }), "取消的修改");
+  await user.click(screen.getByRole("button", { name: "确认重命名" }));
+  await user.click(await screen.findByRole("button", { name: "取消" }));
+
+  expect(screen.queryByRole("heading", { name: "选择修改范围" })).toBeNull();
+  expect(screen.getByRole("button", { name: "确认，0 项行为" })).toBeInTheDocument();
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_device_profile")).toBe(false);
+});
+
+test("saves the original shared profile after choosing the shared edit scope", async () => {
+  currentSnapshot.devices.push(device({ deviceId: "device-second", name: "后台键盘" }));
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(await screen.findByRole("button", { name: "确认，0 项行为" }));
+  await user.click(screen.getByRole("button", { name: "重命名按键 确认" }));
+  await user.clear(screen.getByRole("textbox", { name: "按键名称" }));
+  await user.type(screen.getByRole("textbox", { name: "按键名称" }), "新的确认");
+  await user.click(screen.getByRole("button", { name: "确认重命名" }));
+  await user.click(await screen.findByRole("button", { name: "同步修改 2 台键盘" }));
+
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_device_profile", {
+    profile: expect.objectContaining({
+      profile: expect.objectContaining({
+        id: deviceProfile.profile.id,
+        groups: expect.arrayContaining([expect.objectContaining({
+          buttons: expect.arrayContaining([expect.objectContaining({ id: "ENTER", label: "新的确认" })]),
+        })]),
+      }),
+    }),
+  }));
+});
+
+test("duplicates the edited shared profile for the current keyboard", async () => {
+  currentSnapshot.devices.push(device({ deviceId: "device-second", name: "后台键盘" }));
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "duplicate_profile_for_device") {
+      const request = (args as { request: { device_id: string; source_profile: DeviceProfile; name: string } }).request;
+      const cloned: DeviceProfile = {
+        ...structuredClone(request.source_profile),
+        profile: { ...request.source_profile.profile, id: "front-desk-copy", name: request.name },
+      };
+      currentSnapshot = {
+        ...currentSnapshot,
+        deviceProfiles: [currentSnapshot.deviceProfiles[0], cloned],
+        devices: currentSnapshot.devices.map((item) => item.deviceId === request.device_id
+          ? { ...item, runtimeAssignment: { ...item.runtimeAssignment!, device_profile_id: cloned.profile.id } }
+          : item),
+      };
+    }
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(await screen.findByRole("button", { name: "确认，0 项行为" }));
+  await user.click(screen.getByRole("button", { name: "重命名按键 确认" }));
+  await user.clear(screen.getByRole("textbox", { name: "按键名称" }));
+  await user.type(screen.getByRole("textbox", { name: "按键名称" }), "设备专用确认");
+  await user.click(screen.getByRole("button", { name: "确认重命名" }));
+  await user.click(await screen.findByRole("button", { name: "仅修改这台键盘" }));
+
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("duplicate_profile_for_device", {
+    request: expect.objectContaining({
+      device_id: "device-front-desk",
+      name: "碳膜电话键盘 (前台键盘)",
+      source_profile: expect.objectContaining({
+        profile: expect.objectContaining({
+          id: deviceProfile.profile.id,
+          groups: expect.arrayContaining([expect.objectContaining({
+            buttons: expect.arrayContaining([expect.objectContaining({ id: "ENTER", label: "设备专用确认" })]),
+          })]),
+        }),
+      }),
+    }),
+  }));
+  expect(currentSnapshot.deviceProfiles[0].profile.groups[0].buttons.find((button) => button.id === "ENTER")?.label).toBe("确认");
+});
+
+test("keeps the original assignment and allows retrying a failed device-only copy", async () => {
+  currentSnapshot.devices.push(device({ deviceId: "device-second", name: "后台键盘" }));
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "duplicate_profile_for_device") throw new Error("copy failed");
+    return structuredClone(currentSnapshot);
+  });
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(await screen.findByRole("button", { name: "确认，0 项行为" }));
+  await user.click(screen.getByRole("button", { name: "重命名按键 确认" }));
+  await user.clear(screen.getByRole("textbox", { name: "按键名称" }));
+  await user.type(screen.getByRole("textbox", { name: "按键名称" }), "不会保存");
+  await user.click(screen.getByRole("button", { name: "确认重命名" }));
+  await user.click(await screen.findByRole("button", { name: "仅修改这台键盘" }));
+
+  expect(await screen.findByText(/保存失败: copy failed/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "仅修改这台键盘" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "确认，0 项行为" })).toBeInTheDocument();
+  expect(currentSnapshot.devices[0].runtimeAssignment?.device_profile_id).toBe(deviceProfile.profile.id);
 });
 
 test("prompts to connect a keyboard when the device registry is empty", async () => {
@@ -1757,6 +1886,7 @@ test("autosaves Button Behavior after Device Management enables shared-profile c
   expect(screen.getByRole("status")).toHaveTextContent("2 个设备");
   await user.click(screen.getByRole("button", { name: "按键行为" }));
   await addPasteAction(user, "共享配置的新行为");
+  await user.click(await screen.findByRole("button", { name: "同步修改 2 台键盘" }));
 
   await waitFor(
     () => expect(invoke).toHaveBeenCalledWith("save_device_profile", {

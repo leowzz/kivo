@@ -26,6 +26,7 @@ import { DeviceSetupWizard } from "./DeviceSetupWizard";
 import { hardwareProfilesAreValid } from "./HardwareMapping";
 import { KeyboardWorkspace } from "./KeyboardWorkspace";
 import { Keypad } from "./Keypad";
+import { SharedProfileEditDialog } from "./SharedProfileEditDialog";
 import { assignedProfile, selectDeviceId } from "./deviceSelection";
 import { reconcileSetupSession, setupPresence } from "./deviceSetupSession";
 import { t } from "./i18n";
@@ -76,6 +77,12 @@ type ProfileAutosaveTarget = {
 type PersistedProfileSave = {
   serialized: string;
   snapshot: AppSnapshot;
+};
+type ProfileMutation = (profile: DeviceProfile) => DeviceProfile;
+type PendingProfileMutation = {
+  deviceId: string;
+  profileId: string;
+  apply: ProfileMutation;
 };
 
 const PREVIEW_MODE = import.meta.env.DEV && new URLSearchParams(window.location.search).has("preview");
@@ -250,6 +257,8 @@ export default function App() {
   const [setupTargetId, setSetupTargetId] = useState<string | null>(null);
   const [profileCreatorOpen, setProfileCreatorOpen] = useState(false);
   const [profileCreatorSourceId, setProfileCreatorSourceId] = useState<string | null>(null);
+  const [pendingProfileMutation, setPendingProfileMutation] = useState<PendingProfileMutation | null>(null);
+  const [confirmedSharedRelationship, setConfirmedSharedRelationship] = useState<string | null>(null);
   const pressedOwnersRef = useRef<Map<string, PressedOwner>>(new Map());
   const mountedRef = useRef(true);
   const registryEpochRef = useRef(0);
@@ -287,6 +296,11 @@ export default function App() {
   const editorLearningActive = devices.some((device) =>
     device.learning?.deviceProfileId === editorProfileConfig?.profile.id
   );
+  const profileMutationTarget = view === "home" ? selectedDeviceProfile : editorProfileConfig;
+  const selectedProfileRelationshipKey = selectedDevice && profileMutationTarget
+    ? `${selectedDevice.deviceId}:${profileMutationTarget.profile.id}`
+    : null;
+  const profileMutationContextKey = `${selectedDevice?.deviceId ?? ""}:${selectedDevice?.runtimeAssignment?.device_profile_id ?? ""}:${profileMutationTarget?.profile.id ?? ""}`;
   const currentSetupPresence = useMemo(
     () => setupPresence(devices, candidates),
     [devices, candidates],
@@ -295,6 +309,11 @@ export default function App() {
   useEffect(() => {
     setPressedButtonIds(pressedButtonsForDevice(pressedOwnersRef.current, selectedDeviceIdValue));
   }, [selectedDeviceIdValue]);
+
+  useEffect(() => {
+    setConfirmedSharedRelationship(null);
+    setPendingProfileMutation(null);
+  }, [profileMutationContextKey]);
 
   const selectPhysicalDevice = useCallback((deviceId: string) => {
     if (!devices.some((device) => device.deviceId === deviceId)) return;
@@ -822,11 +841,6 @@ export default function App() {
     });
   }, [editorLearningActive, editorProfileConfig?.profile.id]);
 
-  const updateEditorProfile = useCallback((update: (profile: DeviceProfile) => DeviceProfile) => {
-    const profileId = editorProfileConfig?.profile.id;
-    if (profileId) updateProfile(profileId, update);
-  }, [editorProfileConfig?.profile.id, updateProfile]);
-
   const setSharedDraftPending = useCallback((profileId: string, pending: boolean) => {
     setPendingSharedDraftProfileIds((current) => {
       const next = new Set(current);
@@ -877,6 +891,52 @@ export default function App() {
     });
     if (mountedRef.current) applySnapshot(snapshot, true);
   }, [applySnapshot, autosave.flush, homeMetrics, language, registry]);
+
+  const requestDeviceProfileMutation = useCallback((mutation: ProfileMutation) => {
+    if (!selectedDevice || !profileMutationTarget) return;
+    const profile = profileMutationTarget;
+    const relationshipKey = `${selectedDevice.deviceId}:${profile.profile.id}`;
+    const affectedDeviceCount = devices.filter((device) =>
+      device.runtimeAssignment?.device_profile_id === profile.profile.id,
+    ).length;
+    const isAssignedToSelectedDevice = selectedDevice.runtimeAssignment?.device_profile_id === profile.profile.id;
+    if (isAssignedToSelectedDevice && (affectedDeviceCount <= 1 || confirmedSharedRelationship === relationshipKey)) {
+      updateProfile(profile.profile.id, mutation);
+      return;
+    }
+    setPendingProfileMutation({
+      deviceId: selectedDevice.deviceId,
+      profileId: profile.profile.id,
+      apply: mutation,
+    });
+  }, [confirmedSharedRelationship, devices, profileMutationTarget, selectedDevice, updateProfile]);
+
+  const chooseSharedProfileEditScope = useCallback(async (scope: "device" | "shared") => {
+    const pending = pendingProfileMutation;
+    if (!pending) return;
+    const profile = profileById(pending.profileId);
+    const device = devices.find((item) => item.deviceId === pending.deviceId);
+    if (!profile || !device) {
+      setPendingProfileMutation(null);
+      return;
+    }
+    if (scope === "shared") {
+      setConfirmedSharedRelationship(`${pending.deviceId}:${pending.profileId}`);
+      setPendingProfileMutation(null);
+      updateProfile(pending.profileId, pending.apply);
+      return;
+    }
+    try {
+      await duplicateManagedProfileForDevice({
+        deviceId: pending.deviceId,
+        sourceProfile: pending.apply(profile),
+        name: `${profile.profile.name} (${device.name})`,
+      });
+      setPendingProfileMutation(null);
+    } catch (duplicateError) {
+      setError(`${t(language, "error.save")}: ${errorMessage(duplicateError)}`);
+    }
+  }, [devices, duplicateManagedProfileForDevice, language, pendingProfileMutation, profileById, updateProfile]);
 
   const saveSettings = async (nextEditorProfile: string | null, nextLanguage: Language) => {
     await autosave.flush();
@@ -1209,11 +1269,11 @@ export default function App() {
               selectedButtonId={selectedButtonId}
               pressedButtonIds={pressedButtonIds}
               onSelectButton={setSelectedButtonId}
-              onChangeActions={(buttonId, actions) => selectedDeviceProfile && updateProfile(selectedDeviceProfile.profile.id, (profile) => ({
+              onChangeActions={(buttonId, actions) => requestDeviceProfileMutation((profile) => ({
                 ...profile,
                 actions: { ...profile.actions, [buttonId]: actions },
               }))}
-              onRenameButton={(buttonId, label) => selectedDeviceProfile && updateProfile(selectedDeviceProfile.profile.id, (profile) => ({
+              onRenameButton={(buttonId, label) => requestDeviceProfileMutation((profile) => ({
                 ...profile,
                 profile: {
                   ...profile.profile,
@@ -1272,14 +1332,14 @@ export default function App() {
           language={language}
           button={selectedButton}
           actions={selectedActions}
-          onChange={(actions: TriggerActions) => selectedButtonId && updateEditorProfile((profile) => ({
+          onChange={(actions: TriggerActions) => selectedButtonId && requestDeviceProfileMutation((profile) => ({
             ...profile,
             actions: {
               ...profile.actions,
               [selectedButtonId]: actions,
             },
           }))}
-          onRename={(buttonId, label) => updateEditorProfile((profile) => ({
+          onRename={(buttonId, label) => requestDeviceProfileMutation((profile) => ({
             ...profile,
             profile: {
               ...profile.profile,
@@ -1338,6 +1398,23 @@ export default function App() {
           </section>
         </div>
       )}
+      {pendingProfileMutation && (() => {
+        const profile = profileById(pendingProfileMutation.profileId);
+        const device = devices.find((item) => item.deviceId === pendingProfileMutation.deviceId);
+        if (!profile || !device) return null;
+        const affectedDeviceCount = devices.filter((item) =>
+          item.runtimeAssignment?.device_profile_id === pendingProfileMutation.profileId,
+        ).length;
+        return <SharedProfileEditDialog
+          language={language}
+          deviceName={device.name}
+          profileName={profile.profile.name}
+          affectedDeviceCount={affectedDeviceCount}
+          allowDeviceScope={device.runtimeAssignment?.device_profile_id === pendingProfileMutation.profileId}
+          onChoose={(scope) => void chooseSharedProfileEditScope(scope)}
+          onCancel={() => setPendingProfileMutation(null)}
+        />;
+      })()}
 
       <DeviceSetupWizard
         open={setupOpen}

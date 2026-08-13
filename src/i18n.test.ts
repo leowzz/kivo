@@ -41,4 +41,10 @@ describe("i18n", () => {
     expect(t("zh-CN", "workspace.unconfigured")).toBe("未配置");
     expect(t("en-US", "workspace.repair")).toBe("Repair setup");
   });
+
+  test("includes shared profile edit scope labels", () => {
+    expect(t("zh-CN", "sharedEdit.device")).toBe("仅修改这台键盘");
+    expect(t("zh-CN", "sharedEdit.shared", { count: 2 })).toBe("同步修改 2 台键盘");
+    expect(t("en-US", "sharedEdit.shared", { count: 2 })).toBe("Update 2 keyboards");
+  });
 });

@@ -463,6 +463,15 @@
 .confirm-dialog > p { margin: 16px; color: var(--gray-11); font-size: var(--text-13); line-height: 1.6; }
 .confirm-summary { margin: 0 16px 16px; border-left: 3px solid var(--amber-border); border-radius: 0 var(--radius-6) var(--radius-6) 0; padding: 8px 10px; color: var(--amber-text); background: var(--amber-bg); font-size: var(--text-12); }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-subtle); background: var(--bg-app); border-radius: 0 0 var(--radius-12) var(--radius-12); }
+.shared-profile-edit-dialog { width: min(460px, 100%); border: 1px solid var(--border-default); border-radius: var(--radius-8); color: var(--gray-12); background: var(--bg-raised); box-shadow: var(--shadow-3); }
+.shared-profile-edit-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); padding: 13px 12px 13px 16px; border-bottom: 1px solid var(--border-subtle); }
+.shared-profile-edit-header > div { display: flex; align-items: center; gap: 8px; color: var(--amber-text); }
+.shared-profile-edit-header h2 { margin: 0; color: var(--gray-12); font-size: var(--text-17); font-weight: var(--weight-semibold); }
+.shared-profile-edit-body { display: grid; gap: var(--space-12); padding: 16px; }
+.shared-profile-edit-body p { margin: 0; color: var(--gray-11); font-size: var(--text-13); line-height: 1.55; }
+.shared-profile-edit-body .shared-profile-edit-warning { border-left: 3px solid var(--amber-border); padding: 8px 10px; color: var(--amber-text); background: var(--amber-bg); font-size: var(--text-12); }
+.shared-profile-edit-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-8); padding: 12px 16px; border-top: 1px solid var(--border-subtle); background: var(--bg-app); }
+.shared-profile-edit-actions button { min-height: 34px; border: 1px solid var(--border-strong); border-radius: var(--radius-8); padding: 0 12px; }
 
 /* ===== 布局编辑器 ===== */
 .layout-editor { width: min(860px, calc(100vw - 32px)); max-height: calc(100vh - 32px); border: 1px solid var(--border-strong); border-radius: var(--radius-12); padding: 0; color: inherit; background: var(--bg-raised); box-shadow: var(--shadow-3); }
