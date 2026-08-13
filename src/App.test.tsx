@@ -10,6 +10,9 @@ import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
+// Vitest runs this source assertion in Node, while the production tsconfig excludes Node globals.
+// @ts-expect-error Test-only Node module.
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import App from "./App";
 import type {
@@ -20,6 +23,9 @@ import type {
   RuntimeAssignment,
   RuntimeEvent,
 } from "./types";
+
+const appCss = readFileSync("src/styles/app.css", "utf8");
+const baseCss = readFileSync("src/styles/base.css", "utf8");
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
@@ -399,6 +405,13 @@ test("keeps ordinary navigation to keyboard, devices, and settings, with Advance
   expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "返回" }));
   expect(screen.getByRole("heading", { name: "设置" })).toBeInTheDocument();
+});
+
+test("uses a three-column text navigation row without page-level horizontal overflow on narrow screens", () => {
+  expect(appCss).toMatch(
+    /@media \(max-width: 680px\)[\s\S]*?\.sidebar\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)[^}]*\}/,
+  );
+  expect(baseCss).toMatch(/html, body, #root\s*\{[^}]*overflow:\s*hidden/);
 });
 
 test("shows an incompatible-workspace startup screen without loading runtime state", async () => {

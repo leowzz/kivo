@@ -1,8 +1,13 @@
 import { render, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+// Vitest runs this source assertion in Node, while the production tsconfig excludes Node globals.
+// @ts-expect-error Test-only Node module.
+import { readFileSync } from "node:fs";
 import { expect, test, vi } from "vitest";
 import { KeyboardWorkspace } from "./KeyboardWorkspace";
 import type { DeviceProfile, DeviceStatus, TriggerActions } from "./types";
+
+const viewCss = readFileSync("src/styles/views.css", "utf8");
 
 const profile: DeviceProfile = {
   schema_version: 3,
@@ -74,6 +79,21 @@ function renderWorkspace({
 
 test("shows the connection empty state when no keyboard is selected", () => {
   expect(renderWorkspace({ device: null }).getByText("连接你的键盘")).toBeInTheDocument();
+});
+
+test("keeps the keyboard editor geometry stable across desktop and narrow layouts", () => {
+  expect(viewCss).toMatch(
+    /\.keyboard-workspace\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(320px,\s*380px\)/,
+  );
+  expect(viewCss).toMatch(
+    /@media \(max-width: 980px\)[\s\S]*?\.keyboard-workspace\s*\{[^}]*grid-template-columns:\s*1fr[^}]*\}/,
+  );
+  expect(viewCss).toMatch(
+    /@media \(max-width: 980px\)[\s\S]*?\.keyboard-workspace \.action-panel\s*\{[^}]*grid-row:\s*3[^}]*\}/,
+  );
+  expect(viewCss).toMatch(
+    /@media \(max-width: 680px\)[\s\S]*?\.action-dialog[^\{]*\{[^}]*max-height:\s*calc\(100dvh - 20px\)[^}]*\}/,
+  );
 });
 
 test("continues setup for an unassigned keyboard", () => {

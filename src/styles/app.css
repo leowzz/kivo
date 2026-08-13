@@ -117,7 +117,7 @@
   .device-switcher select { width: min(220px, 54vw); }
   .save-state { grid-column: 1 / -1; min-height: 0; padding: 0 var(--space-12) 6px; }
   .product-workspace { display: block; }
-  .sidebar { display: grid; grid-template-columns: 1fr; border-right: 0; border-bottom: 1px solid var(--border-subtle); }
+  .sidebar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-right: 0; border-bottom: 1px solid var(--border-subtle); }
   .home-nav-button, .devices-nav-button, .settings-nav-button { flex: 0 0 auto; width: auto; white-space: nowrap; }
   .home-nav-button.is-active::before, .devices-nav-button.is-active::before, .settings-nav-button.is-active::before { left: 10px; right: 10px; top: auto; bottom: 0; width: auto; height: 3px; }
   .content-panel { min-height: 480px; }

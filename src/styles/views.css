@@ -174,9 +174,9 @@
 .add-actions button:hover { border-color: var(--green-7); border-style: dashed; color: var(--green-11); background: var(--green-1); box-shadow: none; }
 
 @media (max-width: 980px) {
-  .keyboard-workspace { display: flex; flex-direction: column; overflow: auto; }
-  .keyboard-workspace .keypad-stage { flex: 1 0 420px; }
-  .keyboard-workspace .action-panel { min-height: 440px; border-top: 1px solid var(--border-subtle); border-left: 0; }
+  .keyboard-workspace { display: grid; grid-template-columns: 1fr; grid-template-rows: auto minmax(420px, auto) minmax(440px, auto); overflow: auto; }
+  .keyboard-workspace .keypad-stage { grid-column: 1; grid-row: 2; }
+  .keyboard-workspace .action-panel { grid-column: 1; grid-row: 3; min-height: 440px; border-top: 1px solid var(--border-subtle); border-left: 0; }
   .add-actions { grid-auto-flow: column; grid-auto-columns: minmax(126px, 1fr); grid-template-columns: none; overflow-x: auto; }
   .add-actions button { white-space: nowrap; }
 }
@@ -187,7 +187,8 @@
   .action-row-main { font-size: var(--text-11); }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 680px) {
+  .action-dialog, .device-setup-dialog, .confirm-dialog, .shared-profile-edit-dialog, .layout-editor { max-height: calc(100dvh - 20px); }
   .action-dialog { width: min(680px, calc(100vw - 20px)); }
 }
 
