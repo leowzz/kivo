@@ -1,0 +1,23 @@
+{
+  "name": "@kivo/workbench-one-hardware",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsci dev",
+    "build": "tsci build src/main.tsx --routing-disabled --disable-parts-engine",
+    "build:preview": "tsci build src/main.tsx --routing-disabled --disable-parts-engine --pcb-png --pcb-svgs",
+    "snapshot": "tsci snapshot --pcb-only",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "tscircuit": "0.0.2308"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
