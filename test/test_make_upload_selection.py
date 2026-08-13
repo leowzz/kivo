@@ -188,8 +188,9 @@ def test_selector_failure_stops_before_build_or_upload(tmp_path: Path) -> None:
     )
 
     assert result.returncode != 0
-    assert len(invocations) == 1
-    assert "select_firmware_target.py" in invocations[0]
+    assert len(invocations) == 2
+    assert "scripts/kill_helper.py" in invocations[0]
+    assert "select_firmware_target.py" in invocations[1]
 
 
 def test_bootsel_selection_verifies_with_the_resolved_runtime_serial(
@@ -240,7 +241,8 @@ def test_selected_serial_flows_through_build_upload_and_verification(
     result, invocations = run_make(tmp_path, target)
 
     assert result.returncode == 0, result.stderr
-    assert selector_arguments in invocations[0]
+    assert "scripts/kill_helper.py" in invocations[0]
+    assert selector_arguments in invocations[1]
     build_index = next(
         index
         for index, line in enumerate(invocations)
@@ -255,4 +257,4 @@ def test_selected_serial_flows_through_build_upload_and_verification(
         if "verify_runtime_firmware.py" in line
         and "--serial SELECTED-SERIAL" in line
     )
-    assert 0 < build_index < upload_index < verify_index
+    assert 1 < build_index < upload_index < verify_index

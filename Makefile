@@ -42,7 +42,7 @@ download-mode: require-serial
 
 upload: upload-rp2040
 
-upload-esp32s3: require-build-id
+upload-esp32s3: helper-kill require-build-id
 	@set -e; \
 	  serial="$(SERIAL)"; \
 	  if [ -z "$$serial" ]; then \
@@ -55,7 +55,7 @@ upload-esp32s3: require-build-id
 	  $(UV_CMD) run pio pkg exec -p tool-esptoolpy -- esptool.py --chip esp32s3 --port "$$download_port" --after hard_reset run; \
 	  $(UV_CMD) run python scripts/verify_runtime_firmware.py --serial "$$serial" --vid 0x303a --pid 0x4002 --family esp32s3 --board luatos-esp32s3-aio --build "$(BUILD_ID)"
 
-upload-rp2040: require-build-id
+upload-rp2040: helper-kill require-build-id
 	@set -e; \
 	  serial="$(SERIAL)"; \
 	  if [ -z "$$serial" ]; then \
