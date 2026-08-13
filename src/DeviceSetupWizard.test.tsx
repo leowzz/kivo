@@ -308,19 +308,28 @@ test("recognizes an unassigned keyboard and recommends only compatible presets",
 
 test("restarts key detection or opens advanced I/O from the test step", async () => {
   const user = userEvent.setup();
-  const onOpenAdvanced = vi.fn();
+  let finishAdvanced!: () => void;
+  const onOpenAdvanced = vi.fn(() => new Promise<void>((resolve) => {
+    finishAdvanced = resolve;
+  }));
   const { props } = renderWizard({
     devices: [unassignedDevice()],
     onOpenAdvanced,
   });
   await user.click(screen.getByRole("button", { name: "继续设置" }));
   await user.click(screen.getByRole("button", { name: "下一步" }));
-  await user.click(screen.getByRole("button", { name: "高级 I/O 设置" }));
+  const advanced = screen.getByRole("button", { name: "高级 I/O 设置" });
+  await user.click(advanced);
+  expect(advanced).toBeDisabled();
+  expect(screen.getByRole("button", { name: "关闭" })).toBeDisabled();
+  await user.click(advanced);
+  expect(onOpenAdvanced).toHaveBeenCalledOnce();
   expect(onOpenAdvanced).toHaveBeenCalledWith(
     "rp-device-id",
     "rp-profile",
     "rp-hardware",
   );
+  finishAdvanced();
 
   await user.click(screen.getByRole("button", { name: "重新检测" }));
   expect(screen.getByText("第 3 步，共 3 步")).toBeInTheDocument();

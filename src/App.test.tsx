@@ -1116,7 +1116,7 @@ test("completes one exact Device and navigates to its keyboard workspace", async
   expect(screen.queryByRole("combobox", { name: "硬件配置" })).toBeNull();
 });
 
-test("assigns the selected preset before opening advanced I/O from setup", async () => {
+test("opens the selected preset as an unassigned advanced I/O draft", async () => {
   const user = userEvent.setup();
   currentSnapshot.devices = [rpUnassignedDevice()];
   currentSnapshot.candidates = [];
@@ -1129,16 +1129,14 @@ test("assigns the selected preset before opening advanced I/O from setup", async
   await user.click(within(dialog).getByRole("button", { name: "下一步" }));
   await user.click(within(dialog).getByRole("button", { name: "高级 I/O 设置" }));
 
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("complete_device_setup", {
-    deviceId: "stable-rp",
-    name: expect.any(String),
-    assignment: {
-      device_profile_id: "rp-profile",
-      hardware_profile_id: "rp-other",
-    },
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_settings", {
+    settings: { schema_version: 2, editor_profile: "rp-profile", language: "zh-CN" },
   }));
+  expect(invoke).not.toHaveBeenCalledWith("complete_device_setup", expect.anything());
+  expect(currentSnapshot.devices[0].runtimeAssignment).toBeNull();
   expect(await screen.findByRole("tab", { name: "I/O 映射" })).toHaveAttribute("aria-selected", "true");
-  expect(screen.getByRole("button", { name: "开始学习" })).toBeEnabled();
+  expect(screen.getByRole("combobox", { name: "硬件配置" })).toHaveValue("rp-other");
+  expect(screen.getByRole("button", { name: "开始学习" })).toBeDisabled();
 });
 
 test("forwards unassigned input_state only to the open setup target", async () => {

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ConfigurationSettingsDialog } from "./ConfigurationSettingsDialog";
 import { HardwareMapping } from "./HardwareMapping";
 import { LayoutEditor } from "./LayoutEditor";
@@ -11,6 +11,7 @@ type ProfileMutation = (profile: DeviceProfile) => DeviceProfile;
 
 export interface AdvancedSettingsProps {
   initialSection?: AdvancedSection;
+  initialHardwareProfileId?: string;
   language: Language;
   profiles: DeviceProfile[];
   editorProfileId: string | null;
@@ -40,7 +41,7 @@ export function AdvancedSettings(props: AdvancedSettingsProps) {
     const assignedId = props.selectedDevice?.runtimeAssignment?.device_profile_id;
     return props.profiles.find((profile) => profile.profile.id === assignedId) ?? props.profiles.find((profile) => profile.profile.id === props.editorProfileId) ?? null;
   }, [props.editorProfileId, props.profiles, props.selectedDevice?.runtimeAssignment?.device_profile_id]);
-  const hardwareId = props.selectedDevice?.runtimeAssignment?.hardware_profile_id;
+  const hardwareId = props.selectedDevice?.runtimeAssignment?.hardware_profile_id ?? props.initialHardwareProfileId;
   const sharedCount = target ? props.devices.filter((device) => device.runtimeAssignment?.device_profile_id === target.profile.id).length : 0;
   const offline = !props.selectedDevice?.runtimeAssignment;
   const canDuplicateForDevice = Boolean(target && props.selectedDevice &&
@@ -49,6 +50,10 @@ export function AdvancedSettings(props: AdvancedSettingsProps) {
     props.selectedDevice.identity === "valid" &&
     props.selectedDevice.runtimeAssignment?.device_profile_id === target.profile.id);
   const labels: Record<AdvancedSection, string> = { profiles: t(props.language, "advanced.profiles"), layout: t(props.language, "advanced.layout"), io: t(props.language, "advanced.io"), technical: t(props.language, "advanced.technical") };
+
+  useEffect(() => {
+    if (props.initialSection) setSection(props.initialSection);
+  }, [props.initialSection]);
 
   return <div className={canDuplicateForDevice ? "advanced-settings" : "advanced-settings without-device-duplicate"}>
     <header className="content-heading"><div><h2>{t(props.language, "settings.advanced")}</h2></div></header>

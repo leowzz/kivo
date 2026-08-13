@@ -933,7 +933,6 @@ export default function App() {
     deviceId: string,
     name: string,
     assignment: RuntimeAssignment,
-    destination: "keyboard" | "advanced" = "keyboard",
   ) => {
     await autosave.flush();
     const completed = await invoke<AppSnapshot>("complete_device_setup", {
@@ -964,8 +963,7 @@ export default function App() {
     });
     setSetupOpen(false);
     setSetupInputEvent(null);
-    if (destination === "advanced") setAdvancedInitialSection("io");
-    setView(destination);
+    setView("keyboard");
   };
 
   const run = async (label: string, task: () => Promise<void>) => {
@@ -1167,6 +1165,7 @@ export default function App() {
           ) : view === "advanced" ? (
             <><div className="advanced-back"><button type="button" onClick={() => void navigate("settings")}>{t(language, "common.back")}</button></div><AdvancedSettings
               initialSection={advancedInitialSection}
+              initialHardwareProfileId={hardwareEditorTarget?.deviceProfileId === editorProfile ? hardwareEditorTarget.hardwareProfileId : undefined}
               language={language}
               profiles={deviceProfiles}
               editorProfileId={editorProfile}
@@ -1312,13 +1311,16 @@ export default function App() {
         onRetryCandidate={retrySetupCandidate}
         onCreateProfile={createDeviceProfile}
         onComplete={completeDeviceSetup}
-        onOpenAdvanced={(deviceId, deviceProfileId, hardwareProfileId) => void run(
-          t(language, "setup.openAdvancedIo"),
-          () => completeDeviceSetup(deviceId, devices.find((device) => device.deviceId === deviceId)?.name ?? t(language, "setup.newKeyboard"), {
-            device_profile_id: deviceProfileId,
-            hardware_profile_id: hardwareProfileId,
-          }, "advanced"),
-        )}
+        onOpenAdvanced={async (deviceId, deviceProfileId, hardwareProfileId) => {
+          await saveSettings(deviceProfileId, language);
+          if (!mountedRef.current) return;
+          setSelectedDeviceId(deviceId);
+          setHardwareEditorTarget({ deviceId: null, deviceProfileId, hardwareProfileId });
+          setAdvancedInitialSection("io");
+          setSetupOpen(false);
+          setSetupInputEvent(null);
+          setView("advanced");
+        }}
         onClose={() => {
           setSetupOpen(false);
           setSetupInputEvent(null);

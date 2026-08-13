@@ -57,7 +57,7 @@ export function ConfigurationSettingsDialog({
       <section ref={dialogRef} className="device-setup-dialog configuration-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="configuration-settings-title">
         <header className="device-setup-header">
           <h2 id="configuration-settings-title">{t(language, "settings.title")}</h2>
-          <button className="icon-button" type="button" aria-label={t(language, "common.close")} title={t(language, "common.close")} onClick={onCancel}><X size={17} aria-hidden="true" /></button>
+          <button className="icon-button" type="button" aria-label={t(language, "common.close")} title={t(language, "common.close")} disabled={busy} onClick={onCancel}><X size={17} aria-hidden="true" /></button>
         </header>
         <div className="device-setup-body">
           <div className="settings-fields">
@@ -80,7 +80,7 @@ export function ConfigurationSettingsDialog({
           </div>
         </div>
         <footer className="device-setup-footer">
-          <button className="secondary-button" type="button" onClick={onCancel}>{t(language, "common.cancel")}</button>
+          <button className="secondary-button" type="button" disabled={busy} onClick={onCancel}>{t(language, "common.cancel")}</button>
           <button className="primary-button" type="button" disabled={Boolean(validation) || busy} onClick={() => onSave(settings)}>{saveLabel}</button>
           <button className="secondary-button" type="button" disabled={!copyName.trim() || Boolean(validation) || busy} onClick={async () => {
             setBusy(true);

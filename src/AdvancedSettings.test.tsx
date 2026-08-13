@@ -23,6 +23,13 @@ test("keeps advanced sections in a fixed order and shows selected device details
   expect(screen.getByText("/dev/cu.usb")).toBeInTheDocument();
 });
 
+test("follows a newly requested entry section while already mounted", () => {
+  const props = { language: "zh-CN" as const, profiles: [profile], editorProfileId: "profile-a", devices: [device], selectedDevice: device, boardProfiles: [board], onCreate: vi.fn(), onSelectProfile: vi.fn(), onImport: vi.fn(), onExport: vi.fn(), onDelete: vi.fn(), onRequestProfileMutation: vi.fn(), onDuplicateForDevice: vi.fn(), onHardwareSelectionChange: vi.fn(), onBeginLearning: vi.fn(), onEndLearning: vi.fn() };
+  const { rerender } = render(<AdvancedSettings {...props} initialSection="profiles" />);
+  rerender(<AdvancedSettings {...props} initialSection="io" />);
+  expect(screen.getByRole("tab", { name: "I/O 映射" })).toHaveAttribute("aria-selected", "true");
+});
+
 test("uses the gated mutation callback for layout edits", async () => {
   const user = userEvent.setup();
   const onRequestProfileMutation = vi.fn();

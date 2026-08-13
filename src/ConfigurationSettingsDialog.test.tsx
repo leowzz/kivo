@@ -85,3 +85,19 @@ test("keeps focus inside and closes with Escape", async () => {
   fireEvent.keyDown(window, { key: "Escape" });
   expect(onCancel).toHaveBeenCalledOnce();
 });
+
+test("blocks every dismissal while duplication is pending", async () => {
+  const user = userEvent.setup();
+  let finishDuplicate!: () => void;
+  const onDuplicate = vi.fn(() => new Promise<void>((resolve) => {
+    finishDuplicate = resolve;
+  }));
+  const onCancel = vi.fn();
+  render(<ConfigurationSettingsDialog open profile={profile} sharedDeviceCount={1} onSave={vi.fn()} onDuplicate={onDuplicate} onCancel={onCancel} />);
+  await user.click(screen.getByRole("button", { name: "复制并仅用于此设备" }));
+  expect(screen.getByRole("button", { name: "关闭" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "取消" })).toBeDisabled();
+  await user.click(screen.getByRole("button", { name: "关闭" }));
+  expect(onCancel).not.toHaveBeenCalled();
+  finishDuplicate();
+});

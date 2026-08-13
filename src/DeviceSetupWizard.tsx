@@ -47,7 +47,7 @@ export interface DeviceSetupWizardProps {
     deviceId: string,
     deviceProfileId: string,
     hardwareProfileId: string,
-  ): void;
+  ): Promise<void> | void;
   onClose(): void;
 }
 
@@ -291,6 +291,19 @@ export function DeviceSetupWizard({
     }
   }
 
+  async function openAdvanced() {
+    if (!selectedDevice || !deviceProfileId || !hardwareProfileId || pending) return;
+    setPending(true);
+    setError(null);
+    try {
+      await onOpenAdvanced(selectedDevice.deviceId, deviceProfileId, hardwareProfileId);
+    } catch (operationError) {
+      setError(errorMessage(operationError));
+    } finally {
+      setPending(false);
+    }
+  }
+
   const canRetry =
     selectedCandidate !== null &&
     selectedCandidate.deviceId !== null &&
@@ -496,11 +509,7 @@ export function DeviceSetupWizard({
                 <button type="button" disabled={pending} onClick={() => {
                   setTestPressedButtonIds(new Set());
                 }}>{t(language, "setup.retry")}</button>
-                <button type="button" disabled={pending} onClick={() => onOpenAdvanced(
-                  selectedDevice.deviceId,
-                  deviceProfileId,
-                  hardwareProfileId,
-                )}>{t(language, "setup.openAdvancedIo")}</button>
+                <button type="button" disabled={pending} onClick={() => void openAdvanced()}>{t(language, "setup.openAdvancedIo")}</button>
                 <button type="button" disabled={pending} onClick={() => void complete()}>{t(language, "setup.skipTest")}</button>
                 <button className="primary-button" type="button" disabled={pending} onClick={() => void complete()}>{t(language, "setup.complete")}</button>
               </div>
