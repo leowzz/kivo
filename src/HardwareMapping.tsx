@@ -1,4 +1,4 @@
-import { Cable, Copy, LayoutGrid, Monitor, Pencil, Plus, Radio, SquareStop, Trash2 } from "lucide-react";
+import { Cable, Copy, LayoutGrid, Monitor, Pencil, Plus, Radio, SquareStop, ToggleRight, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { editablePins as selectEditablePins } from "./deviceStatus";
@@ -11,6 +11,7 @@ import type {
   Language,
   LearningTarget,
   ModelLayout,
+  SwitchState,
 } from "./types";
 
 interface HardwareMappingProps {
@@ -31,7 +32,11 @@ interface HardwareMappingProps {
 }
 
 function sourceName(language: Language, source: InputSource) {
-  return t(language, source.type === "direct" ? "hardware.direct" : "hardware.matrix");
+  return t(language, source.type === "direct"
+    ? "hardware.direct"
+    : source.type === "contact_matrix"
+      ? "hardware.matrix"
+      : "hardware.featureSwitch");
 }
 
 function uniqueValue(base: string, existing: Set<string>) {
@@ -57,7 +62,11 @@ function boardSafePins(board: BoardProfileSummary | undefined) {
 
 function ownedInputPins(hardware: HardwareProfile) {
   return hardware.inputs.flatMap((source) =>
-    source.type === "direct" ? Object.values(source.keys) : source.pins
+    source.type === "direct"
+      ? Object.values(source.keys)
+      : source.type === "contact_matrix"
+        ? source.pins
+        : [source.gpio]
   );
 }
 
@@ -79,13 +88,17 @@ function invalidBoardPins(hardware: HardwareProfile, boardProfiles: readonly Boa
   if (!board) return new Set(hardware.inputs.flatMap((source) =>
     source.type === "direct"
       ? Object.values(source.keys)
-      : [...source.pins, ...Object.values(source.keys).flat()]
+      : source.type === "contact_matrix"
+        ? [...source.pins, ...Object.values(source.keys).flat()]
+        : [source.gpio]
   ));
   const safe = new Set(boardSafePins(board));
   return new Set(hardware.inputs.flatMap((source) =>
     (source.type === "direct"
       ? Object.values(source.keys)
-      : [...source.pins, ...Object.values(source.keys).flat()]
+      : source.type === "contact_matrix"
+        ? [...source.pins, ...Object.values(source.keys).flat()]
+        : [source.gpio]
     ).filter((pin) => !safe.has(pin))
   ));
 }
@@ -96,6 +109,14 @@ function hasInvalidContactPair(hardware: HardwareProfile) {
       left === right || !source.pins.includes(left) || !source.pins.includes(right)
     )
   );
+}
+
+function hasInvalidFeatureSwitch(hardware: HardwareProfile, buttons: readonly { id: string }[]) {
+  const knownButtons = new Set(buttons.map((button) => button.id));
+  return hardware.inputs.some((source) => source.type === "feature_switch" && (
+    !source.name.trim() ||
+    source.buttons.some((button) => !knownButtons.has(button))
+  ));
 }
 
 function hasInvalidOled(
@@ -111,6 +132,7 @@ function hasInvalidOled(
 export function hardwareProfilesAreValid(
   profiles: readonly HardwareProfile[],
   boardProfiles: readonly BoardProfileSummary[],
+  layout?: ModelLayout,
 ) {
   return profiles.every((profile) => {
     const board = boardProfiles.find(({ id }) => id === profile.board_profile_id);
@@ -118,7 +140,8 @@ export function hardwareProfilesAreValid(
       invalidBoardPins(profile, boardProfiles).size === 0 &&
       conflictingPins(profile).size === 0 &&
       !hasInvalidContactPair(profile) &&
-      !hasInvalidOled(profile, board);
+      !hasInvalidOled(profile, board) &&
+      (!layout || !hasInvalidFeatureSwitch(profile, layout.groups.flatMap((group) => group.buttons)));
   });
 }
 
@@ -515,7 +538,11 @@ export function HardwareMapping({
               <section className="source-editor" key={`${source.type}-${source.id}`}>
                 <div className="source-heading">
                   <div>
-                    {source.type === "direct" ? <Cable size={14} /> : <LayoutGrid size={14} />}
+                    {source.type === "direct"
+                      ? <Cable size={14} />
+                      : source.type === "contact_matrix"
+                        ? <LayoutGrid size={14} />
+                        : <ToggleRight size={14} />}
                     <strong>{sourceName(language, source)}</strong>
                     <code>{source.id}</code>
                   </div>
@@ -527,6 +554,62 @@ export function HardwareMapping({
                   </button>
                 </div>
 
+                {source.type === "feature_switch" ? (
+                  <div className="feature-switch-editor">
+                    <div className="feature-switch-fields">
+                      <label className="field-stack compact-field">
+                        <span>{t(language, "hardware.switchName")}</span>
+                        <input value={source.name} onChange={(event) => updateSource(sourceIndex, { ...source, name: event.target.value })} />
+                      </label>
+                      <label className="field-stack compact-field">
+                        <span>{t(language, "hardware.switchGpio")}</span>
+                        <select
+                          aria-label={t(language, "hardware.switchGpio")}
+                          aria-invalid={invalid.has(source.gpio) || conflicts.has(source.gpio)}
+                          value={source.gpio}
+                          onChange={(event) => updateSource(sourceIndex, { ...source, gpio: Number(event.target.value) })}
+                        >
+                          {pinOptions(source.gpio, editablePins.filter((pin) => !oledPins.has(pin)), new Set([...inputPins].filter((pin) => pin !== source.gpio))).map((pin) => <option value={pin} key={pin}>{pin}</option>)}
+                        </select>
+                        {(invalid.has(source.gpio) || conflicts.has(source.gpio)) && <small className="field-error">{conflicts.has(source.gpio) ? conflictMessage(language, source.gpio) : invalidMessage(language, [source.gpio])}</small>}
+                      </label>
+                      <label className="field-stack compact-field">
+                        <span>{t(language, "hardware.switchNormalState")}</span>
+                        <select value={source.normal_state} onChange={(event) => updateSource(sourceIndex, { ...source, normal_state: event.target.value as SwitchState })}>
+                          <option value="open">{t(language, "hardware.switchNormallyOpen")}</option>
+                          <option value="closed">{t(language, "hardware.switchNormallyClosed")}</option>
+                        </select>
+                      </label>
+                      <label className="field-stack compact-field">
+                        <span>{t(language, "hardware.switchEnabledWhen")}</span>
+                        <select value={source.enabled_when} onChange={(event) => updateSource(sourceIndex, { ...source, enabled_when: event.target.value as SwitchState })}>
+                          <option value="open">{t(language, "hardware.switchOpen")}</option>
+                          <option value="closed">{t(language, "hardware.switchClosed")}</option>
+                        </select>
+                      </label>
+                    </div>
+                    <fieldset className="feature-switch-buttons">
+                      <legend>{t(language, "hardware.switchButtons")}</legend>
+                      <div className="feature-switch-button-grid">
+                        {buttons.map((button) => (
+                          <label key={button.id}>
+                            <input
+                              type="checkbox"
+                              checked={source.buttons.includes(button.id)}
+                              onChange={(event) => updateSource(sourceIndex, {
+                                ...source,
+                                buttons: event.target.checked
+                                  ? [...new Set([...source.buttons, button.id])]
+                                  : source.buttons.filter((id) => id !== button.id),
+                              })}
+                            />
+                            <span>{button.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </fieldset>
+                  </div>
+                ) : <>
                 {source.type === "contact_matrix" && (() => {
                   const invalidSourcePins = source.pins.filter((pin) => invalid.has(pin));
                   const conflictingSourcePins = [...new Set(
@@ -640,6 +723,7 @@ export function HardwareMapping({
                     </div>
                   ))}
                 </div>
+                </>}
               </section>
             ))}
           </div>
@@ -653,6 +737,18 @@ export function HardwareMapping({
               ...hardware,
               inputs: [...hardware.inputs, { type: "contact_matrix", id: `matrix-${hardware.inputs.length + 1}`, pins: [], keys: {} }],
             })}><Plus size={16} />{t(language, "hardware.addMatrix")}</button>
+            <button type="button" onClick={() => replaceHardware({
+              ...hardware,
+              inputs: [...hardware.inputs, {
+                type: "feature_switch",
+                id: `switch-${hardware.inputs.length + 1}`,
+                name: t(language, "hardware.switchDefaultName"),
+                gpio: editablePins.find((pin) => !inputPins.has(pin) && !oledPins.has(pin)) ?? 0,
+                normal_state: "open",
+                enabled_when: "closed",
+                buttons: [],
+              }],
+            })}><Plus size={16} />{t(language, "hardware.addSwitch")}</button>
           </div>
 
           <details className="learning-panel">

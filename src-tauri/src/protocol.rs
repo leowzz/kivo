@@ -438,6 +438,14 @@ pub fn topology_commands(
                     .checked_add(1)
                     .ok_or_else(|| AppError::new("too_many_input_sources"))?;
             }
+            InputSource::FeatureSwitch { gpio, .. } => {
+                lines.push(format!(
+                    "CONFIG_DIRECT {revision} {source_index} 1 {gpio}\n"
+                ));
+                source_index = source_index
+                    .checked_add(1)
+                    .ok_or_else(|| AppError::new("too_many_input_sources"))?;
+            }
             InputSource::Direct { .. } | InputSource::ContactMatrix { .. } => {}
         }
     }
@@ -452,6 +460,7 @@ fn hardware_pins(hardware: &HardwareProfile) -> BTreeSet<u8> {
         .flat_map(|input| match input {
             InputSource::Direct { keys, .. } => keys.values().copied().collect::<Vec<_>>(),
             InputSource::ContactMatrix { pins, .. } => pins.clone(),
+            InputSource::FeatureSwitch { gpio, .. } => vec![*gpio],
         })
         .collect::<BTreeSet<_>>();
     if let Some(ssd1306) = &hardware.ssd1306 {
@@ -850,9 +859,11 @@ mod tests {
         display::{DisplayRegion, DrawOperation, Rect, SceneMode, SceneUpdate},
         hardware::board_by_id,
         model::{ButtonDefinition, ButtonGroup, ModelLayout},
-        profile::{DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION},
+        profile::{
+            DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION, SwitchState,
+        },
     };
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     fn device_profile() -> DeviceProfile {
         DeviceProfile {
@@ -1489,6 +1500,38 @@ mod tests {
                 },
             ),
             Some("A")
+        );
+    }
+
+    #[test]
+    fn feature_switch_topology_uses_a_direct_gpio_without_a_button_binding() {
+        let mut model = device_profile();
+        model
+            .hardware_profiles
+            .first_mut()
+            .unwrap()
+            .inputs
+            .push(InputSource::FeatureSwitch {
+                id: "mode".into(),
+                name: "Mode switch".into(),
+                gpio: 3,
+                normal_state: SwitchState::Open,
+                enabled_when: SwitchState::Closed,
+                buttons: BTreeSet::from(["A".into()]),
+            });
+        let hardware = model.hardware_profile("esp-primary").unwrap();
+        assert_eq!(
+            topology_commands(hardware, 7, &BTreeSet::from([1, 2, 3, 12, 13])).unwrap(),
+            vec![
+                "CONFIG_BEGIN 7 30\n",
+                "CONFIG_MATRIX 7 0 2 1 2 2 12 13\n",
+                "CONFIG_DIRECT 7 1 1 3\n",
+                "CONFIG_COMMIT 7\n",
+            ]
+        );
+        assert_eq!(
+            model.button_for("esp-primary", &PhysicalInput::Direct { gpio: 3 }),
+            None
         );
     }
 

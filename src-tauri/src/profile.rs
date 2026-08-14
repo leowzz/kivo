@@ -47,6 +47,13 @@ pub enum ActionTrigger {
     DoublePress,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SwitchState {
+    Open,
+    Closed,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TriggerSettings {
     pub long_press_ms: u32,
@@ -176,12 +183,23 @@ pub enum InputSource {
         pins: Vec<u8>,
         keys: BTreeMap<String, [u8; 2]>,
     },
+    FeatureSwitch {
+        id: String,
+        name: String,
+        gpio: u8,
+        normal_state: SwitchState,
+        enabled_when: SwitchState,
+        #[serde(default)]
+        buttons: BTreeSet<String>,
+    },
 }
 
 impl InputSource {
     fn id(&self) -> &str {
         match self {
-            Self::Direct { id, .. } | Self::ContactMatrix { id, .. } => id,
+            Self::Direct { id, .. }
+            | Self::ContactMatrix { id, .. }
+            | Self::FeatureSwitch { id, .. } => id,
         }
     }
 }
@@ -404,10 +422,56 @@ impl DeviceProfile {
                     }
                     runtime_source = runtime_source.checked_add(1)?;
                 }
+                InputSource::FeatureSwitch { .. } => {
+                    runtime_source = runtime_source.checked_add(1)?;
+                }
                 InputSource::Direct { .. } | InputSource::ContactMatrix { .. } => {}
             }
         }
         None
+    }
+
+    pub fn feature_switch_for(
+        &self,
+        hardware_id: &str,
+        input: &PhysicalInput,
+    ) -> Option<&InputSource> {
+        let hardware = self.hardware_profile(hardware_id)?;
+        hardware.inputs.iter().find(|source| {
+            let InputSource::FeatureSwitch { gpio, .. } = source else {
+                return false;
+            };
+            matches!(input, PhysicalInput::Direct { gpio: input_gpio } if input_gpio == gpio)
+        })
+    }
+
+    pub fn button_is_enabled(
+        &self,
+        hardware_id: &str,
+        button: &str,
+        states: &BTreeMap<String, SwitchState>,
+    ) -> bool {
+        self.hardware_profile(hardware_id)
+            .into_iter()
+            .flat_map(|hardware| &hardware.inputs)
+            .filter_map(|source| {
+                let InputSource::FeatureSwitch {
+                    id,
+                    normal_state,
+                    enabled_when,
+                    buttons,
+                    ..
+                } = source
+                else {
+                    return None;
+                };
+                buttons
+                    .contains(button)
+                    .then_some((id, normal_state, enabled_when))
+            })
+            .all(|(id, normal_state, enabled_when)| {
+                states.get(id).copied().unwrap_or(*normal_state) == *enabled_when
+            })
     }
 
     pub fn validate(&self) -> Result<(), AppError> {
@@ -505,6 +569,26 @@ impl DeviceProfile {
                             edges.push(pair);
                         }
                         validate_bipartite(&edges)?;
+                    }
+                    InputSource::FeatureSwitch {
+                        id: _,
+                        name,
+                        gpio,
+                        normal_state: _,
+                        enabled_when: _,
+                        buttons: gated_buttons,
+                    } => {
+                        if name.trim().is_empty() {
+                            return Err(AppError::new("invalid_feature_switch_name")
+                                .with_param("hardware_profile", &hardware.id));
+                        }
+                        validate_pin(*gpio, board.safe_pins, &mut owned_pins)?;
+                        for button in gated_buttons {
+                            if !buttons.contains(button.as_str()) {
+                                return Err(AppError::new("unknown_feature_switch_button")
+                                    .with_param("button", button));
+                            }
+                        }
                     }
                 }
             }
@@ -807,6 +891,39 @@ mod tests {
             TriggerActions::press(vec![ButtonAction::Open { target: " ".into() }]),
         );
         assert_eq!(profile.validate().unwrap_err().code, "invalid_open_target");
+    }
+
+    #[test]
+    fn feature_switches_validate_targets_and_round_trip() {
+        let mut profile = profile();
+        profile.hardware_profiles[0]
+            .inputs
+            .push(InputSource::FeatureSwitch {
+                id: "mode".into(),
+                name: "Mode switch".into(),
+                gpio: 7,
+                normal_state: SwitchState::Open,
+                enabled_when: SwitchState::Closed,
+                buttons: BTreeSet::from(["UP".into()]),
+            });
+
+        profile.validate().unwrap();
+        let yaml = serde_yaml_ng::to_string(&profile).unwrap();
+        let restored: DeviceProfile = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(restored, profile);
+
+        profile.hardware_profiles[0].inputs[1] = InputSource::FeatureSwitch {
+            id: "mode".into(),
+            name: "Mode switch".into(),
+            gpio: 7,
+            normal_state: SwitchState::Open,
+            enabled_when: SwitchState::Closed,
+            buttons: BTreeSet::from(["MISSING".into()]),
+        };
+        assert_eq!(
+            profile.validate().unwrap_err().code,
+            "unknown_feature_switch_button"
+        );
     }
 
     #[test]

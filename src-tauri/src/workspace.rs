@@ -1287,6 +1287,7 @@ fn hardware_binding_count(profile: &DeviceProfile) -> usize {
         .map(|input| match input {
             InputSource::Direct { keys, .. } => keys.len(),
             InputSource::ContactMatrix { keys, .. } => keys.len(),
+            InputSource::FeatureSwitch { buttons, .. } => buttons.len(),
         })
         .sum()
 }

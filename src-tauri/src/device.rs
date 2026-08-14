@@ -14,7 +14,7 @@ use crate::{
     hardware::{BoardProfile, DeviceId},
     metrics::{HomeMetricsSnapshot, MetricAttribution, MetricsStore},
     paste::{Clock, PasteHandle, PasteReply, PasteRequest, SystemClock},
-    profile::{ActionTrigger, DeviceProfile},
+    profile::{ActionTrigger, DeviceProfile, InputSource, SwitchState},
     protocol::{
         ACTION_RUN_PROTOCOL_VERSION, ActionSequence, DISPLAY_LARGE_FONT_PROTOCOL_VERSION,
         DISPLAY_PROTOCOL_VERSION, DeviceMessage, HelloCapabilities, InputState,
@@ -134,6 +134,7 @@ pub struct DeviceSession {
     pending_receive_sequences: BTreeMap<u64, usize>,
     gesture_placeholders: BTreeMap<u64, usize>,
     trigger_metadata: BTreeMap<(PhysicalInput, u64), TriggerMetadata>,
+    feature_switch_states: BTreeMap<String, SwitchState>,
     active_receive_sequence: Option<u64>,
     pending_paste: Option<PendingPaste>,
     pending_reconfiguration: Option<PendingReconfiguration>,
@@ -159,6 +160,40 @@ pub struct RuntimeProfileSnapshot {
     pub profile: DeviceProfile,
     pub hardware_profile_id: String,
     pub metric_attribution: MetricAttribution,
+}
+
+fn initial_feature_switch_states(
+    snapshot: Option<&RuntimeProfileSnapshot>,
+    previous: &BTreeMap<String, SwitchState>,
+) -> BTreeMap<String, SwitchState> {
+    snapshot
+        .and_then(|runtime| {
+            runtime
+                .profile
+                .hardware_profile(&runtime.hardware_profile_id)
+        })
+        .into_iter()
+        .flat_map(|hardware| &hardware.inputs)
+        .filter_map(|source| {
+            let InputSource::FeatureSwitch {
+                id, normal_state, ..
+            } = source
+            else {
+                return None;
+            };
+            Some((
+                id.clone(),
+                previous.get(id).copied().unwrap_or(*normal_state),
+            ))
+        })
+        .collect()
+}
+
+fn format_switch_state(state: SwitchState) -> &'static str {
+    match state {
+        SwitchState::Open => "open",
+        SwitchState::Closed => "closed",
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -201,6 +236,7 @@ struct ActiveLearning {
 impl DeviceSession {
     #[cfg(test)]
     pub fn new(profile: RuntimeProfileSnapshot) -> Self {
+        let feature_switch_states = initial_feature_switch_states(Some(&profile), &BTreeMap::new());
         Self {
             profile: Some(Arc::new(profile)),
             candidate_board: crate::hardware::board_by_id(
@@ -221,6 +257,7 @@ impl DeviceSession {
             pending_receive_sequences: BTreeMap::new(),
             gesture_placeholders: BTreeMap::new(),
             trigger_metadata: BTreeMap::new(),
+            feature_switch_states,
             active_receive_sequence: None,
             pending_paste: None,
             pending_reconfiguration: None,
@@ -248,6 +285,7 @@ impl DeviceSession {
             pending_receive_sequences: BTreeMap::new(),
             gesture_placeholders: BTreeMap::new(),
             trigger_metadata: BTreeMap::new(),
+            feature_switch_states: BTreeMap::new(),
             active_receive_sequence: None,
             pending_paste: None,
             pending_reconfiguration: None,
@@ -261,6 +299,8 @@ impl DeviceSession {
         &mut self,
         snapshot: Option<Arc<RuntimeProfileSnapshot>>,
     ) -> SessionOutput {
+        self.feature_switch_states =
+            initial_feature_switch_states(snapshot.as_deref(), &BTreeMap::new());
         self.profile = snapshot.clone();
         if let Some(pending) = self.pending_reconfiguration.as_mut() {
             pending.snapshot = snapshot;
@@ -281,6 +321,8 @@ impl DeviceSession {
         self.settle_placeholders(&mut output);
         self.ready = false;
         self.configuring = None;
+        self.feature_switch_states =
+            initial_feature_switch_states(snapshot.as_deref(), &self.feature_switch_states);
         self.profile = snapshot.clone();
         self.pending_reconfiguration = Some(PendingReconfiguration {
             snapshot,
@@ -608,14 +650,41 @@ impl DeviceSession {
                 .button_for(&runtime.hardware_profile_id, &input)
                 .map(str::to_owned)
         });
-        let metric_press = (state == InputState::Down)
-            .then(|| metric_snapshot.as_ref().zip(button.as_deref()))
-            .flatten()
-            .map(|(runtime, button_id)| MetricPress {
-                attribution: runtime.metric_attribution.clone(),
-                button_id: button_id.into(),
-                occurred_at_ms,
-            });
+        let feature_switch = metric_snapshot.as_ref().and_then(|runtime| {
+            runtime
+                .profile
+                .feature_switch_for(&runtime.hardware_profile_id, &input)
+                .and_then(|source| match source {
+                    InputSource::FeatureSwitch {
+                        id,
+                        normal_state,
+                        enabled_when,
+                        ..
+                    } => Some((id.clone(), *normal_state, *enabled_when)),
+                    _ => None,
+                })
+        });
+        let metric_press = if state == InputState::Down
+            && button.as_deref().is_some_and(|button_id| {
+                metric_snapshot.as_ref().is_some_and(|runtime| {
+                    runtime.profile.button_is_enabled(
+                        &runtime.hardware_profile_id,
+                        button_id,
+                        &self.feature_switch_states,
+                    )
+                })
+            }) {
+            metric_snapshot
+                .as_ref()
+                .zip(button.as_deref())
+                .map(|(runtime, button_id)| MetricPress {
+                    attribution: runtime.metric_attribution.clone(),
+                    button_id: button_id.into(),
+                    occurred_at_ms,
+                })
+        } else {
+            None
+        };
         let mut activity = RuntimeActivity {
             input: Some(input),
             pressed: Some(state == InputState::Down),
@@ -627,6 +696,26 @@ impl DeviceSession {
             activity.params.insert("button".into(), button);
         }
         output.activities.push(activity);
+        if let Some((id, normal_state, enabled_when)) = feature_switch {
+            let switch_state = match state {
+                InputState::Down => SwitchState::Closed,
+                InputState::Up => SwitchState::Open,
+            };
+            self.feature_switch_states.insert(id.clone(), switch_state);
+            if !self.is_v6() && state == InputState::Down {
+                output.lines.push(format!("SKIP {event_id}\n"));
+            }
+            output.activities.push(
+                RuntimeActivity::new("feature_switch_changed")
+                    .with_param("switch", id)
+                    .with_param("state", format_switch_state(switch_state))
+                    .with_param("normalState", format_switch_state(normal_state))
+                    .with_param("enabledWhen", format_switch_state(enabled_when))
+                    .with_context(context),
+            );
+            output.completed_receive_sequences.push(receive_sequence);
+            return;
+        }
         let Some(snapshot) = action_snapshot else {
             if state == InputState::Down {
                 output.lines.push(format!("SKIP {event_id}\n"));
@@ -905,6 +994,8 @@ impl DeviceSession {
         output: &mut SessionOutput,
     ) {
         self.profile = snapshot;
+        self.feature_switch_states =
+            initial_feature_switch_states(self.profile.as_deref(), &BTreeMap::new());
         self.ready = false;
         self.configuring = None;
         if self.hello.is_none() {
@@ -1004,6 +1095,7 @@ impl DeviceSession {
         self.active_snapshot = None;
         self.active_context = None;
         self.active_release_placeholder = None;
+        self.feature_switch_states.clear();
         self.active_receive_sequence = None;
         self.pending_paste = None;
         self.queue.clear();
@@ -1202,6 +1294,26 @@ impl DeviceSession {
                 .get(&button)
                 .map(|triggers| triggers.actions_for(occurrence.trigger).to_vec())
                 .unwrap_or_default();
+            if !runtime.profile.button_is_enabled(
+                &runtime.hardware_profile_id,
+                &button,
+                &self.feature_switch_states,
+            ) {
+                if !self.is_v6() {
+                    output.lines.push(format!("SKIP {}\n", queued.event_id));
+                }
+                self.finish_queued_occurrence(
+                    queued.receive_sequence,
+                    queued.release_placeholder,
+                    output,
+                );
+                output.activities.push(
+                    RuntimeActivity::new("feature_disabled")
+                        .with_param("button", button)
+                        .with_context(occurrence.context),
+                );
+                continue;
+            }
             if actions.is_empty() {
                 if !self.is_v6() {
                     output.lines.push(format!("SKIP {}\n", queued.event_id));
@@ -2549,7 +2661,7 @@ mod tests {
         paste::{ClipboardWriter, PasteCoordinator},
         profile::{
             ButtonAction, DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION,
-            Ssd1306Config,
+            Ssd1306Config, SwitchState,
         },
         protocol::{
             DISPLAY_LARGE_FONT_PROTOCOL_VERSION, DISPLAY_PROTOCOL_VERSION, DeviceMessage,
@@ -2559,7 +2671,7 @@ mod tests {
     use serialport::{SerialPortInfo, SerialPortType, UsbPortInfo};
     use std::{
         cell::RefCell,
-        collections::BTreeMap,
+        collections::{BTreeMap, BTreeSet},
         sync::Mutex,
         time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
@@ -2637,6 +2749,22 @@ mod tests {
         hardware.ssd1306 = Some(Ssd1306Config { sda: 4, scl: 5 });
         runtime.metric_attribution.device_id =
             DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "ABCDEF123456").unwrap();
+        runtime
+    }
+
+    fn runtime_model_with_feature_switch() -> RuntimeProfileSnapshot {
+        let mut runtime = runtime_model();
+        runtime.profile.hardware_profiles[0]
+            .inputs
+            .push(InputSource::FeatureSwitch {
+                id: "mode".into(),
+                name: "Mode switch".into(),
+                gpio: 7,
+                normal_state: SwitchState::Open,
+                enabled_when: SwitchState::Closed,
+                buttons: BTreeSet::from(["A".into()]),
+            });
+        runtime.profile.validate().unwrap();
         runtime
     }
 
@@ -3087,6 +3215,82 @@ mod tests {
         assert_eq!(release.activities[0].params["button"], "A");
         drop(store);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn feature_switch_gates_buttons_without_becoming_a_button_trigger() {
+        let mut session = DeviceSession::new(runtime_model_with_feature_switch());
+        session.ready = true;
+        session.hello = Some(HelloCapabilities {
+            protocol: ACTION_RUN_PROTOCOL_VERSION,
+            controller_family_id: crate::hardware::ESP32S3_FAMILY_ID.into(),
+            board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+            firmware_build_id: "test".into(),
+            pins: vec![6, 7],
+        });
+
+        let disabled = session.on_message(
+            DeviceMessage::State {
+                event_id: 1,
+                input: PhysicalInput::Direct { gpio: 7 },
+                state: InputState::Up,
+            },
+            &mut |_| Ok(()),
+        );
+        assert!(
+            disabled
+                .activities
+                .iter()
+                .all(|activity| activity.code != "trigger_occurred")
+        );
+
+        let blocked = session.on_message(
+            DeviceMessage::State {
+                event_id: 2,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            &mut |_| Ok(()),
+        );
+        assert!(
+            blocked
+                .activities
+                .iter()
+                .any(|activity| activity.code == "feature_disabled")
+        );
+        assert!(blocked.paste_requests.is_empty());
+
+        session.on_message(
+            DeviceMessage::State {
+                event_id: 2,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Up,
+            },
+            &mut |_| Ok(()),
+        );
+
+        session.on_message(
+            DeviceMessage::State {
+                event_id: 3,
+                input: PhysicalInput::Direct { gpio: 7 },
+                state: InputState::Down,
+            },
+            &mut |_| Ok(()),
+        );
+        let enabled = session.on_message(
+            DeviceMessage::State {
+                event_id: 4,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            &mut |_| Ok(()),
+        );
+        assert!(
+            enabled
+                .activities
+                .iter()
+                .any(|activity| activity.code == "action_step_started")
+        );
     }
 
     #[test]

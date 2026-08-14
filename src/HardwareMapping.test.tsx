@@ -450,6 +450,35 @@ test("accepts GPIO26 through GPIO29 across direct, matrix, and OLED ownership", 
   expect(within(sda).queryByRole("option", { name: "27" })).toBeNull();
 });
 
+test("configures feature switch polarity and affected buttons independently from key mappings", async () => {
+  const user = userEvent.setup();
+  const onChange = renderMapping({
+    profiles: [{
+      ...structuredClone(hardwareProfiles[0]),
+      inputs: [{
+        type: "feature_switch",
+        id: "mode",
+        name: "Mode",
+        gpio: 12,
+        normal_state: "open",
+        enabled_when: "closed",
+        buttons: [],
+      }],
+    }],
+  });
+
+  await user.selectOptions(screen.getByLabelText("常态"), "closed");
+  await user.selectOptions(screen.getByLabelText("以下状态启用按钮"), "open");
+  await user.click(screen.getByRole("checkbox", { name: "1" }));
+
+  const updates = onChange.mock.calls.map(([profiles]) => (profiles as HardwareProfile[])[0].inputs[0]);
+  expect(updates).toEqual(expect.arrayContaining([
+    expect.objectContaining({ normal_state: "closed" }),
+    expect.objectContaining({ enabled_when: "open" }),
+    expect.objectContaining({ buttons: ["ONE"] }),
+  ]));
+});
+
 test("keeps repeated add names collision-free when custom names occupy generated suffixes", async () => {
   const user = userEvent.setup();
   const onChange = vi.fn<(profiles: HardwareProfile[]) => void>();

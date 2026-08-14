@@ -1499,12 +1499,14 @@ fn activity_level(code: &str) -> EventLevel {
         | "input_state"
         | "learning_ready"
         | "learning_input"
+        | "feature_switch_changed"
         | "action_step_started"
         | "action_step_completed" => EventLevel::Info,
         "input_before_configuration"
         | "unexpected_action_acknowledgement"
         | "unmapped_input"
         | "empty_action_list"
+        | "feature_disabled"
         | "no_runtime_assignment"
         | "invalid_assignment" => EventLevel::Warning,
         _ => EventLevel::Error,
