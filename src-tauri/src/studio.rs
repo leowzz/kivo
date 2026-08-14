@@ -17,7 +17,7 @@ use std::{
 };
 use tauri::Manager;
 
-struct StudioState {
+pub(super) struct StudioState {
     repo_root: PathBuf,
     build_active: Arc<AtomicBool>,
     build_cancelled: Arc<AtomicBool>,
@@ -26,7 +26,7 @@ struct StudioState {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct StudioProductSummary {
+pub(super) struct StudioProductSummary {
     product_version_id: String,
     display_name: String,
     board_profile_id: String,
@@ -36,7 +36,7 @@ struct StudioProductSummary {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct StudioBoardSummary {
+pub(super) struct StudioBoardSummary {
     id: String,
     family_id: String,
     controller_token: String,
@@ -47,7 +47,7 @@ struct StudioBoardSummary {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct StudioSnapshot {
+pub(super) struct StudioSnapshot {
     products: Vec<StudioProductSummary>,
     boards: Vec<StudioBoardSummary>,
     repo_root: PathBuf,
@@ -55,7 +55,7 @@ struct StudioSnapshot {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct StudioBuildResult {
+pub(super) struct StudioBuildResult {
     output: ProductBuildOutput,
     logs: Vec<String>,
 }
@@ -138,12 +138,14 @@ fn snapshot(state: &StudioState) -> Result<StudioSnapshot, AppError> {
 }
 
 #[tauri::command]
-fn studio_get_snapshot(state: tauri::State<'_, StudioState>) -> Result<StudioSnapshot, AppError> {
+pub(super) fn studio_get_snapshot(
+    state: tauri::State<'_, StudioState>,
+) -> Result<StudioSnapshot, AppError> {
     snapshot(&state)
 }
 
 #[tauri::command]
-fn studio_load_product(
+pub(super) fn studio_load_product(
     state: tauri::State<'_, StudioState>,
     product_version_id: String,
 ) -> Result<ProductDefinition, AppError> {
@@ -155,14 +157,14 @@ fn studio_load_product(
 }
 
 #[tauri::command]
-fn studio_validate_product(
+pub(super) fn studio_validate_product(
     definition: ProductDefinition,
 ) -> Result<NormalizedProductDefinition, AppError> {
     definition.normalize()
 }
 
 #[tauri::command]
-fn studio_save_product(
+pub(super) fn studio_save_product(
     state: tauri::State<'_, StudioState>,
     definition: ProductDefinition,
     create: bool,
@@ -194,7 +196,7 @@ fn save_product(
 }
 
 #[tauri::command]
-fn studio_copy_product(
+pub(super) fn studio_copy_product(
     state: tauri::State<'_, StudioState>,
     source_product_version_id: String,
     definition: ProductDefinition,
@@ -216,7 +218,7 @@ fn copy_product(
 }
 
 #[tauri::command]
-fn studio_delete_product(
+pub(super) fn studio_delete_product(
     state: tauri::State<'_, StudioState>,
     product_version_id: String,
 ) -> Result<StudioSnapshot, AppError> {
@@ -236,7 +238,7 @@ fn delete_product(repo_root: &Path, product_version_id: &str) -> Result<(), AppE
 }
 
 #[tauri::command]
-async fn studio_build_product(
+pub(super) async fn studio_build_product(
     state: tauri::State<'_, StudioState>,
     product_version_id: String,
 ) -> Result<StudioBuildResult, AppError> {
@@ -270,56 +272,33 @@ async fn studio_build_product(
     .map_err(|error| AppError::new("product_build_task_failed").with_detail(error.to_string()))?
 }
 
-pub fn run() {
-    let repo_root = env::var_os("KIVO_REPOSITORY_ROOT")
+pub(super) fn repository_root() -> PathBuf {
+    env::var_os("KIVO_REPOSITORY_ROOT")
         .map(PathBuf::from)
         .and_then(|path| path.canonicalize().ok())
         .filter(|path| path.join("src-tauri/Cargo.toml").is_file())
-        .expect("KIVO_REPOSITORY_ROOT must point to the Kivo repository");
-    tauri::Builder::default()
-        .setup(move |app| {
-            app.manage(StudioState {
-                repo_root,
-                build_active: Arc::new(AtomicBool::new(false)),
-                build_cancelled: Arc::new(AtomicBool::new(false)),
-                closing: Arc::new(AtomicBool::new(false)),
-            });
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            studio_get_snapshot,
-            studio_load_product,
-            studio_validate_product,
-            studio_save_product,
-            studio_copy_product,
-            studio_delete_product,
-            studio_build_product,
-        ])
-        .build(tauri::generate_context!())
-        .expect("error while building Kivo Product Studio")
-        .run(|app, event| match event {
-            tauri::RunEvent::WindowEvent {
-                event: tauri::WindowEvent::CloseRequested { api, .. },
-                ..
-            } if app
-                .state::<StudioState>()
-                .build_active
-                .load(Ordering::Acquire) =>
-            {
-                api.prevent_close();
-                begin_cancelled_shutdown(app);
-            }
-            tauri::RunEvent::ExitRequested { api, .. }
-                if app
-                    .state::<StudioState>()
-                    .build_active
-                    .load(Ordering::Acquire) =>
-            {
-                api.prevent_exit();
-                begin_cancelled_shutdown(app);
-            }
-            _ => {}
-        });
+        .expect("KIVO_REPOSITORY_ROOT must point to the Kivo repository")
+}
+
+pub(super) fn setup(app: &mut tauri::App, repo_root: PathBuf) {
+    app.manage(StudioState {
+        repo_root,
+        build_active: Arc::new(AtomicBool::new(false)),
+        build_cancelled: Arc::new(AtomicBool::new(false)),
+        closing: Arc::new(AtomicBool::new(false)),
+    });
+}
+
+pub(super) fn cancel_active_build_for_shutdown(app: &tauri::AppHandle) -> bool {
+    if !app
+        .state::<StudioState>()
+        .build_active
+        .load(Ordering::Acquire)
+    {
+        return false;
+    }
+    begin_cancelled_shutdown(app);
+    true
 }
 
 fn begin_cancelled_shutdown(app: &tauri::AppHandle) {

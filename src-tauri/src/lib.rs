@@ -54,6 +54,8 @@ use workspace::{
 
 const DEVICE_SCAN_INTERVAL: Duration = Duration::from_millis(500);
 const RUNTIME_EVENT_POLL_INTERVAL: Duration = Duration::from_millis(5);
+#[cfg(feature = "product-studio")]
+const MAIN_APP_IDENTIFIER: &str = "cn.wleo.kivo";
 
 struct BackgroundDeviceScanner {
     enumerator: Arc<dyn UsbEnumerator>,
@@ -1149,13 +1151,20 @@ fn get_startup_failure(state: tauri::State<'_, StartupState>) -> Option<StartupF
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-#[cfg(not(feature = "product-studio"))]
 pub fn run() {
-    let app = tauri::Builder::default()
+    #[cfg(feature = "product-studio")]
+    let studio_repo_root = studio::repository_root();
+
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
+        .setup(move |app| {
+            #[cfg(feature = "product-studio")]
+            studio::setup(app, studio_repo_root.clone());
             app.manage(StartupState::default());
             let result: SetupResult = (|| {
+                #[cfg(feature = "product-studio")]
+                let config_directory = app.path().config_dir()?.join(MAIN_APP_IDENTIFIER);
+                #[cfg(not(feature = "product-studio"))]
                 let config_directory = app.path().app_config_dir()?;
                 let codex_home_fallback = app.path().home_dir()?.join(".codex");
                 let codex_cursor_store = app
@@ -1172,6 +1181,9 @@ pub fn run() {
                     "application_started",
                     serde_json::json!({"version": env!("CARGO_PKG_VERSION")}),
                 ));
+                #[cfg(feature = "product-studio")]
+                let bundled_profiles = studio_repo_root.join("models/prod");
+                #[cfg(not(feature = "product-studio"))]
                 let bundled_profiles = app.path().resource_dir()?.join("models");
                 let workspace = match Workspace::load(&config_directory, &bundled_profiles) {
                     Ok(workspace) => workspace,
@@ -1197,7 +1209,10 @@ pub fn run() {
                     };
                 let operation_barrier = Arc::new(RwLock::new(()));
                 let workspace = Arc::new(RwLock::new(workspace));
-                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                #[cfg(all(
+                    any(target_os = "macos", target_os = "windows"),
+                    not(feature = "product-studio")
+                ))]
                 {
                     let workspace_guard = workspace
                         .read()
@@ -1314,37 +1329,84 @@ pub fn run() {
             })();
             settle_setup_result(result, |error| report_startup_failure(app, error));
             Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            get_startup_failure,
-            get_snapshot,
-            retry_candidate,
-            save_device_profile,
-            create_device_profile,
-            duplicate_profile_for_device,
-            save_settings,
-            rename_device,
-            save_product_device_config,
-            copy_product_device_config,
-            save_runtime_assignment,
-            complete_device_setup,
-            clear_runtime_assignment,
-            forget_device,
-            get_device_metrics,
-            begin_learning,
-            end_learning,
-            preview_device_profile_import,
-            import_device_profile,
-            export_device_profile,
-            delete_device_profile,
-            preview_backup,
-            export_backup,
-            restore_backup,
-        ])
+        });
+
+    #[cfg(not(feature = "product-studio"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        get_startup_failure,
+        get_snapshot,
+        retry_candidate,
+        save_device_profile,
+        create_device_profile,
+        duplicate_profile_for_device,
+        save_settings,
+        rename_device,
+        save_product_device_config,
+        copy_product_device_config,
+        save_runtime_assignment,
+        complete_device_setup,
+        clear_runtime_assignment,
+        forget_device,
+        get_device_metrics,
+        begin_learning,
+        end_learning,
+        preview_device_profile_import,
+        import_device_profile,
+        export_device_profile,
+        delete_device_profile,
+        preview_backup,
+        export_backup,
+        restore_backup,
+    ]);
+
+    #[cfg(feature = "product-studio")]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        get_startup_failure,
+        get_snapshot,
+        retry_candidate,
+        save_device_profile,
+        create_device_profile,
+        duplicate_profile_for_device,
+        save_settings,
+        rename_device,
+        save_product_device_config,
+        copy_product_device_config,
+        save_runtime_assignment,
+        complete_device_setup,
+        clear_runtime_assignment,
+        forget_device,
+        get_device_metrics,
+        begin_learning,
+        end_learning,
+        preview_device_profile_import,
+        import_device_profile,
+        export_device_profile,
+        delete_device_profile,
+        preview_backup,
+        export_backup,
+        restore_backup,
+        studio::studio_get_snapshot,
+        studio::studio_load_product,
+        studio::studio_validate_product,
+        studio::studio_save_product,
+        studio::studio_copy_product,
+        studio::studio_delete_product,
+        studio::studio_build_product,
+    ]);
+
+    let app = builder
         .build(tauri::generate_context!())
         .expect("error while building Kivo");
 
     app.run(|app_handle, event| match event {
+        #[cfg(feature = "product-studio")]
+        tauri::RunEvent::WindowEvent {
+            event: tauri::WindowEvent::CloseRequested { api, .. },
+            ..
+        } if studio::cancel_active_build_for_shutdown(app_handle) => {
+            api.prevent_close();
+        }
+        #[cfg(not(feature = "product-studio"))]
         tauri::RunEvent::WindowEvent {
             label,
             event: tauri::WindowEvent::CloseRequested { api, .. },
@@ -1364,6 +1426,12 @@ pub fn run() {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
+        }
+        #[cfg(feature = "product-studio")]
+        tauri::RunEvent::ExitRequested { api, .. }
+            if studio::cancel_active_build_for_shutdown(app_handle) =>
+        {
+            api.prevent_exit();
         }
         tauri::RunEvent::ExitRequested { .. } => {
             runtime_log::emit_lifecycle(runtime_log::RuntimeLogEntry::new(
@@ -1408,11 +1476,6 @@ pub fn run() {
         }
         _ => {}
     });
-}
-
-#[cfg(feature = "product-studio")]
-pub fn run() {
-    studio::run();
 }
 
 #[cfg(test)]

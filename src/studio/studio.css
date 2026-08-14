@@ -1,3 +1,16 @@
+.studio-hub-shell { height: 100%; min-height: 0; display: grid; grid-template-rows: 52px minmax(0, 1fr); background: var(--gray-2); color: var(--gray-12); }
+.studio-hub-header { display: flex; align-items: center; gap: 24px; padding: 0 14px; border-bottom: 1px solid var(--border-default); background: var(--gray-1); }
+.studio-hub-brand { min-width: 220px; display: flex; align-items: center; gap: 9px; }
+.studio-hub-brand img { width: 27px; height: 27px; border-radius: var(--radius-6); }
+.studio-hub-brand strong { font-size: var(--text-14); white-space: nowrap; }
+.studio-hub-tabs { align-self: stretch; display: flex; align-items: flex-end; gap: 4px; }
+.studio-hub-tabs button { height: 40px; display: inline-flex; align-items: center; gap: 7px; padding: 0 14px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--gray-10); font-size: var(--text-13); }
+.studio-hub-tabs button:hover { color: var(--gray-12); background: var(--gray-2); }
+.studio-hub-tabs button[aria-selected="true"] { border-bottom-color: var(--green-9); color: var(--green-11); font-weight: var(--weight-semibold); }
+.studio-hub-panel { min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
+.studio-hub-panel[hidden] { display: none; }
+.studio-hub-loading { height: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--gray-9); font-size: var(--text-12); }
+
 .studio-shell { height: 100%; display: grid; grid-template-columns: 252px minmax(0, 1fr); background: var(--gray-2); color: var(--gray-12); }
 .studio-sidebar { min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border-default); background: var(--gray-1); }
 .studio-brand { height: 68px; padding: 14px 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border-subtle); }
@@ -125,3 +138,4 @@
 @keyframes studio-spin { to { transform: rotate(360deg); } }
 @media (max-width: 1120px) { .layout-editor { grid-template-columns: 150px minmax(360px, 1fr); } .layout-preview { display: none; } .binding-grid { grid-template-columns: repeat(3, minmax(90px, 1fr)); } }
 @media (max-width: 760px) { .display-pin-grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); } }
+@media (max-width: 680px) { .studio-hub-header { gap: 8px; padding: 0 8px; } .studio-hub-brand { min-width: 0; } .studio-hub-brand strong { display: none; } .studio-hub-tabs { margin-left: auto; } .studio-hub-tabs button { padding: 0 9px; } }

@@ -1,6 +1,6 @@
 # Kivo Product Studio 与内嵌产品定义实施计划
 
-> 状态：Implemented (2026-08-14)
+> 状态：Implemented (2026-08-15)
 >
 > 本文记录当前已确认的实现方向。后续实现应以本文为准，并保留现有 DIY
 > Device Profile 与 Runtime Assignment 工作流的兼容性。
@@ -9,6 +9,9 @@
 
 - 新增仅通过 `make studio` 启动的 Product Studio Tauri 开发 flavor；普通
   Kivo 安装包不包含 Studio 页面、YAML 写入或构建命令。
+- Product Studio 是统一开发工作台，默认进入“开发调试”，完整承载原 Kivo App 的
+  设备切换、按键与 Action 编辑、布局、IO 映射、学习和数据管理；现有产品定义编辑器
+  作为“产品定义”Tab 保留。
 - Product Definition 作为唯一生产源文件，包含产品身份、按键布局和硬件拓扑，
   不包含用户 Actions。
 - 生产固件同时嵌入编译后的运行拓扑与完整语义定义；普通 Kivo 通过协议读取定义，
@@ -51,16 +54,21 @@
 ## 3. Studio And Runtime
 
 - 增加 `studio.html`、独立 React 入口和 `tauri.studio.conf.json`；Cargo feature
-  `product-studio` 注册 Studio 专属命令并切换到无托盘、关闭即退出的 Studio
-  runtime。
+  `product-studio` 同时注册设备运行时命令与 Studio 专属命令，并切换到无托盘、
+  关闭即退出的 Studio runtime。
 - `make studio` 先执行 `helper-kill`，设置经过 canonicalize 的仓库根目录，再使用
   `tauri dev --features product-studio --config ...` 启动。
+- Studio 顶层提供“开发调试”和“产品定义”两个 Tab。两个工作区按需加载且首次打开后
+  保持挂载，切换 Tab 不丢失设备选择或未保存的产品草稿。
+- “开发调试”复用正式 Kivo 的配置目录，以便沿用现有 Device Profile、Runtime
+  Assignment、Actions 和指标数据；普通 `main.tsx` 入口本阶段保持现状，后续再单独
+  重构为面向用户的最小化版本。
 - 所有 Studio 文件操作限制在当前仓库的 `products/` 和 `output/products/`。
 - Studio 提供产品列表、新建或复制版本、产品身份、布局、硬件引脚、规范化定义预览、
   校验结果和构建日志。
 - 已保存 Product Version ID 不允许原地重命名；新修订通过复制创建。
 - 编辑采用内存 draft 和显式保存；存在校验错误或未保存修改时禁止构建。
-- 保存复用原子临时文件替换，不提供删除入口。
+- 保存复用原子临时文件替换；产品身份页提供带二次确认的删除入口。
 - 固件协议 v9 为 `HELLO` 增加 `<product-version-id|->`；v10 增加
   `CONFIG_OLED_CONTROL`，用于原子配置显示控制面板的五路 GPIO。旧协议 3-8 和 `-`
   继续进入 legacy 流程，v9 产品固件继续支持不带控制面板的定义。
@@ -109,8 +117,8 @@
 - Runtime integration：Product Device 零配置进入可编辑状态、同型号两台设备 Actions
   隔离、动作执行、定义变化导致未知按键错误、legacy Runtime Assignment 不回归。
 - Backup：轻量导出与合并恢复、离线 Device 恢复、型号不匹配、旧全量备份导入兼容。
-- Studio UI：新建或复制、布局和引脚编辑、校验阻止保存或构建、dirty 状态、构建成功、
-  构建失败和 busy 日志。
+- Studio UI：顶层 Tab 切换与状态保持、完整开发调试工作区、新建或复制、布局和引脚编辑、
+  校验阻止保存或构建、dirty 状态、构建成功、构建失败和 busy 日志。
 - Packaging：普通 `npm run build` 和 `make helper-build` 不包含 Studio 前端、Studio
   commands 或 `products/`。
 - Makefile：验证 `make -n studio` 和 `make -n build-product` 的命令与参数。

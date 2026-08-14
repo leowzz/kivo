@@ -214,7 +214,7 @@ function learningTargetsMatch(left: LearningTarget, right: LearningTarget) {
     left.pins.every((pin, index) => pin === right.pins[index]);
 }
 
-export default function App() {
+export default function App({ embedded = false }: { embedded?: boolean }) {
   const queue = useRef(new SerializedSaveQueue()).current;
   const [registry, setRegistry] = useState<RegistryState>({
     deviceProfiles: [],
@@ -1038,11 +1038,13 @@ export default function App() {
     const incompatible = startupFailure.code === "unsupported_profile_schema" ||
       startupFailure.code === "unsupported_settings_schema";
     return (
-      <main className="startup-failure-shell">
-        <header className="startup-failure-brand">
-          <img src={brandIcon} alt="" />
-          <span>Kivo</span>
-        </header>
+      <main className={`startup-failure-shell${embedded ? " is-embedded" : ""}`}>
+        {!embedded ? (
+          <header className="startup-failure-brand">
+            <img src={brandIcon} alt="" />
+            <span>Kivo</span>
+          </header>
+        ) : null}
         <section className="startup-failure-content" role="alert">
           <AlertTriangle size={28} aria-hidden="true" />
           <div>
@@ -1067,9 +1069,9 @@ export default function App() {
   }
 
   return (
-    <main className="product-shell">
-      <header className="topbar">
-        <div className="brand"><img src={brandIcon} alt="" /><h1>Kivo</h1></div>
+    <main className={`product-shell${embedded ? " is-embedded" : ""}`}>
+      <header className={`topbar${embedded ? " is-embedded" : ""}`}>
+        {!embedded ? <div className="brand"><img src={brandIcon} alt="" /><h1>Kivo</h1></div> : null}
         <div className="device-summary" aria-label={t(language, "device.summary")}>
           <span className="summary-ready"><i />{summary.ready} {t(language, "device.ready")}</span>
           <b aria-hidden="true">{" · "}</b>
