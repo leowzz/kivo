@@ -74,6 +74,23 @@ ESP32-S3 的下载模式不会显示成磁盘。请使用 Chrome 或 Edge：
 
 功能开关属于 Hardware Profile 的输入源，不会出现在按键布局中。配置时只需选择开关 GPIO 和受影响的按钮。开关闭合时启用按钮；断开或 helper 尚未确认开关状态时屏蔽按钮。被屏蔽的按键不会计入动作统计，正在执行的动作会完整结束。
 
+## 硬件产品命名
+
+Kivo 实体产品使用 `<product-family>-k<key-count>-<capabilities>-r<hardware-revision>`
+形式的 Product Version ID。产品能力变体和 PCB 修订彼此独立，软件发布版本、固件
+版本、生产批次和单台设备序列号不进入该 ID。
+
+当前规划中的 **Kivo Workbench One** 包含 18 个独立实体按键、麦克风、集成显示屏，
+以及可旋转、可按压的编码器，其首版命名为：
+
+```text
+workbench-one-k18-mic-disp-encp-r01
+```
+
+其中 `k18` 不包含编码器按压，`encp` 明确表示编码器同时支持旋转和按压。该名称
+记录的是计划目标，不代表硬件、固件或实体设备已经完成验收。完整字段定义、token
+顺序和升级规则见[产品版本 ID 命名规范](docs/product-version-id-naming.md)。
+
 ## 支持的控制器
 
 | 板卡 | Controller Family | 运行时 USB | 固件环境 | 上传命令 |
@@ -194,7 +211,10 @@ test/                Python、PlatformIO 与发布流程测试
 docs/                硬件改造、兼容性与设计记录
 ```
 
-领域术语以 [`CONTEXT.md`](CONTEXT.md) 为准。电话硬件改造和电气安全要求见 [`docs/telephone-usb-voice-terminal-mod-guide.md`](docs/telephone-usb-voice-terminal-mod-guide.md)；改造设备必须彻底隔离原 PSTN 电话线路。
+领域术语以 [`CONTEXT.md`](CONTEXT.md) 为准，实体产品版本命名见
+[`docs/product-version-id-naming.md`](docs/product-version-id-naming.md)。电话硬件改造和
+电气安全要求见 [`docs/telephone-usb-voice-terminal-mod-guide.md`](docs/telephone-usb-voice-terminal-mod-guide.md)；
+改造设备必须彻底隔离原 PSTN 电话线路。
 
 ## 平台状态
 
