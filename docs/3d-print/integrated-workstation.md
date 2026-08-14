@@ -40,14 +40,17 @@ uv run scripts/integrated_workstation.py
 | Key plane | `30 degrees` above horizontal |
 | Sloped panel attachment | Six `3.4` clearances into hidden chassis inserts |
 | Display PCB | `64.90 x 35.03`, four M3 clearance holes |
+| Display header | 8 pins on PCB left half, first pin at `x=11.38`, `2.54` pitch |
+| Display cable slot | `24.5 x 6.5`, aligned below the left-side header |
 | Controller tray | `29.0 x 58.0` clear area |
 | RP2040 reference | `22.86 x 53.34` |
 | ESP32-S3 reference | `25.4 x 56.0` |
 
 The display PCB sits on the removable panel in a rounded locating bezel with
 `0.65` clearance on each edge. The bezel rises only `2.0` above the 30-degree
-key plane. Four M3 holes secure the PCB, and a hidden `21 x 6` slot under the
-board routes its cable into the chassis.
+key plane. Four M3 holes secure the PCB. The dimensioned reference places its
+eight-pin header on the left half of the board, so a hidden `24.5 x 6.5` slot
+is aligned below that header rather than centered beneath the PCB.
 
 ## Hardware And Assembly
 
@@ -97,7 +100,9 @@ board routes its cable into the chassis.
 - The 210 mm shell width fits a nominal 220 mm bed but leaves little room for a
   skirt or brim. Check the slicer's printable area before starting.
 - The chassis has no broad sloped roof, so it does not need support beneath the
-  key deck. Only narrow 30-degree support lips remain around the opening.
+  key deck. The removable panel rests on two side rails, a front lip, and six
+  insert bosses. Its rear center remains open, avoiding a long unsupported
+  cross bridge at the top of the chassis.
 
 The generator rejects any result that is not a single positive, watertight,
 consistently wound two-manifold mesh. It measures both levels of all 18 switch

@@ -54,6 +54,7 @@ PANEL_X1 = 207.0
 PANEL_Y0 = 3.0
 PANEL_Y1 = 121.0
 PANEL_CLEARANCE = 0.3
+PANEL_OPENING_REAR_OVERCUT = 2.0
 PANEL_LIP_DEPTH = 2.4
 PANEL_SCREW_CENTERS = np.array(
     [
@@ -132,6 +133,23 @@ SCREEN_BOARD_HOLES = np.array(
         [SCREEN_BOARD_WIDTH - 3.00, SCREEN_BOARD_HEIGHT - 2.90],
     ]
 )
+SCREEN_HEADER_PIN_COUNT = 8
+SCREEN_HEADER_FIRST_PIN_X = 11.38
+SCREEN_HEADER_PIN_PITCH = 2.54
+SCREEN_HEADER_PIN_Y_FROM_TOP = 1.93
+SCREEN_HEADER_PIN_CENTERS = np.array(
+    [
+        [
+            SCREEN_HEADER_FIRST_PIN_X + pin * SCREEN_HEADER_PIN_PITCH,
+            SCREEN_BOARD_HEIGHT - SCREEN_HEADER_PIN_Y_FROM_TOP,
+        ]
+        for pin in range(SCREEN_HEADER_PIN_COUNT)
+    ]
+)
+SCREEN_CABLE_SLOT_LOCAL_X0 = 9.5
+SCREEN_CABLE_SLOT_LOCAL_Y0 = 29.0
+SCREEN_CABLE_SLOT_WIDTH = 24.5
+SCREEN_CABLE_SLOT_HEIGHT = 6.5
 
 SHELL_SCREW_CENTERS = np.array(
     [[77.0, 13.0], [205.0, 13.0], [77.0, 99.0], [205.0, 99.0]]
@@ -538,12 +556,16 @@ def build_panel_screen_parts() -> list[trimesh.Trimesh]:
 
 
 def panel_screen_cutters() -> list[trimesh.Trimesh]:
-    cable_x0 = SCREEN_BOARD_ORIGIN[0] + 22.0
-    cable_y0 = SCREEN_BOARD_ORIGIN[1] + 28.5
+    cable_x0 = SCREEN_BOARD_ORIGIN[0] + SCREEN_CABLE_SLOT_LOCAL_X0
+    cable_y0 = SCREEN_BOARD_ORIGIN[1] + SCREEN_CABLE_SLOT_LOCAL_Y0
     cutters = [
         box(
             (cable_x0, cable_y0, -1.0),
-            (cable_x0 + 21.0, cable_y0 + 6.0, KEY_PLATE_THICKNESS + 1.0),
+            (
+                cable_x0 + SCREEN_CABLE_SLOT_WIDTH,
+                cable_y0 + SCREEN_CABLE_SLOT_HEIGHT,
+                KEY_PLATE_THICKNESS + 1.0,
+            ),
         )
     ]
     for hole in SCREEN_BOARD_HOLES + SCREEN_BOARD_ORIGIN:
@@ -627,7 +649,7 @@ def panel_opening_cutter() -> trimesh.Trimesh:
         ),
         (
             PANEL_X1 + PANEL_CLEARANCE,
-            PANEL_Y1 + PANEL_CLEARANCE,
+            PANEL_Y1 + PANEL_OPENING_REAR_OVERCUT,
             KEY_PLATE_THICKNESS + SCREEN_BEZEL_RAISE + 1.0,
         ),
     )
@@ -640,7 +662,6 @@ def build_panel_support_parts() -> list[trimesh.Trimesh]:
         box((WEDGE_X0, 0.0, -PANEL_LIP_DEPTH), (82.0, 120.0, 0.0)),
         box((200.0, 0.0, -PANEL_LIP_DEPTH), (WEDGE_X1, 120.0, 0.0)),
         box((82.0, 0.0, -PANEL_LIP_DEPTH), (200.0, 9.0, 0.0)),
-        box((82.0, 114.0, -PANEL_LIP_DEPTH), (200.0, 120.0, 0.0)),
     ]
     parts.extend(
         cylinder(
@@ -818,6 +839,30 @@ def validate_switch_geometry(panel: trimesh.Trimesh) -> None:
         raise ValueError("switch row pitch drifted")
 
 
+def validate_screen_header_access(panel: trimesh.Trimesh) -> None:
+    slot_x1 = SCREEN_CABLE_SLOT_LOCAL_X0 + SCREEN_CABLE_SLOT_WIDTH
+    slot_y1 = SCREEN_CABLE_SLOT_LOCAL_Y0 + SCREEN_CABLE_SLOT_HEIGHT
+    if SCREEN_HEADER_PIN_CENTERS[:, 0].max() >= SCREEN_BOARD_WIDTH / 2.0:
+        raise ValueError("screen header is not on the PCB's left half")
+    if not np.all(
+        (SCREEN_HEADER_PIN_CENTERS[:, 0] > SCREEN_CABLE_SLOT_LOCAL_X0)
+        & (SCREEN_HEADER_PIN_CENTERS[:, 0] < slot_x1)
+        & (SCREEN_HEADER_PIN_CENTERS[:, 1] > SCREEN_CABLE_SLOT_LOCAL_Y0)
+        & (SCREEN_HEADER_PIN_CENTERS[:, 1] < slot_y1)
+    ):
+        raise ValueError("screen cable slot does not cover all header pins")
+
+    for pin in SCREEN_HEADER_PIN_CENTERS:
+        panel_pin = SCREEN_BOARD_ORIGIN + pin - np.array([PANEL_X0, PANEL_Y0])
+        probe = cylinder(
+            0.5,
+            KEY_PLATE_THICKNESS + 0.4,
+            (panel_pin[0], panel_pin[1], KEY_PLATE_THICKNESS / 2.0),
+        )
+        if intersection_volume(panel, probe) > 0.01:
+            raise ValueError(f"screen header pin access is blocked: {pin}")
+
+
 def place_handset_base(base: trimesh.Trimesh) -> trimesh.Trimesh:
     base = base.copy()
     origin = handset_base_origin()
@@ -978,6 +1023,14 @@ def validate_panel_attachment(shell: trimesh.Trimesh, panel: trimesh.Trimesh) ->
     if not collision.is_empty and collision.volume > 0.05:
         raise ValueError(f"sloped panel assembly collision: {collision.volume}")
 
+    rear_strip_probe = box(
+        (90.0, PANEL_Y1 + PANEL_CLEARANCE + 0.05, 0.1),
+        (192.0, PANEL_Y1 + 1.2, KEY_PLATE_THICKNESS - 0.1),
+    )
+    rear_strip_probe.apply_transform(DECK_TRANSFORM)
+    if intersection_volume(shell, rear_strip_probe) > 0.01:
+        raise ValueError("panel opening leaves an unsupported rear roof strip")
+
 
 def validate_bottom_cover_attachment(
     shell: trimesh.Trimesh, cover: trimesh.Trimesh
@@ -1038,6 +1091,7 @@ def validate_models(
     macro.assert_closed_manifold(cover, "integrated workstation bottom cover")
     macro.assert_closed_manifold(handset_base, "workstation handset base")
     validate_switch_geometry(panel)
+    validate_screen_header_access(panel)
     validate_panel_attachment(shell, panel)
     validate_handset_fit(shell, handset_base)
     validate_handset_screw_holes(shell, handset_base)

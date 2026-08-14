@@ -82,6 +82,23 @@ def test_controller_bay_accepts_both_reference_boards() -> None:
     assert np.all(bay - esp32_s3 >= np.array([3.6, 2.0]))
 
 
+def test_screen_header_slot_is_on_left_and_covers_all_eight_pins(
+    generated_models: tuple[
+        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
+    ],
+) -> None:
+    _, panel, _, _ = generated_models
+
+    assert workstation.SCREEN_HEADER_PIN_COUNT == 8
+    assert workstation.SCREEN_HEADER_FIRST_PIN_X == 11.38
+    assert workstation.SCREEN_HEADER_PIN_PITCH == 2.54
+    assert workstation.SCREEN_HEADER_PIN_Y_FROM_TOP == 1.93
+    assert workstation.SCREEN_HEADER_PIN_CENTERS[:, 0].max() < (
+        workstation.SCREEN_BOARD_WIDTH / 2.0
+    )
+    workstation.validate_screen_header_access(panel)
+
+
 def test_handset_base_has_four_aligned_bottom_up_screw_pairs(
     generated_models: tuple[
         trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
@@ -128,6 +145,16 @@ def test_sloped_panel_is_flat_printable_and_has_six_aligned_screws(
     workstation.validate_panel_attachment(shell, panel)
     assert panel.bounds[0, 2] == pytest.approx(0.0, abs=0.003)
     assert workstation.PANEL_SCREW_CENTERS.shape == (6, 2)
+
+
+def test_shell_has_no_long_unsupported_rear_panel_bridge(
+    generated_models: tuple[
+        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
+    ],
+) -> None:
+    shell, panel, _, _ = generated_models
+
+    workstation.validate_panel_attachment(shell, panel)
 
 
 def test_exported_stls_reload_as_closed_manifolds(
