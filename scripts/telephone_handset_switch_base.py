@@ -26,12 +26,11 @@ else:
     import macro_pad_variants as macro
 
 
-SOURCE_FILENAME = "pico_macro_pad_top.stl.stl"
-SOURCE_HASH = "ce0f7b64d06b3fc2864d29452e87fb264f70567c0f5924eab380d0748f4e9155"
-CELL_START = 23.05
 CELL_SIZE = 19.05
-CELL_END = CELL_START + CELL_SIZE
 PLATE_THICKNESS = 3.4
+SWITCH_STEP_HEIGHT = 2.0
+LOWER_SWITCH_APERTURE = 14.8
+UPPER_SWITCH_APERTURE = 14.0
 
 INNER_WIDTH = 40.0
 INNER_LENGTH = 55.0
@@ -178,7 +177,6 @@ PAD_TOP_PROBES = (
     ),
 )
 
-DEFAULT_SOURCE_ROOT = Path("models/3d-print/3x3keypad")
 DEFAULT_OUTPUT_ROOT = Path("models/3d-print/telephone-handset-switch-base")
 DEFAULT_PREVIEW_ROOT = Path("/tmp/kivo-handset-switch-base-previews")
 OUTPUT_FILENAME = "telephone_handset_switch_base.stl"
@@ -294,17 +292,25 @@ def region_volume(mesh: trimesh.Trimesh, lower: np.ndarray, upper: np.ndarray) -
     return abs(float(signed_volume))
 
 
-def load_canonical_source(source_root: Path) -> trimesh.Trimesh:
-    path = source_root / SOURCE_FILENAME
-    actual = hashlib.sha256(path.read_bytes()).hexdigest()
-    if actual != SOURCE_HASH:
-        raise ValueError(f"source hash mismatch for {path}: {actual} != {SOURCE_HASH}")
-    return macro.load_source(path)
+def centered_aperture_cutter(
+    size: float, z_min: float, z_max: float
+) -> trimesh.Trimesh:
+    inset = (CELL_SIZE - size) / 2.0
+    return box_from_bounds(
+        np.array([inset, inset, z_min]),
+        np.array([CELL_SIZE - inset, CELL_SIZE - inset, z_max]),
+    )
 
 
-def extract_source_cell(source: trimesh.Trimesh) -> trimesh.Trimesh:
-    cell = macro.clip_slab(source, 0, CELL_START, CELL_END)
-    return macro.clip_slab(cell, 1, CELL_START, CELL_END)
+def build_switch_cell() -> trimesh.Trimesh:
+    plate = box_from_bounds(
+        np.zeros(3), np.array([CELL_SIZE, CELL_SIZE, PLATE_THICKNESS])
+    )
+    lower = centered_aperture_cutter(LOWER_SWITCH_APERTURE, -1.0, SWITCH_STEP_HEIGHT)
+    upper = centered_aperture_cutter(
+        UPPER_SWITCH_APERTURE, SWITCH_STEP_HEIGHT, PLATE_THICKNESS + 1.0
+    )
+    return subtract_meshes(plate, [lower, upper])
 
 
 JOIN_OVERLAP = 0.02
@@ -349,8 +355,8 @@ def build_outer_ring() -> trimesh.Trimesh:
     return subtract_meshes(outer, [inner, inner_funnel_cutter()])
 
 
-def place_source_cell(source: trimesh.Trimesh) -> trimesh.Trimesh:
-    cell = extract_source_cell(source).copy()
+def place_switch_cell() -> trimesh.Trimesh:
+    cell = build_switch_cell()
     target_lower = np.array(
         [
             CENTER_X - CELL_SIZE / 2.0,
@@ -362,7 +368,7 @@ def place_source_cell(source: trimesh.Trimesh) -> trimesh.Trimesh:
     return cell
 
 
-def build_switch_platform(source: trimesh.Trimesh) -> trimesh.Trimesh:
+def build_switch_platform() -> trimesh.Trimesh:
     platform = box_from_bounds(
         np.array(
             [
@@ -396,7 +402,7 @@ def build_switch_platform(source: trimesh.Trimesh) -> trimesh.Trimesh:
         ),
     )
     border = subtract_meshes(platform, [protected_cutter])
-    return macro.union_meshes([border, place_source_cell(source)])
+    return macro.union_meshes([border, place_switch_cell()])
 
 
 def build_tower_and_ribs() -> trimesh.Trimesh:
@@ -488,10 +494,10 @@ def rear_hole_cutter() -> trimesh.Trimesh:
     return cutter
 
 
-def generate_base(source: trimesh.Trimesh) -> trimesh.Trimesh:
+def generate_base() -> trimesh.Trimesh:
     parts = [
         build_outer_ring(),
-        build_switch_platform(source),
+        build_switch_platform(),
         build_tower_and_ribs(),
     ]
     parts.extend(
@@ -651,24 +657,24 @@ def require_loop_size(
     raise ValueError(f"{label} drifted: {sizes.tolist()}")
 
 
-def protected_cell_mismatch(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> float:
+def protected_cell_mismatch(mesh: trimesh.Trimesh) -> float:
     return macro.region_mismatch_volume(
-        source,
+        build_switch_cell(),
         mesh,
-        np.array([CELL_START, CELL_START, -0.1]),
-        np.array([CELL_END, CELL_END, PLATE_THICKNESS + 0.1]),
+        np.zeros(3),
+        np.array([CELL_SIZE, CELL_SIZE, PLATE_THICKNESS]),
         np.array(
             [
                 CENTER_X - CELL_SIZE / 2.0,
                 CENTER_Y - CELL_SIZE / 2.0,
-                PLATFORM_BOTTOM - 0.1,
+                PLATFORM_BOTTOM,
             ]
         ),
         np.array(
             [
                 CENTER_X + CELL_SIZE / 2.0,
                 CENTER_Y + CELL_SIZE / 2.0,
-                PLATFORM_TOP + 0.1,
+                PLATFORM_TOP,
             ]
         ),
     )
@@ -928,30 +934,15 @@ def validate_outer_ring_coverage(
         raise ValueError(f"outer wall is missing: volume={missing_volume}")
 
 
-def validation_source_cell_reference(source: trimesh.Trimesh) -> trimesh.Trimesh:
-    cell = macro.clip_slab(source, 0, CELL_START, CELL_END)
-    cell = macro.clip_slab(cell, 1, CELL_START, CELL_END)
-    target_lower = np.array(
-        [
-            CENTER_X - CELL_SIZE / 2.0,
-            CENTER_Y - CELL_SIZE / 2.0,
-            PLATFORM_BOTTOM,
-        ]
-    )
-    cell.apply_translation(target_lower - cell.bounds[0])
-    return cell
-
-
 def validate_unexpected_material(
     mesh: trimesh.Trimesh,
-    source: trimesh.Trimesh,
     outer_ring: trimesh.Trimesh,
     feature_references: list[tuple[str, trimesh.Trimesh]],
 ) -> None:
     allowed = macro.union_meshes(
         [
             outer_ring,
-            validation_source_cell_reference(source),
+            place_switch_cell(),
             *(reference for _, reference in feature_references),
         ]
     )
@@ -984,7 +975,7 @@ def funnel_section_dimensions(level: float) -> tuple[float, float, float]:
     )
 
 
-def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationReport:
+def validate_base(mesh: trimesh.Trimesh) -> ValidationReport:
     if not mesh.is_watertight:
         mesh = mesh.copy()
         mesh.merge_vertices()
@@ -996,9 +987,9 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
     if not np.allclose(mesh.extents, expected_extents, atol=0.003):
         raise ValueError(f"outer extents drifted: {mesh.extents.tolist()}")
 
-    mismatch = protected_cell_mismatch(mesh, source)
+    mismatch = protected_cell_mismatch(mesh)
     if mismatch > PROTECTED_VOLUME_TOLERANCE:
-        raise ValueError(f"source switch cell drifted: mismatch={mismatch}")
+        raise ValueError(f"switch cell drifted: mismatch={mismatch}")
 
     pocket_loops = measured_section_loops(mesh, axis=2, level=RING_SECTION_LEVEL)
     require_rounded_rectangle_loop(
@@ -1008,9 +999,7 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
         "R6 outer corner ring profile",
         PROFILE_TOLERANCE,
     )
-    ring_width, ring_length, ring_radius = funnel_section_dimensions(
-        RING_SECTION_LEVEL
-    )
+    ring_width, ring_length, ring_radius = funnel_section_dimensions(RING_SECTION_LEVEL)
     require_rounded_rectangle_loop(
         pocket_loops,
         np.array(
@@ -1112,7 +1101,7 @@ def validate_base(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> ValidationR
     outer_ring_reference = required_outer_ring_reference(rear_clearance)
     validate_outer_ring_coverage(mesh, outer_ring_reference)
     feature_references = required_feature_references()
-    validate_unexpected_material(mesh, source, outer_ring_reference, feature_references)
+    validate_unexpected_material(mesh, outer_ring_reference, feature_references)
     for label, reference in feature_references:
         shared = macro.boolean_meshes([mesh, reference], "intersection")
         missing_volume = max(0.0, float(reference.volume - shared.volume))
@@ -1299,14 +1288,12 @@ def main(argv: list[str] | None = None) -> int:
     import json
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source-root", type=Path, default=DEFAULT_SOURCE_ROOT)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--preview-root", type=Path, default=DEFAULT_PREVIEW_ROOT)
     arguments = parser.parse_args(argv)
 
-    source = load_canonical_source(arguments.source_root)
-    mesh = generate_base(source)
-    report = validate_base(mesh, source)
+    mesh = generate_base()
+    report = validate_base(mesh)
     target = arguments.output_root / OUTPUT_FILENAME
     export_base(mesh, target)
     for view in ("isometric", "top", "side-section", "bottom"):
