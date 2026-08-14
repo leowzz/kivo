@@ -189,6 +189,23 @@ make upload-esp32s3 SERIAL=ABCDEF123456
 make upload-rp2040 SERIAL=E0C9125B0D9B
 ```
 
+监控固件的 USB CDC 串口（默认 `115200` 波特率）：
+
+```bash
+make monitor                 # 默认选择 RP2040
+make monitor-rp2040
+make monitor-esp32s3
+```
+
+未传 `SERIAL` 时会打开设备选择器；也可以直接指定设备和波特率：
+
+```bash
+make monitor-rp2040 SERIAL=E0C9125B0D9B
+make monitor-esp32s3 SERIAL=ABCDEF123456 BAUD=921600
+```
+
+监控命令会先停止可能占用串口的 Kivo helper。按 `Ctrl+C` 退出监控。
+
 ## 测试与构建
 
 ```bash
