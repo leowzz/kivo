@@ -1,6 +1,6 @@
-import { Activity, Hash, MousePointer2, Trophy } from "lucide-react";
+import { Activity, Ban, Hash, MousePointer2, Trophy } from "lucide-react";
 import { t } from "./i18n";
-import type { DeviceProfile, DeviceStatus, HomeMetricsSnapshot, Language } from "./types";
+import type { ActivityLog, DeviceProfile, DeviceStatus, HomeMetricsSnapshot, Language } from "./types";
 
 interface Props {
   devices: DeviceStatus[];
@@ -9,14 +9,24 @@ interface Props {
   profile: DeviceProfile | undefined;
 }
 
-function buttonLabel(profile: DeviceProfile | undefined, buttonId: string | undefined) {
-  if (!buttonId) return "-";
-  return profile?.profile.groups.flatMap((group) => group.buttons).find((button) => button.id === buttonId)?.label ?? buttonId;
+function buttonName(profile: DeviceProfile | undefined, buttonId: string | null | undefined) {
+  if (!buttonId) return undefined;
+  return profile?.profile.groups.flatMap((group) => group.buttons).find((button) => button.id === buttonId)?.label;
 }
 
-function formatLog(message: string) {
-  const match = /^(\S+) pressed$/.exec(message);
-  return match ? `按下 ${match[1]}` : message;
+function buttonLabel(profile: DeviceProfile | undefined, buttonId: string | undefined) {
+  if (!buttonId) return "-";
+  return buttonName(profile, buttonId) ?? buttonId;
+}
+
+function formatLog(log: ActivityLog, profile: DeviceProfile | undefined) {
+  if (log.kind === "feature_disabled") {
+    return `功能开关关闭，未执行「${buttonName(profile, log.buttonId) ?? "未知按键"}」`;
+  }
+  const match = /^(\S+) pressed$/.exec(log.message);
+  if (!match) return log.message;
+  const name = buttonName(profile, match[1]);
+  return `按下 ${name ?? "未知按键"}`;
 }
 
 export function HomeDashboard({ devices, language, metrics, profile }: Props) {
@@ -62,7 +72,14 @@ export function HomeDashboard({ devices, language, metrics, profile }: Props) {
       <aside className="activity-log" aria-label={t(language, "home.logs")}>
         <div className="panel-title"><div><span>{metrics?.logs.length ?? 0}</span><h2>{t(language, "home.logs")}</h2></div></div>
         <div className="activity-log-list">
-          {metrics?.logs.length ? metrics.logs.map((log, index) => <div className="activity-log-item" key={`${log.timestampMs}-${index}`}><time>{new Date(log.timestampMs).toLocaleTimeString()}</time><span>{formatLog(log.message)}</span></div>) : <p className="panel-empty"><Activity size={18} />{t(language, "activity.empty")}</p>}
+          {metrics?.logs.length ? metrics.logs.map((log, index) => {
+            const featureDisabled = log.kind === "feature_disabled";
+            return <div className={featureDisabled ? "activity-log-item is-feature-disabled" : "activity-log-item"} key={`${log.timestampMs}-${index}`}>
+              <time>{new Date(log.timestampMs).toLocaleTimeString()}</time>
+              {featureDisabled && <Ban aria-hidden="true" size={13} />}
+              <span>{formatLog(log, profile)}</span>
+            </div>;
+          }) : <p className="panel-empty"><Activity size={18} />{t(language, "activity.empty")}</p>}
         </div>
       </aside>
     </div>

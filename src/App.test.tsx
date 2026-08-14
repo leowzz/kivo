@@ -1290,6 +1290,13 @@ test("renders seven-day metrics in model order with Chinese logs", async () => {
         message: "DIGIT_5 pressed",
         buttonId: "DIGIT_5",
       },
+      {
+        ...baseSnapshot.homeMetrics!.logs[0],
+        timestampMs: baseSnapshot.homeMetrics!.logs[0].timestampMs + 1,
+        kind: "feature_disabled",
+        message: "Action blocked by feature switch",
+        buttonId: "ENTER",
+      },
     ],
   };
   render(<App />);
@@ -1304,7 +1311,12 @@ test("renders seven-day metrics in model order with Chinese logs", async () => {
     expect.stringContaining("5"),
     expect.stringContaining("确认"),
   ]);
-  expect(screen.getByText("按下 DIGIT_5")).toBeInTheDocument();
+  expect(screen.getByText("按下 5")).toBeInTheDocument();
+  expect(screen.queryByText("按下 DIGIT_5")).toBeNull();
+  const blockedLog = screen.getByText("功能开关关闭，未执行「确认」").closest(".activity-log-item");
+  expect(blockedLog).toHaveClass("is-feature-disabled");
+  expect(blockedLog?.querySelector(".lucide-ban")).not.toBeNull();
+  expect(blockedLog).not.toHaveTextContent("ENTER");
   expect(screen.queryByLabelText("当前编辑配置")).toBeNull();
   expect(screen.queryByLabelText("语言")).toBeNull();
 });
@@ -1510,7 +1522,7 @@ test("keeps Home scoped to the Editor Profile while retaining Device metrics and
 
   await user.click(screen.getByRole("button", { name: "首页" }));
   expect(screen.getByText("累计按下: 12")).toBeInTheDocument();
-  expect(screen.getByText("按下 DIGIT_2")).toBeInTheDocument();
+  expect(screen.getByText("按下 2")).toBeInTheDocument();
   expect(screen.queryByText("累计按下: 99")).toBeNull();
   expect(screen.queryByText("other-profile activity")).toBeNull();
 

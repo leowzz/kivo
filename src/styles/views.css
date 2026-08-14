@@ -48,6 +48,10 @@
 .activity-log-item:hover { background: var(--gray-2); }
 .activity-log-item time { flex: 0 0 auto; color: var(--gray-8); font-size: var(--text-11); font-variant-numeric: tabular-nums; }
 .activity-log-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-log-item.is-feature-disabled { border: 1px solid var(--amber-border); color: var(--amber-text); background: var(--amber-bg); }
+.activity-log-item.is-feature-disabled:hover { background: var(--amber-bg); }
+.activity-log-item.is-feature-disabled time { color: inherit; opacity: .75; }
+.activity-log-item.is-feature-disabled svg { flex: 0 0 auto; }
 .panel-empty { display: grid; place-items: center; align-content: center; gap: 6px; min-height: 120px; color: var(--gray-8); font-size: var(--text-13); text-align: center; }
 .panel-empty svg { color: var(--gray-7); }
 .home-unavailable { margin: var(--space-20) var(--space-24); padding: 10px 14px; border: 1px solid var(--red-border); border-radius: var(--radius-8); color: var(--red-text); background: var(--red-bg); font-size: var(--text-13); }

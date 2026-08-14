@@ -59,6 +59,8 @@ pub struct RuntimeActivity {
     context: Option<RuntimeEventContext>,
     #[serde(skip)]
     metric_press: Option<MetricPress>,
+    #[serde(skip)]
+    feature_disabled_log: Option<FeatureDisabledLog>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -66,6 +68,13 @@ struct MetricPress {
     attribution: MetricAttribution,
     button_id: String,
     occurred_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FeatureDisabledLog {
+    attribution: MetricAttribution,
+    button_id: String,
+    occurred_at_ms: Option<u64>,
 }
 
 impl RuntimeActivity {
@@ -79,6 +88,7 @@ impl RuntimeActivity {
             learning_target: None,
             context: None,
             metric_press: None,
+            feature_disabled_log: None,
         }
     }
 
@@ -1307,11 +1317,20 @@ impl DeviceSession {
                     queued.release_placeholder,
                     output,
                 );
-                output.activities.push(
-                    RuntimeActivity::new("feature_disabled")
+                let feature_disabled_log = FeatureDisabledLog {
+                    attribution: runtime.metric_attribution.clone(),
+                    button_id: button.clone(),
+                    occurred_at_ms: occurrence
+                        .context
+                        .as_ref()
+                        .map(|context| context.timestamp_ms),
+                };
+                output.activities.push(RuntimeActivity {
+                    feature_disabled_log: Some(feature_disabled_log),
+                    ..RuntimeActivity::new("feature_disabled")
                         .with_param("button", button)
-                        .with_context(occurrence.context),
-                );
+                        .with_context(occurrence.context)
+                });
                 continue;
             }
             if actions.is_empty() {
@@ -1603,20 +1622,25 @@ fn persist_metrics(
     activity: &RuntimeActivity,
     snapshot_at_ms: u64,
 ) -> Result<Option<HomeMetricsSnapshot>, rusqlite::Error> {
-    let Some(metric_press) = activity.metric_press.as_ref() else {
+    let attribution = if let Some(metric_press) = activity.metric_press.as_ref() {
+        metrics.record_button_press(
+            &metric_press.attribution,
+            &metric_press.button_id,
+            metric_press.occurred_at_ms,
+        )?;
+        &metric_press.attribution
+    } else if let Some(log) = activity.feature_disabled_log.as_ref() {
+        metrics.record_feature_disabled(
+            &log.attribution,
+            &log.button_id,
+            log.occurred_at_ms.unwrap_or(snapshot_at_ms),
+        )?;
+        &log.attribution
+    } else {
         return Ok(None);
     };
-    metrics.record_button_press(
-        &metric_press.attribution,
-        &metric_press.button_id,
-        metric_press.occurred_at_ms,
-    )?;
     metrics
-        .home_snapshot(
-            &metric_press.attribution.device_profile_id,
-            None,
-            snapshot_at_ms,
-        )
+        .home_snapshot(&attribution.device_profile_id, None, snapshot_at_ms)
         .map(Some)
 }
 
@@ -3252,12 +3276,33 @@ mod tests {
             },
             &mut |_| Ok(()),
         );
-        assert!(
-            blocked
-                .activities
-                .iter()
-                .any(|activity| activity.code == "feature_disabled")
+        let blocked_activity = blocked
+            .activities
+            .iter()
+            .find(|activity| activity.code == "feature_disabled")
+            .unwrap();
+        assert_eq!(
+            blocked_activity
+                .feature_disabled_log
+                .as_ref()
+                .map(|log| log.button_id.as_str()),
+            Some("A")
         );
+        let path = std::env::temp_dir().join(format!(
+            "kivo-feature-disabled-{}-{}.sqlite3",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = MetricsStore::open(&path).unwrap();
+        let update = persist_metrics(&store, blocked_activity, 1_720_086_400_000)
+            .unwrap()
+            .unwrap();
+        assert_eq!(update.total_presses, 0);
+        assert_eq!(update.logs[0].kind, "feature_disabled");
+        assert_eq!(update.logs[0].button_id.as_deref(), Some("A"));
         assert!(blocked.paste_requests.is_empty());
 
         session.on_message(
@@ -3291,6 +3336,8 @@ mod tests {
                 .iter()
                 .any(|activity| activity.code == "action_step_started")
         );
+        drop(store);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

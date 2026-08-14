@@ -267,10 +267,12 @@ fn enrich_runtime_event(
         .read()
         .ok()
         .and_then(|workspace| workspace.settings.editor_profile.clone());
+    let updates_home = (event.activity.code == "input_state"
+        && event.activity.pressed == Some(true))
+        || event.activity.code == "feature_disabled";
     let matches_editor = event.device_profile_id.is_some()
         && event.device_profile_id == editor_profile
-        && event.activity.code == "input_state"
-        && event.activity.pressed == Some(true);
+        && updates_home;
     if matches_editor
         && let (Some(metrics), Some(device_profile_id)) =
             (metrics, event.device_profile_id.as_deref())
@@ -2622,6 +2624,17 @@ mod tests {
 
         let matching = enrich_runtime_event(&state.workspace, state.metrics.as_deref(), event);
         assert_eq!(matching.home_update.as_ref().unwrap().total_presses, 2);
+
+        let blocked = enrich_runtime_event(
+            &state.workspace,
+            state.metrics.as_deref(),
+            coordinator::RuntimeEvent {
+                activity: device::RuntimeActivity::new("feature_disabled"),
+                home_update: None,
+                ..matching.clone()
+            },
+        );
+        assert!(blocked.home_update.is_some());
 
         let mismatched = enrich_runtime_event(
             &state.workspace,

@@ -149,13 +149,14 @@ impl MetricsBackup {
                 || log.device_name.trim().is_empty()
                 || log.device_profile_id.is_empty()
                 || log.hardware_profile_id.is_empty()
-                || log.button_id.as_ref().is_some_and(|button_id| {
-                    !aggregate_keys.contains(&(
-                        log.device_profile_id.as_str(),
-                        log.device_id.as_str(),
-                        button_id.as_str(),
-                    ))
-                })
+                || (log.kind == "button"
+                    && log.button_id.as_ref().is_some_and(|button_id| {
+                        !aggregate_keys.contains(&(
+                            log.device_profile_id.as_str(),
+                            log.device_id.as_str(),
+                            button_id.as_str(),
+                        ))
+                    }))
         }) {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -271,6 +272,38 @@ impl MetricsStore {
             params![
                 timestamp_ms,
                 format!("{button_id} pressed"),
+                attribution.device_id.as_str(),
+                attribution.device_name,
+                attribution.device_profile_id,
+                attribution.hardware_profile_id,
+                button_id
+            ],
+        )?;
+        trim_activity_logs(&transaction)?;
+        transaction.commit()
+    }
+
+    pub fn record_feature_disabled(
+        &self,
+        attribution: &MetricAttribution,
+        button_id: &str,
+        timestamp_ms: u64,
+    ) -> Result<(), rusqlite::Error> {
+        let mut connection = self
+            .connection
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let connection = connection.as_mut().ok_or(rusqlite::Error::InvalidQuery)?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "
+            INSERT INTO activity_logs (
+                occurred_at_ms, kind, message, device_id, device_name,
+                device_profile_id, hardware_profile_id, button_id
+            ) VALUES (?1, 'feature_disabled', 'Action blocked by feature switch', ?2, ?3, ?4, ?5, ?6)
+            ",
+            params![
+                integer(timestamp_ms)?,
                 attribution.device_id.as_str(),
                 attribution.device_name,
                 attribution.device_profile_id,
@@ -828,6 +861,32 @@ mod tests {
             complete_device_snapshot.logs[2].hardware_profile_id,
             "esp-primary"
         );
+    }
+
+    #[test]
+    fn feature_disabled_activity_is_logged_without_counting_a_press() {
+        let directory = TestDirectory::new();
+        let store = MetricsStore::open(&directory.0.join("metrics.sqlite3")).unwrap();
+        let attribution = MetricAttribution {
+            device_id: DeviceId::new("luatos-esp32s3-aio", "AAAAAAAAAAAA").unwrap(),
+            device_name: "Desk".into(),
+            device_profile_id: "phone".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        let timestamp = 1_720_086_400_000;
+
+        store
+            .record_feature_disabled(&attribution, "ONE", timestamp)
+            .unwrap();
+
+        let snapshot = store.home_snapshot("phone", None, timestamp).unwrap();
+        assert_eq!(snapshot.total_presses, 0);
+        assert_eq!(snapshot.today_presses, 0);
+        assert_eq!(snapshot.logs.len(), 1);
+        assert_eq!(snapshot.logs[0].kind, "feature_disabled");
+        assert_eq!(snapshot.logs[0].button_id.as_deref(), Some("ONE"));
+        assert_eq!(snapshot.logs[0].message, "Action blocked by feature switch");
+        assert!(store.backup().unwrap().validate().is_ok());
     }
 
     #[test]
