@@ -23,12 +23,14 @@ std::string formatHello(const BoardProfile &profile,
     return {};
   }
 
-  std::string line = "HELLO 8 ";
+  std::string line = "HELLO 10 ";
   line += profile.controllerFamilyId;
   line += ' ';
   line += profile.boardProfileId;
   line += ' ';
   line += firmwareBuildId;
+  line += ' ';
+  line += '-';
   line += ' ';
   line += std::to_string(profile.safePinCount);
   for (std::size_t index = 0; index < profile.safePinCount; ++index) {
@@ -47,7 +49,7 @@ std::string formatHello(const BoardProfile &profile,
     return {};
   }
 
-  std::string line = "HELLO 9 ";
+  std::string line = "HELLO 10 ";
   line += profile.controllerFamilyId;
   line += ' ';
   line += profile.boardProfileId;

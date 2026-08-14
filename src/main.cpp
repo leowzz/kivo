@@ -162,6 +162,14 @@ void applyRuntimePinModes() {
     for (const auto gpio : source.rows) pinMode(gpio, INPUT_PULLUP);
     for (const auto gpio : source.columns) pinMode(gpio, INPUT_PULLUP);
   }
+  if (const auto &panel = controller.topology().oledControlPanel;
+      panel.has_value()) {
+    pinMode(panel->confirm, INPUT_PULLUP);
+    pinMode(panel->encoderPress, INPUT_PULLUP);
+    pinMode(panel->encoderA, INPUT_PULLUP);
+    pinMode(panel->encoderB, INPUT_PULLUP);
+    pinMode(panel->back, INPUT_PULLUP);
+  }
 }
 
 void applyLearningPinModes() {
@@ -286,6 +294,14 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
                                    command->oledScl)) {
         topologyBuilder.cancel();
         configError(command->revision, "invalid_oled");
+      }
+      return;
+    case HelperCommandKind::ConfigOledControl:
+      if (!topologyBuilder.addOledControlPanel(
+              command->revision, command->pins[0], command->pins[1],
+              command->pins[2], command->pins[3], command->pins[4])) {
+        topologyBuilder.cancel();
+        configError(command->revision, "invalid_oled_control");
       }
       return;
     case HelperCommandKind::ConfigCommit: {

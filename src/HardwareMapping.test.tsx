@@ -723,7 +723,7 @@ test("rejects unsupported, unsafe, same-pin, conflicting, and duplicate pin owne
     debounce_ms: 30,
     inputs: [] as HardwareProfile["inputs"],
   };
-  const withOled = (ssd1306: { sda: number; scl: number }, inputs = base.inputs) => ({
+  const withOled = (ssd1306: NonNullable<HardwareProfile["ssd1306"]>, inputs = base.inputs) => ({
     ...base,
     inputs,
     ssd1306,
@@ -736,6 +736,31 @@ test("rejects unsupported, unsafe, same-pin, conflicting, and duplicate pin owne
   expect(hardwareProfilesAreValid([withOled({ sda: 18, scl: 18 })], boardProfiles)).toBe(false);
   expect(hardwareProfilesAreValid([
     withOled({ sda: 18, scl: 19 }, [{ type: "direct", id: "direct", keys: { ONE: 18 } }]),
+  ], boardProfiles)).toBe(false);
+  const controlPanel = {
+    type: "ec11_confirm_back" as const,
+    confirm: 3,
+    encoder_press: 4,
+    encoder_a: 5,
+    encoder_b: 6,
+    back: 7,
+  };
+  expect(hardwareProfilesAreValid([
+    withOled({ sda: 18, scl: 19, control_panel: controlPanel }),
+  ], boardProfiles)).toBe(true);
+  expect(hardwareProfilesAreValid([
+    withOled({
+      sda: 18,
+      scl: 19,
+      control_panel: { ...controlPanel, confirm: 18 },
+    }),
+  ], boardProfiles)).toBe(false);
+  expect(hardwareProfilesAreValid([
+    withOled({
+      sda: 18,
+      scl: 19,
+      control_panel: { ...controlPanel, back: 23 },
+    }),
   ], boardProfiles)).toBe(false);
   expect(hardwareProfilesAreValid([{
     ...base,

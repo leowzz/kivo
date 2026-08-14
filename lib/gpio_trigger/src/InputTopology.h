@@ -39,12 +39,21 @@ struct OledConfig {
   std::uint8_t scl;
 };
 
+struct OledControlPanelConfig {
+  std::uint8_t confirm;
+  std::uint8_t encoderPress;
+  std::uint8_t encoderA;
+  std::uint8_t encoderB;
+  std::uint8_t back;
+};
+
 struct RuntimeTopology {
   std::uint32_t revision = 0;
   std::uint16_t debounceMs = 30;
   std::vector<DirectInputSource> directs;
   std::vector<MatrixInputSource> matrices;
   std::optional<OledConfig> oled;
+  std::optional<OledControlPanelConfig> oledControlPanel;
 
   std::size_t keyCount() const;
 };
@@ -61,6 +70,10 @@ class TopologyBuilder {
                  std::vector<std::uint8_t> columns);
   bool addOled(std::uint32_t revision, std::uint8_t sda,
                std::uint8_t scl);
+  bool addOledControlPanel(std::uint32_t revision, std::uint8_t confirm,
+                           std::uint8_t encoderPress,
+                           std::uint8_t encoderA, std::uint8_t encoderB,
+                           std::uint8_t back);
   std::optional<RuntimeTopology> commit(std::uint32_t revision);
   void cancel();
 

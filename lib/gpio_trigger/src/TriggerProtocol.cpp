@@ -238,6 +238,17 @@ std::optional<HelperCommand> parseHelperCommand(std::string_view line) {
     return command;
   }
 
+  if (*kind == "CONFIG_OLED_CONTROL") {
+    const auto revision = takeNumber(line);
+    if (!revision.has_value()) return std::nullopt;
+    HelperCommand command{HelperCommandKind::ConfigOledControl};
+    command.revision = *revision;
+    if (!takePins(line, 5, command.pins) || takeToken(line).has_value()) {
+      return std::nullopt;
+    }
+    return command;
+  }
+
   if (*kind == "CONFIG_COMMIT" || *kind == "LEARN_END") {
     const auto revision = takeNumber(line);
     if (!revision.has_value() || takeToken(line).has_value()) return std::nullopt;

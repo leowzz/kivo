@@ -14,7 +14,8 @@ Profile 中的输入拓扑原子地下发给固件。现有配置可以表达：
 - 直连按键：按键 ID 到 GPIO 的映射；
 - 接点矩阵：按键 ID 到两个 GPIO 接点的映射；
 - 功能开关：GPIO、开关名称以及受其控制的按键集合；
-- SSD1306 屏幕：SDA 和 SCL 引脚；
+- SSD1306 屏幕：SDA 和 SCL 引脚；可选的 OLED + EC11 控制模块还包含确认、
+  编码器按压、编码器 A/B 相和返回五路 GPIO；
 - 按下、释放、长按、双击对应的动作；
 - Device Profile、Hardware Profile 与具体 Device 的 Runtime Assignment。
 
@@ -134,6 +135,7 @@ Draft 可以修改；Release 一旦发布便不可原地修改。修正已发布
 | 矩阵行 / 列 | `InputSource.ContactMatrix.keys` 的二分图分区 |
 | 功能开关 | `InputSource.FeatureSwitch.gpio` |
 | 屏幕 SDA / SCL | `HardwareProfile.ssd1306` |
+| OLED + EC11 模块控制信号 | `HardwareProfile.ssd1306.control_panel` |
 
 “每个 I/O 的用途”是以上配置推导出的管理端视图，不额外保存一份可能产生冲突的 GPIO 用途表。
 未使用引脚在 UI 中明确显示，但在发布 JSON 中保持省略。
@@ -144,7 +146,9 @@ Draft 可以修改；Release 一旦发布便不可原地修改。修正已发布
 - 同一 Hardware Profile 内一个 GPIO 只能被一个来源占用；
 - 同一个按键不能绑定到多个物理输入；
 - 矩阵接点必须能够形成合法二分图，且接点组合不能重复；
-- SSD1306 只能用于声明支持 OLED 的 Board Profile，SDA 与 SCL 不能相同；
+- SSD1306 只能用于声明支持 OLED 的 Board Profile；普通屏占用 SDA/SCL 两路，
+  `ec11_confirm_back` 模块占用 SDA/SCL、确认、编码器按压、编码器 A/B 相和返回共七路，
+  所有引脚必须互不重复；
 - Feature Switch 引用的按键必须存在；
 - Device Profile 所需协议版本不能高于目标 Firmware Release 的协议版本。
 
@@ -160,7 +164,9 @@ Draft 可以修改；Release 一旦发布便不可原地修改。修正已发布
 
 ### 5.4 屏幕能力
 
-当前配置只表达 SSD1306 的 SDA/SCL。其他屏幕类型、SPI 屏幕、屏幕旋转、分辨率或多个屏幕都需要：
+当前配置表达 SSD1306 的 SDA/SCL，也可为带 EC11、确认键和返回键的成品模块配置额外五路
+控制 GPIO。这五路属于显示组件，不进入可视按键布局，也不增加 Product ID 的 `kNN`。
+其他屏幕类型、SPI 屏幕、屏幕旋转、分辨率或多个屏幕都需要：
 
 1. 扩展 Board Profile 能力；
 2. 升级 Device Profile schema；

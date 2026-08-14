@@ -29,7 +29,8 @@ std::size_t RuntimeTopology::keyCount() const {
 bool TopologyBuilder::begin(std::uint32_t revision,
                             std::uint16_t debounceMs) {
   if (debounceMs == 0 || debounceMs > 1000) return false;
-  pending_ = RuntimeTopology{revision, debounceMs, {}, {}, std::nullopt};
+  pending_ = RuntimeTopology{revision, debounceMs, {}, {}, std::nullopt,
+                             std::nullopt};
   sourceIndices_.clear();
   ownedPins_.clear();
   return true;
@@ -72,6 +73,23 @@ bool TopologyBuilder::addOled(std::uint32_t revision, std::uint8_t sda,
   }
   ownedPins_.insert(ownedPins_.end(), pins.begin(), pins.end());
   pending_->oled = OledConfig{sda, scl};
+  return true;
+}
+
+bool TopologyBuilder::addOledControlPanel(
+    std::uint32_t revision, std::uint8_t confirm,
+    std::uint8_t encoderPress, std::uint8_t encoderA,
+    std::uint8_t encoderB, std::uint8_t back) {
+  const std::vector<std::uint8_t> pins{confirm, encoderPress, encoderA,
+                                       encoderB, back};
+  if (!pending_.has_value() || pending_->revision != revision ||
+      !pending_->oled.has_value() || pending_->oledControlPanel.has_value() ||
+      !pinsAvailable(pins)) {
+    return false;
+  }
+  ownedPins_.insert(ownedPins_.end(), pins.begin(), pins.end());
+  pending_->oledControlPanel =
+      OledControlPanelConfig{confirm, encoderPress, encoderA, encoderB, back};
   return true;
 }
 

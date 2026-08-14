@@ -899,23 +899,23 @@ void test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins() {
                     platform::selectRp2040OledBus(5, 6));
 }
 
-void test_formats_protocol_v8_hello_with_board_and_build() {
+void test_formats_protocol_v10_hello_with_board_and_build() {
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 8 rp2040 yd-rp2040 0.1.0+gabc1234 27 "
+      "HELLO 10 rp2040 yd-rp2040 0.1.0+gabc1234 - 27 "
       "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 26 "
       "27 28 29\n",
       formatHello(kYdRp2040, "0.1.0+gabc1234").c_str());
 }
 
-void test_formats_protocol_v9_hello_with_product_identity() {
+void test_formats_protocol_v10_hello_with_product_identity() {
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 9 rp2040 yd-rp2040 0.1.0+gabc1234 key-k1-r01 27 "
+      "HELLO 10 rp2040 yd-rp2040 0.1.0+gabc1234 key-k1-r01 27 "
       "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 26 "
       "27 28 29\n",
       formatHello(kYdRp2040, "0.1.0+gabc1234", "key-k1-r01")
           .c_str());
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 9 rp2040 yd-rp2040 build - 27 "
+      "HELLO 10 rp2040 yd-rp2040 build - 27 "
       "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 26 "
       "27 28 29\n",
       formatHello(kYdRp2040, "build", "-").c_str());
@@ -986,6 +986,16 @@ void test_parses_runtime_configuration_commands() {
   TEST_ASSERT_EQUAL_UINT8(4, oled->oledSda);
   TEST_ASSERT_EQUAL_UINT8(5, oled->oledScl);
 
+  const auto oledControl =
+      parseHelperCommand("CONFIG_OLED_CONTROL 3 19 20 21 22 26\n");
+  TEST_ASSERT_TRUE(oledControl.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::ConfigOledControl,
+                    oledControl->kind);
+  TEST_ASSERT_EQUAL_UINT32(3, oledControl->revision);
+  TEST_ASSERT_EQUAL_UINT8(5, oledControl->pins.size());
+  TEST_ASSERT_EQUAL_UINT8(19, oledControl->pins[0]);
+  TEST_ASSERT_EQUAL_UINT8(26, oledControl->pins[4]);
+
   const auto commit = parseHelperCommand("CONFIG_COMMIT 3\n");
   TEST_ASSERT_TRUE(commit.has_value());
   TEST_ASSERT_EQUAL(HelperCommandKind::ConfigCommit, commit->kind);
@@ -1033,6 +1043,24 @@ void test_oled_pins_are_reserved_when_input_command_arrives_first() {
   TEST_ASSERT_TRUE(topology->oled.has_value());
   TEST_ASSERT_EQUAL_UINT8(5, topology->oled->sda);
   TEST_ASSERT_EQUAL_UINT8(6, topology->oled->scl);
+}
+
+void test_oled_control_panel_reserves_five_pins_without_counting_keys() {
+  TopologyBuilder builder(kYdRp2040);
+  TEST_ASSERT_TRUE(builder.begin(1, 30));
+  TEST_ASSERT_FALSE(builder.addOledControlPanel(1, 19, 20, 21, 22, 26));
+  TEST_ASSERT_TRUE(builder.addOled(1, 28, 29));
+  TEST_ASSERT_FALSE(builder.addOledControlPanel(1, 19, 19, 21, 22, 26));
+  TEST_ASSERT_TRUE(builder.addOledControlPanel(1, 19, 20, 21, 22, 26));
+  TEST_ASSERT_FALSE(builder.addDirect(1, 0, {6, 19}));
+  TEST_ASSERT_TRUE(builder.addDirect(1, 0, {6}));
+
+  const auto topology = builder.commit(1);
+  TEST_ASSERT_TRUE(topology.has_value());
+  TEST_ASSERT_TRUE(topology->oledControlPanel.has_value());
+  TEST_ASSERT_EQUAL_UINT8(19, topology->oledControlPanel->confirm);
+  TEST_ASSERT_EQUAL_UINT8(26, topology->oledControlPanel->back);
+  TEST_ASSERT_EQUAL_UINT8(1, topology->keyCount());
 }
 
 void test_parses_extended_registered_board_pin_domain() {
@@ -1123,6 +1151,15 @@ void test_rejects_malformed_runtime_commands() {
       parseHelperCommand("CONFIG_OLED 3 4 256\n").has_value());
   TEST_ASSERT_FALSE(
       parseHelperCommand("CONFIG_OLED 3 4 5 trailing\n").has_value());
+  TEST_ASSERT_FALSE(
+      parseHelperCommand("CONFIG_OLED_CONTROL 3 19 20 21 22\n")
+          .has_value());
+  TEST_ASSERT_FALSE(
+      parseHelperCommand("CONFIG_OLED_CONTROL 3 19 20 21 22 256\n")
+          .has_value());
+  TEST_ASSERT_FALSE(
+      parseHelperCommand("CONFIG_OLED_CONTROL 3 19 20 21 22 26 trailing\n")
+          .has_value());
   TEST_ASSERT_FALSE(parseHelperCommand("PASTE 9 0 2\n").has_value());
   TEST_ASSERT_FALSE(parseHelperCommand("HOTKEY 9 2 1 0 40\n").has_value());
   TEST_ASSERT_FALSE(parseHelperCommand("DELAY 9 1 1 0\n").has_value());
@@ -1188,11 +1225,14 @@ void test_learning_rejects_active_oled_pins() {
   TEST_ASSERT_TRUE(builder.begin(7, 30));
   TEST_ASSERT_TRUE(builder.addDirect(7, 0, {6}));
   TEST_ASSERT_TRUE(builder.addOled(7, 4, 5));
+  TEST_ASSERT_TRUE(builder.addOledControlPanel(7, 19, 20, 21, 22, 26));
   GpioTriggerController controller(kYdRp2040, 0);
   controller.configure(*builder.commit(7), 0);
 
   TEST_ASSERT_FALSE(controller.beginLearning(8, {4, 7}, 0));
   TEST_ASSERT_FALSE(controller.beginLearning(8, {5, 7}, 0));
+  TEST_ASSERT_FALSE(controller.beginLearning(8, {19, 7}, 0));
+  TEST_ASSERT_FALSE(controller.beginLearning(8, {22, 7}, 0));
   TEST_ASSERT_TRUE(controller.beginLearning(8, {7, 8}, 0));
 }
 
@@ -1787,8 +1827,8 @@ int main(int, char **) {
   RUN_TEST(test_rp2040_standalone_debug_topology_matches_keyboard_wiring);
   RUN_TEST(test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match);
   RUN_TEST(test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins);
-  RUN_TEST(test_formats_protocol_v8_hello_with_board_and_build);
-  RUN_TEST(test_formats_protocol_v9_hello_with_product_identity);
+  RUN_TEST(test_formats_protocol_v10_hello_with_board_and_build);
+  RUN_TEST(test_formats_protocol_v10_hello_with_product_identity);
   RUN_TEST(test_rejects_empty_firmware_build_id);
   RUN_TEST(test_rejects_whitespace_in_firmware_build_id);
   RUN_TEST(test_contact_edge_reports_unordered_pair_once_after_debounce);
@@ -1796,6 +1836,7 @@ int main(int, char **) {
   RUN_TEST(test_oled_configuration_requires_supported_distinct_safe_pins);
   RUN_TEST(test_oled_pins_are_reserved_when_oled_command_arrives_first);
   RUN_TEST(test_oled_pins_are_reserved_when_input_command_arrives_first);
+  RUN_TEST(test_oled_control_panel_reserves_five_pins_without_counting_keys);
   RUN_TEST(test_parses_extended_registered_board_pin_domain);
   RUN_TEST(test_parser_defers_unsupported_pins_to_board_validation);
   RUN_TEST(test_parses_learning_and_ordered_action_commands);

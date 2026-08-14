@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 
-pub const PRODUCT_PROTOCOL_VERSION: u16 = 9;
+pub const PRODUCT_PROTOCOL_VERSION: u16 = 10;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProductManifest {

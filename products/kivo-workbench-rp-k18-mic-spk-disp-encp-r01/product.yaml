@@ -67,6 +67,13 @@ hardware_profile:
   ssd1306:
     sda: 28
     scl: 29
+    control_panel:
+      type: ec11_confirm_back
+      confirm: 19
+      encoder_press: 20
+      encoder_a: 21
+      encoder_b: 22
+      back: 26
   inputs:
   - type: direct
     id: direct-1

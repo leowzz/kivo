@@ -76,6 +76,14 @@ function conflictingPins(hardware: HardwareProfile) {
   if (hardware.ssd1306) {
     add(hardware.ssd1306.sda);
     add(hardware.ssd1306.scl);
+    if (hardware.ssd1306.control_panel) {
+      const panel = hardware.ssd1306.control_panel;
+      add(panel.confirm);
+      add(panel.encoder_press);
+      add(panel.encoder_a);
+      add(panel.encoder_b);
+      add(panel.back);
+    }
   }
   return new Set(
     [...counts.entries()].filter(([, count]) => count > 1).map(([pin]) => pin),
@@ -125,7 +133,18 @@ function hasInvalidOled(
   if (!hardware.ssd1306) return false;
   if (!board?.supportsOled) return true;
   const safe = new Set(boardSafePins(board));
-  return !safe.has(hardware.ssd1306.sda) || !safe.has(hardware.ssd1306.scl);
+  const pins = [hardware.ssd1306.sda, hardware.ssd1306.scl];
+  if (hardware.ssd1306.control_panel) {
+    const panel = hardware.ssd1306.control_panel;
+    pins.push(
+      panel.confirm,
+      panel.encoder_press,
+      panel.encoder_a,
+      panel.encoder_b,
+      panel.back,
+    );
+  }
+  return pins.some((pin) => !safe.has(pin)) || new Set(pins).size !== pins.length;
 }
 
 export function hardwareProfilesAreValid(

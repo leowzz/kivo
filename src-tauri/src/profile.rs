@@ -2,8 +2,8 @@ use crate::{
     hardware::board_by_id,
     model::ModelLayout,
     protocol::{
-        ACTION_RUN_PROTOCOL_VERSION, ADVANCED_ACTION_PROTOCOL_VERSION, OLED_PROTOCOL_VERSION,
-        PhysicalInput, encode_hotkey,
+        ACTION_RUN_PROTOCOL_VERSION, ADVANCED_ACTION_PROTOCOL_VERSION,
+        OLED_CONTROL_PANEL_PROTOCOL_VERSION, OLED_PROTOCOL_VERSION, PhysicalInput, encode_hotkey,
     },
     workspace::AppError,
 };
@@ -205,6 +205,34 @@ impl InputSource {
 pub struct Ssd1306Config {
     pub sda: u8,
     pub scl: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_panel: Option<OledControlPanelConfig>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum OledControlPanelConfig {
+    Ec11ConfirmBack {
+        confirm: u8,
+        encoder_press: u8,
+        encoder_a: u8,
+        encoder_b: u8,
+        back: u8,
+    },
+}
+
+impl OledControlPanelConfig {
+    pub fn pins(&self) -> [u8; 5] {
+        match self {
+            Self::Ec11ConfirmBack {
+                confirm,
+                encoder_press,
+                encoder_a,
+                encoder_b,
+                back,
+            } => [*confirm, *encoder_press, *encoder_a, *encoder_b, *back],
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -345,6 +373,15 @@ impl DeviceProfile {
             .any(|hardware| hardware.ssd1306.is_some())
         {
             required = required.max(OLED_PROTOCOL_VERSION);
+        }
+        if self.hardware_profiles.iter().any(|hardware| {
+            hardware
+                .ssd1306
+                .as_ref()
+                .and_then(|oled| oled.control_panel.as_ref())
+                .is_some()
+        }) {
+            required = required.max(OLED_CONTROL_PANEL_PROTOCOL_VERSION);
         }
         for actions in self.actions.values() {
             if !actions.release.is_empty()
@@ -516,6 +553,11 @@ impl DeviceProfile {
                 }
                 validate_pin(ssd1306.sda, board.safe_pins, &mut owned_pins)?;
                 validate_pin(ssd1306.scl, board.safe_pins, &mut owned_pins)?;
+                if let Some(control_panel) = &ssd1306.control_panel {
+                    for pin in control_panel.pins() {
+                        validate_pin(pin, board.safe_pins, &mut owned_pins)?;
+                    }
+                }
             }
             for source in &hardware.inputs {
                 if !valid_id(source.id()) || !source_ids.insert(source.id()) {
@@ -957,6 +999,28 @@ mod tests {
             }]),
         );
         assert_eq!(modifier_only.minimum_protocol_version(), 6);
+
+        let mut control_panel = yaml_profile(
+            "yd-rp2040",
+            Some((28, 29)),
+            "    inputs:\n      - type: direct\n        id: direct\n        keys:\n          UP: 6",
+        );
+        control_panel.hardware_profiles[0]
+            .ssd1306
+            .as_mut()
+            .unwrap()
+            .control_panel = Some(OledControlPanelConfig::Ec11ConfirmBack {
+            confirm: 19,
+            encoder_press: 20,
+            encoder_a: 21,
+            encoder_b: 22,
+            back: 26,
+        });
+        assert!(control_panel.validate().is_ok());
+        assert_eq!(
+            control_panel.minimum_protocol_version(),
+            OLED_CONTROL_PANEL_PROTOCOL_VERSION
+        );
     }
 
     #[test]

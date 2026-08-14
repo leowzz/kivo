@@ -10,12 +10,14 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-pub const HOST_PROTOCOL_VERSION: u16 = 9;
+pub const HOST_PROTOCOL_VERSION: u16 = 10;
 pub const DISPLAY_PROTOCOL_VERSION: u16 = 7;
 pub const DISPLAY_LARGE_FONT_PROTOCOL_VERSION: u16 = 8;
 pub const ACTION_RUN_PROTOCOL_VERSION: u16 = 6;
 pub const OLED_PROTOCOL_VERSION: u16 = 4;
+pub const OLED_CONTROL_PANEL_PROTOCOL_VERSION: u16 = 10;
 pub const ADVANCED_ACTION_PROTOCOL_VERSION: u16 = 5;
+const PRODUCT_DEFINITION_PROTOCOL_VERSION: u16 = 9;
 const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 3;
 const DISPLAY_WIDTH: u16 = 128;
 const DISPLAY_HEIGHT: u16 = 32;
@@ -116,7 +118,7 @@ pub fn validate_hello(
             .with_param("expected", HOST_PROTOCOL_VERSION.to_string())
             .with_param("actual", hello.protocol.to_string()));
     }
-    if hello.protocol < HOST_PROTOCOL_VERSION && hello.product_version_id.is_some() {
+    if hello.protocol < PRODUCT_DEFINITION_PROTOCOL_VERSION && hello.product_version_id.is_some() {
         return Err(AppError::new("protocol_mismatch"));
     }
     if let Some(product_version_id) = &hello.product_version_id
@@ -600,6 +602,16 @@ pub fn topology_commands(
             return Err(AppError::new("gpio_used_by_multiple_sources")
                 .with_param("gpio", ssd1306.sda.to_string()));
         }
+        if let Some(control_panel) = &ssd1306.control_panel {
+            let pins = control_panel.pins();
+            let unique = pins
+                .into_iter()
+                .chain([ssd1306.sda, ssd1306.scl])
+                .collect::<BTreeSet<_>>();
+            if unique.len() != 7 {
+                return Err(AppError::new("gpio_used_by_multiple_sources"));
+            }
+        }
     }
     for pin in hardware_pins(hardware) {
         if !board.safe_pins.contains(&pin) || !reported_pins.contains(&pin) {
@@ -615,6 +627,12 @@ pub fn topology_commands(
             "CONFIG_OLED {revision} {} {}\n",
             ssd1306.sda, ssd1306.scl
         ));
+        if let Some(control_panel) = &ssd1306.control_panel {
+            let [confirm, encoder_press, encoder_a, encoder_b, back] = control_panel.pins();
+            lines.push(format!(
+                "CONFIG_OLED_CONTROL {revision} {confirm} {encoder_press} {encoder_a} {encoder_b} {back}\n"
+            ));
+        }
     }
     let mut source_index = 0u8;
     for input in &hardware.inputs {
@@ -671,6 +689,9 @@ fn hardware_pins(hardware: &HardwareProfile) -> BTreeSet<u8> {
     if let Some(ssd1306) = &hardware.ssd1306 {
         pins.insert(ssd1306.sda);
         pins.insert(ssd1306.scl);
+        if let Some(control_panel) = &ssd1306.control_panel {
+            pins.extend(control_panel.pins());
+        }
     }
     pins
 }
@@ -1064,7 +1085,10 @@ mod tests {
         display::{DisplayRegion, DrawOperation, Rect, SceneMode, SceneUpdate},
         hardware::board_by_id,
         model::{ButtonDefinition, ButtonGroup, ModelLayout},
-        profile::{DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION},
+        profile::{
+            DeviceProfile, HardwareProfile, InputSource, OledControlPanelConfig,
+            PROFILE_SCHEMA_VERSION,
+        },
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -1861,6 +1885,35 @@ mod tests {
                 "CONFIG_COMMIT 7\n",
             ]
         );
+    }
+
+    #[test]
+    fn oled_control_panel_precedes_inputs_and_requires_all_reported_pins() {
+        let mut hardware = ssd1306_hardware();
+        hardware.ssd1306.as_mut().unwrap().control_panel =
+            Some(OledControlPanelConfig::Ec11ConfirmBack {
+                confirm: 19,
+                encoder_press: 20,
+                encoder_a: 21,
+                encoder_b: 22,
+                back: 26,
+            });
+        let pins = BTreeSet::from([4, 5, 6, 19, 20, 21, 22, 26]);
+
+        assert_eq!(
+            topology_commands(&hardware, 7, &pins).unwrap(),
+            vec![
+                "CONFIG_BEGIN 7 30\n",
+                "CONFIG_OLED 7 4 5\n",
+                "CONFIG_OLED_CONTROL 7 19 20 21 22 26\n",
+                "CONFIG_DIRECT 7 0 1 6\n",
+                "CONFIG_COMMIT 7\n",
+            ]
+        );
+        let missing = topology_commands(&hardware, 7, &BTreeSet::from([4, 5, 6, 19, 20, 21, 22]))
+            .unwrap_err();
+        assert_eq!(missing.code, "capability_mismatch");
+        assert_eq!(missing.params.get("gpio").map(String::as_str), Some("26"));
     }
 
     #[test]

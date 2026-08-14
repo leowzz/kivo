@@ -35,7 +35,8 @@ workbench-one-rp-k18-mic-disp-encp-r01
 - Product Family ID 使用稳定的产品名，不写按键数量、能力、PCB 修订或生命周期阶段。
 - Controller token 表示控制器芯片系列，必须来自本文登记表；更换控制器系列会产生新的
   Product Variant ID。
-- `kNN` 表示独立实体按键的数量。编码器旋转和编码器按压均不计入该数量。
+- `kNN` 表示独立实体按键的数量。显示组件自带的确认/返回键、编码器旋转和编码器按压
+  均不计入该数量；这些信号属于组件硬件配置。
 - 能力 token 必须来自本文登记表，并严格按照登记顺序排列。
 - Hardware Revision 使用 `rNN`，至少两位，从 `r01` 开始；持久化时可保存整数 `1`。
 - Product Version ID 发布后保持不可变；不能通过改变既有 token 的含义来复用旧 ID。

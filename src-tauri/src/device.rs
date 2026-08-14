@@ -2971,7 +2971,11 @@ mod tests {
         let mut runtime = runtime_model();
         let hardware = &mut runtime.profile.hardware_profiles[0];
         hardware.board_profile_id = crate::hardware::YD_RP2040_BOARD_ID.into();
-        hardware.ssd1306 = Some(Ssd1306Config { sda: 4, scl: 5 });
+        hardware.ssd1306 = Some(Ssd1306Config {
+            sda: 4,
+            scl: 5,
+            control_panel: None,
+        });
         runtime.metric_attribution.device_id =
             DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "ABCDEF123456").unwrap();
         runtime

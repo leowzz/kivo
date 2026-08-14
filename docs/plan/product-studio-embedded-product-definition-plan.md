@@ -32,8 +32,9 @@
   CLI、桌面端设备读取共用同一实现。
 - 校验 Product Version ID 组成、布局按键数量、Board Profile、GPIO 白名单、
   引脚冲突、矩阵二分图、功能开关目标和 SSD1306 能力。
-- 首版只支持现有固件能力：直连键、接点矩阵、功能开关、SSD1306。`mic`、
-  `encp` 等 token 可作为产品能力记录，但不提供引脚编辑、事件或试机支持。
+- 当前支持直连键、接点矩阵、功能开关、SSD1306，以及作为显示组件配置的
+  `ec11_confirm_back` 控制面板。控制面板统一配置确认、编码器按压、编码器 A/B 相和
+  返回五路 GPIO，不把它们加入按键布局；`mic` 等其他 token 仍只记录产品能力。
 - YAML 经验证后转为确定性 JSON，限制为 64 KiB，计算 SHA-256；固件嵌入该
   JSON，同时由相同对象生成编译期 topology header。
 - 新增共享构建服务及 `kivo-product` CLI；
@@ -60,8 +61,9 @@
 - 已保存 Product Version ID 不允许原地重命名；新修订通过复制创建。
 - 编辑采用内存 draft 和显式保存；存在校验错误或未保存修改时禁止构建。
 - 保存复用原子临时文件替换，不提供删除入口。
-- 固件协议升级到 v9：`HELLO` 增加 `<product-version-id|->`；旧协议 3-8 和
-  `-` 继续进入 legacy 流程。
+- 固件协议 v9 为 `HELLO` 增加 `<product-version-id|->`；v10 增加
+  `CONFIG_OLED_CONTROL`，用于原子配置显示控制面板的五路 GPIO。旧协议 3-8 和 `-`
+  继续进入 legacy 流程，v9 产品固件继续支持不带控制面板的定义。
 - 新增 `PRODUCT_INFO` 与 `PRODUCT_READ` 请求，以及 `PRODUCT_BEGIN`、顺序编号的
   `PRODUCT_CHUNK`、`PRODUCT_END` 响应。
 - 每块原始数据最多 144 字节；Host 严格验证顺序、64 KiB 上限、15 秒超时、长度和
@@ -100,10 +102,10 @@
 
 - Rust：Product Definition YAML/JSON round trip、所有身份和硬件校验、确定性摘要、
   大小限制、原子保存、生成 header 与 manifest。
-- Firmware native：内嵌 topology 启动、无产品 legacy 启动、v9 HELLO、定义分块、
+- Firmware native：内嵌 topology 启动、无产品 legacy 启动、v10 HELLO、定义分块、
   255 字节行限制、错误请求和重启恢复。
-- Host protocol：协议 3-8 回归、v9 完整读取、缓存命中、缺块、乱序、base64、长度、
-  SHA、超时和 schema 错误。
+- Host protocol：协议 3-8 回归、v9 产品定义读取、v10 显示控制面板配置、缓存命中、
+  缺块、乱序、base64、长度、SHA、超时和 schema 错误。
 - Runtime integration：Product Device 零配置进入可编辑状态、同型号两台设备 Actions
   隔离、动作执行、定义变化导致未知按键错误、legacy Runtime Assignment 不回归。
 - Backup：轻量导出与合并恢复、离线 Device 恢复、型号不匹配、旧全量备份导入兼容。

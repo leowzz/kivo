@@ -127,6 +127,37 @@ function HardwareHarness() {
   );
 }
 
+function DisplayModuleHarness() {
+  const [draft, setDraft] = useState<ProductDefinition>({
+    ...structuredClone(definition),
+    product: {
+      ...definition.product,
+      variant_id: "test-rp-k3",
+      product_version_id: "test-rp-k3-r01",
+    },
+    layout: {
+      ...definition.layout,
+      id: "test-rp-k3",
+      groups: [{
+        id: "keys",
+        columns: 3,
+        buttons: ["K1", "K2", "K3"].map((id) => ({ id, label: id })),
+      }],
+    },
+  });
+  return (
+    <HardwareEditor
+      definition={draft}
+      boards={[{ ...board, safePins: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] }]}
+      update={(mutate) => setDraft((current) => {
+        const next = structuredClone(current);
+        mutate(next);
+        return next;
+      })}
+    />
+  );
+}
+
 function ExhaustedHardwareHarness() {
   const [draft, setDraft] = useState<ProductDefinition>({
     ...structuredClone(definition),
@@ -219,6 +250,29 @@ test("automatic GPIO assignment never falls back to GPIO 0", async () => {
   expect(screen.getByRole("combobox", { name: "K1" })).toHaveValue("1");
   expect(screen.getByRole("combobox", { name: "K2" })).toHaveValue("");
   expect(within(screen.getByRole("combobox", { name: "K2" })).getByRole("option", { name: "GPIO 0" })).toBeEnabled();
+});
+
+test("the EC11 display module configures seven pins without adding layout keys", async () => {
+  const user = userEvent.setup();
+  render(<DisplayModuleHarness />);
+
+  await user.click(screen.getByRole("button", { name: "Direct" }));
+  await user.selectOptions(
+    screen.getByRole("combobox", { name: "显示组件" }),
+    "ec11_confirm_back",
+  );
+
+  expect(screen.getByRole("combobox", { name: "K1" })).toHaveValue("1");
+  expect(screen.getByRole("combobox", { name: "K2" })).toHaveValue("2");
+  expect(screen.getByRole("combobox", { name: "K3" })).toHaveValue("3");
+  expect(screen.getByRole("combobox", { name: "SDA" })).toHaveValue("9");
+  expect(screen.getByRole("combobox", { name: "SCL" })).toHaveValue("10");
+  expect(screen.getByRole("combobox", { name: "确认 KEY1" })).toHaveValue("4");
+  expect(screen.getByRole("combobox", { name: "编码器按压 PSH" })).toHaveValue("5");
+  expect(screen.getByRole("combobox", { name: "编码器 A 相 TRA" })).toHaveValue("6");
+  expect(screen.getByRole("combobox", { name: "编码器 B 相 TRB" })).toHaveValue("7");
+  expect(screen.getByRole("combobox", { name: "返回 KEY0" })).toHaveValue("8");
+  expect(screen.queryByRole("combobox", { name: "PSH" })).toBeNull();
 });
 
 test("switching controller families updates the product ID token", async () => {
