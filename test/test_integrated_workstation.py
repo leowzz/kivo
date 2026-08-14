@@ -35,6 +35,7 @@ def test_generated_models_validate(
     assert report.key_layout == (6, 3)
     assert report.key_pitch == 19.05
     assert report.key_plane_degrees == pytest.approx(30.0)
+    assert report.wire_clip_count == 6
     assert report.handset_pocket == (65.0, 80.0)
     assert report.handset_clearance_per_side == 0.6
     assert report.handset_screw_count == 4
@@ -129,6 +130,39 @@ def test_screen_header_slot_is_on_left_and_covers_all_eight_pins(
         workstation.SCREEN_BOARD_WIDTH / 2.0
     )
     workstation.validate_screen_header_access(panel)
+
+
+def test_screen_has_four_backside_heat_set_insert_through_holes(
+    generated_models: tuple[
+        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
+    ],
+) -> None:
+    _, panel, _, _ = generated_models
+
+    assert workstation.SCREEN_BOARD_HOLES.shape == (4, 2)
+    assert workstation.SCREEN_INSERT_THROUGH_DIAMETER == 4.0
+    assert workstation.SCREEN_INSERT_MATERIAL_DEPTH == pytest.approx(5.4)
+    assert workstation.SCREEN_INSERT_MATERIAL_DEPTH >= (
+        workstation.HEAT_SET_INSERT_LENGTH
+    )
+    workstation.validate_screen_insert_holes(panel)
+
+
+def test_panel_has_six_support_free_recessed_fly_wire_clips(
+    generated_models: tuple[
+        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
+    ],
+) -> None:
+    _, panel, _, _ = generated_models
+
+    assert workstation.WIRE_CLIP_CENTERS.shape == (6, 2)
+    assert workstation.WIRE_CLIP_MOUTH_WIDTH == 1.5
+    assert workstation.WIRE_CLIP_POCKET_WIDTH == 3.0
+    assert workstation.WIRE_CLIP_FRONT_SKIN == pytest.approx(1.2)
+    assert (
+        workstation.WIRE_CLIP_POCKET_WIDTH - workstation.WIRE_CLIP_MOUTH_WIDTH
+    ) / 2.0 <= workstation.WIRE_CLIP_TRANSITION_DEPTH
+    workstation.validate_wire_clips(panel)
 
 
 def test_handset_base_has_four_aligned_bottom_up_screw_pairs(

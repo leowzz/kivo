@@ -125,7 +125,8 @@ SCREEN_BOARD_ORIGIN = np.array(
         SCREEN_BEZEL_Y0 + (SCREEN_BEZEL_HEIGHT - SCREEN_BOARD_HEIGHT) / 2.0,
     ]
 )
-SCREEN_HOLE_DIAMETER = 3.4
+SCREEN_INSERT_THROUGH_DIAMETER = HEAT_SET_INSERT_HOLE_DIAMETER
+SCREEN_INSERT_MATERIAL_DEPTH = KEY_PLATE_THICKNESS + SCREEN_BEZEL_RAISE
 SCREEN_BOARD_HOLES = np.array(
     [
         [2.95, 2.97],
@@ -151,6 +152,30 @@ SCREEN_CABLE_SLOT_LOCAL_X0 = 9.5
 SCREEN_CABLE_SLOT_LOCAL_Y0 = 29.0
 SCREEN_CABLE_SLOT_WIDTH = 24.5
 SCREEN_CABLE_SLOT_HEIGHT = 6.5
+
+# Six recessed clips retain fly-wire bundles without adding protrusions to the
+# panel's print face. Each slot groups three neighboring switches. The mouth
+# expands into the pocket at 45 degrees and the 3 mm roof is a short bridge, so
+# the panel remains support-free when printed with its underside on the bed.
+WIRE_CLIP_LENGTH = 16.0
+WIRE_CLIP_MOUTH_WIDTH = 1.5
+WIRE_CLIP_POCKET_WIDTH = 3.0
+WIRE_CLIP_MOUTH_DEPTH = 0.6
+WIRE_CLIP_TRANSITION_DEPTH = 0.75
+WIRE_CLIP_POCKET_DEPTH = 2.2
+WIRE_CLIP_FRONT_SKIN = KEY_PLATE_THICKNESS - WIRE_CLIP_POCKET_DEPTH
+WIRE_CLIP_X_CENTERS = np.array([KEY_X0 + 1.5 * KEY_PITCH, KEY_X0 + 4.5 * KEY_PITCH])
+WIRE_CLIP_Y_CENTERS = np.array(
+    [
+        KEY_Y0 + KEY_PITCH,
+        KEY_Y0 + 2.0 * KEY_PITCH,
+        (KEY_Y0 + 2.5 * KEY_PITCH + LOWER_SWITCH_APERTURE / 2.0 + SCREEN_BEZEL_Y0)
+        / 2.0,
+    ]
+)
+WIRE_CLIP_CENTERS = np.array(
+    [[x, y] for y in WIRE_CLIP_Y_CENTERS for x in WIRE_CLIP_X_CENTERS]
+)
 
 SHELL_SCREW_CENTERS = np.array(
     [[77.0, 13.0], [205.0, 13.0], [77.0, 99.0], [205.0, 99.0]]
@@ -226,6 +251,7 @@ class ValidationReport:
     key_layout: tuple[int, int]
     key_pitch: float
     key_plane_degrees: float
+    wire_clip_count: int
     handset_pocket: tuple[float, float]
     handset_clearance_per_side: float
     handset_screw_count: int
@@ -600,19 +626,67 @@ def panel_screen_cutters() -> list[trimesh.Trimesh]:
         )
     ]
     for hole in SCREEN_BOARD_HOLES + SCREEN_BOARD_ORIGIN:
-        cutters.append(
-            cylinder(
-                SCREEN_HOLE_DIAMETER / 2.0,
-                KEY_PLATE_THICKNESS + SCREEN_BEZEL_RAISE + 2.0,
-                (
-                    hole[0],
-                    hole[1],
-                    (KEY_PLATE_THICKNESS + SCREEN_BEZEL_RAISE) / 2.0,
+        # The display inserts are installed from the panel's flat underside.
+        # Their 4 mm bores continue through the screen collars so the PCB-side
+        # screws can enter the inserts without a trapped plastic floor.
+        cutters.extend(
+            [
+                cylinder(
+                    SCREEN_INSERT_THROUGH_DIAMETER / 2.0,
+                    SCREEN_INSERT_MATERIAL_DEPTH
+                    + 2.0 * HEAT_SET_INSERT_CUTTER_OVERSHOOT,
+                    (
+                        hole[0],
+                        hole[1],
+                        SCREEN_INSERT_MATERIAL_DEPTH / 2.0,
+                    ),
+                    axis=2,
                 ),
-                axis=2,
-            )
+                cylinder(
+                    HEAT_SET_INSERT_LEAD_DIAMETER / 2.0,
+                    HEAT_SET_INSERT_LEAD_DEPTH + HEAT_SET_INSERT_CUTTER_OVERSHOOT,
+                    (
+                        hole[0],
+                        hole[1],
+                        (HEAT_SET_INSERT_LEAD_DEPTH - HEAT_SET_INSERT_CUTTER_OVERSHOOT)
+                        / 2.0,
+                    ),
+                    axis=2,
+                ),
+            ]
         )
     return cutters
+
+
+def wire_clip_cutters(center: Iterable[float]) -> list[trimesh.Trimesh]:
+    center_xy = tuple(center)
+    if len(center_xy) != 2:
+        raise ValueError("wire clip center must contain x and y")
+    center_x, center_y = center_xy
+    x0 = center_x - WIRE_CLIP_LENGTH / 2.0
+    x1 = center_x + WIRE_CLIP_LENGTH / 2.0
+    transition_z1 = WIRE_CLIP_MOUTH_DEPTH + WIRE_CLIP_TRANSITION_DEPTH
+
+    mouth = box(
+        (x0, center_y - WIRE_CLIP_MOUTH_WIDTH / 2.0, -1.0),
+        (x1, center_y + WIRE_CLIP_MOUTH_WIDTH / 2.0, WIRE_CLIP_MOUTH_DEPTH),
+    )
+    transition = hull(
+        [
+            [x, center_y + side * width / 2.0, z]
+            for x in (x0, x1)
+            for width, z in (
+                (WIRE_CLIP_MOUTH_WIDTH, WIRE_CLIP_MOUTH_DEPTH - 0.02),
+                (WIRE_CLIP_POCKET_WIDTH, transition_z1 + 0.02),
+            )
+            for side in (-1.0, 1.0)
+        ]
+    )
+    pocket = box(
+        (x0, center_y - WIRE_CLIP_POCKET_WIDTH / 2.0, transition_z1),
+        (x1, center_y + WIRE_CLIP_POCKET_WIDTH / 2.0, WIRE_CLIP_POCKET_DEPTH),
+    )
+    return [mouth, transition, pocket]
 
 
 def panel_attachment_cutters() -> list[trimesh.Trimesh]:
@@ -663,6 +737,9 @@ def generate_sloped_panel() -> trimesh.Trimesh:
                 )
             )
     cutters.extend(panel_screen_cutters())
+    cutters.extend(
+        cutter for center in WIRE_CLIP_CENTERS for cutter in wire_clip_cutters(center)
+    )
     cutters.extend(panel_attachment_cutters())
     result = subtract(combined, cutters)
     result.apply_translation([-PANEL_X0, -PANEL_Y0, 0.0])
@@ -1016,6 +1093,94 @@ def validate_screen_header_access(panel: trimesh.Trimesh) -> None:
             raise ValueError(f"screen header pin access is blocked: {pin}")
 
 
+def validate_screen_insert_holes(panel: trimesh.Trimesh) -> None:
+    if SCREEN_INSERT_MATERIAL_DEPTH < HEAT_SET_INSERT_LENGTH:
+        raise ValueError("screen mounting collars are too shallow for the inserts")
+
+    for screen_center in SCREEN_BOARD_HOLES + SCREEN_BOARD_ORIGIN:
+        panel_center = screen_center - np.array([PANEL_X0, PANEL_Y0])
+        through_probe = cylinder(
+            SCREEN_INSERT_THROUGH_DIAMETER / 2.0 - 0.05,
+            SCREEN_INSERT_MATERIAL_DEPTH + 0.2,
+            (
+                panel_center[0],
+                panel_center[1],
+                SCREEN_INSERT_MATERIAL_DEPTH / 2.0,
+            ),
+        )
+        if intersection_volume(panel, through_probe) > 0.01:
+            raise ValueError(f"screen insert through hole is blocked: {screen_center}")
+
+        lead_probe = cylinder(
+            HEAT_SET_INSERT_LEAD_DIAMETER / 2.0 - 0.05,
+            HEAT_SET_INSERT_LEAD_DEPTH - 0.1,
+            (
+                panel_center[0],
+                panel_center[1],
+                HEAT_SET_INSERT_LEAD_DEPTH / 2.0,
+            ),
+        )
+        if intersection_volume(panel, lead_probe) > 0.01:
+            raise ValueError(f"screen insert lead-in is blocked: {screen_center}")
+
+
+def validate_wire_clips(panel: trimesh.Trimesh) -> None:
+    side_expansion = (WIRE_CLIP_POCKET_WIDTH - WIRE_CLIP_MOUTH_WIDTH) / 2.0
+    if side_expansion > WIRE_CLIP_TRANSITION_DEPTH + 1e-9:
+        raise ValueError("wire clip transition exceeds a support-free 45 degree slope")
+    if WIRE_CLIP_FRONT_SKIN < 1.0:
+        raise ValueError("wire clips leave too little material on the panel face")
+
+    for design_center in WIRE_CLIP_CENTERS:
+        center = design_center - np.array([PANEL_X0, PANEL_Y0])
+        mouth_probe = box(
+            (
+                center[0] - WIRE_CLIP_LENGTH / 2.0 + 0.1,
+                center[1] - WIRE_CLIP_MOUTH_WIDTH / 2.0 + 0.05,
+                0.05,
+            ),
+            (
+                center[0] + WIRE_CLIP_LENGTH / 2.0 - 0.1,
+                center[1] + WIRE_CLIP_MOUTH_WIDTH / 2.0 - 0.05,
+                WIRE_CLIP_MOUTH_DEPTH - 0.05,
+            ),
+        )
+        if intersection_volume(panel, mouth_probe) > 0.01:
+            raise ValueError(f"wire clip mouth is blocked: {design_center}")
+
+        pocket_probe = box(
+            (
+                center[0] - WIRE_CLIP_LENGTH / 2.0 + 0.1,
+                center[1] - WIRE_CLIP_POCKET_WIDTH / 2.0 + 0.05,
+                WIRE_CLIP_MOUTH_DEPTH + WIRE_CLIP_TRANSITION_DEPTH + 0.05,
+            ),
+            (
+                center[0] + WIRE_CLIP_LENGTH / 2.0 - 0.1,
+                center[1] + WIRE_CLIP_POCKET_WIDTH / 2.0 - 0.05,
+                WIRE_CLIP_POCKET_DEPTH - 0.05,
+            ),
+        )
+        if intersection_volume(panel, pocket_probe) > 0.01:
+            raise ValueError(f"wire clip pocket is blocked: {design_center}")
+
+        skin_probe = box(
+            (
+                center[0] - WIRE_CLIP_LENGTH / 2.0 + 0.2,
+                center[1] - WIRE_CLIP_POCKET_WIDTH / 2.0 + 0.1,
+                WIRE_CLIP_POCKET_DEPTH + 0.1,
+            ),
+            (
+                center[0] + WIRE_CLIP_LENGTH / 2.0 - 0.2,
+                center[1] + WIRE_CLIP_POCKET_WIDTH / 2.0 - 0.1,
+                KEY_PLATE_THICKNESS - 0.1,
+            ),
+        )
+        if intersection_volume(panel, skin_probe) < skin_probe.volume - 0.02:
+            raise ValueError(
+                f"wire clip breaks through the panel face: {design_center}"
+            )
+
+
 def validate_controller_connector_opening(shell: trimesh.Trimesh) -> None:
     rear_probe = box(
         (
@@ -1347,6 +1512,8 @@ def validate_models(
     macro.assert_closed_manifold(handset_base, "workstation handset base")
     validate_switch_geometry(panel)
     validate_screen_header_access(panel)
+    validate_screen_insert_holes(panel)
+    validate_wire_clips(panel)
     validate_controller_connector_opening(shell)
     validate_controller_cradle(cover)
     validate_panel_attachment(shell, panel)
@@ -1373,6 +1540,7 @@ def validate_models(
         key_layout=(KEY_COLUMNS, KEY_ROWS),
         key_pitch=KEY_PITCH,
         key_plane_degrees=plane_angle,
+        wire_clip_count=len(WIRE_CLIP_CENTERS),
         handset_pocket=(HANDSET_POCKET_WIDTH, HANDSET_POCKET_LENGTH),
         handset_clearance_per_side=HANDSET_CLEARANCE,
         handset_screw_count=len(HANDSET_SCREW_LOCAL_CENTERS),
