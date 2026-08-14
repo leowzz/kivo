@@ -166,13 +166,13 @@ test("copies Product Device actions only from the same Product Version", async (
     product: {
       display_name: "Kivo Key 1",
       family_id: "key",
-      variant_id: "key-k1",
+      variant_id: "key-rp-k1",
       hardware_revision: 1,
-      product_version_id: "key-k1-r01",
+      product_version_id: "key-rp-k1-r01",
       capabilities: [],
     },
     layout: {
-      id: "key-k1",
+      id: "key-rp-k1",
       name: "Kivo Key 1",
       groups: [{ id: "keys", columns: 1, buttons: [{ id: "K1", label: "K1" }] }],
     },
@@ -185,18 +185,18 @@ test("copies Product Device actions only from the same Product Version", async (
     },
   };
   const productConfig = {
-    product_version_id: "key-k1-r01",
+    product_version_id: "key-rp-k1-r01",
     trigger_settings: { long_press_ms: 500, double_press_ms: 300 },
     actions: {},
   };
   renderManagement({
     devices: [
-      device({ productVersionId: "key-k1-r01", productDefinition, productConfig }),
+      device({ productVersionId: "key-rp-k1-r01", productDefinition, productConfig }),
       device({
         deviceId: "rp-b",
         name: "RP2040 B",
         hardwareSerial: "RP-B-002",
-        productVersionId: "key-k1-r01",
+        productVersionId: "key-rp-k1-r01",
         productDefinition,
         productConfig,
       }),
@@ -204,12 +204,12 @@ test("copies Product Device actions only from the same Product Version", async (
         deviceId: "rp-other",
         name: "Other product",
         hardwareSerial: "RP-C-003",
-        productVersionId: "other-k1-r01",
+        productVersionId: "other-rp-k1-r01",
         productDefinition: {
           ...productDefinition,
-          product: { ...productDefinition.product, product_version_id: "other-k1-r01" },
+          product: { ...productDefinition.product, product_version_id: "other-rp-k1-r01" },
         },
-        productConfig: { ...productConfig, product_version_id: "other-k1-r01" },
+        productConfig: { ...productConfig, product_version_id: "other-rp-k1-r01" },
       }),
     ],
     onCopyProductConfig,

@@ -2133,9 +2133,9 @@ mod tests {
             product: ProductIdentity {
                 display_name: "Kivo Key 3".into(),
                 family_id: family_id.into(),
-                variant_id: format!("{family_id}-k3"),
+                variant_id: format!("{family_id}-rp-k3"),
                 hardware_revision: 1,
-                product_version_id: format!("{family_id}-k3-r01"),
+                product_version_id: format!("{family_id}-rp-k3-r01"),
                 capabilities: Vec::new(),
             },
             layout: layout(),
@@ -3935,7 +3935,7 @@ actions: {}
                 &device,
                 &definition,
                 ProductDeviceConfig {
-                    product_version_id: "key-k3-r01".into(),
+                    product_version_id: "key-rp-k3-r01".into(),
                     trigger_settings: TriggerSettings {
                         long_press_ms: 725,
                         double_press_ms: 260,
@@ -3965,7 +3965,7 @@ actions: {}
             .product_config
             .as_ref()
             .unwrap();
-        assert_eq!(restored.product_version_id, "key-k3-r01");
+        assert_eq!(restored.product_version_id, "key-rp-k3-r01");
         assert_eq!(restored.trigger_settings.long_press_ms, 725);
 
         let mismatch_directory = TestDirectory::new();
@@ -3989,7 +3989,7 @@ actions: {}
                 .as_ref()
                 .unwrap()
                 .product_version_id,
-            "alt-k3-r01"
+            "alt-rp-k3-r01"
         );
     }
 
@@ -4006,7 +4006,7 @@ actions: {}
                 kind: BackupKind::ProductDevices,
                 devices: vec![UserBackupDevice {
                     device_id: device.clone(),
-                    product_version_id: "key-k3-r01".into(),
+                    product_version_id: "key-rp-k3-r01".into(),
                     trigger_settings: TriggerSettings::default(),
                     actions: BTreeMap::from([(
                         "UNKNOWN".into(),
@@ -4069,7 +4069,7 @@ actions: {}
                 .unwrap();
         }
         let first_config = ProductDeviceConfig {
-            product_version_id: "key-k3-r01".into(),
+            product_version_id: "key-rp-k3-r01".into(),
             trigger_settings: TriggerSettings::default(),
             actions: BTreeMap::from([(
                 "A".into(),

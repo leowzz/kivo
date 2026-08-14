@@ -233,8 +233,8 @@ mod tests {
         let root = Path::new("/repo");
         assert!(product_path(root, "../outside-r01").is_err());
         assert_eq!(
-            product_path(root, "key-k1-r01").unwrap(),
-            root.join("products/key-k1-r01/product.yaml")
+            product_path(root, "key-rp-k1-r01").unwrap(),
+            root.join("products/key-rp-k1-r01/product.yaml")
         );
     }
 
@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(
             build_product_cancellable(
                 Path::new("/missing/repository"),
-                "key-k1-r01",
+                "key-rp-k1-r01",
                 "test",
                 &cancelled,
                 |_| {},

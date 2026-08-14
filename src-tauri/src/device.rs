@@ -2841,13 +2841,13 @@ mod tests {
             product: ProductIdentity {
                 display_name: "Kivo Key 1".into(),
                 family_id: "key".into(),
-                variant_id: "key-k1".into(),
+                variant_id: "key-rp-k1".into(),
                 hardware_revision: 1,
-                product_version_id: "key-k1-r01".into(),
+                product_version_id: "key-rp-k1-r01".into(),
                 capabilities: Vec::new(),
             },
             layout: ModelLayout {
-                id: "key-k1".into(),
+                id: "key-rp-k1".into(),
                 name: "Kivo Key 1".into(),
                 groups: vec![ButtonGroup {
                     id: "keys".into(),
@@ -2879,7 +2879,7 @@ mod tests {
         let normalized = embedded_product_definition().normalize().unwrap();
         cache.store(&normalized).unwrap();
         let response = format!(
-            "PRODUCT_INFO key-k1-r01 1 {} {}\n",
+            "PRODUCT_INFO key-rp-k1-r01 1 {} {}\n",
             normalized.byte_length, normalized.sha256
         );
         let mut device = BufReader::new(MemoryTransport {
@@ -2891,7 +2891,7 @@ mod tests {
             controller_family_id: "rp2040".into(),
             board_profile_id: crate::hardware::YD_RP2040_BOARD_ID.into(),
             firmware_build_id: "test".into(),
-            product_version_id: Some("key-k1-r01".into()),
+            product_version_id: Some("key-rp-k1-r01".into()),
             pins: vec![0],
         };
 

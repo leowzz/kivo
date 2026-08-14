@@ -39,6 +39,7 @@ struct StudioProductSummary {
 struct StudioBoardSummary {
     id: String,
     family_id: String,
+    controller_token: String,
     display_name: String,
     safe_pins: Vec<u8>,
     supports_oled: bool,
@@ -124,6 +125,9 @@ fn snapshot(state: &StudioState) -> Result<StudioSnapshot, AppError> {
             .map(|board| StudioBoardSummary {
                 id: board.id.into(),
                 family_id: board.family_id.into(),
+                controller_token: crate::hardware::product_id_token_for_board(board.id)
+                    .expect("registered boards have a controller product token")
+                    .into(),
                 display_name: board.display_name.into(),
                 safe_pins: board.safe_pins.to_vec(),
                 supports_oled: board.supports_oled,
@@ -176,11 +180,11 @@ fn save_product(
     let id = &definition.product.product_version_id;
     let path = product_path(repo_root, id)?;
     if create == path.exists() {
-        return Err(AppError::new(if create {
-            "product_already_exists"
+        return Err(if create {
+            AppError::new("product_already_exists").with_param("productVersionId", id)
         } else {
-            "product_not_found"
-        }));
+            AppError::new("product_not_found").with_param("productVersionId", id)
+        });
     }
     let directory = path.parent().expect("product path has a directory");
     fs::create_dir_all(directory).map_err(|error| {
@@ -209,6 +213,26 @@ fn copy_product(
         return Err(AppError::new("source_product_not_found"));
     }
     save_product(repo_root, definition, true)
+}
+
+#[tauri::command]
+fn studio_delete_product(
+    state: tauri::State<'_, StudioState>,
+    product_version_id: String,
+) -> Result<StudioSnapshot, AppError> {
+    delete_product(&state.repo_root, &product_version_id)?;
+    snapshot(&state)
+}
+
+fn delete_product(repo_root: &Path, product_version_id: &str) -> Result<(), AppError> {
+    let path = product_path(repo_root, product_version_id)?;
+    if !path.is_file() {
+        return Err(AppError::new("product_not_found"));
+    }
+    let directory = path.parent().expect("product path has a directory");
+    fs::remove_dir_all(directory).map_err(|error| {
+        AppError::new("delete_product_directory_failed").with_detail(error.to_string())
+    })
 }
 
 #[tauri::command]
@@ -268,6 +292,7 @@ pub fn run() {
             studio_validate_product,
             studio_save_product,
             studio_copy_product,
+            studio_delete_product,
             studio_build_product,
         ])
         .build(tauri::generate_context!())
@@ -327,12 +352,12 @@ mod tests {
 product:
   display_name: {name}
   family_id: key
-  variant_id: key-k1
+  variant_id: key-rp-k1
   hardware_revision: {revision}
   product_version_id: {id}
   capabilities: []
 layout:
-  id: key-k1
+  id: key-rp-k1
   name: {name}
   groups:
     - id: keys
@@ -356,13 +381,13 @@ hardware_profile:
     fn create_update_copy_and_list_stay_under_products() {
         let directory = tempfile::tempdir().unwrap();
         let first =
-            ProductDefinition::parse_yaml(yaml("key-k1-r01", 1, "Key One").as_bytes()).unwrap();
+            ProductDefinition::parse_yaml(yaml("key-rp-k1-r01", 1, "Key One").as_bytes()).unwrap();
         save_product(directory.path(), &first, true).unwrap();
+        let duplicate = save_product(directory.path(), &first, true).unwrap_err();
+        assert_eq!(duplicate.code, "product_already_exists");
         assert_eq!(
-            save_product(directory.path(), &first, true)
-                .unwrap_err()
-                .code,
-            "product_already_exists"
+            duplicate.params.get("productVersionId").map(String::as_str),
+            Some("key-rp-k1-r01")
         );
 
         let mut updated = first.clone();
@@ -371,27 +396,37 @@ hardware_profile:
         save_product(directory.path(), &updated, false).unwrap();
 
         let second =
-            ProductDefinition::parse_yaml(yaml("key-k1-r02", 2, "Key Two").as_bytes()).unwrap();
-        copy_product(directory.path(), "key-k1-r01", &second).unwrap();
+            ProductDefinition::parse_yaml(yaml("key-rp-k1-r02", 2, "Key Two").as_bytes()).unwrap();
+        copy_product(directory.path(), "key-rp-k1-r01", &second).unwrap();
         let products = list_products(directory.path()).unwrap();
         assert_eq!(products.len(), 2);
         assert_eq!(products[0].display_name, "Updated Key One");
         assert!(
             directory
                 .path()
-                .join("products/key-k1-r02/product.yaml")
+                .join("products/key-rp-k1-r02/product.yaml")
                 .is_file()
         );
         assert!(!directory.path().join("product.yaml").exists());
+
+        delete_product(directory.path(), "key-rp-k1-r02").unwrap();
+        assert_eq!(list_products(directory.path()).unwrap().len(), 1);
+        assert!(!directory.path().join("products/key-rp-k1-r02").exists());
+        assert_eq!(
+            delete_product(directory.path(), "key-rp-k1-r02")
+                .unwrap_err()
+                .code,
+            "product_not_found"
+        );
     }
 
     #[test]
     fn copy_requires_an_existing_source() {
         let directory = tempfile::tempdir().unwrap();
         let definition =
-            ProductDefinition::parse_yaml(yaml("key-k1-r01", 1, "Key One").as_bytes()).unwrap();
+            ProductDefinition::parse_yaml(yaml("key-rp-k1-r01", 1, "Key One").as_bytes()).unwrap();
         assert_eq!(
-            copy_product(directory.path(), "key-k1-r02", &definition)
+            copy_product(directory.path(), "key-rp-k1-r02", &definition)
                 .unwrap_err()
                 .code,
             "source_product_not_found"

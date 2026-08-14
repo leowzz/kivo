@@ -33,6 +33,7 @@ export interface ProductSummary {
 export interface StudioBoard {
   id: string;
   familyId: string;
+  controllerToken: string;
   displayName: string;
   safePins: number[];
   supportsOled: boolean;

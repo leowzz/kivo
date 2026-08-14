@@ -18,6 +18,7 @@ pub struct UsbIdentity {
 pub struct ControllerFamily {
     pub id: &'static str,
     pub display_name: &'static str,
+    pub product_id_token: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,10 +52,12 @@ pub const CONTROLLER_FAMILIES: &[ControllerFamily] = &[
     ControllerFamily {
         id: ESP32S3_FAMILY_ID,
         display_name: "ESP32-S3",
+        product_id_token: "s3",
     },
     ControllerFamily {
         id: RP2040_FAMILY_ID,
         display_name: "RP2040",
+        product_id_token: "rp",
     },
 ];
 
@@ -156,6 +159,7 @@ const TEST_CONTROLLER_FAMILIES: &[ControllerFamily] = &[
     ControllerFamily {
         id: TEST_ESP32C3_FAMILY_ID,
         display_name: "ESP32-C3",
+        product_id_token: "c3",
     },
 ];
 
@@ -251,6 +255,14 @@ pub(crate) fn board_profile_ids_match(left: &str, right: &str) -> bool {
     canonical_board_profile_id(left) == canonical_board_profile_id(right)
 }
 
+pub(crate) fn product_id_token_for_board(board_profile_id: &str) -> Option<&'static str> {
+    let board = board_by_id(board_profile_id)?;
+    CONTROLLER_FAMILIES
+        .iter()
+        .find(|family| family.id == board.family_id)
+        .map(|family| family.product_id_token)
+}
+
 #[cfg(test)]
 fn registries_are_valid(families: &[ControllerFamily], boards: &[BoardProfile]) -> bool {
     let unique = |items: &[&str]| {
@@ -260,8 +272,13 @@ fn registries_are_valid(families: &[ControllerFamily], boards: &[BoardProfile]) 
             .all(|(index, item)| is_valid_component(item) && !items[index + 1..].contains(item))
     };
     let family_ids = families.iter().map(|family| family.id).collect::<Vec<_>>();
+    let product_id_tokens = families
+        .iter()
+        .map(|family| family.product_id_token)
+        .collect::<Vec<_>>();
     let board_ids = boards.iter().map(|board| board.id).collect::<Vec<_>>();
     unique(&family_ids)
+        && unique(&product_id_tokens)
         && unique(&board_ids)
         && boards.iter().all(|board| {
             is_valid_component(board.family_id)
@@ -406,8 +423,10 @@ mod tests {
         let esp = board_by_runtime_usb(0x303a, 0x4002).unwrap();
         assert_eq!(esp.family_id, "esp32s3");
         assert_eq!(esp.id, "yd-esp32-s3");
+        assert_eq!(product_id_token_for_board(esp.id), Some("s3"));
         let rp = board_by_runtime_usb(0x2e8a, 0x102e).unwrap();
         assert_eq!(rp.family_id, "rp2040");
+        assert_eq!(product_id_token_for_board(rp.id), Some("rp"));
         assert_eq!(board_by_bootloader_usb(0x2e8a, 0x0003), Some(rp));
         assert!(board_by_runtime_usb(0x2e8a, 0x0003).is_none());
     }

@@ -9,29 +9,32 @@
 | 字段 | 含义 | 何时变化 |
 |---|---|---|
 | Product Family ID | 产品系列及代际 | 产品进入新的、不能视为同代变体的代际时 |
-| Product Variant ID | 同一系列内不可变的用户可见能力集合 | 按键数量或已登记能力发生变化时 |
+| Product Variant ID | 同一系列内不可变的控制器与用户可见能力组合 | 控制器系列、按键数量或已登记能力发生变化时 |
 | Hardware Revision | 同一能力变体的 PCB、引脚或器件修订 | 实现变化但对外能力不变时 |
 | Product Version ID | Product Variant ID 与 Hardware Revision 的完整组合 | 任一组成部分变化时 |
 
-这些字段均不包含单台设备序列号。单台设备仍由 Device ID 标识；使用哪块控制器、
-如何接线以及运行哪个固件，分别由 Board Profile、Hardware Profile 和固件版本描述。
+这些字段均不包含单台设备序列号。单台设备仍由 Device ID 标识。Product Variant ID
+只记录控制器系列的稳定缩写；具体使用哪块开发板、如何接线以及运行哪个固件，仍分别由
+Board Profile、Hardware Profile 和固件版本描述。
 
 ## 规范格式
 
 ```text
-<product-family>-k<key-count>[-<capability>...]-r<hardware-revision>
+<product-family>-<controller>-k<key-count>[-<capability>...]-r<hardware-revision>
 ```
 
 示例：
 
 ```text
-workbench-one-k18-mic-disp-encp-r01
+workbench-one-rp-k18-mic-disp-encp-r01
 ```
 
 组成规则：
 
 - 全部使用小写 ASCII、数字和连字符，不使用空格或下划线。
 - Product Family ID 使用稳定的产品名，不写按键数量、能力、PCB 修订或生命周期阶段。
+- Controller token 表示控制器芯片系列，必须来自本文登记表；更换控制器系列会产生新的
+  Product Variant ID。
 - `kNN` 表示独立实体按键的数量。编码器旋转和编码器按压均不计入该数量。
 - 能力 token 必须来自本文登记表，并严格按照登记顺序排列。
 - Hardware Revision 使用 `rNN`，至少两位，从 `r01` 开始；持久化时可保存整数 `1`。
@@ -42,6 +45,16 @@ workbench-one-k18-mic-disp-encp-r01
 ```regex
 ^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$
 ```
+
+## 控制器 Token
+
+| Token | 控制器系列 |
+|---|---|
+| `rp` | RP2040 |
+| `s3` | ESP32-S3 |
+
+Token 只区分芯片系列，不携带开发板厂商信息。比如 YD-RP2040 使用 `rp`，
+YD-ESP32-S3 使用 `s3`；将来同一芯片系列增加其他 Board Profile 时仍复用同一 token。
 
 ## 能力 Token
 
@@ -68,9 +81,9 @@ Kivo Workbench One 的计划版本包含 18 个独立实体按键、麦克风、
 status: planned
 display_name: Kivo Workbench One
 product_family_id: workbench-one
-product_variant_id: workbench-one-k18-mic-disp-encp
+product_variant_id: workbench-one-rp-k18-mic-disp-encp
 hardware_revision: 1
-product_version_id: workbench-one-k18-mic-disp-encp-r01
+product_version_id: workbench-one-rp-k18-mic-disp-encp-r01
 ```
 
 `status: planned` 表示这是已确定的命名和目标能力，不代表硬件实现、固件支持或
@@ -81,10 +94,11 @@ product_version_id: workbench-one-k18-mic-disp-encp-r01
 
 | 变化 | 结果 |
 |---|---|
-| 同一能力下修正 PCB 或更换兼容器件 | `workbench-one-k18-mic-disp-encp-r02` |
-| 编码器改为不能按压 | `workbench-one-k18-mic-disp-enc-r01` |
-| 独立按键增加到 20 个 | `workbench-one-k20-mic-disp-encp-r01` |
-| 增加扬声器 | `workbench-one-k18-mic-spk-disp-encp-r01` |
+| 同一能力下修正 PCB 或更换兼容器件 | `workbench-one-rp-k18-mic-disp-encp-r02` |
+| 控制器从 RP2040 改为 ESP32-S3 | `workbench-one-s3-k18-mic-disp-encp-r01` |
+| 编码器改为不能按压 | `workbench-one-rp-k18-mic-disp-enc-r01` |
+| 独立按键增加到 20 个 | `workbench-one-rp-k20-mic-disp-encp-r01` |
+| 增加扬声器 | `workbench-one-rp-k18-mic-spk-disp-encp-r01` |
 | 只升级固件 | Product Version ID 不变 |
 | 推出不兼容的下一代产品 | 新建 Product Family，例如 `workbench-two` |
 

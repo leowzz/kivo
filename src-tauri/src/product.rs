@@ -181,7 +181,13 @@ impl ProductDefinition {
         if self.schema_version != PRODUCT_DEFINITION_SCHEMA_VERSION {
             return Err(AppError::new("unsupported_product_definition_schema"));
         }
-        validate_product_identity(&self.product, button_count(&self.layout))?;
+        let controller_token =
+            crate::hardware::product_id_token_for_board(&self.hardware_profile.board_profile_id)
+                .ok_or_else(|| {
+                    AppError::new("unknown_board_profile")
+                        .with_param("board_profile", &self.hardware_profile.board_profile_id)
+                })?;
+        validate_product_identity(&self.product, controller_token, button_count(&self.layout))?;
 
         let profile = DeviceProfile {
             schema_version: PROFILE_SCHEMA_VERSION,
@@ -231,7 +237,11 @@ fn button_count(layout: &ModelLayout) -> usize {
     layout.groups.iter().map(|group| group.buttons.len()).sum()
 }
 
-fn validate_product_identity(identity: &ProductIdentity, key_count: usize) -> Result<(), AppError> {
+fn validate_product_identity(
+    identity: &ProductIdentity,
+    controller_token: &str,
+    key_count: usize,
+) -> Result<(), AppError> {
     if identity.display_name.trim().is_empty() {
         return Err(AppError::new("invalid_product_display_name"));
     }
@@ -270,7 +280,10 @@ fn validate_product_identity(identity: &ProductIdentity, key_count: usize) -> Re
         .iter()
         .map(|capability| format!("-{capability}"))
         .collect::<String>();
-    let expected_variant = format!("{}-k{key_count}{capability_suffix}", identity.family_id);
+    let expected_variant = format!(
+        "{}-{controller_token}-k{key_count}{capability_suffix}",
+        identity.family_id
+    );
     if identity.variant_id != expected_variant {
         return Err(AppError::new("product_variant_id_mismatch")
             .with_param("expected", expected_variant)
@@ -429,13 +442,13 @@ mod tests {
             product: ProductIdentity {
                 display_name: "Kivo Key 1".into(),
                 family_id: "key".into(),
-                variant_id: "key-k1-disp".into(),
+                variant_id: "key-rp-k1-disp".into(),
                 hardware_revision: 1,
-                product_version_id: "key-k1-disp-r01".into(),
+                product_version_id: "key-rp-k1-disp-r01".into(),
                 capabilities: vec!["disp".into()],
             },
             layout: ModelLayout {
-                id: "key-k1".into(),
+                id: "key-rp-k1-disp".into(),
                 name: "Kivo Key 1".into(),
                 groups: vec![ButtonGroup {
                     id: "keys".into(),
@@ -486,10 +499,26 @@ mod tests {
         );
 
         let mut mismatched = definition();
-        mismatched.product.product_version_id = "key-k2-disp-r01".into();
+        mismatched.product.product_version_id = "key-rp-k2-disp-r01".into();
         assert_eq!(
             mismatched.validate().unwrap_err().code,
             "product_version_id_mismatch"
+        );
+    }
+
+    #[test]
+    fn controller_family_token_is_part_of_the_canonical_product_id() {
+        let mut esp32s3 = definition();
+        esp32s3.hardware_profile.board_profile_id = "yd-esp32-s3".into();
+        esp32s3.product.variant_id = "key-s3-k1-disp".into();
+        esp32s3.product.product_version_id = "key-s3-k1-disp-r01".into();
+        esp32s3.layout.id = "key-s3-k1-disp".into();
+        assert!(esp32s3.validate().is_ok());
+
+        esp32s3.product.variant_id = "key-rp-k1-disp".into();
+        assert_eq!(
+            esp32s3.validate().unwrap_err().code,
+            "product_variant_id_mismatch"
         );
     }
 
@@ -513,7 +542,7 @@ mod tests {
             cache.load(
                 &normalized.sha256,
                 normalized.byte_length,
-                "key-k1-disp-r01",
+                "key-rp-k1-disp-r01",
                 "yd-rp2040",
             ),
             Some(normalized.definition.clone())
@@ -526,7 +555,7 @@ mod tests {
                 .load(
                     &normalized.sha256,
                     normalized.byte_length,
-                    "key-k1-disp-r01",
+                    "key-rp-k1-disp-r01",
                     "yd-rp2040",
                 )
                 .is_none()
@@ -545,7 +574,7 @@ mod tests {
                 .load(
                     &normalized.sha256,
                     normalized.byte_length + 1,
-                    "key-k1-disp-r01",
+                    "key-rp-k1-disp-r01",
                     "yd-rp2040",
                 )
                 .is_none()

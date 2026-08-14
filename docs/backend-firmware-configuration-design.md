@@ -321,7 +321,7 @@ Check-in 请求示例：
   "devices": [
     {
       "device_id": "vccgnd-yd-rp2040:SERIAL",
-      "product_version_id": "workbench-one-k18-mic-disp-encp-r01",
+      "product_version_id": "workbench-one-rp-k18-mic-disp-encp-r01",
       "board_profile_id": "vccgnd-yd-rp2040",
       "controller_family_id": "rp2040",
       "firmware_build_id": "v0.6.11",

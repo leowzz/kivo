@@ -2410,7 +2410,7 @@ mod tests {
 
     fn product_definition() -> ProductDefinition {
         let layout = crate::model::ModelLayout {
-            id: "key-k1".into(),
+            id: "key-rp-k1".into(),
             name: "Kivo Key 1".into(),
             groups: vec![crate::model::ButtonGroup {
                 id: "keys".into(),
@@ -2426,9 +2426,9 @@ mod tests {
             product: ProductIdentity {
                 display_name: "Kivo Key 1".into(),
                 family_id: "key".into(),
-                variant_id: "key-k1".into(),
+                variant_id: "key-rp-k1".into(),
                 hardware_revision: 1,
-                product_version_id: "key-k1-r01".into(),
+                product_version_id: "key-rp-k1-r01".into(),
                 capabilities: Vec::new(),
             },
             layout,
@@ -2886,7 +2886,7 @@ mod tests {
                 controller_family_id: "rp2040".into(),
                 board_profile_id: crate::hardware::YD_RP2040_BOARD_ID.into(),
                 firmware_build_id: "product-build".into(),
-                product_version_id: Some("key-k1-r01".into()),
+                product_version_id: Some("key-rp-k1-r01".into()),
                 pins: crate::hardware::board_by_id(crate::hardware::YD_RP2040_BOARD_ID)
                     .unwrap()
                     .safe_pins
@@ -2906,7 +2906,7 @@ mod tests {
             .into_iter()
             .find(|status| status.device_id == id)
             .unwrap();
-        assert_eq!(status.product_version_id.as_deref(), Some("key-k1-r01"));
+        assert_eq!(status.product_version_id.as_deref(), Some("key-rp-k1-r01"));
         assert!(status.product_definition.is_some());
         assert!(status.product_config.is_some());
         let record = coordinator
@@ -2921,7 +2921,7 @@ mod tests {
         assert!(record.runtime_assignment.is_none());
         assert_eq!(
             record.product_config.unwrap().product_version_id,
-            "key-k1-r01"
+            "key-rp-k1-r01"
         );
         assert!(matches!(
             launcher.commands_for(&id).as_slice(),

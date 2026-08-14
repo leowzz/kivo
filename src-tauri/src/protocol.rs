@@ -1438,14 +1438,15 @@ mod tests {
 
     #[test]
     fn parses_protocol_v9_hello_with_product_or_legacy_marker() {
-        let product = parse_device("HELLO 9 rp2040 yd-rp2040 build key-k1-r01 3 0 11 22").unwrap();
+        let product =
+            parse_device("HELLO 9 rp2040 yd-rp2040 build key-rp-k1-r01 3 0 11 22").unwrap();
         assert!(matches!(
             product,
             DeviceMessage::Hello(HelloCapabilities {
                 protocol: 9,
                 product_version_id: Some(ref id),
                 ..
-            }) if id == "key-k1-r01"
+            }) if id == "key-rp-k1-r01"
         ));
         let generic = parse_device("HELLO 9 rp2040 yd-rp2040 build - 3 0 11 22").unwrap();
         assert!(matches!(
@@ -1463,7 +1464,7 @@ mod tests {
         let bytes = br#"{"schema_version":1}"#;
         let sha256 = crate::product::sha256_hex(bytes);
         let info = parse_device(&format!(
-            "PRODUCT_INFO key-k1-r01 1 {} {sha256}",
+            "PRODUCT_INFO key-rp-k1-r01 1 {} {sha256}",
             bytes.len()
         ));
         assert!(matches!(

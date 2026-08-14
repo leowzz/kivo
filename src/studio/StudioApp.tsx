@@ -16,14 +16,16 @@ import {
   RefreshCw,
   Save,
   Trash2,
+  TriangleAlert,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { ButtonGroup, InputSource } from "../types";
+import { useCallback, useEffect, useState } from "react";
+import type { ButtonGroup, HardwareProfile, InputSource } from "../types";
 import type {
   NormalizedDefinition,
   ProductBuildResult,
   ProductDefinition,
+  ProductSummary,
   StudioBoard,
   StudioError,
   StudioSnapshot,
@@ -37,6 +39,12 @@ const CAPABILITIES = ["mic", "spk", "disp", "enc", "encp"] as const;
 function errorText(error: unknown) {
   if (typeof error === "object" && error && "code" in error) {
     const value = error as StudioError;
+    if (value.code === "product_already_exists") {
+      const id = value.params?.productVersionId;
+      return id
+        ? `产品版本 ${id} 已存在，请提高 Hardware Revision 后再保存。`
+        : "该产品版本已存在，请提高 Hardware Revision 后再保存。";
+    }
     return value.detail ? `${value.code}: ${value.detail}` : value.code;
   }
   return String(error);
@@ -50,13 +58,86 @@ function buttonCount(definition: ProductDefinition) {
   return definition.layout.groups.reduce((sum, group) => sum + group.buttons.length, 0);
 }
 
+function nextAvailableRevision(
+  definition: ProductDefinition,
+  controllerToken: string,
+  products: ProductSummary[],
+) {
+  const existingIds = new Set(products.map((product) => product.productVersionId));
+  let revision = Math.max(1, definition.product.hardware_revision + 1);
+  while (existingIds.has(canonicalIdentity(
+    definition.product.family_id,
+    controllerToken,
+    buttonCount(definition),
+    definition.product.capabilities,
+    revision,
+  ).version)) {
+    revision += 1;
+  }
+  return revision;
+}
+
+function orderedAssignablePins(safePins: number[]) {
+  return [...safePins].sort((left, right) => left - right).filter((pin) => pin > 0);
+}
+
+function usedHardwarePins(hardware: HardwareProfile) {
+  const used = new Set<number>();
+  if (hardware.ssd1306) {
+    used.add(hardware.ssd1306.sda);
+    used.add(hardware.ssd1306.scl);
+  }
+  for (const source of hardware.inputs) {
+    if (source.type === "direct") Object.values(source.keys).forEach((pin) => used.add(pin));
+    if (source.type === "contact_matrix") source.pins.forEach((pin) => used.add(pin));
+    if (source.type === "feature_switch") used.add(source.gpio);
+  }
+  return used;
+}
+
+function boundHardwareButtons(inputs: InputSource[]) {
+  const bound = new Set<string>();
+  for (const source of inputs) {
+    if (source.type === "direct" || source.type === "contact_matrix") {
+      Object.keys(source.keys).forEach((button) => bound.add(button));
+    }
+  }
+  return bound;
+}
+
+function automaticDirectKeys(
+  buttons: { id: string }[],
+  safePins: number[],
+  occupiedPins: ReadonlySet<number>,
+  boundButtons: ReadonlySet<string> = new Set(),
+) {
+  const available = orderedAssignablePins(safePins).filter((pin) => !occupiedPins.has(pin));
+  const keys: Record<string, number> = {};
+  let pinIndex = 0;
+  for (const button of buttons) {
+    if (boundButtons.has(button.id) || pinIndex >= available.length) continue;
+    keys[button.id] = available[pinIndex];
+    pinIndex += 1;
+  }
+  return keys;
+}
+
+function nextSourceId(inputs: InputSource[], prefix: string) {
+  const ids = new Set(inputs.map((source) => source.id));
+  for (let index = 1; ; index += 1) {
+    const candidate = `${prefix}-${index}`;
+    if (!ids.has(candidate)) return candidate;
+  }
+}
+
 function canonicalIdentity(
   familyId: string,
+  controllerToken: string,
   keys: number,
   capabilities: string[],
   revision: number,
 ) {
-  const variant = `${familyId}-k${keys}${capabilities.map((token) => `-${token}`).join("")}`;
+  const variant = `${familyId}-${controllerToken}-k${keys}${capabilities.map((token) => `-${token}`).join("")}`;
   return {
     variant,
     version: `${variant}-r${String(revision).padStart(2, "0")}`,
@@ -71,7 +152,13 @@ function emptyDefinition(
   revision: number,
   board: StudioBoard,
 ): ProductDefinition {
-  const identity = canonicalIdentity(familyId, keys, capabilities, revision);
+  const identity = canonicalIdentity(
+    familyId,
+    board.controllerToken,
+    keys,
+    capabilities,
+    revision,
+  );
   const buttons = Array.from({ length: keys }, (_, index) => ({
     id: `K${index + 1}`,
     label: `K${index + 1}`,
@@ -100,17 +187,20 @@ function emptyDefinition(
         {
           type: "direct",
           id: "direct-1",
-          keys: Object.fromEntries(buttons.map((button, index) => [button.id, board.safePins[index] ?? 0])),
+          keys: automaticDirectKeys(buttons, board.safePins, new Set()),
         },
       ],
     },
   };
 }
 
-function syncNewIdentity(definition: ProductDefinition) {
+function syncIdentity(definition: ProductDefinition, boards: StudioBoard[]) {
   const next = clone(definition);
+  const board = boards.find((item) => item.id === next.hardware_profile.board_profile_id);
+  if (!board) return next;
   const identity = canonicalIdentity(
     next.product.family_id,
+    board.controllerToken,
     buttonCount(next),
     next.product.capabilities,
     next.product.hardware_revision,
@@ -141,9 +231,21 @@ export default function StudioApp() {
   const [busy, setBusy] = useState(false);
   const [buildLogs, setBuildLogs] = useState<string[]>([]);
   const [modal, setModal] = useState<CreateMode | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [fatal, setFatal] = useState<string | null>(null);
 
   const dirty = definition ? JSON.stringify(definition) !== saved : false;
+  const conflictingProduct = definition && selectedId !== definition.product.product_version_id
+    ? snapshot?.products.find(
+        (product) => product.productVersionId === definition.product.product_version_id,
+      ) ?? null
+    : null;
+  const definitionBoard = definition
+    ? snapshot?.boards.find((board) => board.id === definition.hardware_profile.board_profile_id)
+    : null;
+  const suggestedRevision = definition && conflictingProduct && snapshot && definitionBoard
+    ? nextAvailableRevision(definition, definitionBoard.controllerToken, snapshot.products)
+    : null;
 
   const refresh = useCallback(async () => {
     const next = await invoke<StudioSnapshot>("studio_get_snapshot");
@@ -206,22 +308,101 @@ export default function StudioApp() {
       if (!current) return current;
       const next = clone(current);
       mutate(next);
-      return isNew ? syncNewIdentity(next) : next;
+      return syncIdentity(next, snapshot?.boards ?? []);
     });
-  }, [isNew]);
+  }, [snapshot?.boards]);
 
   const save = async () => {
-    if (!definition || validationError) return;
+    if (!definition) return;
+    if (conflictingProduct) {
+      setFatal(`产品版本 ${definition.product.product_version_id} 已存在，请使用建议的硬件版本号后再保存。`);
+      return;
+    }
+    if (validationError) {
+      setFatal(`无法保存：${validationError}`);
+      return;
+    }
     setBusy(true);
     try {
-      const next = await invoke<StudioSnapshot>("studio_save_product", {
-        definition,
-        create: isNew,
-      });
+      const identityChanged = !isNew
+        && selectedId !== null
+        && selectedId !== definition.product.product_version_id;
+      const next = identityChanged
+        ? await invoke<StudioSnapshot>("studio_copy_product", {
+            sourceProductVersionId: selectedId,
+            definition,
+          })
+        : await invoke<StudioSnapshot>("studio_save_product", {
+            definition,
+            create: isNew,
+          });
       setSnapshot(next);
       setSelectedId(definition.product.product_version_id);
       setSaved(JSON.stringify(definition));
       setIsNew(false);
+    } catch (error) {
+      setFatal(errorText(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteProduct = async () => {
+    if (!definition || busy) return;
+    if (!selectedId) {
+      setDeleteOpen(false);
+      setDefinition(null);
+      setSaved("");
+      setIsNew(false);
+      setBuildLogs([]);
+      return;
+    }
+    setBusy(true);
+    try {
+      const next = await invoke<StudioSnapshot>("studio_delete_product", {
+        productVersionId: selectedId,
+      });
+      setSnapshot(next);
+      setSelectedId(null);
+      setDefinition(null);
+      setSaved("");
+      setIsNew(false);
+      setBuildLogs([]);
+      setDeleteOpen(false);
+    } catch (error) {
+      setFatal(errorText(error));
+      setDeleteOpen(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createProduct = async (nextDefinition: ProductDefinition) => {
+    if (modal !== "copy") {
+      setDefinition(nextDefinition);
+      setSelectedId(null);
+      setSaved("");
+      setIsNew(true);
+      setModal(null);
+      setTab("identity");
+      return;
+    }
+    if (!selectedId) return;
+    const sourceProductVersionId = selectedId;
+    setModal(null);
+    setBusy(true);
+    try {
+      const next = await invoke<StudioSnapshot>("studio_copy_product", {
+        sourceProductVersionId,
+        definition: nextDefinition,
+      });
+      setSnapshot(next);
+      setSelectedId(nextDefinition.product.product_version_id);
+      setDefinition(nextDefinition);
+      setSaved(JSON.stringify(nextDefinition));
+      setIsNew(false);
+      setTab("identity");
+      setBuildLogs([]);
     } catch (error) {
       setFatal(errorText(error));
     } finally {
@@ -258,7 +439,7 @@ export default function StudioApp() {
         </div>
         <div className="sidebar-actions">
           <button className="primary" onClick={() => setModal("new")}><Plus size={15} />新建</button>
-          <button aria-label="复制产品版本" title="复制产品版本" disabled={!definition || dirty} onClick={() => setModal("copy")}><Copy size={15} /></button>
+          <button aria-label="复制产品版本" title="复制产品版本" disabled={!definition || dirty || busy} onClick={() => setModal("copy")}><Copy size={15} /></button>
           <button aria-label="刷新" title="刷新" onClick={() => refresh()}><RefreshCw size={15} /></button>
         </div>
         <nav className="product-list" aria-label="产品版本">
@@ -285,7 +466,13 @@ export default function StudioApp() {
             {dirty ? <i>未保存</i> : definition ? <i className="saved"><Check size={12} />已保存</i> : null}
           </div>
           <div className="toolbar-actions">
-            <button disabled={!definition || !dirty || Boolean(validationError) || busy} onClick={save}><Save size={16} />保存</button>
+            <button
+              disabled={!definition || !dirty || busy}
+              title={conflictingProduct
+                ? `无法保存：产品版本 ${conflictingProduct.productVersionId} 已存在`
+                : validationError ? `无法保存：${validationError}` : "保存"}
+              onClick={save}
+            ><Save size={16} />保存</button>
             <button className="primary" disabled={!definition || dirty || Boolean(validationError) || busy} onClick={build}>
               {busy ? <LoaderCircle className="spin" size={16} /> : <Hammer size={16} />}构建
             </button>
@@ -301,8 +488,30 @@ export default function StudioApp() {
               <TabButton active={tab === "definition"} icon={<Braces size={15} />} label="规范化定义" onClick={() => setTab("definition")} />
             </div>
             <div className="studio-workspace">
-              {tab === "identity" ? <IdentityEditor definition={definition} immutable={!isNew} update={update} /> : null}
-              {tab === "layout" ? <LayoutEditor definition={definition} update={update} /> : null}
+              {tab === "identity" ? (
+                <IdentityEditor
+                  definition={definition}
+                  immutable={!isNew}
+                  deleteLabel={selectedId ? "删除产品版本" : "丢弃草稿"}
+                  deleting={busy}
+                  conflictingProduct={conflictingProduct}
+                  suggestedRevision={suggestedRevision}
+                  onDelete={() => setDeleteOpen(true)}
+                  onUseSuggestedRevision={() => {
+                    if (suggestedRevision === null) return;
+                    setFatal(null);
+                    update((draft) => { draft.product.hardware_revision = suggestedRevision; });
+                  }}
+                  update={update}
+                />
+              ) : null}
+              {tab === "layout" ? (
+                <LayoutEditor
+                  definition={definition}
+                  board={snapshot.boards.find((board) => board.id === definition.hardware_profile.board_profile_id)}
+                  update={update}
+                />
+              ) : null}
               {tab === "hardware" ? <HardwareEditor definition={definition} boards={snapshot.boards} update={update} /> : null}
               {tab === "definition" ? <DefinitionPreview normalized={normalized} /> : null}
             </div>
@@ -328,14 +537,16 @@ export default function StudioApp() {
           source={definition}
           boards={snapshot.boards}
           onClose={() => setModal(null)}
-          onCreate={(next) => {
-            setDefinition(next);
-            setSelectedId(null);
-            setSaved("");
-            setIsNew(true);
-            setModal(null);
-            setTab("identity");
-          }}
+          onCreate={createProduct}
+        />
+      ) : null}
+      {deleteOpen && definition ? (
+        <DeleteDialog
+          productVersionId={selectedId}
+          dirty={dirty}
+          busy={busy}
+          onClose={() => setDeleteOpen(false)}
+          onConfirm={deleteProduct}
         />
       ) : null}
       {fatal ? <div className="fatal-banner"><span>{fatal}</span><button onClick={() => setFatal(null)}><X size={14} /></button></div> : null}
@@ -351,9 +562,25 @@ function Field(props: { label: string; children: React.ReactNode; wide?: boolean
   return <label className={props.wide ? "field wide" : "field"}><span>{props.label}</span>{props.children}</label>;
 }
 
-function IdentityEditor({ definition, immutable, update }: {
+function IdentityEditor({
+  definition,
+  immutable,
+  deleteLabel,
+  deleting,
+  conflictingProduct,
+  suggestedRevision,
+  onDelete,
+  onUseSuggestedRevision,
+  update,
+}: {
   definition: ProductDefinition;
   immutable: boolean;
+  deleteLabel: string;
+  deleting: boolean;
+  conflictingProduct: ProductSummary | null;
+  suggestedRevision: number | null;
+  onDelete: () => void;
+  onUseSuggestedRevision: () => void;
   update: (mutate: (draft: ProductDefinition) => void) => void;
 }) {
   return (
@@ -365,6 +592,14 @@ function IdentityEditor({ definition, immutable, update }: {
         <Field label="Hardware Revision"><input disabled={immutable} type="number" min={1} value={definition.product.hardware_revision} onChange={(event) => update((draft) => { draft.product.hardware_revision = Number(event.target.value); })} /></Field>
         <Field label="Product Variant ID" wide><input disabled value={definition.product.variant_id} /></Field>
         <Field label="Product Version ID" wide><input disabled value={definition.product.product_version_id} /></Field>
+        {conflictingProduct && suggestedRevision !== null ? (
+          <div className="identity-conflict" role="alert">
+            <span><TriangleAlert size={16} />该版本已存在：<code>{conflictingProduct.displayName}</code></span>
+            <button type="button" onClick={onUseSuggestedRevision}>
+              改用 r{String(suggestedRevision).padStart(2, "0")}
+            </button>
+          </div>
+        ) : null}
       </div>
       <h3>Capabilities</h3>
       <div className="capability-row">
@@ -378,12 +613,16 @@ function IdentityEditor({ definition, immutable, update }: {
           })} /><span>{token}</span></label>
         ))}
       </div>
+      <div className="identity-delete">
+        <button disabled={deleting} onClick={onDelete}><Trash2 size={15} />{deleteLabel}</button>
+      </div>
     </section>
   );
 }
 
-export function LayoutEditor({ definition, update }: {
+export function LayoutEditor({ definition, board, update }: {
   definition: ProductDefinition;
+  board?: StudioBoard;
   update: (mutate: (draft: ProductDefinition) => void) => void;
 }) {
   const [selectedGroupIndex, setSelectedGroupIndex] = useState(0);
@@ -408,6 +647,27 @@ export function LayoutEditor({ definition, update }: {
     update((draft) => { draft.layout.groups.splice(groupIndex, 1); });
     setSelectedGroupIndex(Math.max(0, Math.min(groupIndex, nextCount - 1)));
   };
+  const addButton = () => {
+    const id = nextButtonId();
+    update((draft) => {
+      const target = draft.layout.groups[groupIndex];
+      if (!target) return;
+      target.buttons.push({ id, label: id });
+      target.columns = Math.max(target.columns, target.buttons.length);
+      if (!board) return;
+      const directSources = draft.hardware_profile.inputs.filter(
+        (source): source is Extract<InputSource, { type: "direct" }> => source.type === "direct",
+      );
+      if (directSources.length !== 1) return;
+      const binding = automaticDirectKeys(
+        [{ id }],
+        board.safePins,
+        usedHardwarePins(draft.hardware_profile),
+        boundHardwareButtons(draft.hardware_profile.inputs),
+      );
+      Object.assign(directSources[0].keys, binding);
+    });
+  };
   return (
     <section className="layout-editor">
       <div className="group-rail">
@@ -424,6 +684,7 @@ export function LayoutEditor({ definition, update }: {
             <Field label="Group ID"><input value={group.id} onChange={(event) => { const value = event.target.value; update((draft) => { const target = draft.layout.groups[groupIndex]; if (target) target.id = value; }); }} /></Field>
             <Field label="Columns"><input type="number" min={1} value={group.columns} onChange={(event) => update((draft) => { const target = draft.layout.groups[groupIndex]; if (target) target.columns = Number(event.target.value); })} /></Field>
           </div>
+          <button className="add-row" onClick={addButton}><CirclePlus size={15} />添加按键</button>
           <div className="button-table">
             <div className="table-head"><span>ID</span><span>Label</span><span /></div>
             {group.buttons.map((button, buttonIndex) => (
@@ -434,7 +695,6 @@ export function LayoutEditor({ definition, update }: {
               </div>
             ))}
           </div>
-          <button className="add-row" onClick={() => update((draft) => { const target = draft.layout.groups[groupIndex]; const id = nextButtonId(); target?.buttons.push({ id, label: id }); })}><CirclePlus size={15} />添加按键</button>
         </div>
       ) : null}
       <div className="layout-preview">
@@ -449,7 +709,7 @@ export function LayoutEditor({ definition, update }: {
   );
 }
 
-function HardwareEditor({ definition, boards, update }: {
+export function HardwareEditor({ definition, boards, update }: {
   definition: ProductDefinition;
   boards: StudioBoard[];
   update: (mutate: (draft: ProductDefinition) => void) => void;
@@ -457,11 +717,37 @@ function HardwareEditor({ definition, boards, update }: {
   const hardware = definition.hardware_profile;
   const board = boards.find((item) => item.id === hardware.board_profile_id) ?? boards[0];
   const buttons = definition.layout.groups.flatMap((group) => group.buttons);
+  const unavailablePins = usedHardwarePins(hardware);
   const addSource = (type: InputSource["type"]) => update((draft) => {
-    const count = draft.hardware_profile.inputs.length + 1;
-    if (type === "direct") draft.hardware_profile.inputs.push({ type, id: `direct-${count}`, keys: {} });
-    if (type === "contact_matrix") draft.hardware_profile.inputs.push({ type, id: `matrix-${count}`, pins: [], keys: {} });
-    if (type === "feature_switch") draft.hardware_profile.inputs.push({ type, id: `switch-${count}`, name: "Feature switch", gpio: board.safePins[0] ?? 0, buttons: [] });
+    const inputs = draft.hardware_profile.inputs;
+    if (type === "direct") {
+      const draftButtons = draft.layout.groups.flatMap((group) => group.buttons);
+      inputs.push({
+        type,
+        id: nextSourceId(inputs, "direct"),
+        keys: automaticDirectKeys(
+          draftButtons,
+          board.safePins,
+          usedHardwarePins(draft.hardware_profile),
+          boundHardwareButtons(inputs),
+        ),
+      });
+    }
+    if (type === "contact_matrix") {
+      inputs.push({ type, id: nextSourceId(inputs, "matrix"), pins: [], keys: {} });
+    }
+    if (type === "feature_switch") {
+      const used = usedHardwarePins(draft.hardware_profile);
+      const gpio = orderedAssignablePins(board.safePins).find((pin) => !used.has(pin));
+      if (gpio === undefined) return;
+      inputs.push({
+        type,
+        id: nextSourceId(inputs, "switch"),
+        name: "Feature switch",
+        gpio,
+        buttons: [],
+      });
+    }
   });
   return (
     <section className="editor-section hardware-editor">
@@ -472,24 +758,38 @@ function HardwareEditor({ definition, boards, update }: {
         <Field label="Debounce (ms)"><input type="number" min={1} max={1000} value={hardware.debounce_ms} onChange={(event) => update((draft) => { draft.hardware_profile.debounce_ms = Number(event.target.value); })} /></Field>
       </div>
       <div className="oled-line">
-        <label className="switch-control"><input type="checkbox" disabled={!board.supportsOled} checked={Boolean(hardware.ssd1306)} onChange={(event) => update((draft) => { draft.hardware_profile.ssd1306 = event.target.checked ? { sda: board.safePins.at(-2) ?? 0, scl: board.safePins.at(-1) ?? 1 } : undefined; })} /><span />SSD1306</label>
-        {hardware.ssd1306 ? <><Field label="SDA"><PinSelect value={hardware.ssd1306.sda} board={board} onChange={(value) => update((draft) => { if (draft.hardware_profile.ssd1306) draft.hardware_profile.ssd1306.sda = value; })} /></Field><Field label="SCL"><PinSelect value={hardware.ssd1306.scl} board={board} onChange={(value) => update((draft) => { if (draft.hardware_profile.ssd1306) draft.hardware_profile.ssd1306.scl = value; })} /></Field></> : null}
+        <label className="switch-control"><input type="checkbox" disabled={!board.supportsOled} checked={Boolean(hardware.ssd1306)} onChange={(event) => update((draft) => {
+          if (!event.target.checked) {
+            draft.hardware_profile.ssd1306 = undefined;
+            return;
+          }
+          const used = usedHardwarePins(draft.hardware_profile);
+          const available = [...board.safePins]
+            .sort((left, right) => left - right)
+            .filter((pin) => !used.has(pin));
+          draft.hardware_profile.ssd1306 = {
+            sda: available.at(-2) ?? 0,
+            scl: available.at(-1) ?? 1,
+          };
+        })} /><span />SSD1306</label>
+        {hardware.ssd1306 ? <><Field label="SDA"><PinSelect value={hardware.ssd1306.sda} board={board} unavailablePins={unavailablePins} onChange={(value) => update((draft) => { if (draft.hardware_profile.ssd1306) draft.hardware_profile.ssd1306.sda = value; })} /></Field><Field label="SCL"><PinSelect value={hardware.ssd1306.scl} board={board} unavailablePins={unavailablePins} onChange={(value) => update((draft) => { if (draft.hardware_profile.ssd1306) draft.hardware_profile.ssd1306.scl = value; })} /></Field></> : null}
       </div>
       <div className="source-heading"><h2>Input Sources</h2><div><button onClick={() => addSource("direct")}>Direct</button><button onClick={() => addSource("contact_matrix")}>Matrix</button><button onClick={() => addSource("feature_switch")}>Switch</button></div></div>
       <div className="source-list">
         {hardware.inputs.map((source, sourceIndex) => (
-          <SourceEditor key={`${source.id}-${sourceIndex}`} source={source} sourceIndex={sourceIndex} board={board} buttons={buttons} update={update} />
+          <SourceEditor key={`${source.id}-${sourceIndex}`} source={source} sourceIndex={sourceIndex} board={board} buttons={buttons} unavailablePins={unavailablePins} update={update} />
         ))}
       </div>
     </section>
   );
 }
 
-function SourceEditor({ source, sourceIndex, board, buttons, update }: {
+function SourceEditor({ source, sourceIndex, board, buttons, unavailablePins, update }: {
   source: InputSource;
   sourceIndex: number;
   board: StudioBoard;
   buttons: { id: string; label: string }[];
+  unavailablePins: ReadonlySet<number>;
   update: (mutate: (draft: ProductDefinition) => void) => void;
 }) {
   const [open, setOpen] = useState(true);
@@ -503,7 +803,7 @@ function SourceEditor({ source, sourceIndex, board, buttons, update }: {
       </header>
       {open && source.type === "direct" ? (
         <div className="binding-grid">
-          {buttons.map((button) => <Field key={button.id} label={button.id}><PinSelect empty value={source.keys[button.id]} board={board} onChange={(value) => change((target) => { if (target.type !== "direct") return; if (Number.isNaN(value)) delete target.keys[button.id]; else target.keys[button.id] = value; })} /></Field>)}
+          {buttons.map((button) => <Field key={button.id} label={button.id}><PinSelect empty value={source.keys[button.id]} board={board} unavailablePins={unavailablePins} onChange={(value) => change((target) => { if (target.type !== "direct") return; if (Number.isNaN(value)) delete target.keys[button.id]; else target.keys[button.id] = value; })} /></Field>)}
         </div>
       ) : null}
       {open && source.type === "contact_matrix" ? (
@@ -513,18 +813,62 @@ function SourceEditor({ source, sourceIndex, board, buttons, update }: {
         </div>
       ) : null}
       {open && source.type === "feature_switch" ? (
-        <div className="switch-editor"><Field label="Name"><input value={source.name} onChange={(event) => change((target) => { if (target.type === "feature_switch") target.name = event.target.value; })} /></Field><Field label="GPIO"><PinSelect value={source.gpio} board={board} onChange={(value) => change((target) => { if (target.type === "feature_switch") target.gpio = value; })} /></Field><div className="button-checks">{buttons.map((button) => <label key={button.id}><input type="checkbox" checked={source.buttons.includes(button.id)} onChange={(event) => change((target) => { if (target.type !== "feature_switch") return; target.buttons = event.target.checked ? [...target.buttons, button.id] : target.buttons.filter((id) => id !== button.id); })} />{button.id}</label>)}</div></div>
+        <div className="switch-editor"><Field label="Name"><input value={source.name} onChange={(event) => change((target) => { if (target.type === "feature_switch") target.name = event.target.value; })} /></Field><Field label="GPIO"><PinSelect value={source.gpio} board={board} unavailablePins={unavailablePins} onChange={(value) => change((target) => { if (target.type === "feature_switch") target.gpio = value; })} /></Field><div className="button-checks">{buttons.map((button) => <label key={button.id}><input type="checkbox" checked={source.buttons.includes(button.id)} onChange={(event) => change((target) => { if (target.type !== "feature_switch") return; target.buttons = event.target.checked ? [...target.buttons, button.id] : target.buttons.filter((id) => id !== button.id); })} />{button.id}</label>)}</div></div>
       ) : null}
     </section>
   );
 }
 
-function PinSelect({ value, board, onChange, empty = false }: { value: number | undefined; board: StudioBoard; onChange: (value: number) => void; empty?: boolean }) {
-  return <select value={value ?? ""} onChange={(event) => onChange(event.target.value === "" ? Number.NaN : Number(event.target.value))}>{empty ? <option value="">Unbound</option> : null}{board.safePins.map((pin) => <option key={pin} value={pin}>GPIO {pin}</option>)}</select>;
+function PinSelect({ value, board, unavailablePins, onChange, empty = false }: {
+  value: number | undefined;
+  board: StudioBoard;
+  unavailablePins?: ReadonlySet<number>;
+  onChange: (value: number) => void;
+  empty?: boolean;
+}) {
+  return (
+    <select value={value ?? ""} onChange={(event) => onChange(event.target.value === "" ? Number.NaN : Number(event.target.value))}>
+      {empty ? <option value="">Unbound</option> : null}
+      {board.safePins.map((pin) => (
+        <option key={pin} value={pin} disabled={pin !== value && unavailablePins?.has(pin)}>
+          GPIO {pin}
+        </option>
+      ))}
+    </select>
+  );
 }
 
 function DefinitionPreview({ normalized }: { normalized: NormalizedDefinition | null }) {
   return <section className="definition-preview"><header><div><h2>product.json</h2><span>{normalized?.byteLength ?? 0} bytes</span></div><code>{normalized?.sha256 ?? "Invalid definition"}</code></header><pre>{normalized ? JSON.stringify(JSON.parse(normalized.json), null, 2) : ""}</pre></section>;
+}
+
+function DeleteDialog({ productVersionId, dirty, busy, onClose, onConfirm }: {
+  productVersionId: string | null;
+  dirty: boolean;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const deletingSavedProduct = productVersionId !== null;
+  const title = deletingSavedProduct ? "删除产品版本" : "丢弃草稿";
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (!busy && event.target === event.currentTarget) onClose(); }}>
+      <div className="studio-modal" role="dialog" aria-modal="true" aria-labelledby="delete-product-title">
+        <header><strong id="delete-product-title">{title}</strong><button aria-label="关闭删除确认" disabled={busy} onClick={onClose}><X size={15} /></button></header>
+        <div className="modal-body delete-confirm-body">
+          {deletingSavedProduct ? <p>确定删除产品版本 <code>{productVersionId}</code>？</p> : <p>确定丢弃当前未保存的产品草稿？</p>}
+          {dirty && deletingSavedProduct ? <p>当前未保存的修改也会一并丢失。</p> : null}
+          {deletingSavedProduct ? <p>对应的产品目录将被删除，此操作无法撤销。</p> : null}
+        </div>
+        <footer>
+          <button disabled={busy} onClick={onClose}>取消</button>
+          <button className="danger-action" disabled={busy} onClick={onConfirm}>
+            {busy ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}{deletingSavedProduct ? "确认删除" : "丢弃草稿"}
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
 }
 
 function CreateDialog({ mode, source, boards, onClose, onCreate }: {
@@ -545,7 +889,17 @@ function CreateDialog({ mode, source, boards, onClose, onCreate }: {
       next.product.display_name = displayName;
       next.product.hardware_revision = revision;
       next.layout.name = displayName;
-      const identity = canonicalIdentity(next.product.family_id, buttonCount(next), next.product.capabilities, revision);
+      const board = boards.find(
+        (item) => item.id === next.hardware_profile.board_profile_id,
+      );
+      if (!board) return;
+      const identity = canonicalIdentity(
+        next.product.family_id,
+        board.controllerToken,
+        buttonCount(next),
+        next.product.capabilities,
+        revision,
+      );
       next.product.variant_id = identity.variant;
       next.product.product_version_id = identity.version;
       onCreate(next);
