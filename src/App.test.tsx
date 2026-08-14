@@ -46,7 +46,7 @@ const deviceProfile: DeviceProfile = {
     {
       id: "front-desk",
       name: "前台硬件配置",
-      board_profile_id: "luatos-esp32s3-aio",
+      board_profile_id: "yd-esp32-s3",
       debounce_ms: 30,
       inputs: [
         { type: "direct", id: "side", keys: { ENTER: 6 } },
@@ -74,7 +74,7 @@ function device(overrides: Partial<DeviceStatus> = {}): DeviceStatus {
     hardwareSerial: "ABC123",
     port: "/dev/cu.test",
     controllerFamilyId: "esp32s3",
-    boardProfileId: "luatos-esp32s3-aio",
+    boardProfileId: "yd-esp32-s3",
     firmwareBuildId: "test-build",
     capabilities: [1, 2, 6, 12, 13],
     runtimeAssignment: {
@@ -165,9 +165,9 @@ const baseSnapshot: AppSnapshot = {
   editorProfile: deviceProfile.profile.id,
   boardProfiles: [
     {
-      id: "luatos-esp32s3-aio",
+      id: "yd-esp32-s3",
       controllerFamilyId: "esp32s3",
-      displayName: "LuatOS ESP32-S3 AIO",
+      displayName: "YD-ESP32-S3",
       runtimeUsb: "303a:4002",
       bootloaderUsb: null,
       safePins: [1, 2, 6, 12, 13],
@@ -244,7 +244,7 @@ function runtimeEvent(overrides: Partial<RuntimeEvent> = {}): RuntimeEvent {
     deviceId: "device-front-desk",
     rawSerial: "ABC123",
     controllerFamilyId: "esp32s3",
-    boardProfileId: "luatos-esp32s3-aio",
+    boardProfileId: "yd-esp32-s3",
     port: "/dev/cu.test",
     deviceProfileId: deviceProfile.profile.id,
     hardwareProfileId: "front-desk",
@@ -545,7 +545,7 @@ test("summarizes mixed devices and adds candidates only to attention", async () 
       rawSerial: null,
       port: null,
       controllerFamilyId: "rp2040",
-      boardProfileId: "vccgnd-yd-rp2040",
+      boardProfileId: "yd-rp2040",
       latestError: null,
     },
   ];
@@ -625,7 +625,7 @@ test("periodically refreshes candidates that produce no runtime event", async ()
       rawSerial: null,
       port: "/dev/cu.candidate",
       controllerFamilyId: "rp2040",
-      boardProfileId: "vccgnd-yd-rp2040",
+      boardProfileId: "yd-rp2040",
       latestError: null,
     },
   ];
@@ -1504,7 +1504,7 @@ test("resolves runtime input from the event Hardware Profile and rejects assignm
   currentSnapshot.deviceProfiles[0].hardware_profiles.push({
     id: "alternate-hardware",
     name: "备用硬件配置",
-    board_profile_id: "luatos-esp32s3-aio",
+    board_profile_id: "yd-esp32-s3",
     debounce_ms: 30,
     inputs: [{ type: "direct", id: "alternate", keys: { ENTER: 7 } }],
   });
@@ -2062,6 +2062,41 @@ test("previews a full backup before restoring it", async () => {
   );
 });
 
+test("previews a Product Device backup as a non-destructive merge", async () => {
+  const user = userEvent.setup();
+  vi.mocked(open).mockResolvedValue("/tmp/product-devices.yaml");
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "preview_backup")
+      return {
+        kind: "product_devices",
+        profileCount: 0,
+        buttonCount: 0,
+        hardwareBindingCount: 0,
+        actionCount: 7,
+        deviceCount: 2,
+        assignmentCount: 0,
+        metricRowCount: 0,
+        activityCount: 0,
+      };
+    return structuredClone(currentSnapshot);
+  });
+  render(<App />);
+  await screen.findByText("数据与备份");
+
+  await user.click(screen.getByRole("button", { name: "数据与备份" }));
+  await user.click(screen.getByRole("button", { name: "恢复备份" }));
+  const dialog = await screen.findByRole("dialog", { name: "恢复设备行为备份" });
+  expect(within(dialog).getByText("2 台设备，7 项行为")).toBeInTheDocument();
+  expect(dialog).toHaveTextContent("产品版本不一致的设备不会被修改");
+  await user.click(within(dialog).getByRole("button", { name: "确认" }));
+
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("restore_backup", {
+      path: "/tmp/product-devices.yaml",
+    }),
+  );
+});
+
 test("deletes the last device profile and keeps configuration-file actions available", async () => {
   const user = userEvent.setup();
   render(<App />);
@@ -2107,9 +2142,9 @@ test("autosaves a newly added Hardware Profile with its compiled Board Profile",
       profile: expect.objectContaining({
         hardware_profiles: expect.arrayContaining([
           expect.objectContaining({
-            id: "luatos-esp32s3-aio-hardware",
-            name: "LuatOS ESP32-S3 AIO 硬件配置",
-            board_profile_id: "luatos-esp32s3-aio",
+            id: "yd-esp32-s3-hardware",
+            name: "YD-ESP32-S3 硬件配置",
+            board_profile_id: "yd-esp32-s3",
           }),
         ]),
       }),
@@ -2120,7 +2155,7 @@ test("autosaves a newly added Hardware Profile with its compiled Board Profile",
 
 test("blocks autosave while a Board Profile change leaves invalid mappings and permits revert", async () => {
   currentSnapshot.boardProfiles.push({
-    id: "vccgnd-yd-rp2040",
+    id: "yd-rp2040",
     controllerFamilyId: "rp2040",
     displayName: "YD-RP2040",
     runtimeUsb: "2e8a:000a",
@@ -2132,12 +2167,12 @@ test("blocks autosave while a Board Profile change leaves invalid mappings and p
   await openDeviceIo(user);
   vi.mocked(invoke).mockClear();
 
-  await user.selectOptions(screen.getByLabelText("板型"), "vccgnd-yd-rp2040");
+  await user.selectOptions(screen.getByLabelText("板型"), "yd-rp2040");
   expect(await screen.findByText("无效 GPIO 6")).toBeInTheDocument();
   await new Promise((resolve) => setTimeout(resolve, 550));
   expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_device_profile")).toBe(false);
 
-  await user.selectOptions(screen.getByLabelText("板型"), "luatos-esp32s3-aio");
+  await user.selectOptions(screen.getByLabelText("板型"), "yd-esp32-s3");
   expect(screen.queryByText("无效 GPIO 6")).toBeNull();
   await new Promise((resolve) => setTimeout(resolve, 550));
   expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "save_device_profile")).toBe(false);
@@ -2147,7 +2182,7 @@ test("deletes a Hardware Profile without repairing its Device assignment", async
   currentSnapshot.deviceProfiles[0].hardware_profiles.push({
     id: "spare",
     name: "备用硬件配置",
-    board_profile_id: "luatos-esp32s3-aio",
+    board_profile_id: "yd-esp32-s3",
     debounce_ms: 30,
     inputs: [],
   });
@@ -2499,7 +2534,7 @@ test("targets learning and captured input to the explicitly selected non-first H
   currentSnapshot.deviceProfiles[0].hardware_profiles.push({
     id: "alternate-hardware",
     name: "备用硬件配置",
-    board_profile_id: "luatos-esp32s3-aio",
+    board_profile_id: "yd-esp32-s3",
     debounce_ms: 30,
     inputs: [{
       type: "contact_matrix",

@@ -44,7 +44,7 @@ def wait_for_expected_hello(
             while monotonic() < deadline:
                 device.write(b"HELLO\n")
                 last_line = device.readline().decode("utf-8", errors="replace").strip()
-                if last_line.split()[:5] == expected:
+                if last_line.split()[: len(expected)] == expected:
                     return
                 sleep(0.1)
     except serial.SerialException as error:
@@ -60,7 +60,7 @@ def verify_runtime_firmware(
 ) -> None:
     serial_number = require_serial(serial_number)
     port = wait_for_runtime_port(serial_number, usb_id)
-    expected = ["HELLO", "8", family, board, build]
+    expected = ["HELLO", "9", family, board, build, "-"]
     wait_for_expected_hello(port.device, expected)
 
 

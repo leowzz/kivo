@@ -37,8 +37,8 @@ Kivo 是一套由设备固件和 Tauri 桌面 helper 组成的实体按键工作
 
 | 板卡 | 选择这个文件 |
 |---|---|
-| LuatOS ESP32-S3-AIO | `kivo-vX.Y.Z-esp32s3.bin` |
-| VCC-GND YD-RP2040 | `kivo-vX.Y.Z-rp2040.uf2` |
+| YD-ESP32-S3 | `kivo-vX.Y.Z-esp32s3.bin` |
+| YD-RP2040 | `kivo-vX.Y.Z-rp2040.uf2` |
 
 ### YD-RP2040：拖入文件管理器
 
@@ -95,8 +95,8 @@ workbench-one-k18-mic-disp-encp-r01
 
 | 板卡 | Controller Family | 运行时 USB | 固件环境 | 上传命令 |
 |---|---|---|---|---|
-| LuatOS ESP32-S3-AIO | ESP32-S3 | `303a:4002` | `esp32s3` | `make upload-esp32s3` |
-| VCC-GND YD-RP2040 | RP2040 | `2e8a:102e` | `rp2040` | `make upload-rp2040` |
+| YD-ESP32-S3 | ESP32-S3 | `303a:4002` | `esp32s3` | `make upload-esp32s3` |
+| YD-RP2040 | RP2040 | `2e8a:102e` | `rp2040` | `make upload-rp2040` |
 
 YD-RP2040 的 UF2 bootloader USB 标识为 `2e8a:0003`。Kivo 会先校验 USB 身份，再通过 `HELLO` 协议确认板卡和固件；不受该 Board Profile 支持的 GPIO 会被拒绝。
 

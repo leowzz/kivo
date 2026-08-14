@@ -16,7 +16,7 @@ from scripts.select_firmware_target import (
 )
 
 
-RP_BOARD = "vccgnd-yd-rp2040"
+RP_BOARD = "yd-rp2040"
 RP_RUNTIME_USB = (0x2E8A, 0x102E)
 
 
@@ -31,8 +31,8 @@ def rp_row(
 
 def test_parses_inventory_tsv_without_treating_placeholders_as_values() -> None:
     output = (
-        "runtime\t2e8a:102e\tvccgnd-yd-rp2040\tSERIAL-A\t/dev/a\n"
-        "bootloader\t2e8a:0003\tvccgnd-yd-rp2040\t-\t-\n"
+        "runtime\t2e8a:102e\tyd-rp2040\tSERIAL-A\t/dev/a\n"
+        "bootloader\t2e8a:0003\tyd-rp2040\t-\t-\n"
     )
 
     assert parse_inventory_rows(output) == [
@@ -143,7 +143,7 @@ def test_selection_moves_to_nearest_row_when_selected_device_disappears() -> Non
 
 def test_filters_out_other_board_profiles() -> None:
     tracker = TargetTracker(RP_BOARD, {"runtime"})
-    other = ("runtime", (0x303A, 0x4002), "luatos-esp32s3-aio", "ESP", "/dev/esp")
+    other = ("runtime", (0x303A, 0x4002), "yd-esp32-s3", "ESP", "/dev/esp")
 
     tracker.update([other, rp_row("RP", "/dev/rp")], datetime(2026, 8, 2, 12, 0, 0))
 

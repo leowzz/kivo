@@ -643,7 +643,7 @@ fn wait_for_input_event(coordinator: &mut RuntimeCoordinator, serial: &str) {
 
 #[test]
 fn held_input_on_one_device_does_not_block_another_devices_paste_sequence() {
-    let rp = board("vccgnd-yd-rp2040");
+    let rp = board("yd-rp2040");
     let specs = [
         (
             "HOLD",
@@ -780,8 +780,8 @@ fn held_input_on_one_device_does_not_block_another_devices_paste_sequence() {
 #[test]
 fn four_concurrent_devices_keep_runtime_and_global_paste_isolated() {
     assert_due_fake_deadline_fires_on_registration();
-    let esp = board("luatos-esp32s3-aio");
-    let rp = board("vccgnd-yd-rp2040");
+    let esp = board("yd-esp32-s3");
+    let rp = board("yd-rp2040");
     let specs = [
         (
             "ESP-A",

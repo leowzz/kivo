@@ -141,7 +141,7 @@ done
 
 require_serial_body="$(target_body require-serial)"
 grep -Fq 'test -n "$(SERIAL)"' <<<"$require_serial_body"
-grep -Fq 'expected = ["HELLO", "8", family, board, build]' "$ROOT/scripts/verify_runtime_firmware.py"
+grep -Fq 'expected = ["HELLO", "9", family, board, build, "-"]' "$ROOT/scripts/verify_runtime_firmware.py"
 
 for target in upload-esp32s3 upload-rp2040; do
   ! grep -Eq "^${target}:[[:space:]].*require-serial([[:space:]]|$)" "$MAKEFILE"
@@ -160,12 +160,12 @@ rp2040_upload_body="$(target_body upload-rp2040)"
 test "$(grep -n -- '-t upload' <<<"$esp32_upload_body" | cut -d: -f1)" -lt "$(grep -n 'verify_runtime_firmware.py' <<<"$esp32_upload_body" | cut -d: -f1)"
 grep -Fq -- 'esptool.py --chip esp32s3' <<<"$esp32_upload_body"
 grep -Fq -- '--after hard_reset run' <<<"$esp32_upload_body"
-grep -Fq -- '--board luatos-esp32s3-aio --mode runtime' <<<"$esp32_upload_body"
+grep -Fq -- '--board yd-esp32-s3 --mode runtime' <<<"$esp32_upload_body"
 ! grep -Fq -- '--mode bootloader' <<<"$esp32_upload_body"
 test "$(grep -n 'select_firmware_target.py' <<<"$esp32_upload_body" | cut -d: -f1)" -lt "$(grep -n '$(ESP32S3_BUILD)' <<<"$esp32_upload_body" | cut -d: -f1)"
 test "$(grep -n -- '-t upload' <<<"$esp32_upload_body" | cut -d: -f1)" -lt "$(grep -n -- 'esptool.py --chip esp32s3' <<<"$esp32_upload_body" | cut -d: -f1)"
 test "$(grep -n -- 'esptool.py --chip esp32s3' <<<"$esp32_upload_body" | cut -d: -f1)" -lt "$(grep -n 'verify_runtime_firmware.py' <<<"$esp32_upload_body" | cut -d: -f1)"
-grep -Fq -- '--board vccgnd-yd-rp2040 --mode runtime --mode bootloader' <<<"$rp2040_upload_body"
+grep -Fq -- '--board yd-rp2040 --mode runtime --mode bootloader' <<<"$rp2040_upload_body"
 test "$(grep -n 'select_firmware_target.py' <<<"$rp2040_upload_body" | cut -d: -f1)" -lt "$(grep -n '$(RP2040_BUILD)' <<<"$rp2040_upload_body" | cut -d: -f1)"
 grep -Fq 'scripts/upload_rp2040.py' <<<"$rp2040_upload_body"
 grep -Fq -- '--firmware .pio/build/rp2040/firmware.uf2' <<<"$rp2040_upload_body"

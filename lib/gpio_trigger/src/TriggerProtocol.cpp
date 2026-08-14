@@ -162,6 +162,13 @@ std::optional<HelperCommand> parseHelperCommand(std::string_view line) {
                : std::optional<HelperCommand>{{HelperCommandKind::Hello}};
   }
 
+  if (*kind == "PRODUCT_INFO" || *kind == "PRODUCT_READ") {
+    if (takeToken(line).has_value()) return std::nullopt;
+    return HelperCommand{*kind == "PRODUCT_INFO"
+                             ? HelperCommandKind::ProductInfo
+                             : HelperCommandKind::ProductRead};
+  }
+
   if (*kind == "CONFIG_BEGIN") {
     const auto revision = takeNumber(line);
     const auto debounce = takeNumber(line);

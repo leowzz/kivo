@@ -14,10 +14,10 @@ except ModuleNotFoundError:
 
 
 KNOWN_TARGETS = {
-    (0x303A, 0x4002): ("runtime", "luatos-esp32s3-aio"),
-    (0x303A, 0x1001): ("bootloader", "luatos-esp32s3-aio"),
-    (0x2E8A, 0x102E): ("runtime", "vccgnd-yd-rp2040"),
-    (0x2E8A, 0x0003): ("bootloader", "vccgnd-yd-rp2040"),
+    (0x303A, 0x4002): ("runtime", "yd-esp32-s3"),
+    (0x303A, 0x1001): ("bootloader", "yd-esp32-s3"),
+    (0x2E8A, 0x102E): ("runtime", "yd-rp2040"),
+    (0x2E8A, 0x0003): ("bootloader", "yd-rp2040"),
 }
 
 

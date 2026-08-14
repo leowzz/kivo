@@ -11,6 +11,8 @@
 
 enum class HelperCommandKind {
   Hello,
+  ProductInfo,
+  ProductRead,
   ConfigBegin,
   ConfigDirect,
   ConfigMatrix,

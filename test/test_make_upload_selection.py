@@ -219,13 +219,13 @@ def test_bootsel_selection_verifies_with_the_resolved_runtime_serial(
     [
         (
             "upload-rp2040",
-            "--board vccgnd-yd-rp2040 --mode runtime --mode bootloader",
+            "--board yd-rp2040 --mode runtime --mode bootloader",
             "pio run -e rp2040",
             "scripts/upload_rp2040.py",
         ),
         (
             "upload-esp32s3",
-            "--board luatos-esp32s3-aio --mode runtime",
+            "--board yd-esp32-s3 --mode runtime",
             "pio run -e esp32s3",
             "pio run -e esp32s3 -t upload",
         ),

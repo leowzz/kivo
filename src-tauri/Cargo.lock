@@ -1751,6 +1751,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "serialport",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

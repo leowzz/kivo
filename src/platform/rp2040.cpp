@@ -108,11 +108,11 @@ bool supportsRemoteScene(const RemoteDisplayCommit &scene) {
 }  // namespace
 
 namespace platform {
-const BoardProfile &boardProfile() { return kVccGndYdRp2040; }
+const BoardProfile &boardProfile() { return kYdRp2040; }
 
 void begin() {
   TinyUSBDevice.setID(0x2e8a, 0x102e);
-  TinyUSBDevice.setManufacturerDescriptor("VCC-GND");
+  TinyUSBDevice.setManufacturerDescriptor("YD");
   TinyUSBDevice.setProductDescriptor("Kivo Keyboard RP2040");
   Serial.begin(115200);
   keyboard.begin();

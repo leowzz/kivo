@@ -500,6 +500,22 @@ export default function App() {
     }
   }, [language, replaceRegistrySnapshot]);
 
+  const copyManagedProductConfig = useCallback(async (
+    sourceDeviceId: string,
+    targetDeviceId: string,
+  ) => {
+    try {
+      const snapshot = await queue.enqueue(() => invoke<AppSnapshot>("copy_product_device_config", {
+        sourceDeviceId,
+        targetDeviceId,
+      }));
+      if (mountedRef.current) applySnapshot(snapshot, true);
+    } catch (operationError) {
+      setError(`${t(language, "error.save")}: ${errorMessage(operationError)}`);
+      throw operationError;
+    }
+  }, [applySnapshot, language, queue]);
+
   const refreshManagedDeviceMetrics = useCallback(async (deviceId: string | null) => {
     selectedManagedDeviceIdRef.current = deviceId;
     const generation = ++managedMetricsGenerationRef.current;
@@ -792,8 +808,35 @@ export default function App() {
   }, [devices, setSharedDraftPending, updateProfile]);
 
   const changeManagedActions = useCallback((profile: DeviceProfile) => {
+    const productDevice = devices.find(
+      (device) => device.deviceId === selectedManagedDeviceId && device.productVersionId,
+    );
+    if (productDevice?.productVersionId) {
+      const config = {
+        product_version_id: productDevice.productVersionId,
+        trigger_settings: profile.trigger_settings,
+        actions: profile.actions,
+      };
+      setRegistry((current) => ({
+        ...current,
+        devices: current.devices.map((device) =>
+          device.deviceId === productDevice.deviceId
+            ? { ...device, productConfig: config }
+            : device,
+        ),
+      }));
+      void queue.enqueue(() => invoke<AppSnapshot>("save_product_device_config", {
+        deviceId: productDevice.deviceId,
+        config,
+      })).then((snapshot) => {
+        if (mountedRef.current) applySnapshot(snapshot, true);
+      }).catch((operationError) => {
+        if (mountedRef.current) setError(`${t(language, "error.save")}: ${errorMessage(operationError)}`);
+      });
+      return;
+    }
     updateProfile(profile.profile.id, () => profile);
-  }, [updateProfile]);
+  }, [applySnapshot, devices, language, queue, selectedManagedDeviceId, updateProfile]);
 
   const saveManagedSharedProfile = useCallback(async (profile: DeviceProfile) => {
     await autosave.flush();
@@ -837,7 +880,7 @@ export default function App() {
       return;
     }
     const snapshot = await queue.enqueue(() => invoke<AppSnapshot>("save_settings", {
-      settings: { schema_version: 2, editor_profile: nextEditorProfile, language: nextLanguage },
+      settings: { schema_version: 3, editor_profile: nextEditorProfile, language: nextLanguage },
     }));
     applySnapshot(snapshot, true);
   };
@@ -1117,7 +1160,7 @@ export default function App() {
                   <h3>{t(language, "data.groupTransfer")}</h3>
                   <div className="data-menu">
                     <button type="button" onClick={() => void chooseImport()}><FileInput size={16} />{t(language, "nav.import")}</button>
-                    <button type="button" disabled={deviceProfiles.length === 0} onClick={() => void run(t(language, "error.export"), async () => {
+                    <button type="button" onClick={() => void run(t(language, "error.export"), async () => {
                       await autosave.flush();
                       const path = await saveFile({ defaultPath: "kivo-backup.yaml", filters: [{ name: "Kivo", extensions: ["yaml"] }] });
                       if (path) await invoke("export_backup", { path });
@@ -1137,6 +1180,7 @@ export default function App() {
               metrics={deviceMetrics}
               onRename={renameManagedDevice}
               onSaveRuntimeAssignment={saveManagedRuntimeAssignment}
+              onCopyProductConfig={copyManagedProductConfig}
               onMetricsChange={handleManagedMetricsChange}
               onOpenSetup={openSetup}
               onRetryCandidate={retrySetupCandidate}
@@ -1220,26 +1264,35 @@ export default function App() {
       {confirmation && (
         <ConfirmDialog
           title={confirmation.kind === "restore"
-            ? t(language, "dialog.restoreTitle")
+            ? t(language, confirmation.preview.kind === "product_devices"
+              ? "dialog.restoreProductTitle"
+              : "dialog.restoreTitle")
             : confirmation.kind === "delete"
               ? t(language, "dialog.deleteTitle")
               : t(language, confirmation.preview.replacesExisting ? "dialog.replaceTitle" : "dialog.importTitle")}
           body={confirmation.kind === "restore"
-            ? t(language, "dialog.restoreBody")
+            ? t(language, confirmation.preview.kind === "product_devices"
+              ? "dialog.restoreProductBody"
+              : "dialog.restoreBody")
             : confirmation.kind === "delete"
               ? t(language, "dialog.deleteBody", { name: confirmation.profile.profile.name })
               : t(language, confirmation.preview.replacesExisting ? "dialog.replaceBody" : "dialog.importBody")}
           summary={confirmation.kind === "restore"
-            ? t(language, "dialog.backupSummary", {
-              models: confirmation.preview.profileCount,
-              buttons: confirmation.preview.buttonCount,
-              bindings: confirmation.preview.hardwareBindingCount,
-              actions: confirmation.preview.actionCount,
-              devices: confirmation.preview.deviceCount,
-              assignments: confirmation.preview.assignmentCount,
-              metricRows: confirmation.preview.metricRowCount,
-              activity: confirmation.preview.activityCount,
-            })
+            ? confirmation.preview.kind === "product_devices"
+              ? t(language, "dialog.productBackupSummary", {
+                actions: confirmation.preview.actionCount,
+                devices: confirmation.preview.deviceCount,
+              })
+              : t(language, "dialog.backupSummary", {
+                models: confirmation.preview.profileCount,
+                buttons: confirmation.preview.buttonCount,
+                bindings: confirmation.preview.hardwareBindingCount,
+                actions: confirmation.preview.actionCount,
+                devices: confirmation.preview.deviceCount,
+                assignments: confirmation.preview.assignmentCount,
+                metricRows: confirmation.preview.metricRowCount,
+                activity: confirmation.preview.activityCount,
+              })
             : confirmation.kind === "import"
               ? t(language, "dialog.modelSummary", {
                 buttons: confirmation.preview.buttonCount,
@@ -1249,7 +1302,9 @@ export default function App() {
               : confirmation.profile.profile.name}
           confirmLabel={t(language, "common.confirm")}
           cancelLabel={t(language, "common.cancel")}
-          danger={confirmation.kind !== "import" || confirmation.preview.replacesExisting}
+          danger={confirmation.kind === "delete" ||
+            (confirmation.kind === "restore" && confirmation.preview.kind !== "product_devices") ||
+            (confirmation.kind === "import" && confirmation.preview.replacesExisting)}
           onCancel={() => setConfirmation(null)}
           onConfirm={confirmOperation}
         />

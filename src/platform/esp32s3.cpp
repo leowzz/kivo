@@ -32,7 +32,7 @@ bool sendKeyboardReport(const platform::KeyboardReport &keyboardReport) {
 }  // namespace
 
 namespace platform {
-const BoardProfile &boardProfile() { return kLuatOsEsp32S3Aio; }
+const BoardProfile &boardProfile() { return kYdEsp32S3; }
 
 void begin() {
   USB.VID(0x303A);

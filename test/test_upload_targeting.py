@@ -104,14 +104,14 @@ def test_select_download_port_rejects_malformed_or_different_hex_serial(observed
 
 def test_runtime_verifier_retries_until_protocol_is_ready() -> None:
     runtime = FakeRuntimeSerial(
-        [b"", b"HELLO 7 esp32s3 luatos-esp32s3-aio acceptance\n"]
+        [b"", b"HELLO 7 esp32s3 yd-esp32-s3 acceptance\n"]
     )
     opened: list[str] = []
     times = iter([0.0, 0.0, 0.1])
 
     wait_for_expected_hello(
         "/dev/target",
-        ["HELLO", "7", "esp32s3", "luatos-esp32s3-aio", "acceptance"],
+        ["HELLO", "7", "esp32s3", "yd-esp32-s3", "acceptance"],
         timeout=1,
         serial_factory=lambda port, *_args, **_kwargs: opened.append(port) or runtime,
         monotonic=lambda: next(times),
@@ -121,7 +121,7 @@ def test_runtime_verifier_retries_until_protocol_is_ready() -> None:
     assert runtime.write_count == 2
 
 
-def test_runtime_verifier_requires_protocol_v8(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_runtime_verifier_requires_generic_protocol_v9(monkeypatch: pytest.MonkeyPatch) -> None:
     observed: list[tuple[str, list[str]]] = []
     monkeypatch.setattr(
         "scripts.verify_runtime_firmware.wait_for_runtime_port",
@@ -136,14 +136,14 @@ def test_runtime_verifier_requires_protocol_v8(monkeypatch: pytest.MonkeyPatch) 
         "TARGET",
         (0x2E8A, 0x102E),
         "rp2040",
-        "vccgnd-yd-rp2040",
+        "yd-rp2040",
         "v0.6.1",
     )
 
     assert observed == [
         (
             "/dev/target",
-            ["HELLO", "8", "rp2040", "vccgnd-yd-rp2040", "v0.6.1"],
+            ["HELLO", "9", "rp2040", "yd-rp2040", "v0.6.1", "-"],
         )
     ]
 
@@ -155,7 +155,7 @@ def test_runtime_verifier_bounds_timeout_and_reports_expected_and_observed() -> 
     with pytest.raises(TargetError) as captured:
         wait_for_expected_hello(
             "/dev/target",
-            ["HELLO", "7", "esp32s3", "luatos-esp32s3-aio", "acceptance"],
+            ["HELLO", "7", "esp32s3", "yd-esp32-s3", "acceptance"],
             timeout=1,
             serial_factory=lambda *_args, **_kwargs: runtime,
             monotonic=lambda: next(times),
@@ -164,7 +164,7 @@ def test_runtime_verifier_bounds_timeout_and_reports_expected_and_observed() -> 
 
     assert runtime.write_count == 2
     assert "timed out" in str(captured.value)
-    assert "HELLO 7 esp32s3 luatos-esp32s3-aio acceptance" in str(captured.value)
+    assert "HELLO 7 esp32s3 yd-esp32-s3 acceptance" in str(captured.value)
     assert "WRONG 3 response" in str(captured.value)
 
 
@@ -191,22 +191,22 @@ def test_select_download_port_rejects_same_location_with_other_serial() -> None:
 def test_inventory_merges_duplicate_identity_and_prefers_cdc_port() -> None:
     merged = merge_rows(
         [
-            ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", None),
-            ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", "/dev/tty.usbmodem"),
-            ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP2", None),
+            ("bootloader", (0x2E8A, 0x0003), "yd-rp2040", "RP1", None),
+            ("bootloader", (0x2E8A, 0x0003), "yd-rp2040", "RP1", "/dev/tty.usbmodem"),
+            ("bootloader", (0x2E8A, 0x0003), "yd-rp2040", "RP2", None),
         ]
     )
 
     assert merged == [
-        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", "/dev/tty.usbmodem"),
-        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP2", None),
+        ("bootloader", (0x2E8A, 0x0003), "yd-rp2040", "RP1", "/dev/tty.usbmodem"),
+        ("bootloader", (0x2E8A, 0x0003), "yd-rp2040", "RP2", None),
     ]
 
 
 def test_inventory_preserves_same_serial_on_distinct_concrete_ports() -> None:
     rows = [
-        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", "/dev/tty.a"),
-        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", "/dev/tty.b"),
+        ("bootloader", (0x2E8A, 0x0003), "yd-rp2040", "RP1", "/dev/tty.a"),
+        ("bootloader", (0x2E8A, 0x0003), "yd-rp2040", "RP1", "/dev/tty.b"),
     ]
 
     assert merge_rows(rows) == rows
@@ -214,9 +214,9 @@ def test_inventory_preserves_same_serial_on_distinct_concrete_ports() -> None:
 
 def test_inventory_reconciles_one_portless_row_against_two_concrete_rows() -> None:
     rows = [
-        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", None),
-        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", "/dev/tty.a"),
-        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", "/dev/tty.b"),
+        ("bootloader", (0x2E8A, 0x0003), "yd-rp2040", "RP1", None),
+        ("bootloader", (0x2E8A, 0x0003), "yd-rp2040", "RP1", "/dev/tty.a"),
+        ("bootloader", (0x2E8A, 0x0003), "yd-rp2040", "RP1", "/dev/tty.b"),
     ]
 
     assert merge_rows(rows) == rows[1:]
@@ -224,24 +224,24 @@ def test_inventory_reconciles_one_portless_row_against_two_concrete_rows() -> No
 
 def test_inventory_retains_unmatched_portless_observation() -> None:
     rows = [
-        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", None),
-        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", None),
-        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", "/dev/tty.a"),
+        ("bootloader", (0x2E8A, 0x0003), "yd-rp2040", "RP1", None),
+        ("bootloader", (0x2E8A, 0x0003), "yd-rp2040", "RP1", None),
+        ("bootloader", (0x2E8A, 0x0003), "yd-rp2040", "RP1", "/dev/tty.a"),
     ]
 
     assert merge_rows(rows) == [rows[2], rows[0]]
 
 
 def test_inventory_deduplicates_exact_concrete_observations() -> None:
-    row = ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", "/dev/tty.a")
+    row = ("bootloader", (0x2E8A, 0x0003), "yd-rp2040", "RP1", "/dev/tty.a")
 
     assert merge_rows([row, row]) == [row]
 
 
 def test_inventory_preserves_distinct_serialless_cdc_ports() -> None:
     rows = [
-        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", None, "/dev/tty.a"),
-        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", None, "/dev/tty.b"),
+        ("bootloader", (0x2E8A, 0x0003), "yd-rp2040", None, "/dev/tty.a"),
+        ("bootloader", (0x2E8A, 0x0003), "yd-rp2040", None, "/dev/tty.b"),
     ]
 
     assert merge_rows(rows) == rows
@@ -249,8 +249,8 @@ def test_inventory_preserves_distinct_serialless_cdc_ports() -> None:
 
 def test_inventory_preserves_serialless_profiler_rows_in_observation_order() -> None:
     rows = [
-        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", None, None),
-        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", None, None),
+        ("bootloader", (0x2E8A, 0x0003), "yd-rp2040", None, None),
+        ("bootloader", (0x2E8A, 0x0003), "yd-rp2040", None, None),
     ]
 
     assert merge_rows(rows) == rows
@@ -286,7 +286,7 @@ def test_inventory_parses_structured_uf2_json() -> None:
     )
 
     assert list(macos_uf2_rows(run=runner, system_name="Darwin")) == [
-        ("bootloader", (0x2E8A, 0x0003), "vccgnd-yd-rp2040", "RP1", None)
+        ("bootloader", (0x2E8A, 0x0003), "yd-rp2040", "RP1", None)
     ]
 
 
@@ -336,7 +336,7 @@ def test_windows_inventory_adds_bootsel_target_to_picker() -> None:
         (
             "bootloader",
             (0x2E8A, 0x0003),
-            "vccgnd-yd-rp2040",
+            "yd-rp2040",
             "BOOTSEL-1",
             None,
         )

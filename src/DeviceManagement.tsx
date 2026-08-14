@@ -88,6 +88,7 @@ interface DeviceManagementProps {
     deviceId: string,
     assignment: RuntimeAssignment,
   ): void | Promise<void>;
+  onCopyProductConfig?(sourceDeviceId: string, targetDeviceId: string): Promise<void>;
   onMetricsChange(deviceId: string | null): void;
   onOpenSetup(targetId: string | null): void;
   onRetryCandidate(deviceId: string): void | Promise<void>;
@@ -161,6 +162,7 @@ export function DeviceManagement({
   metrics,
   onRename,
   onSaveRuntimeAssignment,
+  onCopyProductConfig,
   onMetricsChange,
   onOpenSetup,
   onRetryCandidate,
@@ -189,6 +191,8 @@ export function DeviceManagement({
   const [assignmentSaving, setAssignmentSaving] = useState(false);
   const [workspaceTab, setWorkspaceTab] = useState<"buttons" | "overview" | "io" | "layout">("buttons");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [copySourceDeviceId, setCopySourceDeviceId] = useState("");
+  const [copyingProductConfig, setCopyingProductConfig] = useState(false);
   const previous = useRef<Row[]>([]);
   const candidateRetryInFlight = useRef(false);
   const pendingAssignment = useRef<RuntimeAssignment | null>(null);
@@ -341,7 +345,34 @@ export function DeviceManagement({
         selectedDevice?.boardProfileId ?? "",
       )
     : [];
-  const editingProfile = deviceProfiles.find((item) => item.profile.id === (assignmentDraft.deviceProfileId || selectedDevice?.runtimeAssignment?.device_profile_id));
+  const productEditingProfile: DeviceProfile | undefined = selectedDevice?.productDefinition && selectedDevice.productConfig
+    ? {
+        schema_version: 3,
+        profile: selectedDevice.productDefinition.layout,
+        trigger_settings: selectedDevice.productConfig.trigger_settings,
+        hardware_profiles: [selectedDevice.productDefinition.hardware_profile],
+        actions: selectedDevice.productConfig.actions,
+      }
+    : undefined;
+  const editingProfile = productEditingProfile ?? deviceProfiles.find((item) => item.profile.id === (assignmentDraft.deviceProfileId || selectedDevice?.runtimeAssignment?.device_profile_id));
+  const isProductDevice = Boolean(productEditingProfile);
+  const productCopySources = useMemo(
+    () => selectedDevice?.productVersionId
+      ? devices.filter((device) =>
+          device.deviceId !== selectedDevice.deviceId &&
+          device.productVersionId === selectedDevice.productVersionId &&
+          device.productConfig,
+        )
+      : [],
+    [devices, selectedDevice?.deviceId, selectedDevice?.productVersionId],
+  );
+  useEffect(() => {
+    setCopySourceDeviceId((current) =>
+      productCopySources.some((device) => device.deviceId === current)
+        ? current
+        : (productCopySources[0]?.deviceId ?? ""),
+    );
+  }, [productCopySources]);
   const buttons = editingProfile?.profile.groups.flatMap((group) => group.buttons) ?? [];
   const selectedButton = buttons.find((button) => button.id === selectedButtonId) ?? null;
   const selectedActions: TriggerActions = editingProfile && selectedButtonId
@@ -355,7 +386,12 @@ export function DeviceManagement({
   const sharedDeviceCount = editingProfile
     ? devices.filter((device) => device.runtimeAssignment?.device_profile_id === editingProfile.profile.id).length
     : 0;
-  const updateEditingProfile = useCallback((next: DeviceProfile) => onChangeProfile?.(next), [onChangeProfile]);
+  const updateEditingProfile = useCallback(
+    (next: DeviceProfile) => isProductDevice
+      ? (onChangeActions ?? onChangeProfile)?.(next)
+      : onChangeProfile?.(next),
+    [isProductDevice, onChangeActions, onChangeProfile],
+  );
   const updateActionProfile = useCallback(
     (next: DeviceProfile) => (onChangeActions ?? onChangeProfile)?.(next),
     [onChangeActions, onChangeProfile],
@@ -407,6 +443,21 @@ export function DeviceManagement({
     } finally {
       candidateRetryInFlight.current = false;
       setCandidateRetrying(false);
+    }
+  };
+  const copyProductConfig = async () => {
+    if (!selectedDevice || !copySourceDeviceId || !onCopyProductConfig) return;
+    setCopyingProductConfig(true);
+    setError(null);
+    try {
+      await onCopyProductConfig(copySourceDeviceId, selectedDevice.deviceId);
+    } catch (reason) {
+      setError({
+        owner: { kind: "device", id: selectedDevice.deviceId },
+        message: errorMessage(reason),
+      });
+    } finally {
+      setCopyingProductConfig(false);
     }
   };
   const selectAssignment = async (deviceProfileId: string) => {
@@ -678,8 +729,8 @@ export function DeviceManagement({
                 <div className="device-workspace-tabs" role="tablist" aria-label={t(language, "devices.detail")}>
                   <button type="button" role="tab" aria-selected={workspaceTab === "buttons"} onClick={() => setWorkspaceTab("buttons")}>{t(language, "devices.workspaceButtons")}</button>
                   <button type="button" role="tab" aria-selected={workspaceTab === "overview"} onClick={() => setWorkspaceTab("overview")}>{t(language, "devices.workspaceOverview")}</button>
-                  <button type="button" role="tab" aria-selected={workspaceTab === "layout"} onClick={() => setWorkspaceTab("layout")}>{t(language, "devices.workspaceLayout")}</button>
-                  <button type="button" role="tab" aria-selected={workspaceTab === "io"} onClick={() => setWorkspaceTab("io")}>{t(language, "devices.workspaceIo")}</button>
+                  {!isProductDevice && <button type="button" role="tab" aria-selected={workspaceTab === "layout"} onClick={() => setWorkspaceTab("layout")}>{t(language, "devices.workspaceLayout")}</button>}
+                  {!isProductDevice && <button type="button" role="tab" aria-selected={workspaceTab === "io"} onClick={() => setWorkspaceTab("io")}>{t(language, "devices.workspaceIo")}</button>}
                 </div>
                 <button className="secondary-button" type="button" aria-label={t(language, "devices.configurationSettings")} onClick={() => setSettingsOpen(true)}>{t(language, "devices.configurationSettings")}</button>
               </div>
@@ -702,7 +753,7 @@ export function DeviceManagement({
               />
               <Detail
               label={t(language, "devices.assignment")}
-              value={assignmentLabel(selectedDevice, deviceProfiles)}
+              value={selectedDevice.productVersionId ?? assignmentLabel(selectedDevice, deviceProfiles)}
               />
               {selectedDevice.connection === "online" &&
                 selectedDevice.mode === "runtime" &&
@@ -716,7 +767,34 @@ export function DeviceManagement({
                     {t(language, "setup.continue")}
                   </button>
                 )}
-              <section className="device-assignment" aria-label={t(language, "devices.assignment")}>
+              {isProductDevice && (
+                <section className="device-assignment" aria-label={t(language, "devices.copyProductConfig")}>
+                  <label>
+                    {t(language, "devices.copyProductConfig")}
+                    <select
+                      aria-label={t(language, "devices.copySource")}
+                      value={copySourceDeviceId}
+                      disabled={copyingProductConfig || productCopySources.length === 0}
+                      onChange={(event) => setCopySourceDeviceId(event.target.value)}
+                    >
+                      {productCopySources.length === 0 ? (
+                        <option value="">{t(language, "devices.copySourceEmpty")}</option>
+                      ) : productCopySources.map((device) => (
+                        <option key={device.deviceId} value={device.deviceId}>{device.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={!copySourceDeviceId || copyingProductConfig || !onCopyProductConfig}
+                    onClick={() => void copyProductConfig()}
+                  >
+                    {t(language, copyingProductConfig ? "devices.copyingProductConfig" : "devices.copyProductConfigAction")}
+                  </button>
+                </section>
+              )}
+              {!isProductDevice && <section className="device-assignment" aria-label={t(language, "devices.assignment")}>
                 <label>
                   {t(language, "devices.useConfiguration")}
                   <select
@@ -739,7 +817,7 @@ export function DeviceManagement({
                 {selectedDraftProfile && compatibleHardware.length === 0 && (
                   <p className="field-error">{t(language, "devices.incompatibleProfile")}</p>
                 )}
-              </section>
+              </section>}
             </>}
             {editingProfile && workspaceTab === "buttons" && (
               <div className="keypad-stage device-keypad-stage" role="tabpanel" aria-label={t(language, "devices.workspaceButtons")}>
@@ -850,6 +928,7 @@ export function DeviceManagement({
           language={language}
           button={selectedButton}
           actions={selectedActions}
+          canRename={!isProductDevice}
           onChange={(actions) => {
             if (!selectedButtonId) return;
             updateActionProfile({
@@ -860,7 +939,9 @@ export function DeviceManagement({
               },
             });
           }}
-          onRename={(buttonId, label) => updateActionProfile({
+          onRename={(buttonId, label) => {
+            if (isProductDevice) return;
+            updateActionProfile({
             ...editingProfile,
             profile: {
               ...editingProfile.profile,
@@ -871,10 +952,11 @@ export function DeviceManagement({
                 ),
               })),
             },
-          })}
+            });
+          }}
         />
       )}
-      {editingProfile && <ConfigurationSettingsDialog open={settingsOpen} language={language} profile={editingProfile} sharedDeviceCount={sharedDeviceCount} onCancel={() => setSettingsOpen(false)} onSave={(settings: TriggerSettings) => { updateEditingProfile({ ...editingProfile, trigger_settings: settings }); setSettingsOpen(false); void onSaveSharedProfile?.({ ...editingProfile, trigger_settings: settings }); }} onDraftChange={(settings) => updateEditingProfile({ ...editingProfile, trigger_settings: settings })} onDuplicate={async (name) => { if (selectedDevice) await onDuplicateProfileForDevice?.({ deviceId: selectedDevice.deviceId, sourceProfile: { ...editingProfile }, name }); setSettingsOpen(false); }} />}
+      {editingProfile && <ConfigurationSettingsDialog open={settingsOpen} language={language} profile={editingProfile} sharedDeviceCount={sharedDeviceCount} allowDuplicate={!isProductDevice} onCancel={() => setSettingsOpen(false)} onSave={(settings: TriggerSettings) => { updateEditingProfile({ ...editingProfile, trigger_settings: settings }); setSettingsOpen(false); if (!isProductDevice) void onSaveSharedProfile?.({ ...editingProfile, trigger_settings: settings }); }} onDraftChange={isProductDevice ? undefined : (settings) => updateEditingProfile({ ...editingProfile, trigger_settings: settings })} onDuplicate={async (name) => { if (selectedDevice) await onDuplicateProfileForDevice?.({ deviceId: selectedDevice.deviceId, sourceProfile: { ...editingProfile }, name }); setSettingsOpen(false); }} />}
     </div>
   );
 }

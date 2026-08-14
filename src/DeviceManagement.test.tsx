@@ -158,6 +158,72 @@ test("uses Board Profile as the primary line and identifier plus status as the s
   expect(within(row).getByText("可用")).toBeInTheDocument();
 });
 
+test("copies Product Device actions only from the same Product Version", async () => {
+  const user = userEvent.setup();
+  const onCopyProductConfig = vi.fn().mockResolvedValue(undefined);
+  const productDefinition = {
+    schema_version: 1 as const,
+    product: {
+      display_name: "Kivo Key 1",
+      family_id: "key",
+      variant_id: "key-k1",
+      hardware_revision: 1,
+      product_version_id: "key-k1-r01",
+      capabilities: [],
+    },
+    layout: {
+      id: "key-k1",
+      name: "Kivo Key 1",
+      groups: [{ id: "keys", columns: 1, buttons: [{ id: "K1", label: "K1" }] }],
+    },
+    hardware_profile: {
+      id: "hardware",
+      name: "Hardware",
+      board_profile_id: "rp2040-pad",
+      debounce_ms: 30,
+      inputs: [],
+    },
+  };
+  const productConfig = {
+    product_version_id: "key-k1-r01",
+    trigger_settings: { long_press_ms: 500, double_press_ms: 300 },
+    actions: {},
+  };
+  renderManagement({
+    devices: [
+      device({ productVersionId: "key-k1-r01", productDefinition, productConfig }),
+      device({
+        deviceId: "rp-b",
+        name: "RP2040 B",
+        hardwareSerial: "RP-B-002",
+        productVersionId: "key-k1-r01",
+        productDefinition,
+        productConfig,
+      }),
+      device({
+        deviceId: "rp-other",
+        name: "Other product",
+        hardwareSerial: "RP-C-003",
+        productVersionId: "other-k1-r01",
+        productDefinition: {
+          ...productDefinition,
+          product: { ...productDefinition.product, product_version_id: "other-k1-r01" },
+        },
+        productConfig: { ...productConfig, product_version_id: "other-k1-r01" },
+      }),
+    ],
+    onCopyProductConfig,
+  });
+
+  await user.click(screen.getByRole("tab", { name: "设备设置" }));
+  const source = screen.getByRole("combobox", { name: "来源设备" });
+  expect(within(source).getByRole("option", { name: "RP2040 B" })).toBeInTheDocument();
+  expect(within(source).queryByRole("option", { name: "Other product" })).toBeNull();
+  await user.click(screen.getByRole("button", { name: "复制行为与触发设置" }));
+
+  expect(onCopyProductConfig).toHaveBeenCalledWith("rp-b", "rp-a");
+});
+
 test("keeps assignment details out of the compact rows while retaining selected activity", async () => {
   const user = userEvent.setup();
   renderManagement();

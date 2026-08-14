@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "product-studio", allow(dead_code, unused_imports))]
+
 mod coordinator;
 mod device;
 #[allow(dead_code)]
@@ -6,10 +8,14 @@ pub mod hardware;
 mod metrics;
 mod model;
 mod paste;
+pub mod product;
+pub mod product_build;
 mod profile;
 mod protocol;
 mod runtime_log;
 mod storage;
+#[cfg(feature = "product-studio")]
+mod studio;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod tray;
 #[allow(dead_code)]
@@ -42,7 +48,8 @@ use std::{
 use tauri::{Emitter, Manager};
 use workspace::{
     AppError, AssignmentResolution, BackupPreview, DuplicateProfileForDeviceRequest,
-    EditorSettingsPatch, ImportPreview, Language, RuntimeAssignment, Workspace,
+    EditorSettingsPatch, ImportPreview, Language, ProductDeviceConfig, RuntimeAssignment,
+    Workspace,
 };
 
 const DEVICE_SCAN_INTERVAL: Duration = Duration::from_millis(500);
@@ -472,6 +479,34 @@ fn rename_device_inner(
     })
 }
 
+fn save_product_device_config_inner(
+    state: &AppState,
+    device_id: &hardware::DeviceId,
+    config: ProductDeviceConfig,
+) -> Result<AppSnapshot, AppError> {
+    mutate_workspace(state, |workspace, coordinator| {
+        let definition = coordinator
+            .and_then(|coordinator| coordinator.product_definition(device_id))
+            .cloned()
+            .ok_or_else(|| AppError::new("product_definition_unavailable"))?;
+        workspace.save_product_device_config(device_id, &definition, config)
+    })
+}
+
+fn copy_product_device_config_inner(
+    state: &AppState,
+    source_device_id: &hardware::DeviceId,
+    target_device_id: &hardware::DeviceId,
+) -> Result<AppSnapshot, AppError> {
+    mutate_workspace(state, |workspace, coordinator| {
+        let definition = coordinator
+            .and_then(|coordinator| coordinator.product_definition(target_device_id))
+            .cloned()
+            .ok_or_else(|| AppError::new("product_definition_unavailable"))?;
+        workspace.copy_product_device_config(source_device_id, target_device_id, &definition)
+    })
+}
+
 fn save_runtime_assignment_inner(
     state: &AppState,
     device_id: &hardware::DeviceId,
@@ -708,11 +743,7 @@ fn restore_backup_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, Ap
         .workspace
         .write()
         .map_err(|_| state_error("workspace_unavailable"))?;
-    let metrics = state
-        .metrics
-        .as_deref()
-        .ok_or_else(|| state_error("metrics_unavailable"))?;
-    workspace.restore_backup(path, metrics)?;
+    workspace.restore_compatible_backup(path, state.metrics.as_deref())?;
     let revision = WorkspaceRevision::capture(&workspace);
     drop(workspace);
     let retired = coordinator
@@ -731,11 +762,7 @@ fn export_backup_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, App
         .workspace
         .read()
         .map_err(|_| state_error("workspace_unavailable"))?;
-    let metrics = state
-        .metrics
-        .as_deref()
-        .ok_or_else(|| state_error("metrics_unavailable"))?;
-    workspace.export_backup(path, metrics)?;
+    workspace.export_user_backup(path)?;
     drop(workspace);
     snapshot(state)
 }
@@ -864,6 +891,24 @@ fn rename_device(
     runtime_log::operation(now_ms(), "device_renamed", context, || {
         rename_device_inner(&state, &device_id, name)
     })
+}
+
+#[tauri::command]
+fn save_product_device_config(
+    state: tauri::State<'_, AppState>,
+    device_id: hardware::DeviceId,
+    config: ProductDeviceConfig,
+) -> Result<AppSnapshot, AppError> {
+    save_product_device_config_inner(&state, &device_id, config)
+}
+
+#[tauri::command]
+fn copy_product_device_config(
+    state: tauri::State<'_, AppState>,
+    source_device_id: hardware::DeviceId,
+    target_device_id: hardware::DeviceId,
+) -> Result<AppSnapshot, AppError> {
+    copy_product_device_config_inner(&state, &source_device_id, &target_device_id)
 }
 
 #[tauri::command]
@@ -1104,6 +1149,7 @@ fn get_startup_failure(state: tauri::State<'_, StartupState>) -> Option<StartupF
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[cfg(not(feature = "product-studio"))]
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -1163,6 +1209,7 @@ pub fn run() {
                     paste.handle(),
                     metrics.clone(),
                     Arc::clone(&operation_barrier),
+                    &config_directory,
                 ));
                 let providers =
                     built_in_provider_registry(&codex_home_fallback, &codex_cursor_store);
@@ -1277,6 +1324,8 @@ pub fn run() {
             duplicate_profile_for_device,
             save_settings,
             rename_device,
+            save_product_device_config,
+            copy_product_device_config,
             save_runtime_assignment,
             complete_device_setup,
             clear_runtime_assignment,
@@ -1361,6 +1410,11 @@ pub fn run() {
     });
 }
 
+#[cfg(feature = "product-studio")]
+pub fn run() {
+    studio::run();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1406,11 +1460,9 @@ mod tests {
 
     #[test]
     fn repeated_operation_contexts_use_camel_case_identifiers() {
-        let device_id = hardware::DeviceId::new(
-            crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
-            "PRIVATE-SERIAL",
-        )
-        .unwrap();
+        let device_id =
+            hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "PRIVATE-SERIAL")
+                .unwrap();
         let assignment = RuntimeAssignment {
             device_profile_id: "profile-1".into(),
             hardware_profile_id: "hardware-1".into(),
@@ -1488,8 +1540,7 @@ mod tests {
     #[test]
     fn learning_operation_context_counts_without_serializing_pins() {
         let device_id =
-            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "LEARNING")
-                .unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "LEARNING").unwrap();
         let pins = [6, 7, 8];
 
         let context =
@@ -1745,7 +1796,7 @@ mod tests {
             hardware_profiles: vec![HardwareProfile {
                 id: "esp-primary".into(),
                 name: "ESP primary".into(),
-                board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+                board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
                 debounce_ms: 30,
                 ssd1306: None,
                 inputs: vec![InputSource::Direct {
@@ -1967,8 +2018,10 @@ mod tests {
                         controller_family_id: board.family_id.into(),
                         board_profile_id: board.id.into(),
                         firmware_build_id: "restore-test".into(),
+                        product_version_id: None,
                         pins: board.safe_pins.to_vec(),
                     },
+                    product_definition: None,
                 })
                 .unwrap();
             Ok(Box::new(RestoreWorker {
@@ -2021,8 +2074,10 @@ mod tests {
                         controller_family_id: board.family_id.into(),
                         board_profile_id: board.id.into(),
                         firmware_build_id: "save-test".into(),
+                        product_version_id: None,
                         pins: board.safe_pins.to_vec(),
                     },
+                    product_definition: None,
                 })
                 .unwrap();
             Ok(Box::new(SaveWorker {
@@ -2074,7 +2129,7 @@ mod tests {
         let boards = value["boardProfiles"].as_array().unwrap();
         let rp2040 = boards
             .iter()
-            .find(|board| board["id"] == crate::hardware::VCCGND_YD_RP2040_BOARD_ID)
+            .find(|board| board["id"] == crate::hardware::YD_RP2040_BOARD_ID)
             .unwrap();
         assert_eq!(
             rp2040["controllerFamilyId"],
@@ -2098,8 +2153,7 @@ mod tests {
             Arc::clone(&state.workspace),
         );
         coordinator.scan_once().unwrap();
-        let id = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
-            .unwrap();
+        let id = hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SAVE-A").unwrap();
         state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
         assert!(!state.scan_requested.load(AtomicOrdering::Relaxed));
 
@@ -2111,7 +2165,7 @@ mod tests {
                 && candidate.issue == coordinator::CandidateIssue::FirmwareNotResponding
         }));
         let missing =
-            hardware::DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "MISSING").unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "MISSING").unwrap();
         assert_eq!(
             retry_candidate_inner(&state, &missing).unwrap_err().code,
             "candidate_not_found"
@@ -2223,8 +2277,7 @@ mod tests {
         state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
 
         let device =
-            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
-                .unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SAVE-A").unwrap();
         let assignment = RuntimeAssignment {
             device_profile_id: "red-phone-v1".into(),
             hardware_profile_id: "esp-primary".into(),
@@ -2256,8 +2309,7 @@ mod tests {
         let directory = TestDirectory::new();
         let state = Arc::new(product_state(&directory.0, vec![product_profile()]));
         let device =
-            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "DUPLICATE-A")
-                .unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "DUPLICATE-A").unwrap();
         {
             let mut workspace = state.workspace.write().unwrap();
             workspace.enroll_device(device.clone()).unwrap();
@@ -2330,7 +2382,7 @@ mod tests {
             .record_button_press(
                 &MetricAttribution {
                     device_id: hardware::DeviceId::new(
-                        crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+                        crate::hardware::YD_ESP32_S3_BOARD_ID,
                         "DUPLICATE-A",
                     )
                     .unwrap(),
@@ -2356,10 +2408,8 @@ mod tests {
         );
         coordinator.scan_once().unwrap();
         coordinator.drain_worker_events();
-        let a = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
-            .unwrap();
-        let b = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-B")
-            .unwrap();
+        let a = hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SAVE-A").unwrap();
+        let b = hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SAVE-B").unwrap();
         state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
         launcher.commands.lock().unwrap().clear();
         let assignment = workspace::RuntimeAssignment {
@@ -2540,8 +2590,7 @@ mod tests {
         assert!(coordinator.candidates()[0].device_id.is_none());
         state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
         let unregistered =
-            hardware::DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "NOT-ENROLLED")
-                .unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "NOT-ENROLLED").unwrap();
 
         assert_eq!(
             rename_device_inner(&state, &unregistered, "Nope".into())
@@ -2583,10 +2632,8 @@ mod tests {
     fn runtime_event_home_update_is_editor_profile_aggregate_only() {
         let directory = TestDirectory::new();
         let state = product_state(&directory.0, vec![product_profile()]);
-        let a = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "EVENT-A")
-            .unwrap();
-        let b = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "EVENT-B")
-            .unwrap();
+        let a = hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "EVENT-A").unwrap();
+        let b = hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "EVENT-B").unwrap();
         let timestamp = now_ms();
         for device_id in [&a, &b] {
             state
@@ -2614,7 +2661,7 @@ mod tests {
             device_id: a,
             raw_serial: "EVENT-A".into(),
             controller_family_id: crate::hardware::ESP32S3_FAMILY_ID.into(),
-            board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+            board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
             port: Some("/dev/event-a".into()),
             device_profile_id: Some("red-phone-v1".into()),
             hardware_profile_id: Some("esp-primary".into()),
@@ -2660,10 +2707,8 @@ mod tests {
         );
         coordinator.scan_once().unwrap();
         coordinator.drain_worker_events();
-        let a = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
-            .unwrap();
-        let b = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-B")
-            .unwrap();
+        let a = hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SAVE-A").unwrap();
+        let b = hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SAVE-B").unwrap();
         {
             let mut workspace = state.workspace.write().unwrap();
             for id in [&a, &b] {
@@ -2708,8 +2753,7 @@ mod tests {
         coordinator.scan_once().unwrap();
         coordinator.drain_worker_events();
         let device_id =
-            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
-                .unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SAVE-A").unwrap();
         {
             let mut workspace = state.workspace.write().unwrap();
             workspace
@@ -2766,8 +2810,7 @@ mod tests {
         coordinator.scan_once().unwrap();
         coordinator.drain_worker_events();
         let device_id =
-            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
-                .unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SAVE-A").unwrap();
         {
             let mut workspace = state.workspace.write().unwrap();
             workspace
@@ -2811,8 +2854,7 @@ mod tests {
         let directory = TestDirectory::new();
         let state = product_state(&directory.0, vec![product_profile()]);
         let id =
-            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456")
-                .unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ABCDEF123456").unwrap();
         {
             let mut workspace = state.workspace.write().unwrap();
             workspace.enroll_device(id.clone()).unwrap();
@@ -2854,8 +2896,7 @@ mod tests {
             .unwrap()
             .as_millis() as u64;
         let device_id =
-            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456")
-                .unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ABCDEF123456").unwrap();
         state
             .metrics
             .as_ref()
@@ -2900,7 +2941,7 @@ mod tests {
         let timestamp = now_ms();
         let attribution = MetricAttribution {
             device_id: hardware::DeviceId::new(
-                crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+                crate::hardware::YD_ESP32_S3_BOARD_ID,
                 "ABCDEF123456",
             )
             .unwrap(),
@@ -2951,8 +2992,7 @@ mod tests {
         coordinator.scan_once().unwrap();
         coordinator.drain_worker_events();
         let device_id =
-            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
-                .unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SAVE-A").unwrap();
         state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
         save_runtime_assignment_inner(
             &state,
@@ -3019,8 +3059,7 @@ mod tests {
         drop(lifecycle_after_restore);
 
         let esp =
-            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "RESTORE-ESP")
-                .unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "RESTORE-ESP").unwrap();
         let stale = state
             .coordinator
             .as_ref()
@@ -3076,7 +3115,7 @@ mod tests {
         export_backup_inner(&state, &backup).unwrap();
         let attribution = MetricAttribution {
             device_id: hardware::DeviceId::new(
-                crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+                crate::hardware::YD_ESP32_S3_BOARD_ID,
                 "ABCDEF123456",
             )
             .unwrap(),
@@ -3140,7 +3179,7 @@ mod tests {
             commit_started_thread.store(true, AtomicOrdering::SeqCst);
             let attribution = MetricAttribution {
                 device_id: hardware::DeviceId::new(
-                    crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+                    crate::hardware::YD_ESP32_S3_BOARD_ID,
                     "ABCDEF123456",
                 )
                 .unwrap(),

@@ -3,6 +3,7 @@ name = "kivo"
 version = "0.6.11"
 description = "Desktop helper for the Kivo GPIO keyboard"
 edition = "2024"
+default-run = "kivo"
 
 [lib]
 name = "kivo_lib"
@@ -17,12 +18,21 @@ notify = "8.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml_ng = "0.10"
+sha2 = "0.10"
 rusqlite = { version = "0.37", features = ["bundled"] }
 nusb = "0.2.5"
 serialport = { version = "4.9", default-features = false }
 tauri = { version = "2.11.5", features = ["image-png", "tray-icon"] }
 tauri-plugin-dialog = "2.7.2"
 tauri-plugin-log = "2.9.0"
+
+[features]
+default = []
+product-studio = []
+
+[[bin]]
+name = "kivo-product"
+path = "src/bin/kivo-product.rs"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [

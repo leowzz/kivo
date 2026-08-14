@@ -757,7 +757,7 @@ mod tests {
                 HardwareProfile {
                     id: "esp-primary".into(),
                     name: "ESP primary".into(),
-                    board_profile_id: "luatos-esp32s3-aio".into(),
+                    board_profile_id: "yd-esp32-s3".into(),
                     debounce_ms: 30,
                     ssd1306: None,
                     inputs: vec![InputSource::Direct {
@@ -768,7 +768,7 @@ mod tests {
                 HardwareProfile {
                     id: "esp-secondary".into(),
                     name: "ESP secondary".into(),
-                    board_profile_id: "luatos-esp32s3-aio".into(),
+                    board_profile_id: "yd-esp32-s3".into(),
                     debounce_ms: 30,
                     ssd1306: None,
                     inputs: vec![InputSource::Direct {
@@ -976,7 +976,7 @@ mod tests {
 
     #[test]
     fn ssd1306_accepts_any_two_distinct_safe_pins_on_supported_board() {
-        let profile = yaml_profile("vccgnd-yd-rp2040", Some((0, 22)), "    inputs: []");
+        let profile = yaml_profile("yd-rp2040", Some((0, 22)), "    inputs: []");
 
         assert!(profile.validate().is_ok());
     }
@@ -984,7 +984,7 @@ mod tests {
     #[test]
     fn direct_input_accepts_new_rp2040_safe_gpio() {
         let profile = yaml_profile(
-            "vccgnd-yd-rp2040",
+            "yd-rp2040",
             None,
             "    inputs:\n      - type: direct\n        id: direct\n        keys:\n          UP: 26",
         );
@@ -995,7 +995,7 @@ mod tests {
     #[test]
     fn contact_matrix_accepts_new_rp2040_safe_gpios() {
         let profile = yaml_profile(
-            "vccgnd-yd-rp2040",
+            "yd-rp2040",
             None,
             "    inputs:\n      - type: contact_matrix\n        id: matrix\n        pins: [26, 27]\n        keys:\n          UP: [26, 27]",
         );
@@ -1005,7 +1005,7 @@ mod tests {
 
     #[test]
     fn ssd1306_accepts_gpio_28_and_29() {
-        let profile = yaml_profile("vccgnd-yd-rp2040", Some((28, 29)), "    inputs: []");
+        let profile = yaml_profile("yd-rp2040", Some((28, 29)), "    inputs: []");
 
         assert!(profile.validate().is_ok());
     }
@@ -1016,7 +1016,7 @@ mod tests {
             let inputs = format!(
                 "    inputs:\n      - type: direct\n        id: direct\n        keys:\n          UP: {gpio}"
             );
-            let profile = yaml_profile("vccgnd-yd-rp2040", None, &inputs);
+            let profile = yaml_profile("yd-rp2040", None, &inputs);
 
             let error = profile.validate().unwrap_err();
             assert_eq!(error.code, "unsupported_gpio");
@@ -1026,7 +1026,7 @@ mod tests {
 
     #[test]
     fn ssd1306_rejects_the_same_pin_for_sda_and_scl() {
-        let profile = yaml_profile("vccgnd-yd-rp2040", Some((4, 4)), "    inputs: []");
+        let profile = yaml_profile("yd-rp2040", Some((4, 4)), "    inputs: []");
 
         assert_eq!(
             profile.validate().unwrap_err().code,
@@ -1036,14 +1036,14 @@ mod tests {
 
     #[test]
     fn ssd1306_rejects_unsupported_boards_before_pin_validation() {
-        let profile = yaml_profile("luatos-esp32s3-aio", Some((23, 24)), "    inputs: []");
+        let profile = yaml_profile("yd-esp32-s3", Some((23, 24)), "    inputs: []");
 
         assert_eq!(profile.validate().unwrap_err().code, "oled_not_supported");
     }
 
     #[test]
     fn ssd1306_rejects_unsafe_pins() {
-        let profile = yaml_profile("vccgnd-yd-rp2040", Some((23, 5)), "    inputs: []");
+        let profile = yaml_profile("yd-rp2040", Some((23, 5)), "    inputs: []");
 
         assert_eq!(profile.validate().unwrap_err().code, "unsupported_gpio");
     }
@@ -1051,7 +1051,7 @@ mod tests {
     #[test]
     fn ssd1306_rejects_direct_input_pin_conflicts() {
         let profile = yaml_profile(
-            "vccgnd-yd-rp2040",
+            "yd-rp2040",
             Some((4, 5)),
             "    inputs:\n      - type: direct\n        id: direct\n        keys:\n          UP: 4",
         );
@@ -1065,7 +1065,7 @@ mod tests {
     #[test]
     fn ssd1306_rejects_matrix_pin_conflicts() {
         let profile = yaml_profile(
-            "vccgnd-yd-rp2040",
+            "yd-rp2040",
             Some((4, 5)),
             "    inputs:\n      - type: contact_matrix\n        id: matrix\n        pins: [1, 5]\n        keys:\n          UP: [1, 5]",
         );
@@ -1078,7 +1078,7 @@ mod tests {
 
     #[test]
     fn ssd1306_yaml_is_backward_compatible_when_omitted() {
-        let profile = yaml_profile("vccgnd-yd-rp2040", None, "    inputs: []");
+        let profile = yaml_profile("yd-rp2040", None, "    inputs: []");
 
         assert!(profile.validate().is_ok());
         assert!(
@@ -1090,7 +1090,7 @@ mod tests {
 
     #[test]
     fn ssd1306_yaml_round_trips_when_configured() {
-        let profile = yaml_profile("vccgnd-yd-rp2040", Some((4, 5)), "    inputs: []");
+        let profile = yaml_profile("yd-rp2040", Some((4, 5)), "    inputs: []");
 
         let serialized = serde_yaml_ng::to_string(&profile).unwrap();
         let deserialized: DeviceProfile = serde_yaml_ng::from_str(&serialized).unwrap();
@@ -1103,8 +1103,8 @@ mod tests {
 
     #[test]
     fn ssd1306_changes_are_topology_changes() {
-        let old = yaml_profile("vccgnd-yd-rp2040", None, "    inputs: []");
-        let new = yaml_profile("vccgnd-yd-rp2040", Some((4, 5)), "    inputs: []");
+        let old = yaml_profile("yd-rp2040", None, "    inputs: []");
+        let new = yaml_profile("yd-rp2040", Some((4, 5)), "    inputs: []");
 
         let change = ProfileChange::between(Some(&old), Some(&new));
 

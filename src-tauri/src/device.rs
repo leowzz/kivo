@@ -14,12 +14,13 @@ use crate::{
     hardware::{BoardProfile, DeviceId},
     metrics::{HomeMetricsSnapshot, MetricAttribution, MetricsStore},
     paste::{Clock, PasteHandle, PasteReply, PasteRequest, SystemClock},
+    product::{PRODUCT_DEFINITION_SCHEMA_VERSION, ProductDefinition, ProductDefinitionCache},
     profile::{ActionTrigger, DeviceProfile, InputSource, SwitchState},
     protocol::{
         ACTION_RUN_PROTOCOL_VERSION, ActionSequence, DISPLAY_LARGE_FONT_PROTOCOL_VERSION,
         DISPLAY_PROTOCOL_VERSION, DeviceMessage, HelloCapabilities, InputState,
-        OLED_PROTOCOL_VERSION, PhysicalInput, display_commands, format_paste_command,
-        is_hello_line, parse_device, topology_commands, validate_hello,
+        OLED_PROTOCOL_VERSION, PhysicalInput, ProductDefinitionTransfer, display_commands,
+        format_paste_command, is_hello_line, parse_device, topology_commands, validate_hello,
     },
     trigger::{TriggerEdge, TriggerOccurrence, TriggerTracker},
 };
@@ -29,6 +30,7 @@ use serialport::{SerialPortInfo, SerialPortType};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     io::{BufRead, BufReader, ErrorKind, Read, Write},
+    path::Path,
     sync::{
         Arc, RwLock,
         atomic::{AtomicBool, Ordering},
@@ -43,6 +45,7 @@ use std::process::Command;
 
 const ACTION_ACK_TIMEOUT: Duration = Duration::from_millis(1800);
 const DISPLAY_ACK_TIMEOUT: Duration = Duration::from_secs(2);
+const PRODUCT_READ_TIMEOUT: Duration = Duration::from_secs(15);
 const SSD1306_PANEL_ID: &str = "ssd1306_128x32_mono";
 const EMPTY_TOPOLOGY_DEBOUNCE_MS: u16 = 30;
 pub(crate) const SERIAL_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -221,10 +224,8 @@ impl DeviceSession {
     pub fn new(profile: RuntimeProfileSnapshot) -> Self {
         Self {
             profile: Some(Arc::new(profile)),
-            candidate_board: crate::hardware::board_by_id(
-                crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
-            )
-            .unwrap(),
+            candidate_board: crate::hardware::board_by_id(crate::hardware::YD_ESP32_S3_BOARD_ID)
+                .unwrap(),
             hello: None,
             revision: 0,
             configuring: None,
@@ -560,7 +561,12 @@ impl DeviceSession {
             | DeviceMessage::LearnOk { .. }
             | DeviceMessage::DisplayOk { .. }
             | DeviceMessage::DisplayResync { .. }
-            | DeviceMessage::DisplayError { .. } => {}
+            | DeviceMessage::DisplayError { .. }
+            | DeviceMessage::ProductInfo { .. }
+            | DeviceMessage::ProductBegin { .. }
+            | DeviceMessage::ProductChunk { .. }
+            | DeviceMessage::ProductEnd { .. }
+            | DeviceMessage::ProductError { .. } => {}
         }
         output
     }
@@ -1009,7 +1015,10 @@ impl DeviceSession {
                 .push(RuntimeActivity::new("invalid_assignment"));
             return;
         };
-        if hardware.board_profile_id != self.candidate_board.id {
+        if !crate::hardware::board_profile_ids_match(
+            &hardware.board_profile_id,
+            self.candidate_board.id,
+        ) {
             output
                 .activities
                 .push(RuntimeActivity::new("assignment_board_mismatch"));
@@ -1645,6 +1654,7 @@ pub struct SystemWorkerLauncher {
     operation_barrier: Arc<RwLock<()>>,
     transport_factory: Arc<dyn SerialTransportFactory>,
     clock: Arc<dyn Clock>,
+    product_cache: Option<Arc<ProductDefinitionCache>>,
 }
 
 impl SystemWorkerLauncher {
@@ -1652,14 +1662,19 @@ impl SystemWorkerLauncher {
         paste: PasteHandle,
         metrics: Option<Arc<MetricsStore>>,
         operation_barrier: Arc<RwLock<()>>,
+        config_directory: &Path,
     ) -> Self {
-        Self::with_runtime(
+        let mut launcher = Self::with_runtime(
             paste,
             metrics,
             operation_barrier,
             Arc::new(SystemSerialTransportFactory),
             Arc::new(SystemClock::default()),
-        )
+        );
+        launcher.product_cache = Some(Arc::new(ProductDefinitionCache::new(
+            config_directory.join("product-definitions"),
+        )));
+        launcher
     }
 
     pub fn with_runtime(
@@ -1675,6 +1690,7 @@ impl SystemWorkerLauncher {
             operation_barrier,
             transport_factory,
             clock,
+            product_cache: None,
         }
     }
 }
@@ -1911,6 +1927,7 @@ struct WorkerRuntime {
     transport_factory: Arc<dyn SerialTransportFactory>,
     clock: Arc<dyn Clock>,
     renderers: Arc<RendererRegistry>,
+    product_cache: Option<Arc<ProductDefinitionCache>>,
 }
 
 pub(crate) fn apply_worker_context_update(
@@ -1974,6 +1991,7 @@ impl WorkerLauncher for SystemWorkerLauncher {
             transport_factory: Arc::clone(&self.transport_factory),
             clock: Arc::clone(&self.clock),
             renderers: renderers.into_inner(),
+            product_cache: self.product_cache.clone(),
         };
         let join = thread::Builder::new()
             .name(format!("kivo-device-{}", start.device_id.as_str()))
@@ -2029,11 +2047,20 @@ fn run_isolated_worker_inner(
         .map_err(|error| format!("serial_handshake_failed: {error}"))?;
     let mut device = BufReader::new(port);
     let hello = read_valid_hello(&mut device, board, clock, stop)?;
+    let product_definition = read_embedded_product_definition(
+        &mut device,
+        &hello,
+        board,
+        clock,
+        stop,
+        runtime.product_cache.as_deref(),
+    )?;
     events
         .send(WorkerEvent::HelloValidated {
             generation: start.generation,
             device_id: start.device_id.clone(),
             capabilities: hello.clone(),
+            product_definition,
         })
         .map_err(|_| "coordinator_stopped".to_owned())?;
     let mut session = DeviceSession::without_model(board);
@@ -2450,6 +2477,108 @@ fn read_valid_hello<R: BufRead>(
     Err("serial_handshake_timeout".into())
 }
 
+fn read_embedded_product_definition<T: Read + Write>(
+    device: &mut BufReader<T>,
+    hello: &HelloCapabilities,
+    board: &BoardProfile,
+    clock: &dyn Clock,
+    stop: &AtomicBool,
+    cache: Option<&ProductDefinitionCache>,
+) -> Result<Option<ProductDefinition>, String> {
+    let Some(expected_product_id) = hello.product_version_id.as_deref() else {
+        return Ok(None);
+    };
+    device
+        .get_mut()
+        .write_all(b"PRODUCT_INFO\n")
+        .and_then(|()| device.get_mut().flush())
+        .map_err(|error| format!("product_info_write_failed: {error}"))?;
+    let deadline = clock.monotonic_now() + PRODUCT_READ_TIMEOUT;
+    let mut line = Vec::new();
+    let (length, sha256) = loop {
+        if stop.load(Ordering::Relaxed) || clock.monotonic_now() >= deadline {
+            return Err("product_read_timeout".into());
+        }
+        line.clear();
+        match device.read_until(b'\n', &mut line) {
+            Ok(0) => return Err("device_disconnected".into()),
+            Ok(_) => {
+                let text =
+                    std::str::from_utf8(&line).map_err(|_| "invalid_product_info".to_owned())?;
+                match parse_device(text) {
+                    Some(DeviceMessage::ProductInfo {
+                        product_version_id: Some(product_version_id),
+                        schema_version,
+                        length,
+                        sha256: Some(sha256),
+                    }) if product_version_id == expected_product_id
+                        && schema_version == PRODUCT_DEFINITION_SCHEMA_VERSION =>
+                    {
+                        break (length, sha256);
+                    }
+                    Some(DeviceMessage::ProductError { code }) => {
+                        return Err(format!("product_info_failed:{code}"));
+                    }
+                    _ => return Err("invalid_product_info".into()),
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::TimedOut => {}
+            Err(error) => return Err(format!("product_info_read_failed: {error}")),
+        }
+    };
+
+    if let Some(definition) =
+        cache.and_then(|cache| cache.load(&sha256, length, expected_product_id, board.id))
+    {
+        return Ok(Some(definition));
+    }
+
+    device
+        .get_mut()
+        .write_all(b"PRODUCT_READ\n")
+        .and_then(|()| device.get_mut().flush())
+        .map_err(|error| format!("product_read_write_failed: {error}"))?;
+    let mut transfer =
+        ProductDefinitionTransfer::new(length, sha256.clone()).map_err(|error| error.code)?;
+    let bytes = loop {
+        if stop.load(Ordering::Relaxed) || clock.monotonic_now() >= deadline {
+            return Err("product_read_timeout".into());
+        }
+        line.clear();
+        match device.read_until(b'\n', &mut line) {
+            Ok(0) => return Err("device_disconnected".into()),
+            Ok(_) => {
+                let text = std::str::from_utf8(&line)
+                    .map_err(|_| "invalid_product_transfer_sequence".to_owned())?;
+                let message = parse_device(text)
+                    .ok_or_else(|| "invalid_product_transfer_sequence".to_owned())?;
+                if let Some(bytes) = transfer.push(message).map_err(|error| error.code)? {
+                    break bytes;
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::TimedOut => {}
+            Err(error) => return Err(format!("product_read_failed: {error}")),
+        }
+    };
+    let definition = ProductDefinition::parse_json(&bytes).map_err(|error| error.code)?;
+    if definition.product.product_version_id != expected_product_id
+        || !crate::hardware::board_profile_ids_match(
+            &definition.hardware_profile.board_profile_id,
+            board.id,
+        )
+    {
+        return Err("product_definition_identity_mismatch".into());
+    }
+    let normalized = definition.normalize().map_err(|error| error.code)?;
+    if normalized.sha256 != sha256 || normalized.json.as_bytes() != bytes {
+        return Err("product_definition_not_canonical".into());
+    }
+    if let Some(cache) = cache {
+        let _ = cache.store(&normalized);
+    }
+    Ok(Some(definition))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn write_isolated_output<W: Write + ?Sized>(
     start: &WorkerStart,
@@ -2660,6 +2789,7 @@ mod tests {
         metrics::{MetricAttribution, MetricsStore},
         model::{ButtonDefinition, ButtonGroup, ModelLayout},
         paste::{ClipboardWriter, PasteCoordinator},
+        product::{PRODUCT_DEFINITION_SCHEMA_VERSION, ProductDefinition, ProductIdentity},
         profile::{
             ButtonAction, DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION,
             Ssd1306Config,
@@ -2673,6 +2803,7 @@ mod tests {
     use std::{
         cell::RefCell,
         collections::{BTreeMap, BTreeSet},
+        io::Cursor,
         sync::Mutex,
         time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
@@ -2680,6 +2811,102 @@ mod tests {
     struct RecordingTargetOpener {
         targets: Arc<Mutex<Vec<String>>>,
         error: Option<String>,
+    }
+
+    struct MemoryTransport {
+        input: Cursor<Vec<u8>>,
+        output: Vec<u8>,
+    }
+
+    impl Read for MemoryTransport {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.input.read(buffer)
+        }
+    }
+
+    impl Write for MemoryTransport {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.output.extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn embedded_product_definition() -> ProductDefinition {
+        ProductDefinition {
+            schema_version: PRODUCT_DEFINITION_SCHEMA_VERSION,
+            product: ProductIdentity {
+                display_name: "Kivo Key 1".into(),
+                family_id: "key".into(),
+                variant_id: "key-k1".into(),
+                hardware_revision: 1,
+                product_version_id: "key-k1-r01".into(),
+                capabilities: Vec::new(),
+            },
+            layout: ModelLayout {
+                id: "key-k1".into(),
+                name: "Kivo Key 1".into(),
+                groups: vec![ButtonGroup {
+                    id: "keys".into(),
+                    columns: 1,
+                    buttons: vec![ButtonDefinition {
+                        id: "K1".into(),
+                        label: "K1".into(),
+                    }],
+                }],
+            },
+            hardware_profile: HardwareProfile {
+                id: "hardware".into(),
+                name: "Hardware".into(),
+                board_profile_id: crate::hardware::YD_RP2040_BOARD_ID.into(),
+                debounce_ms: 30,
+                ssd1306: None,
+                inputs: vec![InputSource::Direct {
+                    id: "direct".into(),
+                    keys: BTreeMap::from([("K1".into(), 0)]),
+                }],
+            },
+        }
+    }
+
+    #[test]
+    fn embedded_product_cache_hit_skips_product_read_transfer() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = ProductDefinitionCache::new(directory.path().into());
+        let normalized = embedded_product_definition().normalize().unwrap();
+        cache.store(&normalized).unwrap();
+        let response = format!(
+            "PRODUCT_INFO key-k1-r01 1 {} {}\n",
+            normalized.byte_length, normalized.sha256
+        );
+        let mut device = BufReader::new(MemoryTransport {
+            input: Cursor::new(response.into_bytes()),
+            output: Vec::new(),
+        });
+        let hello = HelloCapabilities {
+            protocol: 9,
+            controller_family_id: "rp2040".into(),
+            board_profile_id: crate::hardware::YD_RP2040_BOARD_ID.into(),
+            firmware_build_id: "test".into(),
+            product_version_id: Some("key-k1-r01".into()),
+            pins: vec![0],
+        };
+
+        let loaded = read_embedded_product_definition(
+            &mut device,
+            &hello,
+            crate::hardware::board_by_id(crate::hardware::YD_RP2040_BOARD_ID).unwrap(),
+            &SystemClock::default(),
+            &AtomicBool::new(false),
+            Some(&cache),
+        )
+        .unwrap();
+
+        assert_eq!(loaded, Some(normalized.definition));
+        assert_eq!(device.into_inner().output, b"PRODUCT_INFO\n");
     }
 
     impl TargetOpener for RecordingTargetOpener {
@@ -2693,11 +2920,8 @@ mod tests {
         RuntimeProfileSnapshot {
             hardware_profile_id: "esp-primary".into(),
             metric_attribution: MetricAttribution {
-                device_id: DeviceId::new(
-                    crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
-                    "ABCDEF123456",
-                )
-                .unwrap(),
+                device_id: DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ABCDEF123456")
+                    .unwrap(),
                 device_name: "Desk".into(),
                 device_profile_id: "phone".into(),
                 hardware_profile_id: "esp-primary".into(),
@@ -2720,7 +2944,7 @@ mod tests {
                 hardware_profiles: vec![HardwareProfile {
                     id: "esp-primary".into(),
                     name: "ESP primary".into(),
-                    board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+                    board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
                     debounce_ms: 30,
                     ssd1306: None,
                     inputs: vec![InputSource::Direct {
@@ -2746,10 +2970,10 @@ mod tests {
     fn oled_runtime_model() -> RuntimeProfileSnapshot {
         let mut runtime = runtime_model();
         let hardware = &mut runtime.profile.hardware_profiles[0];
-        hardware.board_profile_id = crate::hardware::VCCGND_YD_RP2040_BOARD_ID.into();
+        hardware.board_profile_id = crate::hardware::YD_RP2040_BOARD_ID.into();
         hardware.ssd1306 = Some(Ssd1306Config { sda: 4, scl: 5 });
         runtime.metric_attribution.device_id =
-            DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "ABCDEF123456").unwrap();
+            DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "ABCDEF123456").unwrap();
         runtime
     }
 
@@ -3223,8 +3447,9 @@ mod tests {
         session.hello = Some(HelloCapabilities {
             protocol: ACTION_RUN_PROTOCOL_VERSION,
             controller_family_id: crate::hardware::ESP32S3_FAMILY_ID.into(),
-            board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+            board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
             firmware_build_id: "test".into(),
+            product_version_id: None,
             pins: vec![6, 7],
         });
 
@@ -3431,8 +3656,9 @@ mod tests {
         DeviceMessage::Hello(HelloCapabilities {
             protocol: 4,
             controller_family_id: crate::hardware::ESP32S3_FAMILY_ID.into(),
-            board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+            board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
             firmware_build_id: "test".into(),
+            product_version_id: None,
             pins: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18],
         })
     }
@@ -3508,11 +3734,11 @@ mod tests {
         let event = RuntimeEvent {
             timestamp_ms: 101,
             level: EventLevel::Error,
-            device_id: DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456")
+            device_id: DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ABCDEF123456")
                 .unwrap(),
             raw_serial: "ABCDEF123456".into(),
             controller_family_id: crate::hardware::ESP32S3_FAMILY_ID.into(),
-            board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+            board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
             port: None,
             device_profile_id: Some("phone".into()),
             hardware_profile_id: Some("esp-primary".into()),
@@ -3552,8 +3778,7 @@ mod tests {
 
     #[test]
     fn protocol_v3_oled_profile_is_rejected_before_configuration() {
-        let board =
-            crate::hardware::board_by_id(crate::hardware::VCCGND_YD_RP2040_BOARD_ID).unwrap();
+        let board = crate::hardware::board_by_id(crate::hardware::YD_RP2040_BOARD_ID).unwrap();
         let mut session = DeviceSession::without_model(board);
         session.update_snapshot(Some(Arc::new(oled_runtime_model())));
         let legacy_hello = HelloCapabilities {
@@ -3561,6 +3786,7 @@ mod tests {
             controller_family_id: board.family_id.into(),
             board_profile_id: board.id.into(),
             firmware_build_id: "legacy".into(),
+            product_version_id: None,
             pins: board.safe_pins.to_vec(),
         };
 
@@ -3612,8 +3838,7 @@ mod tests {
 
     #[test]
     fn unassigned_hello_waits_for_coordinator_revision_before_clearing_topology() {
-        let board =
-            crate::hardware::board_by_id(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID).unwrap();
+        let board = crate::hardware::board_by_id(crate::hardware::YD_ESP32_S3_BOARD_ID).unwrap();
         let mut session = DeviceSession::without_model(board);
 
         let hello = session.on_message_deferred(hello(), 0, 100);
@@ -4260,7 +4485,7 @@ mod tests {
             generation: 1,
             device_id,
             port: "/dev/action-deadline".into(),
-            board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+            board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
         };
         let paste = PasteCoordinator::with_timeout(FailingClipboard, Duration::from_millis(100));
         let (events, _received_events) = mpsc::channel();
@@ -4745,7 +4970,7 @@ mod tests {
         session.on_message_deferred(DeviceMessage::Hello(hello), 0, 100);
         session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
         let target = LearningTarget {
-            device_id: DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456")
+            device_id: DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ABCDEF123456")
                 .unwrap(),
             device_profile_id: "phone".into(),
             hardware_profile_id: "esp-primary".into(),
@@ -4802,8 +5027,9 @@ mod tests {
             DeviceMessage::Hello(HelloCapabilities {
                 protocol: 4,
                 controller_family_id: crate::hardware::ESP32S3_FAMILY_ID.into(),
-                board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+                board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
                 firmware_build_id: "test".into(),
+                product_version_id: None,
                 pins: vec![1, 2],
             }),
             &mut |_| Ok(()),
@@ -4855,14 +5081,14 @@ mod tests {
         session.on_message(DeviceMessage::ConfigOk { revision: 2 }, &mut copy);
         assert!(session.ready);
 
-        session.on_line("HELLO 4 esp32s3 luatos-esp32s3-aio build 2 0", &mut copy);
+        session.on_line("HELLO 4 esp32s3 yd-esp32-s3 build 2 0", &mut copy);
         assert!(!session.ready);
         assert!(session.hello.is_none());
 
         session.on_message(DeviceMessage::Hello(hello.clone()), &mut copy);
         session.on_message(DeviceMessage::ConfigOk { revision: 3 }, &mut copy);
         let _ = hello;
-        session.on_line("HELLO 4 esp32s3 vccgnd-yd-rp2040 build 2 0 6", &mut copy);
+        session.on_line("HELLO 4 esp32s3 yd-rp2040 build 2 0 6", &mut copy);
         assert!(!session.ready);
         assert!(session.hello.is_none());
     }

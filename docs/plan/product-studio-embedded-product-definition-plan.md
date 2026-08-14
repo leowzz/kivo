@@ -1,6 +1,6 @@
 # Kivo Product Studio 与内嵌产品定义实施计划
 
-> 状态：Approved Plan / Not Implemented
+> 状态：Implemented (2026-08-14)
 >
 > 本文记录当前已确认的实现方向。后续实现应以本文为准，并保留现有 DIY
 > Device Profile 与 Runtime Assignment 工作流的兼容性。

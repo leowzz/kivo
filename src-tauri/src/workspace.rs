@@ -1,6 +1,9 @@
 use crate::{
-    hardware::{DeviceId, HardwareRegistry, board_by_id, compiled_registry},
+    hardware::{
+        DeviceId, HardwareRegistry, board_by_id, canonical_board_profile_id, compiled_registry,
+    },
     metrics::{MetricsBackup, MetricsStore},
+    product::ProductDefinition,
     profile::{
         ButtonAction, CreateDeviceProfileRequest, DeviceProfile, HardwareProfile, InputSource,
         PROFILE_SCHEMA_VERSION, TriggerActions, TriggerSettings, blank_device_profile,
@@ -14,9 +17,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const SETTINGS_SCHEMA_VERSION: u16 = 2;
+pub const SETTINGS_SCHEMA_VERSION: u16 = 3;
 pub const BACKUP_SCHEMA_VERSION: u16 = 2;
+pub const USER_BACKUP_SCHEMA_VERSION: u16 = 1;
 const LEGACY_SCHEMA_VERSION: u16 = 1;
+const PREVIOUS_SETTINGS_SCHEMA_VERSION: u16 = 2;
 const PREVIOUS_PROFILE_SCHEMA_VERSION: u16 = 2;
 const MAX_IMPORT_BYTES: u64 = 10 * 1024 * 1024;
 
@@ -88,6 +93,18 @@ pub struct DeviceRecord {
     pub name: String,
     pub board_profile_id: String,
     pub runtime_assignment: Option<RuntimeAssignment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product_config: Option<ProductDeviceConfig>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProductDeviceConfig {
+    pub product_version_id: String,
+    #[serde(default)]
+    pub trigger_settings: TriggerSettings,
+    #[serde(default)]
+    pub actions: BTreeMap<String, TriggerActions>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -150,7 +167,7 @@ struct SchemaV2DeviceProfile {
 
 struct ReadProfile {
     profile: DeviceProfile,
-    migrated_from_schema_v2: bool,
+    migrated: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -175,6 +192,33 @@ pub struct BackupDocument {
     pub metrics: MetricsBackup,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackupKind {
+    ProductDevices,
+    Full,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserBackupDevice {
+    pub device_id: DeviceId,
+    pub product_version_id: String,
+    #[serde(default)]
+    pub trigger_settings: TriggerSettings,
+    #[serde(default)]
+    pub actions: BTreeMap<String, TriggerActions>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserBackupDocument {
+    pub schema_version: u16,
+    pub kind: BackupKind,
+    #[serde(default)]
+    pub devices: Vec<UserBackupDevice>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportPreview {
@@ -189,6 +233,7 @@ pub struct ImportPreview {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupPreview {
+    pub kind: BackupKind,
     pub profile_count: usize,
     pub button_count: usize,
     pub hardware_binding_count: usize,
@@ -424,12 +469,28 @@ impl Workspace {
         config_directory: &Path,
         data_directory: &Path,
     ) -> Result<Self, AppError> {
-        let settings = read_versioned_yaml(
-            &data_directory.join("settings.yaml"),
-            SETTINGS_SCHEMA_VERSION,
-            "unsupported_settings_schema",
-            false,
-        )?;
+        let settings_path = data_directory.join("settings.yaml");
+        let settings_schema_version = read_schema_header(&settings_path)?.schema_version;
+        let mut settings: SettingsDocument = match settings_schema_version {
+            SETTINGS_SCHEMA_VERSION => read_versioned_yaml(
+                &settings_path,
+                SETTINGS_SCHEMA_VERSION,
+                "unsupported_settings_schema",
+                false,
+            )?,
+            PREVIOUS_SETTINGS_SCHEMA_VERSION => {
+                let contents = read_yaml_contents(&settings_path, false)?;
+                let mut migrated: SettingsDocument =
+                    serde_yaml_ng::from_str(&contents).map_err(|error| {
+                        AppError::new("invalid_yaml").with_detail(error.to_string())
+                    })?;
+                migrated.schema_version = SETTINGS_SCHEMA_VERSION;
+                migrated
+            }
+            _ => return Err(AppError::new("unsupported_settings_schema")),
+        };
+        let settings_migrated = canonicalize_settings_board_ids(&mut settings)
+            || settings_schema_version == PREVIOUS_SETTINGS_SCHEMA_VERSION;
         let mut profiles = BTreeMap::new();
         let mut migrated_profiles = Vec::new();
         let profile_directory = data_directory.join("profiles");
@@ -438,7 +499,7 @@ impl Workspace {
             let profile = read.profile;
             profile.validate()?;
             validate_profile_filename(&path, &profile)?;
-            if read.migrated_from_schema_v2 {
+            if read.migrated {
                 migrated_profiles.push((path, profile.profile.id.clone()));
             }
             if profiles
@@ -449,6 +510,9 @@ impl Workspace {
             }
         }
         validate_settings(&settings, &profiles)?;
+        if settings_migrated {
+            write_yaml(&settings_path, &settings)?;
+        }
         for (path, id) in migrated_profiles {
             write_yaml(&path, &profiles[&id])?;
         }
@@ -459,7 +523,8 @@ impl Workspace {
         })
     }
 
-    pub fn save_profile(&mut self, profile: DeviceProfile) -> Result<(), AppError> {
+    pub fn save_profile(&mut self, mut profile: DeviceProfile) -> Result<(), AppError> {
+        canonicalize_profile_board_ids(&mut profile);
         profile.validate()?;
         let id = profile.profile.id.clone();
         let path = self.profile_directory().join(format!("{id}.yaml"));
@@ -499,7 +564,8 @@ impl Workspace {
                     AppError::new("unknown_board_profile")
                         .with_param("board_profile", &board_profile_id)
                 })?;
-                let profile = blank_device_profile(String::new(), name.clone(), board_profile_id);
+                let profile =
+                    blank_device_profile(String::new(), name.clone(), board.id.to_owned());
                 (name, board.id.to_owned(), profile)
             }
         };
@@ -606,20 +672,13 @@ impl Workspace {
                 AppError::new("unknown_board_profile")
                     .with_param("board_profile", id.board_profile_id())
             })?;
-            let suffix = id
-                .hardware_serial()
-                .chars()
-                .rev()
-                .take(6)
-                .collect::<String>()
-                .chars()
-                .rev()
-                .collect::<String>();
+            let suffix = device_serial_suffix(&id);
             let record = DeviceRecord {
                 device_id: id.clone(),
                 name: format!("{} · {suffix}", board.display_name),
                 board_profile_id: board.id.into(),
                 runtime_assignment: None,
+                product_config: None,
             };
             let mut settings = self.settings.clone();
             settings.devices.insert(id.clone(), record);
@@ -627,6 +686,73 @@ impl Workspace {
             self.settings = settings;
         }
         Ok(&self.settings.devices[&id])
+    }
+
+    pub(crate) fn enroll_product_device_with_registry(
+        &mut self,
+        registry: HardwareRegistry<'_>,
+        id: DeviceId,
+        definition: &ProductDefinition,
+    ) -> Result<&DeviceRecord, AppError> {
+        if !crate::hardware::board_profile_ids_match(
+            &definition.hardware_profile.board_profile_id,
+            id.board_profile_id(),
+        ) {
+            return Err(AppError::new("product_board_profile_mismatch"));
+        }
+        self.enroll_device_with_registry(registry, id.clone())?;
+        let current_config = self.settings.devices[&id].product_config.as_ref();
+        if let Some(config) = current_config {
+            if config.product_version_id != definition.product.product_version_id {
+                return Err(AppError::new("product_version_id_mismatch"));
+            }
+            definition
+                .as_runtime_profile(config.trigger_settings.clone(), config.actions.clone())
+                .validate()?;
+        } else {
+            let mut settings = self.settings.clone();
+            settings
+                .devices
+                .get_mut(&id)
+                .expect("device was enrolled")
+                .product_config = Some(ProductDeviceConfig {
+                product_version_id: definition.product.product_version_id.clone(),
+                trigger_settings: TriggerSettings::default(),
+                actions: BTreeMap::new(),
+            });
+            self.persist_settings(&settings)?;
+            self.settings = settings;
+        }
+        Ok(&self.settings.devices[&id])
+    }
+
+    pub fn save_product_device_config(
+        &mut self,
+        id: &DeviceId,
+        definition: &ProductDefinition,
+        config: ProductDeviceConfig,
+    ) -> Result<(), AppError> {
+        if config.product_version_id != definition.product.product_version_id {
+            return Err(AppError::new("product_version_id_mismatch"));
+        }
+        definition
+            .as_runtime_profile(config.trigger_settings.clone(), config.actions.clone())
+            .validate()?;
+        self.update_device(id, |record| record.product_config = Some(config))
+    }
+
+    pub fn copy_product_device_config(
+        &mut self,
+        source_id: &DeviceId,
+        target_id: &DeviceId,
+        definition: &ProductDefinition,
+    ) -> Result<(), AppError> {
+        let config = self
+            .device(source_id)?
+            .product_config
+            .clone()
+            .ok_or_else(|| AppError::new("source_product_config_missing"))?;
+        self.save_product_device_config(target_id, definition, config)
     }
 
     pub fn rename_device(&mut self, id: &DeviceId, name: String) -> Result<(), AppError> {
@@ -826,23 +952,72 @@ impl Workspace {
     }
 
     pub fn preview_backup(&self, path: &Path) -> Result<BackupPreview, AppError> {
-        let snapshot = read_backup(path)?;
-        Ok(BackupPreview {
-            profile_count: snapshot.profiles.len(),
-            button_count: snapshot.profiles.values().map(button_count).sum(),
-            hardware_binding_count: snapshot.profiles.values().map(hardware_binding_count).sum(),
-            action_count: snapshot.profiles.values().map(action_count).sum(),
-            device_count: snapshot.settings.devices.len(),
-            assignment_count: snapshot
-                .settings
-                .devices
-                .values()
-                .filter(|device| device.runtime_assignment.is_some())
-                .count(),
-            metric_row_count: snapshot.metrics.button_metrics.len()
-                + snapshot.metrics.button_metric_days.len(),
-            activity_count: snapshot.metrics.activity_logs.len(),
-        })
+        match read_compatible_backup(path)? {
+            CompatibleBackup::ProductDevices(backup) => Ok(BackupPreview {
+                kind: BackupKind::ProductDevices,
+                profile_count: 0,
+                button_count: 0,
+                hardware_binding_count: 0,
+                action_count: backup
+                    .devices
+                    .iter()
+                    .flat_map(|device| device.actions.values())
+                    .map(TriggerActions::action_count)
+                    .sum(),
+                device_count: backup.devices.len(),
+                assignment_count: 0,
+                metric_row_count: 0,
+                activity_count: 0,
+            }),
+            CompatibleBackup::Full(snapshot) => Ok(BackupPreview {
+                kind: BackupKind::Full,
+                profile_count: snapshot.profiles.len(),
+                button_count: snapshot.profiles.values().map(button_count).sum(),
+                hardware_binding_count: snapshot
+                    .profiles
+                    .values()
+                    .map(hardware_binding_count)
+                    .sum(),
+                action_count: snapshot.profiles.values().map(action_count).sum(),
+                device_count: snapshot.settings.devices.len(),
+                assignment_count: snapshot
+                    .settings
+                    .devices
+                    .values()
+                    .filter(|device| device.runtime_assignment.is_some())
+                    .count(),
+                metric_row_count: snapshot.metrics.button_metrics.len()
+                    + snapshot.metrics.button_metric_days.len(),
+                activity_count: snapshot.metrics.activity_logs.len(),
+            }),
+        }
+    }
+
+    pub fn export_user_backup(&self, path: &Path) -> Result<(), AppError> {
+        let devices = self
+            .settings
+            .devices
+            .values()
+            .filter_map(|device| {
+                device
+                    .product_config
+                    .as_ref()
+                    .map(|config| UserBackupDevice {
+                        device_id: device.device_id.clone(),
+                        product_version_id: config.product_version_id.clone(),
+                        trigger_settings: config.trigger_settings.clone(),
+                        actions: config.actions.clone(),
+                    })
+            })
+            .collect();
+        write_yaml(
+            path,
+            &UserBackupDocument {
+                schema_version: USER_BACKUP_SCHEMA_VERSION,
+                kind: BackupKind::ProductDevices,
+                devices,
+            },
+        )
     }
 
     pub fn export_backup(&self, path: &Path, metrics: &MetricsStore) -> Result<(), AppError> {
@@ -862,6 +1037,60 @@ impl Workspace {
 
     pub fn restore_backup(&mut self, path: &Path, metrics: &MetricsStore) -> Result<(), AppError> {
         self.restore_backup_with_operations(path, metrics, &mut SystemRestoreOperations)
+    }
+
+    pub fn restore_compatible_backup(
+        &mut self,
+        path: &Path,
+        metrics: Option<&MetricsStore>,
+    ) -> Result<(), AppError> {
+        match read_compatible_backup(path)? {
+            CompatibleBackup::ProductDevices(backup) => self.restore_user_backup(backup),
+            CompatibleBackup::Full(_) => self.restore_backup(
+                path,
+                metrics.ok_or_else(|| AppError::new("metrics_unavailable"))?,
+            ),
+        }
+    }
+
+    fn restore_user_backup(&mut self, backup: UserBackupDocument) -> Result<(), AppError> {
+        let mut settings = self.settings.clone();
+        for backup_device in backup.devices {
+            let config = ProductDeviceConfig {
+                product_version_id: backup_device.product_version_id,
+                trigger_settings: backup_device.trigger_settings,
+                actions: backup_device.actions,
+            };
+            if let Some(device) = settings.devices.get_mut(&backup_device.device_id) {
+                if device
+                    .product_config
+                    .as_ref()
+                    .is_some_and(|current| current.product_version_id != config.product_version_id)
+                {
+                    continue;
+                }
+                device.product_config = Some(config);
+                continue;
+            }
+
+            let board = board_by_id(backup_device.device_id.board_profile_id())
+                .ok_or_else(|| AppError::new("unknown_board_profile"))?;
+            let suffix = device_serial_suffix(&backup_device.device_id);
+            settings.devices.insert(
+                backup_device.device_id.clone(),
+                DeviceRecord {
+                    device_id: backup_device.device_id,
+                    name: format!("{} · {suffix}", board.display_name),
+                    board_profile_id: board.id.into(),
+                    runtime_assignment: None,
+                    product_config: Some(config),
+                },
+            );
+        }
+        validate_settings(&settings, &self.profiles)?;
+        self.persist_settings(&settings)?;
+        self.settings = settings;
+        Ok(())
     }
 
     fn restore_backup_with_operations(
@@ -1171,7 +1400,8 @@ fn collect_profiles(
     values: Vec<DeviceProfile>,
 ) -> Result<BTreeMap<String, DeviceProfile>, AppError> {
     let mut profiles = BTreeMap::new();
-    for profile in values {
+    for mut profile in values {
+        canonicalize_profile_board_ids(&mut profile);
         profile.validate()?;
         if profiles
             .insert(profile.profile.id.clone(), profile)
@@ -1231,8 +1461,26 @@ fn validate_settings_with_registry(
         if device.name.trim().is_empty() {
             return Err(AppError::new("invalid_device_name").with_param("device_id", id.as_str()));
         }
+        if let Some(config) = &device.product_config
+            && !crate::product::valid_product_version_id(&config.product_version_id)
+        {
+            return Err(
+                AppError::new("invalid_product_version_id").with_param("device_id", id.as_str())
+            );
+        }
     }
     Ok(())
+}
+
+fn device_serial_suffix(id: &DeviceId) -> String {
+    id.hardware_serial()
+        .chars()
+        .rev()
+        .take(6)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect()
 }
 
 fn validate_editor_settings_patch(
@@ -1251,12 +1499,16 @@ fn validate_editor_settings_patch(
 }
 
 fn read_backup(path: &Path) -> Result<WorkspaceSnapshot, AppError> {
-    let backup: BackupDocument = read_versioned_yaml(
+    let mut backup: BackupDocument = read_versioned_yaml(
         path,
         BACKUP_SCHEMA_VERSION,
         "unsupported_backup_schema",
         false,
     )?;
+    if backup.settings.schema_version == PREVIOUS_SETTINGS_SCHEMA_VERSION {
+        backup.settings.schema_version = SETTINGS_SCHEMA_VERSION;
+    }
+    canonicalize_settings_board_ids(&mut backup.settings);
     let profiles = collect_profiles(backup.profiles)?;
     validate_settings(&backup.settings, &profiles)?;
     backup
@@ -1268,6 +1520,55 @@ fn read_backup(path: &Path) -> Result<WorkspaceSnapshot, AppError> {
         profiles,
         metrics: backup.metrics,
     })
+}
+
+enum CompatibleBackup {
+    ProductDevices(UserBackupDocument),
+    Full(WorkspaceSnapshot),
+}
+
+#[derive(Deserialize)]
+struct BackupHeader {
+    schema_version: u16,
+    #[serde(default)]
+    kind: Option<BackupKind>,
+}
+
+fn read_compatible_backup(path: &Path) -> Result<CompatibleBackup, AppError> {
+    let contents = read_yaml_contents(path, false)?;
+    let header: BackupHeader = serde_yaml_ng::from_str(&contents)
+        .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?;
+    if header.kind == Some(BackupKind::ProductDevices) {
+        if header.schema_version != USER_BACKUP_SCHEMA_VERSION {
+            return Err(AppError::new("unsupported_backup_schema"));
+        }
+        let backup: UserBackupDocument = serde_yaml_ng::from_str(&contents)
+            .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?;
+        validate_user_backup(&backup)?;
+        Ok(CompatibleBackup::ProductDevices(backup))
+    } else {
+        read_backup(path).map(CompatibleBackup::Full)
+    }
+}
+
+fn validate_user_backup(backup: &UserBackupDocument) -> Result<(), AppError> {
+    if backup.schema_version != USER_BACKUP_SCHEMA_VERSION
+        || backup.kind != BackupKind::ProductDevices
+    {
+        return Err(AppError::new("unsupported_backup_schema"));
+    }
+    let mut ids = BTreeSet::new();
+    for device in &backup.devices {
+        if !ids.insert(&device.device_id) {
+            return Err(AppError::new("duplicate_backup_device")
+                .with_param("device_id", device.device_id.as_str()));
+        }
+        if !crate::product::valid_product_version_id(&device.product_version_id) {
+            return Err(AppError::new("invalid_product_version_id")
+                .with_param("device_id", device.device_id.as_str()));
+        }
+    }
+    Ok(())
 }
 
 fn button_count(profile: &DeviceProfile) -> usize {
@@ -1538,7 +1839,7 @@ fn migrate_schema_v1_model(legacy: LegacyModelConfig) -> Result<DeviceProfile, A
         return Err(AppError::new("unsupported_model_schema"));
     }
     let board_profile_id = match legacy.hardware.controller.as_str() {
-        "esp32s3" => crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+        "esp32s3" => crate::hardware::YD_ESP32_S3_BOARD_ID,
         controller => {
             return Err(
                 AppError::new("unsupported_legacy_controller").with_param("controller", controller)
@@ -1615,11 +1916,11 @@ fn read_profile(
     let contents = read_yaml_contents(path, limited)?;
     let header: SchemaHeader = serde_yaml_ng::from_str(&contents)
         .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?;
-    match header.schema_version {
+    let mut read = match header.schema_version {
         PROFILE_SCHEMA_VERSION => serde_yaml_ng::from_str(&contents)
             .map(|profile| ReadProfile {
                 profile,
-                migrated_from_schema_v2: false,
+                migrated: false,
             })
             .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string())),
         PREVIOUS_PROFILE_SCHEMA_VERSION if allow_schema_v2 => {
@@ -1627,11 +1928,37 @@ fn read_profile(
                 .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?;
             Ok(ReadProfile {
                 profile: migrate_schema_v2_profile(profile),
-                migrated_from_schema_v2: true,
+                migrated: true,
             })
         }
         _ => Err(AppError::new("unsupported_profile_schema")),
+    }?;
+    read.migrated |= canonicalize_profile_board_ids(&mut read.profile);
+    Ok(read)
+}
+
+fn canonicalize_settings_board_ids(settings: &mut SettingsDocument) -> bool {
+    let mut changed = false;
+    for device in settings.devices.values_mut() {
+        let canonical = canonical_board_profile_id(&device.board_profile_id).to_owned();
+        if canonical != device.board_profile_id {
+            device.board_profile_id = canonical;
+            changed = true;
+        }
     }
+    changed
+}
+
+fn canonicalize_profile_board_ids(profile: &mut DeviceProfile) -> bool {
+    let mut changed = false;
+    for hardware in &mut profile.hardware_profiles {
+        let canonical = canonical_board_profile_id(&hardware.board_profile_id).to_owned();
+        if canonical != hardware.board_profile_id {
+            hardware.board_profile_id = canonical;
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn migrate_schema_v2_profile(legacy: SchemaV2DeviceProfile) -> DeviceProfile {
@@ -1702,6 +2029,7 @@ mod tests {
     use crate::{
         metrics::{MetricAttribution, MetricsStore},
         model::{ButtonDefinition, ButtonGroup, ModelLayout},
+        product::{PRODUCT_DEFINITION_SCHEMA_VERSION, ProductDefinition, ProductIdentity},
         profile::ButtonAction,
     };
     use std::{
@@ -1777,12 +2105,9 @@ mod tests {
             profile: layout(),
             trigger_settings: TriggerSettings::default(),
             hardware_profiles: vec![
-                hardware("esp-primary", crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID),
-                hardware(
-                    "esp-alternate",
-                    crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
-                ),
-                hardware("rp-primary", crate::hardware::VCCGND_YD_RP2040_BOARD_ID),
+                hardware("esp-primary", crate::hardware::YD_ESP32_S3_BOARD_ID),
+                hardware("esp-alternate", crate::hardware::YD_ESP32_S3_BOARD_ID),
+                hardware("rp-primary", crate::hardware::YD_RP2040_BOARD_ID),
             ],
             actions: BTreeMap::from([(
                 "A".into(),
@@ -1800,6 +2125,32 @@ mod tests {
 
     fn workspace(directory: &TestDirectory) -> Workspace {
         Workspace::create(&directory.0, vec![device_profile()]).unwrap()
+    }
+
+    fn product_definition(family_id: &str) -> ProductDefinition {
+        ProductDefinition {
+            schema_version: PRODUCT_DEFINITION_SCHEMA_VERSION,
+            product: ProductIdentity {
+                display_name: "Kivo Key 3".into(),
+                family_id: family_id.into(),
+                variant_id: format!("{family_id}-k3"),
+                hardware_revision: 1,
+                product_version_id: format!("{family_id}-k3-r01"),
+                capabilities: Vec::new(),
+            },
+            layout: layout(),
+            hardware_profile: HardwareProfile {
+                id: "hardware".into(),
+                name: "Hardware".into(),
+                board_profile_id: crate::hardware::YD_RP2040_BOARD_ID.into(),
+                debounce_ms: 30,
+                ssd1306: None,
+                inputs: vec![InputSource::Direct {
+                    id: "direct".into(),
+                    keys: BTreeMap::from([("A".into(), 0), ("B".into(), 1), ("C".into(), 2)]),
+                }],
+            },
+        }
     }
 
     struct MetricsAwareGenerationOperations {
@@ -1878,11 +2229,8 @@ mod tests {
         metrics
             .record_button_press(
                 &MetricAttribution {
-                    device_id: DeviceId::new(
-                        crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
-                        "GENERATION",
-                    )
-                    .unwrap(),
+                    device_id: DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "GENERATION")
+                        .unwrap(),
                     device_name: "Generation test".into(),
                     device_profile_id: "red-phone-v1".into(),
                     hardware_profile_id: "esp-primary".into(),
@@ -1935,12 +2283,12 @@ mod tests {
         let created = workspace
             .create_profile(CreateDeviceProfileRequest::Blank {
                 name: "新键盘".into(),
-                board_profile_id: crate::hardware::VCCGND_YD_RP2040_BOARD_ID.into(),
+                board_profile_id: crate::hardware::YD_RP2040_BOARD_ID.into(),
             })
             .unwrap();
 
         created.validate().unwrap();
-        assert_eq!(created.profile.id, "vccgnd-yd-rp2040");
+        assert_eq!(created.profile.id, "yd-rp2040");
         assert_eq!(created.profile.name, "新键盘");
         assert!(created.profile.groups.is_empty());
         assert!(created.actions.is_empty());
@@ -1948,7 +2296,7 @@ mod tests {
         assert_eq!(created.hardware_profiles[0].id, "hardware");
         assert_eq!(
             created.hardware_profiles[0].board_profile_id,
-            crate::hardware::VCCGND_YD_RP2040_BOARD_ID
+            crate::hardware::YD_RP2040_BOARD_ID
         );
         assert!(created.hardware_profiles[0].inputs.is_empty());
     }
@@ -1973,7 +2321,7 @@ mod tests {
             workspace
                 .create_profile(CreateDeviceProfileRequest::Blank {
                     name: " ".into(),
-                    board_profile_id: crate::hardware::VCCGND_YD_RP2040_BOARD_ID.into(),
+                    board_profile_id: crate::hardware::YD_RP2040_BOARD_ID.into(),
                 })
                 .unwrap_err()
                 .code,
@@ -1986,7 +2334,7 @@ mod tests {
     fn complete_device_setup_persists_name_and_assignment_together() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let id = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SETUP-A").unwrap();
+        let id = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SETUP-A").unwrap();
         workspace.enroll_device(id.clone()).unwrap();
         let assignment = RuntimeAssignment {
             device_profile_id: "red-phone-v1".into(),
@@ -2008,7 +2356,7 @@ mod tests {
     fn complete_device_setup_rolls_back_both_fields_when_assignment_is_invalid() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let id = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SETUP-B").unwrap();
+        let id = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SETUP-B").unwrap();
         workspace.enroll_device(id.clone()).unwrap();
         let before = workspace.settings.clone();
         let disk_before = fs::read(directory.path("data/settings.yaml")).unwrap();
@@ -2036,10 +2384,8 @@ mod tests {
     fn duplicate_and_assign_is_atomic_and_generates_unique_ids() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let device_a =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SHARED-A").unwrap();
-        let device_b =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SHARED-B").unwrap();
+        let device_a = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SHARED-A").unwrap();
+        let device_b = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SHARED-B").unwrap();
         workspace.enroll_device(device_a.clone()).unwrap();
         workspace.enroll_device(device_b.clone()).unwrap();
         let assignment = RuntimeAssignment {
@@ -2094,11 +2440,8 @@ mod tests {
     fn duplicate_generation_keeps_the_open_metrics_store_on_the_active_inode() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let device = DeviceId::new(
-            crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
-            "METRICS-GENERATION",
-        )
-        .unwrap();
+        let device =
+            DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "METRICS-GENERATION").unwrap();
         workspace.enroll_device(device.clone()).unwrap();
         workspace
             .set_assignment(
@@ -2146,8 +2489,7 @@ mod tests {
     fn duplicate_and_assign_write_failure_rolls_back_profile_and_assignment() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let device =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "FAILURE").unwrap();
+        let device = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "FAILURE").unwrap();
         workspace.enroll_device(device.clone()).unwrap();
         let assignment = RuntimeAssignment {
             device_profile_id: "red-phone-v1".into(),
@@ -2192,11 +2534,7 @@ mod tests {
     fn duplicate_and_assign_does_not_guess_same_hardware_id_across_profiles() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let device = DeviceId::new(
-            crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
-            "CROSS-PROFILE",
-        )
-        .unwrap();
+        let device = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "CROSS-PROFILE").unwrap();
         workspace.enroll_device(device.clone()).unwrap();
         let other = workspace
             .create_profile(CreateDeviceProfileRequest::Clone {
@@ -2239,11 +2577,8 @@ mod tests {
     fn duplicate_and_assign_profile_write_failure_leaves_workspace_unchanged() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let device = DeviceId::new(
-            crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
-            "PROFILE-FAILURE",
-        )
-        .unwrap();
+        let device =
+            DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "PROFILE-FAILURE").unwrap();
         workspace.enroll_device(device.clone()).unwrap();
         let assignment = RuntimeAssignment {
             device_profile_id: "red-phone-v1".into(),
@@ -2278,8 +2613,8 @@ mod tests {
     fn complete_device_setup_allows_multiple_devices_to_share_one_profile() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let a = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SHARED-A").unwrap();
-        let b = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SHARED-B").unwrap();
+        let a = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SHARED-A").unwrap();
+        let b = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SHARED-B").unwrap();
         workspace.enroll_device(a.clone()).unwrap();
         workspace.enroll_device(b.clone()).unwrap();
         let assignment = RuntimeAssignment {
@@ -2394,8 +2729,7 @@ mod tests {
             .unwrap();
         let source_metrics =
             MetricsStore::open(&source_directory.join("data/metrics.sqlite3")).unwrap();
-        let device =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "AAAAAAAAAAAA").unwrap();
+        let device = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "AAAAAAAAAAAA").unwrap();
         let source_attribution = MetricAttribution {
             device_id: device.clone(),
             device_name: "Backup desk".into(),
@@ -2415,8 +2749,7 @@ mod tests {
                 },
             )
             .unwrap();
-        let rp2040 =
-            DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "BBBBBBBBBBBB").unwrap();
+        let rp2040 = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "BBBBBBBBBBBB").unwrap();
         source.enroll_device(rp2040.clone()).unwrap();
         source
             .set_assignment(
@@ -2460,13 +2793,13 @@ mod tests {
         assert_eq!(loaded, profile);
         assert_eq!(
             loaded
-                .compatible_hardware(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID)
+                .compatible_hardware(crate::hardware::YD_ESP32_S3_BOARD_ID)
                 .len(),
             2
         );
         assert_eq!(
             loaded
-                .compatible_hardware(crate::hardware::VCCGND_YD_RP2040_BOARD_ID)
+                .compatible_hardware(crate::hardware::YD_RP2040_BOARD_ID)
                 .len(),
             1
         );
@@ -2617,6 +2950,65 @@ actions:
     }
 
     #[test]
+    fn load_migrates_legacy_board_ids_without_losing_assignments_or_actions() {
+        let directory = TestDirectory::new();
+        let mut original = workspace(&directory);
+        let id = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ABCDEF123456").unwrap();
+        original.enroll_device(id.clone()).unwrap();
+        let assignment = RuntimeAssignment {
+            device_profile_id: "red-phone-v1".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        original.set_assignment(&id, assignment.clone()).unwrap();
+        drop(original);
+
+        let settings_path = directory.path("data/settings.yaml");
+        let legacy_settings = fs::read_to_string(&settings_path)
+            .unwrap()
+            .replace(
+                "11:yd-esp32-s3ABCDEF123456",
+                "18:luatos-esp32s3-aioABCDEF123456",
+            )
+            .replace("yd-esp32-s3", "luatos-esp32s3-aio");
+        fs::write(&settings_path, legacy_settings).unwrap();
+
+        let profile_path = directory.path("data/profiles/red-phone-v1.yaml");
+        let legacy_profile = fs::read_to_string(&profile_path)
+            .unwrap()
+            .replace("yd-esp32-s3", "luatos-esp32s3-aio")
+            .replace("yd-rp2040", "vccgnd-yd-rp2040");
+        fs::write(&profile_path, legacy_profile).unwrap();
+
+        let migrated = Workspace::load_existing(&directory.0).unwrap();
+        assert_eq!(
+            migrated.settings.devices[&id].board_profile_id,
+            crate::hardware::YD_ESP32_S3_BOARD_ID
+        );
+        assert_eq!(
+            migrated.settings.devices[&id].runtime_assignment,
+            Some(assignment)
+        );
+        assert_eq!(
+            migrated.profiles["red-phone-v1"].actions,
+            device_profile().actions
+        );
+        assert!(
+            migrated.profiles["red-phone-v1"]
+                .hardware_profiles
+                .iter()
+                .all(|hardware| !hardware.board_profile_id.contains("luatos")
+                    && !hardware.board_profile_id.contains("vccgnd"))
+        );
+
+        let persisted_settings = fs::read_to_string(settings_path).unwrap();
+        let persisted_profile = fs::read_to_string(profile_path).unwrap();
+        assert!(persisted_settings.contains("11:yd-esp32-s3ABCDEF123456"));
+        assert!(persisted_settings.contains("board_profile_id: yd-esp32-s3"));
+        assert!(persisted_profile.contains("board_profile_id: yd-esp32-s3"));
+        assert!(persisted_profile.contains("board_profile_id: yd-rp2040"));
+    }
+
+    #[test]
     fn preview_and_import_migrate_schema_v2_profiles_without_changing_the_id() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
@@ -2708,7 +3100,7 @@ legacy:
         assert_eq!(profile.hardware_profiles.len(), 1);
         assert_eq!(
             profile.hardware_profiles[0].board_profile_id,
-            crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID
+            crate::hardware::YD_ESP32_S3_BOARD_ID
         );
         assert_eq!(profile.hardware_profiles[0].debounce_ms, 45);
         assert_eq!(
@@ -2816,18 +3208,17 @@ actions: {}
 
     #[test]
     fn settings_reject_mismatched_malformed_and_unknown_board_device_ids() {
-        let id =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456").unwrap();
-        let other =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "654321FEDCBA").unwrap();
+        let id = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ABCDEF123456").unwrap();
+        let other = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "654321FEDCBA").unwrap();
         let settings = SettingsDocument {
             devices: BTreeMap::from([(
                 id,
                 DeviceRecord {
                     device_id: other,
                     name: "Desk".into(),
-                    board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+                    board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
                     runtime_assignment: None,
+                    product_config: None,
                 },
             )]),
             ..SettingsDocument::default()
@@ -2839,8 +3230,7 @@ actions: {}
             "device_id_mismatch"
         );
         let mut unknown = SettingsDocument::default();
-        let id =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456").unwrap();
+        let id = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ABCDEF123456").unwrap();
         unknown.devices.insert(
             id.clone(),
             DeviceRecord {
@@ -2848,6 +3238,7 @@ actions: {}
                 name: "Desk".into(),
                 board_profile_id: "unknown-board".into(),
                 runtime_assignment: None,
+                product_config: None,
             },
         );
         assert_eq!(
@@ -2857,7 +3248,7 @@ actions: {}
             "unknown_board_profile"
         );
         assert!(serde_yaml_ng::from_str::<SettingsDocument>(
-            "schema_version: 2\neditor_profile: null\nlanguage: zh-CN\ndevices:\n  malformed:\n    device_id: malformed\n    name: Desk\n    board_profile_id: luatos-esp32s3-aio\n    runtime_assignment: null\n"
+            "schema_version: 2\neditor_profile: null\nlanguage: zh-CN\ndevices:\n  malformed:\n    device_id: malformed\n    name: Desk\n    board_profile_id: yd-esp32-s3\n    runtime_assignment: null\n"
         ).is_err());
     }
 
@@ -2865,11 +3256,11 @@ actions: {}
     fn enrollment_is_idempotent_and_persists_a_default_name() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let id = DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "E0C9125B0D9B").unwrap();
+        let id = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "E0C9125B0D9B").unwrap();
         let first = workspace.enroll_device(id.clone()).unwrap().clone();
         let second = workspace.enroll_device(id.clone()).unwrap().clone();
         assert_eq!(first, second);
-        assert_eq!(first.name, "VCC-GND YD-RP2040 · 5B0D9B");
+        assert_eq!(first.name, "YD-RP2040 · 5B0D9B");
         assert_eq!(
             Workspace::load_existing(&directory.0)
                 .unwrap()
@@ -2883,7 +3274,7 @@ actions: {}
     fn assignments_require_exact_board_equality() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let id = DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "E0C9125B0D9B").unwrap();
+        let id = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "E0C9125B0D9B").unwrap();
         workspace.enroll_device(id.clone()).unwrap();
         assert_eq!(
             workspace
@@ -2917,11 +3308,10 @@ actions: {}
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
         let removed_id =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456").unwrap();
+            DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ABCDEF123456").unwrap();
         let changed_id =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "654321FEDCBA").unwrap();
-        let added_id =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ADDED123456").unwrap();
+            DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "654321FEDCBA").unwrap();
+        let added_id = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ADDED123456").unwrap();
         let assignment = RuntimeAssignment {
             device_profile_id: "red-phone-v1".into(),
             hardware_profile_id: "esp-primary".into(),
@@ -2950,8 +3340,9 @@ actions: {}
             DeviceRecord {
                 device_id: added_id,
                 name: "Stale addition".into(),
-                board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+                board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
                 runtime_assignment: Some(assignment),
+                product_config: None,
             },
         );
         let patch: EditorSettingsPatch =
@@ -2974,8 +3365,7 @@ actions: {}
     fn invalid_editor_settings_patch_rolls_back_memory_and_disk() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let id =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456").unwrap();
+        let id = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ABCDEF123456").unwrap();
         workspace.enroll_device(id).unwrap();
         let settings_before = workspace.settings.clone();
         let settings_path = directory.path("data/settings.yaml");
@@ -3014,8 +3404,7 @@ actions: {}
     fn broken_assignments_are_retained_without_compatible_fallback() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let id =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456").unwrap();
+        let id = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ABCDEF123456").unwrap();
         workspace.enroll_device(id.clone()).unwrap();
         let assignment = RuntimeAssignment {
             device_profile_id: "red-phone-v1".into(),
@@ -3034,7 +3423,7 @@ actions: {}
         );
         let mut incompatible = device_profile();
         incompatible.hardware_profiles[0].board_profile_id =
-            crate::hardware::VCCGND_YD_RP2040_BOARD_ID.into();
+            crate::hardware::YD_RP2040_BOARD_ID.into();
         workspace.save_profile(incompatible).unwrap();
         assert!(matches!(
             workspace.assignment_resolution(&id),
@@ -3046,8 +3435,7 @@ actions: {}
     fn clear_rename_and_forget_are_durable_transactions() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
-        let id =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456").unwrap();
+        let id = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ABCDEF123456").unwrap();
         workspace.enroll_device(id.clone()).unwrap();
         workspace
             .set_assignment(
@@ -3071,8 +3459,8 @@ actions: {}
         assert!(!reloaded.settings.devices.contains_key(&id));
         assert!(reloaded.profiles.contains_key("red-phone-v1"));
         let reenrolled = reloaded.enroll_device(id.clone()).unwrap().clone();
-        assert_eq!(id.as_str(), "18:luatos-esp32s3-aioABCDEF123456");
-        assert_eq!(reenrolled.name, "LuatOS ESP32-S3 AIO · 123456");
+        assert_eq!(id.as_str(), "11:yd-esp32-s3ABCDEF123456");
+        assert_eq!(reenrolled.name, "YD-ESP32-S3 · 123456");
         assert_eq!(reenrolled.runtime_assignment, None);
         assert_eq!(
             Workspace::load_existing(&directory.0)
@@ -3092,12 +3480,10 @@ actions: {}
 
         target.restore_backup(&backup, &metrics).unwrap();
 
-        let id =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "AAAAAAAAAAAA").unwrap();
-        let rp2040 =
-            DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "BBBBBBBBBBBB").unwrap();
-        assert_eq!(id.as_str(), "18:luatos-esp32s3-aioAAAAAAAAAAAA");
-        assert_eq!(rp2040.as_str(), "16:vccgnd-yd-rp2040BBBBBBBBBBBB");
+        let id = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "AAAAAAAAAAAA").unwrap();
+        let rp2040 = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "BBBBBBBBBBBB").unwrap();
+        assert_eq!(id.as_str(), "11:yd-esp32-s3AAAAAAAAAAAA");
+        assert_eq!(rp2040.as_str(), "9:yd-rp2040BBBBBBBBBBBB");
         assert_eq!(target.profiles.len(), 2);
         assert_eq!(target.settings.devices.len(), 2);
         assert_eq!(
@@ -3270,8 +3656,7 @@ actions: {}
             .unwrap();
         let source_metrics =
             MetricsStore::open(&source_directory.join("data/metrics.sqlite3")).unwrap();
-        let device =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "AAAAAAAAAAAA").unwrap();
+        let device = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "AAAAAAAAAAAA").unwrap();
         let attribution = MetricAttribution {
             device_id: device.clone(),
             device_name: "Backup desk".into(),
@@ -3411,7 +3796,7 @@ actions: {}
         let workspace = workspace(&directory);
         let metrics = MetricsStore::open(&directory.path("data/metrics.sqlite3")).unwrap();
         let attribution = MetricAttribution {
-            device_id: DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "AAAAAAAAAAAA")
+            device_id: DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "AAAAAAAAAAAA")
                 .unwrap(),
             device_name: "D".repeat(MAX_IMPORT_BYTES as usize + 1),
             device_profile_id: "red-phone-v1".into(),
@@ -3434,9 +3819,9 @@ actions: {}
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
         let assigned =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "AAAAAAAAAAAA").unwrap();
+            DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "AAAAAAAAAAAA").unwrap();
         let unassigned =
-            DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "BBBBBBBBBBBB").unwrap();
+            DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "BBBBBBBBBBBB").unwrap();
         workspace.enroll_device(assigned.clone()).unwrap();
         workspace.enroll_device(unassigned).unwrap();
         workspace
@@ -3499,7 +3884,7 @@ actions: {}
         assert_eq!(hardware.id, "hardware");
         assert_eq!(
             hardware.board_profile_id,
-            crate::hardware::VCCGND_YD_RP2040_BOARD_ID
+            crate::hardware::YD_RP2040_BOARD_ID
         );
         assert_eq!(
             hardware.inputs,
@@ -3533,6 +3918,184 @@ actions: {}
         assert_eq!(
             workspace.preview_profile(&path).unwrap_err().code,
             "file_too_large"
+        );
+    }
+
+    #[test]
+    fn user_backup_restores_offline_product_devices_and_skips_mismatches() {
+        let source_directory = TestDirectory::new();
+        let mut source = workspace(&source_directory);
+        let device = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "ABCDEF123456").unwrap();
+        let definition = product_definition("key");
+        source
+            .enroll_product_device_with_registry(compiled_registry(), device.clone(), &definition)
+            .unwrap();
+        source
+            .save_product_device_config(
+                &device,
+                &definition,
+                ProductDeviceConfig {
+                    product_version_id: "key-k3-r01".into(),
+                    trigger_settings: TriggerSettings {
+                        long_press_ms: 725,
+                        double_press_ms: 260,
+                    },
+                    actions: BTreeMap::from([(
+                        "A".into(),
+                        TriggerActions::press(vec![ButtonAction::Delay { duration_ms: 25 }]),
+                    )]),
+                },
+            )
+            .unwrap();
+        let backup_path = source_directory.path("user-backup.yaml");
+        source.export_user_backup(&backup_path).unwrap();
+        let preview = source.preview_backup(&backup_path).unwrap();
+        assert_eq!(preview.kind, BackupKind::ProductDevices);
+        assert_eq!(preview.device_count, 1);
+        assert_eq!(preview.action_count, 1);
+
+        let target_directory = TestDirectory::new();
+        let mut target = workspace(&target_directory);
+        target
+            .restore_compatible_backup(&backup_path, None)
+            .unwrap();
+        let restored = target
+            .device(&device)
+            .unwrap()
+            .product_config
+            .as_ref()
+            .unwrap();
+        assert_eq!(restored.product_version_id, "key-k3-r01");
+        assert_eq!(restored.trigger_settings.long_press_ms, 725);
+
+        let mismatch_directory = TestDirectory::new();
+        let mut mismatch = workspace(&mismatch_directory);
+        let other_definition = product_definition("alt");
+        mismatch
+            .enroll_product_device_with_registry(
+                compiled_registry(),
+                device.clone(),
+                &other_definition,
+            )
+            .unwrap();
+        mismatch
+            .restore_compatible_backup(&backup_path, None)
+            .unwrap();
+        assert_eq!(
+            mismatch
+                .device(&device)
+                .unwrap()
+                .product_config
+                .as_ref()
+                .unwrap()
+                .product_version_id,
+            "alt-k3-r01"
+        );
+    }
+
+    #[test]
+    fn restored_unknown_product_button_is_rejected_on_connection() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let device = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "ABCDEF123456").unwrap();
+        let backup_path = directory.path("unknown-button.yaml");
+        write_yaml(
+            &backup_path,
+            &UserBackupDocument {
+                schema_version: USER_BACKUP_SCHEMA_VERSION,
+                kind: BackupKind::ProductDevices,
+                devices: vec![UserBackupDevice {
+                    device_id: device.clone(),
+                    product_version_id: "key-k3-r01".into(),
+                    trigger_settings: TriggerSettings::default(),
+                    actions: BTreeMap::from([(
+                        "UNKNOWN".into(),
+                        TriggerActions::press(vec![ButtonAction::Delay { duration_ms: 10 }]),
+                    )]),
+                }],
+            },
+        )
+        .unwrap();
+        workspace
+            .restore_compatible_backup(&backup_path, None)
+            .unwrap();
+
+        assert_eq!(
+            workspace
+                .enroll_product_device_with_registry(
+                    compiled_registry(),
+                    device,
+                    &product_definition("key"),
+                )
+                .unwrap_err()
+                .code,
+            "unknown_action_button"
+        );
+    }
+
+    #[test]
+    fn settings_schema_v2_is_migrated_to_v3() {
+        let directory = TestDirectory::new();
+        let workspace = workspace(&directory);
+        drop(workspace);
+        let settings_path = directory.path("data/settings.yaml");
+        let mut settings = fs::read_to_string(&settings_path).unwrap();
+        settings = settings.replacen("schema_version: 3", "schema_version: 2", 1);
+        fs::write(&settings_path, settings).unwrap();
+
+        let migrated = Workspace::load_existing(&directory.0).unwrap();
+        assert_eq!(migrated.settings.schema_version, SETTINGS_SCHEMA_VERSION);
+        assert!(
+            fs::read_to_string(settings_path)
+                .unwrap()
+                .starts_with("schema_version: 3\n")
+        );
+    }
+
+    #[test]
+    fn same_product_devices_keep_independent_actions_until_explicit_copy() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let definition = product_definition("key");
+        let first = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "FIRST123456").unwrap();
+        let second = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "SECOND123456").unwrap();
+        for device in [&first, &second] {
+            workspace
+                .enroll_product_device_with_registry(
+                    compiled_registry(),
+                    device.clone(),
+                    &definition,
+                )
+                .unwrap();
+        }
+        let first_config = ProductDeviceConfig {
+            product_version_id: "key-k3-r01".into(),
+            trigger_settings: TriggerSettings::default(),
+            actions: BTreeMap::from([(
+                "A".into(),
+                TriggerActions::press(vec![ButtonAction::Delay { duration_ms: 25 }]),
+            )]),
+        };
+        workspace
+            .save_product_device_config(&first, &definition, first_config.clone())
+            .unwrap();
+        assert!(
+            workspace
+                .device(&second)
+                .unwrap()
+                .product_config
+                .as_ref()
+                .unwrap()
+                .actions
+                .is_empty()
+        );
+
+        workspace
+            .copy_product_device_config(&first, &second, &definition)
+            .unwrap();
+        assert_eq!(
+            workspace.device(&second).unwrap().product_config.as_ref(),
+            Some(&first_config)
         );
     }
 }

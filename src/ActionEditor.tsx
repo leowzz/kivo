@@ -23,6 +23,7 @@ interface ActionEditorProps {
   actions: TriggerActions;
   onChange(actions: TriggerActions): void;
   onRename(buttonId: string, label: string): void;
+  canRename?: boolean;
 }
 
 export const TRIGGER_ORDER: ActionTrigger[] = ["press", "release", "long_press", "double_press"];
@@ -90,7 +91,7 @@ function normalizedActions(actions: TriggerActions): TriggerActions {
   return { ...emptyTriggerActions(), ...actions };
 }
 
-export function ActionEditor({ language, button, actions, onChange, onRename }: ActionEditorProps) {
+export function ActionEditor({ language, button, actions, onChange, onRename, canRename = true }: ActionEditorProps) {
   const [editingTarget, setEditingTarget] = useState<EditingTarget>(null);
   const [dialogDraft, setDialogDraft] = useState<ActionDraft | undefined>();
   const [editingLabel, setEditingLabel] = useState(false);
@@ -185,7 +186,7 @@ export function ActionEditor({ language, button, actions, onChange, onRename }: 
       <div className="panel-title">
         <div className="action-panel-heading">
           <span>{t(language, "behavior.title")}</span>
-          {editingLabel ? (
+          {editingLabel && canRename ? (
             <div className="button-label-edit">
               <input
                 autoFocus
@@ -222,16 +223,18 @@ export function ActionEditor({ language, button, actions, onChange, onRename }: 
           ) : (
             <div className="button-label-display">
               <h2 id="action-title">{button.label}</h2>
-              <button
-                className="icon-button"
-                type="button"
-                aria-label={`${t(language, "behavior.renameButton")} ${button.label}`}
-                title={t(language, "behavior.renameButton")}
-                onClick={() => {
-                  setLabelDraft(button.label);
-                  setEditingLabel(true);
-                }}
-              ><Pencil size={16} /></button>
+              {canRename ? (
+                <button
+                  className="icon-button"
+                  type="button"
+                  aria-label={`${t(language, "behavior.renameButton")} ${button.label}`}
+                  title={t(language, "behavior.renameButton")}
+                  onClick={() => {
+                    setLabelDraft(button.label);
+                    setEditingLabel(true);
+                  }}
+                ><Pencil size={16} /></button>
+              ) : null}
             </div>
           )}
         </div>

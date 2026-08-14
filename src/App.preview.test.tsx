@@ -22,7 +22,7 @@ afterEach(() => {
 test("preview exposes an editable RP2040 SSD1306 configuration", async () => {
   const { previewSnapshot } = await import("./preview");
   const rp2040 = previewSnapshot.boardProfiles.find(
-    ({ id }) => id === "vccgnd-yd-rp2040",
+    ({ id }) => id === "yd-rp2040",
   );
   const hardware = previewSnapshot.deviceProfiles
     .flatMap(({ hardware_profiles }) => hardware_profiles)

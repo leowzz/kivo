@@ -16,7 +16,7 @@ function canonicalDeviceId(boardProfileId: string, hardwareSerial: string): stri
 
 function fixtureDevice(overrides: Partial<DeviceStatus> = {}): DeviceStatus {
   return {
-    deviceId: "luatos-esp32s3-aio:ABCDEF123456",
+    deviceId: canonicalDeviceId("yd-esp32-s3", "ABCDEF123456"),
     name: "前台电话键盘",
     connection: "online",
     mode: "runtime",
@@ -26,7 +26,7 @@ function fixtureDevice(overrides: Partial<DeviceStatus> = {}): DeviceStatus {
     hardwareSerial: "ABCDEF123456",
     port: "/dev/cu.usbmodem-esp32",
     controllerFamilyId: "esp32s3",
-    boardProfileId: "luatos-esp32s3-aio",
+    boardProfileId: "yd-esp32-s3",
     firmwareBuildId: "esp32s3-20260731",
     capabilities: [0, 1, 2, 6, 7, 8],
     runtimeAssignment: {
@@ -43,7 +43,7 @@ function fixtureHardware(overrides: Partial<HardwareProfile> = {}): HardwareProf
   return {
     id: "esp-primary",
     name: "前台接线",
-    board_profile_id: "luatos-esp32s3-aio",
+    board_profile_id: "yd-esp32-s3",
     debounce_ms: 30,
     inputs: [],
     ...overrides,
@@ -105,7 +105,7 @@ describe("matchesDeviceFilter", () => {
   test.each([
     "前台电话",
     "abcdef123456",
-    "LUATOS-ESP32S3-AIO",
+    "YD-ESP32-S3",
     "USBMODEM-ESP32",
   ])("searches name, serial, board, and port using %s", (query) => {
     expect(matchesDeviceFilter(fixtureDevice(), "all", query)).toBe(true);
@@ -123,9 +123,9 @@ test("matches Hardware Profiles by exact Board Profile ID", () => {
   const profiles = [
     fixtureHardware(),
     fixtureHardware({ id: "esp-secondary", name: "备用接线" }),
-    fixtureHardware({ id: "rp-primary", board_profile_id: "vcc-gnd-yd-rp2040" }),
+    fixtureHardware({ id: "rp-primary", board_profile_id: "yd-rp2040" }),
   ];
-  expect(compatibleHardwareProfiles(profiles, "luatos-esp32s3-aio").map(({ id }) => id)).toEqual([
+  expect(compatibleHardwareProfiles(profiles, "yd-esp32-s3").map(({ id }) => id)).toEqual([
     "esp-primary",
     "esp-secondary",
   ]);

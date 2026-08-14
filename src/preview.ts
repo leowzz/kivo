@@ -52,7 +52,10 @@ const telLayout: ModelLayout = {
   ],
 };
 
-const esp32SafePins = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18];
+const esp32SafePins = [
+  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 21,
+  38, 39, 40, 41, 42, 47,
+];
 const rp2040SafePins = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 26, 27, 28, 29];
 
 const phoneProfile: DeviceProfile = {
@@ -63,7 +66,7 @@ const phoneProfile: DeviceProfile = {
     {
       id: "phone-esp-front-desk",
       name: "前台 ESP32-S3 接线",
-      board_profile_id: "luatos-esp32s3-aio",
+      board_profile_id: "yd-esp32-s3",
       debounce_ms: 30,
       inputs: [
         { type: "direct", id: "function-keys", keys: { UP: 6, DOWN: 7, DEL: 8 } },
@@ -83,7 +86,7 @@ const phoneProfile: DeviceProfile = {
     {
       id: "phone-rp-workbench",
       name: "工作台 RP2040 接线",
-      board_profile_id: "vccgnd-yd-rp2040",
+      board_profile_id: "yd-rp2040",
       debounce_ms: 25,
       ssd1306: { sda: 18, scl: 19 },
       inputs: [{ type: "direct", id: "workbench-keys", keys: { UP: 6, DOWN: 7, DEL: 8 } }],
@@ -106,14 +109,14 @@ const operatorProfile: DeviceProfile = {
     {
       id: "operator-esp-backup",
       name: "备用 ESP32-S3 接线",
-      board_profile_id: "luatos-esp32s3-aio",
+      board_profile_id: "yd-esp32-s3",
       debounce_ms: 35,
       inputs: [{ type: "direct", id: "operator-shortcuts", keys: { UP: 4, DOWN: 5, DEL: 6 } }],
     },
     {
       id: "operator-rp-primary",
       name: "主控 RP2040 接线",
-      board_profile_id: "vccgnd-yd-rp2040",
+      board_profile_id: "yd-rp2040",
       debounce_ms: 30,
       inputs: [{ type: "direct", id: "operator-shortcuts", keys: { UP: 18, DOWN: 19, DEL: 20 } }],
     },
@@ -202,18 +205,18 @@ export const previewSnapshot: AppSnapshot = {
   editorProfile: phoneProfile.profile.id,
   boardProfiles: [
     {
-      id: "luatos-esp32s3-aio",
+      id: "yd-esp32-s3",
       controllerFamilyId: "esp32s3",
-      displayName: "LuatOS ESP32-S3 AIO",
+      displayName: "YD-ESP32-S3",
       runtimeUsb: "303a:4002",
       bootloaderUsb: null,
       safePins: esp32SafePins,
       supportsOled: false,
     },
     {
-      id: "vccgnd-yd-rp2040",
+      id: "yd-rp2040",
       controllerFamilyId: "rp2040",
-      displayName: "VCC-GND YD-RP2040",
+      displayName: "YD-RP2040",
       runtimeUsb: "2e8a:102e",
       bootloaderUsb: "2e8a:0003",
       safePins: rp2040SafePins,
@@ -222,7 +225,7 @@ export const previewSnapshot: AppSnapshot = {
   ],
   devices: [
     {
-      deviceId: "18:luatos-esp32s3-aioABCDEF123456",
+      deviceId: "11:yd-esp32-s3ABCDEF123456",
       name: "前台电话键盘",
       connection: "online",
       mode: "runtime",
@@ -232,7 +235,7 @@ export const previewSnapshot: AppSnapshot = {
       hardwareSerial: "ABCDEF123456",
       port: "/dev/cu.usbmodem-esp-front",
       controllerFamilyId: "esp32s3",
-      boardProfileId: "luatos-esp32s3-aio",
+      boardProfileId: "yd-esp32-s3",
       firmwareBuildId: "esp32s3-20260731-a1",
       capabilities: esp32SafePins,
       runtimeAssignment: {
@@ -243,7 +246,7 @@ export const previewSnapshot: AppSnapshot = {
       learning: null,
     },
     {
-      deviceId: "18:luatos-esp32s3-aio654321FEDCBA",
+      deviceId: "11:yd-esp32-s3654321FEDCBA",
       name: "备用电话键盘",
       connection: "offline",
       mode: null,
@@ -253,7 +256,7 @@ export const previewSnapshot: AppSnapshot = {
       hardwareSerial: "654321FEDCBA",
       port: null,
       controllerFamilyId: "esp32s3",
-      boardProfileId: "luatos-esp32s3-aio",
+      boardProfileId: "yd-esp32-s3",
       firmwareBuildId: null,
       capabilities: [],
       runtimeAssignment: {
@@ -264,7 +267,7 @@ export const previewSnapshot: AppSnapshot = {
       learning: null,
     },
     {
-      deviceId: "16:vccgnd-yd-rp2040E0C9125B0D9B",
+      deviceId: "9:yd-rp2040E0C9125B0D9B",
       name: "工作台键盘",
       connection: "online",
       mode: "runtime",
@@ -274,7 +277,7 @@ export const previewSnapshot: AppSnapshot = {
       hardwareSerial: "E0C9125B0D9B",
       port: "/dev/cu.usbmodem-rp-workbench",
       controllerFamilyId: "rp2040",
-      boardProfileId: "vccgnd-yd-rp2040",
+      boardProfileId: "yd-rp2040",
       firmwareBuildId: "rp2040-20260731-b2",
       capabilities: rp2040SafePins,
       runtimeAssignment: {
@@ -285,7 +288,7 @@ export const previewSnapshot: AppSnapshot = {
       learning: null,
     },
     {
-      deviceId: "16:vccgnd-yd-rp2040E0C9125B0E17",
+      deviceId: "9:yd-rp2040E0C9125B0E17",
       name: "主控快捷键盘",
       connection: "online",
       mode: "runtime",
@@ -295,7 +298,7 @@ export const previewSnapshot: AppSnapshot = {
       hardwareSerial: "E0C9125B0E17",
       port: "/dev/cu.usbmodem-rp-primary",
       controllerFamilyId: "rp2040",
-      boardProfileId: "vccgnd-yd-rp2040",
+      boardProfileId: "yd-rp2040",
       firmwareBuildId: "rp2040-20260731-b2",
       capabilities: rp2040SafePins,
       runtimeAssignment: {
@@ -316,7 +319,7 @@ export const previewSnapshot: AppSnapshot = {
       rawSerial: null,
       port: null,
       controllerFamilyId: "rp2040",
-      boardProfileId: "vccgnd-yd-rp2040",
+      boardProfileId: "yd-rp2040",
       latestError: null,
     },
   ],
@@ -340,7 +343,7 @@ export const previewSnapshot: AppSnapshot = {
         timestampMs: 1785396000000,
         kind: "button",
         message: "DIGIT_2 pressed",
-        deviceId: "18:luatos-esp32s3-aioABCDEF123456",
+        deviceId: "11:yd-esp32-s3ABCDEF123456",
         deviceName: "前台电话键盘",
         deviceProfileId: "tel001",
         hardwareProfileId: "phone-esp-front-desk",
@@ -350,7 +353,7 @@ export const previewSnapshot: AppSnapshot = {
         timestampMs: 1785395940000,
         kind: "device",
         message: "Device connected",
-        deviceId: "16:vccgnd-yd-rp2040E0C9125B0E17",
+        deviceId: "9:yd-rp2040E0C9125B0E17",
         deviceName: "主控快捷键盘",
         deviceProfileId: "operator-console",
         hardwareProfileId: "operator-rp-primary",

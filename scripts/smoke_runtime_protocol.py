@@ -51,15 +51,18 @@ def validate_hello(
 ) -> None:
     parts = line.split()
     expected = ["HELLO", str(protocol_version), family, board, build]
-    if parts[:5] != expected:
+    if protocol_version >= 9:
+        expected.append("-")
+    if parts[: len(expected)] != expected:
         raise RuntimeError(f"invalid HELLO: expected {' '.join(expected)!r}, got {line!r}")
-    if len(parts) < 7:
+    pin_count_index = len(expected)
+    if len(parts) < pin_count_index + 2:
         raise RuntimeError(f"invalid HELLO: missing non-empty pin list in {line!r}")
-    if not all(token.isascii() and token.isdigit() for token in parts[5:]):
+    if not all(token.isascii() and token.isdigit() for token in parts[pin_count_index:]):
         raise RuntimeError(f"invalid HELLO: non-integer pin data in {line!r}")
     try:
-        pin_count = int(parts[5])
-        pins = [int(pin) for pin in parts[6:]]
+        pin_count = int(parts[pin_count_index])
+        pins = [int(pin) for pin in parts[pin_count_index + 1 :]]
     except ValueError as error:
         raise RuntimeError(f"invalid HELLO: non-integer pin data in {line!r}") from error
     if (
@@ -119,7 +122,7 @@ def run_smoke(
 ) -> None:
     if not valid_pins:
         raise RuntimeError("valid pins are required")
-    if protocol_version < 3 or protocol_version > 6:
+    if protocol_version < 3 or protocol_version > 9:
         raise RuntimeError("unsupported protocol version")
     write_line(device, "HELLO\n")
     validate_hello(read_line(device), family, board, build, protocol_version)
@@ -173,6 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--valid-pins", required=True, type=parse_pins)
     parser.add_argument("--rejected-pins", required=True, type=parse_pins)
     parser.add_argument("--exercise-actions", action="store_true")
+    parser.add_argument("--protocol-version", type=int, choices=range(3, 10), default=9)
     return parser
 
 
@@ -192,6 +196,7 @@ def run_from_args(
             valid_pins=args.valid_pins,
             rejected_pins=args.rejected_pins,
             exercise_actions=args.exercise_actions,
+            protocol_version=args.protocol_version,
         )
 
 

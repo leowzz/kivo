@@ -34,7 +34,7 @@ const boardProfiles: BoardProfileSummary[] = [
     supportsOled: false,
   },
   {
-    id: "vccgnd-yd-rp2040",
+    id: "yd-rp2040",
     controllerFamilyId: "rp2040",
     displayName: "YD-RP2040",
     runtimeUsb: "2e8a:000a",
@@ -302,7 +302,7 @@ test("retains and visibly marks every invalid pin after changing Board Profile",
   const user = userEvent.setup();
   const onChange = renderMapping();
 
-  await user.selectOptions(screen.getByLabelText("板型"), "vccgnd-yd-rp2040");
+  await user.selectOptions(screen.getByLabelText("板型"), "yd-rp2040");
 
   const updated = onChange.mock.calls.at(-1)?.[0] as HardwareProfile[];
   expect(updated[0].inputs).toEqual(hardwareProfiles[0].inputs);
@@ -338,7 +338,7 @@ test("uses the exact offline safe set and explicitly narrows it with one compati
       device({
         deviceId: "wrong-board",
         name: "Wrong board",
-        boardProfileId: "vccgnd-yd-rp2040",
+        boardProfileId: "yd-rp2040",
         controllerFamilyId: "rp2040",
         capabilities: [0, 1, 2],
       }),
@@ -367,7 +367,7 @@ test("offers learning only for online identity-valid runtime Devices on the exac
       device({
         deviceId: "wrong-board",
         name: "Wrong board",
-        boardProfileId: "vccgnd-yd-rp2040",
+        boardProfileId: "yd-rp2040",
         controllerFamilyId: "rp2040",
       }),
     ],
@@ -382,16 +382,16 @@ test("offers learning only for online identity-valid runtime Devices on the exac
   expect(screen.getByLabelText("消抖")).toBeEnabled();
 });
 
-test("exposes GPIO0 through GPIO22 and GPIO26 through GPIO29 for vccgnd-yd-rp2040", async () => {
+test("exposes GPIO0 through GPIO22 and GPIO26 through GPIO29 for yd-rp2040", async () => {
   const user = userEvent.setup();
   const rpProfile: HardwareProfile = {
     id: "rp",
     name: "RP",
-    board_profile_id: "vccgnd-yd-rp2040",
+    board_profile_id: "yd-rp2040",
     debounce_ms: 30,
     inputs: [],
   };
-  const unsafeRegistry = boardProfiles.map((board) => board.id === "vccgnd-yd-rp2040"
+  const unsafeRegistry = boardProfiles.map((board) => board.id === "yd-rp2040"
     ? { ...board, safePins: Array.from({ length: 30 }, (_, pin) => pin) }
     : board);
   renderMapping({ profiles: [rpProfile], boards: unsafeRegistry });
@@ -411,13 +411,13 @@ test("exposes GPIO0 through GPIO22 and GPIO26 through GPIO29 for vccgnd-yd-rp204
 });
 
 test("accepts GPIO26 through GPIO29 across direct, matrix, and OLED ownership", () => {
-  const rpBoards = boardProfiles.map((board) => board.id === "vccgnd-yd-rp2040"
+  const rpBoards = boardProfiles.map((board) => board.id === "yd-rp2040"
     ? { ...board, safePins: Array.from({ length: 30 }, (_, pin) => pin) }
     : board);
   const profile: HardwareProfile = {
     id: "high-gpio",
     name: "High GPIO",
-    board_profile_id: "vccgnd-yd-rp2040",
+    board_profile_id: "yd-rp2040",
     debounce_ms: 30,
     ssd1306: { sda: 28, scl: 29 },
     inputs: [
@@ -653,7 +653,7 @@ test("edits OLED SDA and OLED SCL through separate controlled selectors", async 
   const profile = {
     id: "oled",
     name: "OLED",
-    board_profile_id: "vccgnd-yd-rp2040",
+    board_profile_id: "yd-rp2040",
     debounce_ms: 30,
     inputs: [],
     ssd1306: { sda: 18, scl: 19 },
@@ -701,7 +701,7 @@ test("enables OLED on the first two unowned safe pins", async () => {
   const profile: HardwareProfile = {
     id: "eighteen-direct",
     name: "Eighteen direct",
-    board_profile_id: "vccgnd-yd-rp2040",
+    board_profile_id: "yd-rp2040",
     debounce_ms: 30,
     inputs: [{ type: "direct", id: "direct", keys: directKeys }],
   };
@@ -719,7 +719,7 @@ test("rejects unsupported, unsafe, same-pin, conflicting, and duplicate pin owne
   const base = {
     id: "validation",
     name: "Validation",
-    board_profile_id: "vccgnd-yd-rp2040",
+    board_profile_id: "yd-rp2040",
     debounce_ms: 30,
     inputs: [] as HardwareProfile["inputs"],
   };
@@ -760,7 +760,7 @@ test("labels a matrix pin shared with OLED as a pin conflict", () => {
     profiles: [{
       id: "matrix-oled-conflict",
       name: "Matrix OLED conflict",
-      board_profile_id: "vccgnd-yd-rp2040",
+      board_profile_id: "yd-rp2040",
       debounce_ms: 30,
       ssd1306: { sda: 18, scl: 19 },
       inputs: [{
@@ -783,7 +783,7 @@ test("reserves OLED pins from OLED counterparts, input selectors, and learning w
   const profile = {
     id: "reserved",
     name: "Reserved",
-    board_profile_id: "vccgnd-yd-rp2040",
+    board_profile_id: "yd-rp2040",
     debounce_ms: 30,
     inputs: [{ type: "direct" as const, id: "direct", keys: { ONE: 0 } }],
     ssd1306: { sda: 18, scl: 19 },

@@ -253,7 +253,7 @@ mod tests {
     use crate::{
         coordinator::RuntimeEventContext,
         device::RuntimeProfileSnapshot,
-        hardware::{DeviceId, LUATOS_ESP32S3_AIO_BOARD_ID},
+        hardware::{DeviceId, YD_ESP32_S3_BOARD_ID},
         metrics::MetricAttribution,
         profile::{ActionTrigger, TriggerSettings, blank_device_profile},
         protocol::{InputState, PhysicalInput},
@@ -268,7 +268,7 @@ mod tests {
         let mut profile = blank_device_profile(
             "profile".into(),
             "Profile".into(),
-            LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+            YD_ESP32_S3_BOARD_ID.into(),
         );
         profile.trigger_settings = TriggerSettings {
             long_press_ms,
@@ -278,7 +278,7 @@ mod tests {
             profile,
             hardware_profile_id: "hardware".into(),
             metric_attribution: MetricAttribution {
-                device_id: DeviceId::new(LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456").unwrap(),
+                device_id: DeviceId::new(YD_ESP32_S3_BOARD_ID, "ABCDEF123456").unwrap(),
                 device_name: "Desk".into(),
                 device_profile_id: "profile".into(),
                 hardware_profile_id: "hardware".into(),

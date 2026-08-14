@@ -38,3 +38,29 @@ std::string formatHello(const BoardProfile &profile,
   line += '\n';
   return line;
 }
+
+std::string formatHello(const BoardProfile &profile,
+                        std::string_view firmwareBuildId,
+                        std::string_view productVersionId) {
+  if (firmwareBuildId.empty() || containsAsciiWhitespace(firmwareBuildId) ||
+      productVersionId.empty() || containsAsciiWhitespace(productVersionId)) {
+    return {};
+  }
+
+  std::string line = "HELLO 9 ";
+  line += profile.controllerFamilyId;
+  line += ' ';
+  line += profile.boardProfileId;
+  line += ' ';
+  line += firmwareBuildId;
+  line += ' ';
+  line += productVersionId;
+  line += ' ';
+  line += std::to_string(profile.safePinCount);
+  for (std::size_t index = 0; index < profile.safePinCount; ++index) {
+    line += ' ';
+    line += std::to_string(profile.safePins[index]);
+  }
+  line += '\n';
+  return line;
+}

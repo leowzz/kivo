@@ -765,8 +765,8 @@ mod tests {
         let store = MetricsStore::open(&directory.0.join("metrics.sqlite3")).unwrap();
         let yesterday = 1_720_000_000_000;
         let today = yesterday + 86_400_000;
-        let device_a = DeviceId::new("luatos-esp32s3-aio", "AAAAAAAAAAAA").unwrap();
-        let device_b = DeviceId::new("luatos-esp32s3-aio", "BBBBBBBBBBBB").unwrap();
+        let device_a = DeviceId::new("yd-esp32-s3", "AAAAAAAAAAAA").unwrap();
+        let device_b = DeviceId::new("yd-esp32-s3", "BBBBBBBBBBBB").unwrap();
         let original_a = MetricAttribution {
             device_id: device_a.clone(),
             device_name: "Desk A".into(),
@@ -868,7 +868,7 @@ mod tests {
         let directory = TestDirectory::new();
         let store = MetricsStore::open(&directory.0.join("metrics.sqlite3")).unwrap();
         let attribution = MetricAttribution {
-            device_id: DeviceId::new("luatos-esp32s3-aio", "AAAAAAAAAAAA").unwrap(),
+            device_id: DeviceId::new("yd-esp32-s3", "AAAAAAAAAAAA").unwrap(),
             device_name: "Desk".into(),
             device_profile_id: "phone".into(),
             hardware_profile_id: "esp-primary".into(),
@@ -893,7 +893,7 @@ mod tests {
     fn backup_round_trips_aggregates_and_only_the_newest_500_activities() {
         let directory = TestDirectory::new();
         let source = MetricsStore::open(&directory.0.join("source.sqlite3")).unwrap();
-        let device = DeviceId::new("luatos-esp32s3-aio", "AAAAAAAAAAAA").unwrap();
+        let device = DeviceId::new("yd-esp32-s3", "AAAAAAAAAAAA").unwrap();
         let attribution = MetricAttribution {
             device_id: device.clone(),
             device_name: "Desk".into(),
@@ -980,7 +980,7 @@ mod tests {
         let directory = TestDirectory::new();
         let store = MetricsStore::open(&directory.0.join("metrics.sqlite3")).unwrap();
         let attribution = MetricAttribution {
-            device_id: DeviceId::new("luatos-esp32s3-aio", "AAAAAAAAAAAA").unwrap(),
+            device_id: DeviceId::new("yd-esp32-s3", "AAAAAAAAAAAA").unwrap(),
             device_name: "Desk".into(),
             device_profile_id: "phone".into(),
             hardware_profile_id: "esp-primary".into(),
@@ -1010,7 +1010,7 @@ mod tests {
         let directory = TestDirectory::new();
         let store = MetricsStore::open(&directory.0.join("metrics.sqlite3")).unwrap();
         let attribution = MetricAttribution {
-            device_id: DeviceId::new("luatos-esp32s3-aio", "AAAAAAAAAAAA").unwrap(),
+            device_id: DeviceId::new("yd-esp32-s3", "AAAAAAAAAAAA").unwrap(),
             device_name: "Desk".into(),
             device_profile_id: "phone".into(),
             hardware_profile_id: "esp-primary".into(),
@@ -1033,7 +1033,7 @@ mod tests {
         let directory = TestDirectory::new();
         let store = MetricsStore::open(&directory.0.join("metrics.sqlite3")).unwrap();
         let attribution = MetricAttribution {
-            device_id: DeviceId::new("luatos-esp32s3-aio", "AAAAAAAAAAAA").unwrap(),
+            device_id: DeviceId::new("yd-esp32-s3", "AAAAAAAAAAAA").unwrap(),
             device_name: "Desk".into(),
             device_profile_id: "phone".into(),
             hardware_profile_id: "esp-primary".into(),

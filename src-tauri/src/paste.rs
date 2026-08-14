@@ -816,7 +816,7 @@ mod tests {
         (
             PasteRequest {
                 receive_sequence,
-                device_id: DeviceId::new("luatos-esp32s3-aio", serial).unwrap(),
+                device_id: DeviceId::new("yd-esp32-s3", serial).unwrap(),
                 event_id,
                 step,
                 text: format!("{serial}-{step}"),
@@ -847,19 +847,19 @@ mod tests {
         assert!(first_reply.try_recv().is_err());
         assert!(second_reply.try_recv().is_err());
         handle
-            .complete(&DeviceId::new("luatos-esp32s3-aio", "A").unwrap(), 10, 1)
+            .complete(&DeviceId::new("yd-esp32-s3", "A").unwrap(), 10, 1)
             .unwrap();
         handle.finish_sequence(1).unwrap();
         assert_eq!(first_reply.recv().unwrap(), PasteReply::Granted);
         assert_eq!(writes.lock().unwrap().as_slice(), ["A-1", "B-1"]);
         handle
-            .complete(&DeviceId::new("luatos-esp32s3-aio", "B").unwrap(), 20, 1)
+            .complete(&DeviceId::new("yd-esp32-s3", "B").unwrap(), 20, 1)
             .unwrap();
         handle.finish_sequence(2).unwrap();
         assert_eq!(second_reply.recv().unwrap(), PasteReply::Granted);
         assert_eq!(writes.lock().unwrap().as_slice(), ["A-1", "B-1", "C-1"]);
         handle
-            .complete(&DeviceId::new("luatos-esp32s3-aio", "C").unwrap(), 30, 1)
+            .complete(&DeviceId::new("yd-esp32-s3", "C").unwrap(), 30, 1)
             .unwrap();
         handle.finish_sequence(3).unwrap();
         coordinator.shutdown();
@@ -885,7 +885,7 @@ mod tests {
         );
         assert_eq!(writes.lock().unwrap().as_slice(), ["B-1"]);
         handle
-            .complete(&DeviceId::new("luatos-esp32s3-aio", "B").unwrap(), 20, 1)
+            .complete(&DeviceId::new("yd-esp32-s3", "B").unwrap(), 20, 1)
             .unwrap();
         handle.finish_sequence(2).unwrap();
 
@@ -899,7 +899,7 @@ mod tests {
         );
         assert_eq!(writes.lock().unwrap().as_slice(), ["B-1", "A-1"]);
         handle
-            .complete(&DeviceId::new("luatos-esp32s3-aio", "A").unwrap(), 10, 1)
+            .complete(&DeviceId::new("yd-esp32-s3", "A").unwrap(), 10, 1)
             .unwrap();
         handle.finish_sequence(1).unwrap();
         coordinator.shutdown();
@@ -920,7 +920,7 @@ mod tests {
         assert_eq!(first_reply.recv().unwrap(), PasteReply::TimedOut);
         assert_eq!(second_reply.recv().unwrap(), PasteReply::Granted);
         handle
-            .complete(&DeviceId::new("luatos-esp32s3-aio", "B").unwrap(), 20, 1)
+            .complete(&DeviceId::new("yd-esp32-s3", "B").unwrap(), 20, 1)
             .unwrap();
         handle.finish_sequence(2).unwrap();
         coordinator.shutdown();
@@ -940,12 +940,12 @@ mod tests {
 
         assert_eq!(first_reply.recv().unwrap(), PasteReply::Granted);
         handle
-            .complete(&DeviceId::new("luatos-esp32s3-aio", "A").unwrap(), 10, 1)
+            .complete(&DeviceId::new("yd-esp32-s3", "A").unwrap(), 10, 1)
             .unwrap();
         assert_eq!(second_reply.recv().unwrap(), PasteReply::Granted);
         assert_eq!(writes.lock().unwrap().as_slice(), ["A-1", "A-2"]);
         handle
-            .complete(&DeviceId::new("luatos-esp32s3-aio", "A").unwrap(), 10, 2)
+            .complete(&DeviceId::new("yd-esp32-s3", "A").unwrap(), 10, 2)
             .unwrap();
         handle.finish_sequence(1).unwrap();
         coordinator.shutdown();
@@ -986,7 +986,7 @@ mod tests {
         handle.submit(second).unwrap();
         assert_eq!(first_reply.recv().unwrap(), PasteReply::Granted);
         handle
-            .cancel_device(&DeviceId::new("luatos-esp32s3-aio", "A").unwrap())
+            .cancel_device(&DeviceId::new("yd-esp32-s3", "A").unwrap())
             .unwrap();
         assert_eq!(first_reply.recv().unwrap(), PasteReply::Cancelled);
         assert_eq!(second_reply.recv().unwrap(), PasteReply::Granted);

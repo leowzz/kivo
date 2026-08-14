@@ -27,7 +27,7 @@ trigger_settings:
 hardware_profiles:
   - id: hardware
     name: Default hardware
-    board_profile_id: vccgnd-yd-rp2040
+    board_profile_id: yd-rp2040
     debounce_ms: 30
     inputs:
       - type: direct

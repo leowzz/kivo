@@ -11,6 +11,7 @@ export interface ConfigurationSettingsDialogProps {
   onSave(settings: TriggerSettings): void;
   onDuplicate(name: string): Promise<void> | void;
   onDraftChange?(settings: TriggerSettings): void;
+  allowDuplicate?: boolean;
   onCancel(): void;
 }
 
@@ -26,6 +27,7 @@ export function ConfigurationSettingsDialog({
   onSave,
   onDuplicate,
   onDraftChange,
+  allowDuplicate = true,
   onCancel,
 }: ConfigurationSettingsDialogProps) {
   const [settings, setSettings] = useState<TriggerSettings>(profile.trigger_settings);
@@ -69,21 +71,21 @@ export function ConfigurationSettingsDialog({
             </label>
           </div>
           {validation && <p className="field-error" role="alert">{validation}</p>}
-          <div className="settings-duplicate">
+          {allowDuplicate && <div className="settings-duplicate">
             <label>
               <span>{t(language, "settings.duplicateName")}</span>
               <input aria-label={t(language, "settings.duplicateName")} value={copyName} onChange={(event) => setCopyName(event.target.value)} />
             </label>
             <p className="form-hint">{t(language, "settings.duplicateHint")}</p>
-          </div>
+          </div>}
         </div>
         <footer className="device-setup-footer">
           <button className="secondary-button" type="button" onClick={onCancel}>{t(language, "common.cancel")}</button>
           <button className="primary-button" type="button" disabled={Boolean(validation) || busy} onClick={() => onSave(settings)}>{saveLabel}</button>
-          <button className="secondary-button" type="button" disabled={!copyName.trim() || Boolean(validation) || busy} onClick={async () => {
+          {allowDuplicate && <button className="secondary-button" type="button" disabled={!copyName.trim() || Boolean(validation) || busy} onClick={async () => {
             setBusy(true);
             try { await onDuplicate(copyName.trim()); } finally { setBusy(false); }
-          }}>{t(language, "devices.duplicateForDevice")}</button>
+          }}>{t(language, "devices.duplicateForDevice")}</button>}
         </footer>
       </section>
     </div>

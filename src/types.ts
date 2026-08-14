@@ -99,17 +99,24 @@ export interface DeviceRecord {
   name: string;
   board_profile_id: string;
   runtime_assignment: RuntimeAssignment | null;
+  product_config?: ProductDeviceConfig | null;
+}
+
+export interface ProductDeviceConfig {
+  product_version_id: string;
+  trigger_settings: TriggerSettings;
+  actions: Record<string, TriggerActions>;
 }
 
 export interface SettingsDocument {
-  schema_version: 2;
+  schema_version: 3;
   editor_profile: string | null;
   language: Language;
   devices: Record<string, DeviceRecord>;
 }
 
 export interface EditorSettingsPatch {
-  schema_version: 2;
+  schema_version: 3;
   editor_profile: string | null;
   language: Language;
 }
@@ -187,6 +194,21 @@ export interface DeviceStatus {
   controllerFamilyId: string;
   boardProfileId: string;
   firmwareBuildId: string | null;
+  productVersionId?: string | null;
+  productDefinition?: {
+    schema_version: 1;
+    product: {
+      display_name: string;
+      family_id: string;
+      variant_id: string;
+      hardware_revision: number;
+      product_version_id: string;
+      capabilities: string[];
+    };
+    layout: ModelLayout;
+    hardware_profile: HardwareProfile;
+  } | null;
+  productConfig?: ProductDeviceConfig | null;
   firmwareProtocol?: number | null;
   capabilities: number[];
   runtimeAssignment: RuntimeAssignment | null;
@@ -277,6 +299,7 @@ export interface ImportPreview {
 }
 
 export interface BackupPreview {
+  kind?: "product_devices" | "full";
   profileCount: number;
   buttonCount: number;
   hardwareBindingCount: number;

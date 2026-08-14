@@ -28,7 +28,7 @@ class FakeSerial:
 def test_smoke_requires_expected_protocol_responses() -> None:
     device = FakeSerial(
         [
-            b"HELLO 6 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n",
+            b"HELLO 6 esp32s3 yd-esp32-s3 test-build 2 1 2\n",
             b"CONFIG_OK 1\n",
             b"CONFIG_ERROR 2 invalid_direct\n",
             b"LEARN_OK 3\n",
@@ -39,7 +39,7 @@ def test_smoke_requires_expected_protocol_responses() -> None:
     run_smoke(
         device,
         family="esp32s3",
-        board="luatos-esp32s3-aio",
+        board="yd-esp32-s3",
         build="test-build",
         valid_pins=[1, 2],
         rejected_pins=[99],
@@ -57,8 +57,29 @@ def test_smoke_requires_expected_protocol_responses() -> None:
     ]
 
 
+def test_smoke_accepts_generic_protocol_v9_hello() -> None:
+    device = FakeSerial(
+        [
+            b"HELLO 9 rp2040 yd-rp2040 test-build - 2 1 2\n",
+            b"CONFIG_OK 1\n",
+            b"LEARN_OK 2\n",
+            b"LEARN_OK 2\n",
+        ]
+    )
+
+    run_smoke(
+        device,
+        family="rp2040",
+        board="yd-rp2040",
+        build="test-build",
+        valid_pins=[1, 2],
+        rejected_pins=[],
+        protocol_version=9,
+    )
+
+
 def test_smoke_ignores_duplicate_hello_before_command_ack() -> None:
-    hello = b"HELLO 6 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n"
+    hello = b"HELLO 6 esp32s3 yd-esp32-s3 test-build 2 1 2\n"
     device = FakeSerial(
         [
             hello,
@@ -73,7 +94,7 @@ def test_smoke_ignores_duplicate_hello_before_command_ack() -> None:
     run_smoke(
         device,
         family="esp32s3",
-        board="luatos-esp32s3-aio",
+        board="yd-esp32-s3",
         build="test-build",
         valid_pins=[1, 2],
         rejected_pins=[99],
@@ -81,13 +102,13 @@ def test_smoke_ignores_duplicate_hello_before_command_ack() -> None:
 
 
 def test_smoke_rejects_wrong_hello() -> None:
-    device = FakeSerial([b"HELLO 2 esp32s3 luatos-esp32s3-aio test-build\n"])
+    device = FakeSerial([b"HELLO 2 esp32s3 yd-esp32-s3 test-build\n"])
 
     try:
         run_smoke(
             device,
             family="esp32s3",
-            board="luatos-esp32s3-aio",
+            board="yd-esp32-s3",
             build="test-build",
             valid_pins=[1, 2],
             rejected_pins=[],
@@ -101,16 +122,16 @@ def test_smoke_rejects_wrong_hello() -> None:
 @pytest.mark.parametrize(
     "hello",
     [
-        "HELLO 6 rp2040 luatos-esp32s3-aio test-build 2 1 2",
+        "HELLO 6 rp2040 yd-esp32-s3 test-build 2 1 2",
         "HELLO 6 esp32s3 other-board test-build 2 1 2",
-        "HELLO 6 esp32s3 luatos-esp32s3-aio other-build 2 1 2",
-        "HELLO 6 esp32s3 luatos-esp32s3-aio test-build",
-        "HELLO 6 esp32s3 luatos-esp32s3-aio test-build nope 1",
-        "HELLO 6 esp32s3 luatos-esp32s3-aio test-build 2 1",
-        "HELLO 6 esp32s3 luatos-esp32s3-aio test-build 2 1 1",
-        "HELLO 6 esp32s3 luatos-esp32s3-aio test-build 0",
-        "HELLO 6 esp32s3 luatos-esp32s3-aio test-build 1 -1",
-        "HELLO 6 esp32s3 luatos-esp32s3-aio test-build 1 256",
+        "HELLO 6 esp32s3 yd-esp32-s3 other-build 2 1 2",
+        "HELLO 6 esp32s3 yd-esp32-s3 test-build",
+        "HELLO 6 esp32s3 yd-esp32-s3 test-build nope 1",
+        "HELLO 6 esp32s3 yd-esp32-s3 test-build 2 1",
+        "HELLO 6 esp32s3 yd-esp32-s3 test-build 2 1 1",
+        "HELLO 6 esp32s3 yd-esp32-s3 test-build 0",
+        "HELLO 6 esp32s3 yd-esp32-s3 test-build 1 -1",
+        "HELLO 6 esp32s3 yd-esp32-s3 test-build 1 256",
     ],
 )
 def test_smoke_rejects_invalid_hello_v6(hello: str) -> None:
@@ -118,7 +139,7 @@ def test_smoke_rejects_invalid_hello_v6(hello: str) -> None:
         run_smoke(
             FakeSerial([hello.encode() + b"\n"]),
             family="esp32s3",
-            board="luatos-esp32s3-aio",
+            board="yd-esp32-s3",
             build="test-build",
             valid_pins=[1, 2],
             rejected_pins=[],
@@ -129,7 +150,7 @@ def test_smoke_cli_requires_build_and_passes_it_to_run_arguments() -> None:
     parser = build_parser()
     arguments = [
         "--serial", "TARGET", "--vid", "0x303a", "--pid", "0x4002",
-        "--family", "esp32s3", "--board", "luatos-esp32s3-aio",
+        "--family", "esp32s3", "--board", "yd-esp32-s3",
         "--valid-pins", "1,2", "--rejected-pins", "99",
     ]
 
@@ -139,7 +160,7 @@ def test_smoke_cli_requires_build_and_passes_it_to_run_arguments() -> None:
     assert args.build == "test-build"
     device = FakeSerial(
         [
-            b"HELLO 6 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n",
+            b"HELLO 9 esp32s3 yd-esp32-s3 test-build - 2 1 2\n",
             b"CONFIG_OK 1\n",
             b"CONFIG_ERROR 2 invalid_direct\n",
             b"LEARN_OK 3\n",
@@ -162,7 +183,7 @@ def test_smoke_cli_requires_build_and_passes_it_to_run_arguments() -> None:
     ],
 )
 def test_smoke_rejects_wrong_configuration_ack(response: bytes, message: str) -> None:
-    responses = [b"HELLO 6 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n"]
+    responses = [b"HELLO 6 esp32s3 yd-esp32-s3 test-build 2 1 2\n"]
     if response.startswith(b"CONFIG_ERROR"):
         responses.append(b"CONFIG_OK 1\n")
     responses.append(response)
@@ -170,7 +191,7 @@ def test_smoke_rejects_wrong_configuration_ack(response: bytes, message: str) ->
         run_smoke(
             FakeSerial(responses),
             family="esp32s3",
-            board="luatos-esp32s3-aio",
+            board="yd-esp32-s3",
             build="test-build",
             valid_pins=[1, 2],
             rejected_pins=[99] if response.startswith(b"CONFIG_ERROR") else [],
@@ -180,7 +201,7 @@ def test_smoke_rejects_wrong_configuration_ack(response: bytes, message: str) ->
 def test_smoke_rejects_wrong_learning_ack() -> None:
     device = FakeSerial(
         [
-            b"HELLO 6 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n",
+            b"HELLO 6 esp32s3 yd-esp32-s3 test-build 2 1 2\n",
             b"CONFIG_OK 1\n",
             b"LEARN_OK 3\n",
         ]
@@ -189,7 +210,7 @@ def test_smoke_rejects_wrong_learning_ack() -> None:
         run_smoke(
             device,
             family="esp32s3",
-            board="luatos-esp32s3-aio",
+            board="yd-esp32-s3",
             build="test-build",
             valid_pins=[1, 2],
             rejected_pins=[],
@@ -199,7 +220,7 @@ def test_smoke_rejects_wrong_learning_ack() -> None:
 def test_smoke_actions_use_one_host_created_run_and_sequential_done_steps() -> None:
     device = FakeSerial(
         [
-            b"HELLO 6 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n",
+            b"HELLO 6 esp32s3 yd-esp32-s3 test-build 2 1 2\n",
             b"CONFIG_OK 1\n",
             b"LEARN_OK 2\n",
             b"LEARN_OK 2\n",
@@ -214,7 +235,7 @@ def test_smoke_actions_use_one_host_created_run_and_sequential_done_steps() -> N
     run_smoke(
         device,
         family="esp32s3",
-        board="luatos-esp32s3-aio",
+        board="yd-esp32-s3",
         build="test-build",
         valid_pins=[1, 2],
         rejected_pins=[],
@@ -257,7 +278,7 @@ def test_smoke_rejects_wrong_action_completion_before_advancing(
 ) -> None:
     device = FakeSerial(
         [
-            b"HELLO 6 esp32s3 luatos-esp32s3-aio test-build 2 1 2\n",
+            b"HELLO 6 esp32s3 yd-esp32-s3 test-build 2 1 2\n",
             b"CONFIG_OK 1\n",
             b"LEARN_OK 2\n",
             b"LEARN_OK 2\n",
@@ -269,7 +290,7 @@ def test_smoke_rejects_wrong_action_completion_before_advancing(
         run_smoke(
             device,
             family="esp32s3",
-            board="luatos-esp32s3-aio",
+            board="yd-esp32-s3",
             build="test-build",
             valid_pins=[1, 2],
             rejected_pins=[],
@@ -284,7 +305,7 @@ def test_smoke_preserves_legacy_event_id_action_exchange(protocol_version: int) 
     device = FakeSerial(
         [
             (
-                f"HELLO {protocol_version} esp32s3 luatos-esp32s3-aio "
+                f"HELLO {protocol_version} esp32s3 yd-esp32-s3 "
                 "test-build 2 1 2\n"
             ).encode(),
             b"CONFIG_OK 1\n",
@@ -299,7 +320,7 @@ def test_smoke_preserves_legacy_event_id_action_exchange(protocol_version: int) 
     run_smoke(
         device,
         family="esp32s3",
-        board="luatos-esp32s3-aio",
+        board="yd-esp32-s3",
         build="test-build",
         valid_pins=[1, 2],
         rejected_pins=[],

@@ -116,11 +116,11 @@ void test_rotated_or_unsupported_panel_requests_full_refresh() {
 }
 
 GpioTriggerController directController(std::uint32_t startMs) {
-  TopologyBuilder builder(kLuatOsEsp32S3Aio);
+  TopologyBuilder builder(kYdEsp32S3);
   builder.begin(1, 30);
   builder.addDirect(1, 0, {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16,
                            17, 18});
-  GpioTriggerController controller(kLuatOsEsp32S3Aio, startMs);
+  GpioTriggerController controller(kYdEsp32S3, startMs);
   controller.configure(*builder.commit(1), startMs);
   return controller;
 }
@@ -800,7 +800,7 @@ void test_formats_display_protocol_replies_exactly() {
 }
 
 void test_commits_complete_matrix_topology_atomically() {
-  TopologyBuilder builder(kLuatOsEsp32S3Aio);
+  TopologyBuilder builder(kYdEsp32S3);
   TEST_ASSERT_TRUE(builder.begin(7, 30));
   TEST_ASSERT_TRUE(builder.addMatrix(7, 0, {1, 2}, {12, 13}));
 
@@ -812,7 +812,7 @@ void test_commits_complete_matrix_topology_atomically() {
 }
 
 void test_runtime_topology_counts_direct_and_matrix_keys() {
-  TopologyBuilder builder(kVccGndYdRp2040);
+  TopologyBuilder builder(kYdRp2040);
   TEST_ASSERT_TRUE(builder.begin(8, 30));
   TEST_ASSERT_TRUE(builder.addDirect(8, 0, {0, 1}));
   TEST_ASSERT_TRUE(builder.addMatrix(8, 1, {2, 3}, {4, 5}));
@@ -824,33 +824,44 @@ void test_runtime_topology_counts_direct_and_matrix_keys() {
 }
 
 void test_board_profiles_enforce_exact_safe_pins() {
-  TEST_ASSERT_TRUE(kLuatOsEsp32S3Aio.supports(18));
-  TEST_ASSERT_FALSE(kLuatOsEsp32S3Aio.supports(19));
-  TEST_ASSERT_TRUE(kVccGndYdRp2040.supports(0));
-  TEST_ASSERT_TRUE(kVccGndYdRp2040.supports(22));
+  for (const auto pin : {0, 10, 11, 18, 21, 38, 39, 40, 41, 42, 47}) {
+    TEST_ASSERT_TRUE(kYdEsp32S3.supports(pin));
+  }
+  TEST_ASSERT_FALSE(kYdEsp32S3.supports(19));
+  TEST_ASSERT_FALSE(kYdEsp32S3.supports(20));
+  TEST_ASSERT_FALSE(kYdEsp32S3.supports(35));
+  TEST_ASSERT_FALSE(kYdEsp32S3.supports(36));
+  TEST_ASSERT_FALSE(kYdEsp32S3.supports(37));
+  TEST_ASSERT_FALSE(kYdEsp32S3.supports(43));
+  TEST_ASSERT_FALSE(kYdEsp32S3.supports(44));
+  TEST_ASSERT_FALSE(kYdEsp32S3.supports(45));
+  TEST_ASSERT_FALSE(kYdEsp32S3.supports(46));
+  TEST_ASSERT_FALSE(kYdEsp32S3.supports(48));
+  TEST_ASSERT_TRUE(kYdRp2040.supports(0));
+  TEST_ASSERT_TRUE(kYdRp2040.supports(22));
   for (std::uint8_t pin = 23; pin <= 25; ++pin) {
-    TEST_ASSERT_FALSE(kVccGndYdRp2040.supports(pin));
+    TEST_ASSERT_FALSE(kYdRp2040.supports(pin));
   }
   for (std::uint8_t pin = 26; pin <= 29; ++pin) {
-    TEST_ASSERT_TRUE(kVccGndYdRp2040.supports(pin));
+    TEST_ASSERT_TRUE(kYdRp2040.supports(pin));
   }
 
-  TopologyBuilder rp2040(kVccGndYdRp2040);
+  TopologyBuilder rp2040(kYdRp2040);
   TEST_ASSERT_TRUE(rp2040.begin(1, 30));
   TEST_ASSERT_TRUE(rp2040.addDirect(1, 0, {0, 22, 26, 27, 28, 29}));
 
-  TopologyBuilder reserved(kVccGndYdRp2040);
+  TopologyBuilder reserved(kYdRp2040);
   TEST_ASSERT_TRUE(reserved.begin(1, 30));
   TEST_ASSERT_FALSE(reserved.addDirect(1, 0, {23}));
 }
 
 void test_board_profiles_report_oled_capability() {
-  TEST_ASSERT_FALSE(kLuatOsEsp32S3Aio.supportsOled);
-  TEST_ASSERT_TRUE(kVccGndYdRp2040.supportsOled);
+  TEST_ASSERT_FALSE(kYdEsp32S3.supportsOled);
+  TEST_ASSERT_TRUE(kYdRp2040.supportsOled);
 }
 
 void test_rp2040_standalone_debug_topology_matches_keyboard_wiring() {
-  const auto topology = makeRp2040StandaloneDebugTopology(kVccGndYdRp2040);
+  const auto topology = makeRp2040StandaloneDebugTopology(kYdRp2040);
 
   TEST_ASSERT_TRUE(topology.has_value());
   TEST_ASSERT_EQUAL_UINT16(30, topology->debounceMs);
@@ -867,7 +878,7 @@ void test_rp2040_standalone_debug_topology_matches_keyboard_wiring() {
   TEST_ASSERT_EQUAL_UINT8(29, topology->oled->scl);
 
   TEST_ASSERT_FALSE(
-      makeRp2040StandaloneDebugTopology(kLuatOsEsp32S3Aio).has_value());
+      makeRp2040StandaloneDebugTopology(kYdEsp32S3).has_value());
 }
 
 void test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match() {
@@ -890,26 +901,40 @@ void test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins() {
 
 void test_formats_protocol_v8_hello_with_board_and_build() {
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 8 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 27 "
+      "HELLO 8 rp2040 yd-rp2040 0.1.0+gabc1234 27 "
       "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 26 "
       "27 28 29\n",
-      formatHello(kVccGndYdRp2040, "0.1.0+gabc1234").c_str());
+      formatHello(kYdRp2040, "0.1.0+gabc1234").c_str());
+}
+
+void test_formats_protocol_v9_hello_with_product_identity() {
+  TEST_ASSERT_EQUAL_STRING(
+      "HELLO 9 rp2040 yd-rp2040 0.1.0+gabc1234 key-k1-r01 27 "
+      "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 26 "
+      "27 28 29\n",
+      formatHello(kYdRp2040, "0.1.0+gabc1234", "key-k1-r01")
+          .c_str());
+  TEST_ASSERT_EQUAL_STRING(
+      "HELLO 9 rp2040 yd-rp2040 build - 27 "
+      "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 26 "
+      "27 28 29\n",
+      formatHello(kYdRp2040, "build", "-").c_str());
 }
 
 void test_rejects_empty_firmware_build_id() {
-  TEST_ASSERT_EQUAL_STRING("", formatHello(kVccGndYdRp2040, "").c_str());
+  TEST_ASSERT_EQUAL_STRING("", formatHello(kYdRp2040, "").c_str());
 }
 
 void test_rejects_whitespace_in_firmware_build_id() {
   TEST_ASSERT_EQUAL_STRING("",
-                           formatHello(kVccGndYdRp2040, "0.1.0 test").c_str());
+                           formatHello(kYdRp2040, "0.1.0 test").c_str());
 }
 
 void test_contact_edge_reports_unordered_pair_once_after_debounce() {
-  TopologyBuilder builder(kLuatOsEsp32S3Aio);
+  TopologyBuilder builder(kYdEsp32S3);
   TEST_ASSERT_TRUE(builder.begin(7, 30));
   TEST_ASSERT_TRUE(builder.addMatrix(7, 0, {1, 2}, {12, 13}));
-  GpioTriggerController controller(kLuatOsEsp32S3Aio, 0);
+  GpioTriggerController controller(kYdEsp32S3, 0);
   controller.configure(*builder.commit(7), 0);
 
   TEST_ASSERT_FALSE(controller.updateContact(0, 1, 12, true, 10).has_value());
@@ -925,6 +950,15 @@ void test_parses_runtime_configuration_commands() {
   const auto hello = parseHelperCommand("HELLO\n");
   TEST_ASSERT_TRUE(hello.has_value());
   TEST_ASSERT_EQUAL(HelperCommandKind::Hello, hello->kind);
+
+  const auto productInfo = parseHelperCommand("PRODUCT_INFO\n");
+  TEST_ASSERT_TRUE(productInfo.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::ProductInfo, productInfo->kind);
+  const auto productRead = parseHelperCommand("PRODUCT_READ\r\n");
+  TEST_ASSERT_TRUE(productRead.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::ProductRead, productRead->kind);
+  TEST_ASSERT_FALSE(parseHelperCommand("PRODUCT_INFO extra\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("PRODUCT_READ 0\n").has_value());
 
   const auto begin = parseHelperCommand("CONFIG_BEGIN 3 30\n");
   TEST_ASSERT_TRUE(begin.has_value());
@@ -958,11 +992,11 @@ void test_parses_runtime_configuration_commands() {
 }
 
 void test_oled_configuration_requires_supported_distinct_safe_pins() {
-  TopologyBuilder esp32(kLuatOsEsp32S3Aio);
+  TopologyBuilder esp32(kYdEsp32S3);
   TEST_ASSERT_TRUE(esp32.begin(1, 30));
   TEST_ASSERT_FALSE(esp32.addOled(1, 4, 5));
 
-  TopologyBuilder rp2040(kVccGndYdRp2040);
+  TopologyBuilder rp2040(kYdRp2040);
   TEST_ASSERT_TRUE(rp2040.begin(1, 30));
   TEST_ASSERT_FALSE(rp2040.addOled(1, 4, 4));
   TEST_ASSERT_FALSE(rp2040.addOled(1, 4, 23));
@@ -975,7 +1009,7 @@ void test_oled_configuration_requires_supported_distinct_safe_pins() {
 }
 
 void test_oled_pins_are_reserved_when_oled_command_arrives_first() {
-  TopologyBuilder builder(kVccGndYdRp2040);
+  TopologyBuilder builder(kYdRp2040);
   TEST_ASSERT_TRUE(builder.begin(1, 30));
   TEST_ASSERT_TRUE(builder.addOled(1, 4, 5));
   TEST_ASSERT_FALSE(builder.addDirect(1, 0, {6, 5}));
@@ -988,7 +1022,7 @@ void test_oled_pins_are_reserved_when_oled_command_arrives_first() {
 }
 
 void test_oled_pins_are_reserved_when_input_command_arrives_first() {
-  TopologyBuilder builder(kVccGndYdRp2040);
+  TopologyBuilder builder(kYdRp2040);
   TEST_ASSERT_TRUE(builder.begin(1, 30));
   TEST_ASSERT_TRUE(builder.addDirect(1, 0, {4}));
   TEST_ASSERT_FALSE(builder.addOled(1, 5, 4));
@@ -1010,11 +1044,11 @@ void test_parses_extended_registered_board_pin_domain() {
   TEST_ASSERT_EQUAL_UINT8(10, direct->pins[0]);
   TEST_ASSERT_EQUAL_UINT8(29, direct->pins[8]);
 
-  TopologyBuilder esp32(kLuatOsEsp32S3Aio);
+  TopologyBuilder esp32(kYdEsp32S3);
   TEST_ASSERT_TRUE(esp32.begin(3, 30));
   TEST_ASSERT_FALSE(esp32.addDirect(3, 0, direct->pins));
 
-  TopologyBuilder rp2040(kVccGndYdRp2040);
+  TopologyBuilder rp2040(kYdRp2040);
   TEST_ASSERT_TRUE(rp2040.begin(3, 30));
   TEST_ASSERT_TRUE(rp2040.addDirect(3, 0, direct->pins));
 }
@@ -1027,11 +1061,11 @@ void test_parser_defers_unsupported_pins_to_board_validation() {
   TEST_ASSERT_EQUAL_UINT8(23, direct->pins[0]);
   TEST_ASSERT_EQUAL_UINT8(25, direct->pins[2]);
 
-  TopologyBuilder esp32(kLuatOsEsp32S3Aio);
+  TopologyBuilder esp32(kYdEsp32S3);
   TEST_ASSERT_TRUE(esp32.begin(3, 30));
   TEST_ASSERT_FALSE(esp32.addDirect(3, 0, direct->pins));
 
-  TopologyBuilder rp2040(kVccGndYdRp2040);
+  TopologyBuilder rp2040(kYdRp2040);
   TEST_ASSERT_TRUE(rp2040.begin(3, 30));
   TEST_ASSERT_FALSE(rp2040.addDirect(3, 0, direct->pins));
 }
@@ -1119,13 +1153,13 @@ void test_debounced_input_edges_do_not_create_action_state() {
 }
 
 void test_learning_reports_contact_and_restores_runtime_topology() {
-  TopologyBuilder builder(kLuatOsEsp32S3Aio);
+  TopologyBuilder builder(kYdEsp32S3);
   builder.begin(7, 30);
   builder.addDirect(7, 0, {6});
-  GpioTriggerController controller(kLuatOsEsp32S3Aio, 0);
+  GpioTriggerController controller(kYdEsp32S3, 0);
   controller.configure(*builder.commit(7), 0);
 
-  TEST_ASSERT_FALSE(controller.beginLearning(4, {1, 10, 12}, 0));
+  TEST_ASSERT_FALSE(controller.beginLearning(4, {1, 12, 35}, 0));
   TEST_ASSERT_TRUE(controller.beginLearning(4, {1, 12}, 0));
   TEST_ASSERT_FALSE(
       controller.updateLearningContact(12, 1, true, 10).has_value());
@@ -1140,21 +1174,21 @@ void test_learning_reports_contact_and_restores_runtime_topology() {
 }
 
 void test_rp2040_learning_accepts_gpio29_and_rejects_gpio23() {
-  GpioTriggerController esp32(kLuatOsEsp32S3Aio, 0);
+  GpioTriggerController esp32(kYdEsp32S3, 0);
   TEST_ASSERT_FALSE(esp32.beginLearning(4, {29}, 0));
 
-  GpioTriggerController rp2040(kVccGndYdRp2040, 0);
+  GpioTriggerController rp2040(kYdRp2040, 0);
   TEST_ASSERT_TRUE(rp2040.beginLearning(4, {29}, 0));
   TEST_ASSERT_TRUE(rp2040.endLearning(4, 1));
   TEST_ASSERT_FALSE(rp2040.beginLearning(5, {23}, 1));
 }
 
 void test_learning_rejects_active_oled_pins() {
-  TopologyBuilder builder(kVccGndYdRp2040);
+  TopologyBuilder builder(kYdRp2040);
   TEST_ASSERT_TRUE(builder.begin(7, 30));
   TEST_ASSERT_TRUE(builder.addDirect(7, 0, {6}));
   TEST_ASSERT_TRUE(builder.addOled(7, 4, 5));
-  GpioTriggerController controller(kVccGndYdRp2040, 0);
+  GpioTriggerController controller(kYdRp2040, 0);
   controller.configure(*builder.commit(7), 0);
 
   TEST_ASSERT_FALSE(controller.beginLearning(8, {4, 7}, 0));
@@ -1241,10 +1275,10 @@ void test_display_status_can_clear_stale_input_activity() {
 }
 
 void test_suppresses_new_contact_that_closes_a_ghost_cycle() {
-  TopologyBuilder builder(kLuatOsEsp32S3Aio);
+  TopologyBuilder builder(kYdEsp32S3);
   builder.begin(1, 1);
   builder.addMatrix(1, 0, {1, 2}, {12, 13});
-  GpioTriggerController controller(kLuatOsEsp32S3Aio, 0);
+  GpioTriggerController controller(kYdEsp32S3, 0);
   controller.configure(*builder.commit(1), 0);
 
   for (const auto pair :
@@ -1259,15 +1293,20 @@ void test_suppresses_new_contact_that_closes_a_ghost_cycle() {
 }
 
 void test_exposes_supported_gpio_inputs() {
-  GpioTriggerController controller(kLuatOsEsp32S3Aio);
+  GpioTriggerController controller(kYdEsp32S3);
   TEST_ASSERT_TRUE(controller.isSupportedPin(0));
   TEST_ASSERT_TRUE(controller.isSupportedPin(1));
   TEST_ASSERT_TRUE(controller.isSupportedPin(9));
+  TEST_ASSERT_TRUE(controller.isSupportedPin(10));
+  TEST_ASSERT_TRUE(controller.isSupportedPin(11));
   TEST_ASSERT_TRUE(controller.isSupportedPin(12));
   TEST_ASSERT_TRUE(controller.isSupportedPin(18));
-  TEST_ASSERT_FALSE(controller.isSupportedPin(10));
-  TEST_ASSERT_FALSE(controller.isSupportedPin(11));
+  TEST_ASSERT_TRUE(controller.isSupportedPin(21));
+  TEST_ASSERT_TRUE(controller.isSupportedPin(38));
+  TEST_ASSERT_TRUE(controller.isSupportedPin(47));
   TEST_ASSERT_FALSE(controller.isSupportedPin(19));
+  TEST_ASSERT_FALSE(controller.isSupportedPin(35));
+  TEST_ASSERT_FALSE(controller.isSupportedPin(48));
 }
 
 void test_stable_edges_emit_once_after_debounce() {
@@ -1749,6 +1788,7 @@ int main(int, char **) {
   RUN_TEST(test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match);
   RUN_TEST(test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins);
   RUN_TEST(test_formats_protocol_v8_hello_with_board_and_build);
+  RUN_TEST(test_formats_protocol_v9_hello_with_product_identity);
   RUN_TEST(test_rejects_empty_firmware_build_id);
   RUN_TEST(test_rejects_whitespace_in_firmware_build_id);
   RUN_TEST(test_contact_edge_reports_unordered_pair_once_after_debounce);
