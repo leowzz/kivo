@@ -10,3 +10,4 @@ dist/
 /output/
 src-tauri/target/
 config.yaml
+.idea
