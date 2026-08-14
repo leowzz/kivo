@@ -59,15 +59,11 @@ export interface ContactInputSource {
   keys: Record<string, [number, number]>;
 }
 
-export type SwitchState = "open" | "closed";
-
 export interface FeatureSwitchInputSource {
   type: "feature_switch";
   id: string;
   name: string;
   gpio: number;
-  normal_state: SwitchState;
-  enabled_when: SwitchState;
   buttons: string[];
 }
 

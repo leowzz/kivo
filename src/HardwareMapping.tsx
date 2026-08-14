@@ -11,7 +11,6 @@ import type {
   Language,
   LearningTarget,
   ModelLayout,
-  SwitchState,
 } from "./types";
 
 interface HardwareMappingProps {
@@ -573,20 +572,6 @@ export function HardwareMapping({
                         </select>
                         {(invalid.has(source.gpio) || conflicts.has(source.gpio)) && <small className="field-error">{conflicts.has(source.gpio) ? conflictMessage(language, source.gpio) : invalidMessage(language, [source.gpio])}</small>}
                       </label>
-                      <label className="field-stack compact-field">
-                        <span>{t(language, "hardware.switchNormalState")}</span>
-                        <select value={source.normal_state} onChange={(event) => updateSource(sourceIndex, { ...source, normal_state: event.target.value as SwitchState })}>
-                          <option value="open">{t(language, "hardware.switchNormallyOpen")}</option>
-                          <option value="closed">{t(language, "hardware.switchNormallyClosed")}</option>
-                        </select>
-                      </label>
-                      <label className="field-stack compact-field">
-                        <span>{t(language, "hardware.switchEnabledWhen")}</span>
-                        <select value={source.enabled_when} onChange={(event) => updateSource(sourceIndex, { ...source, enabled_when: event.target.value as SwitchState })}>
-                          <option value="open">{t(language, "hardware.switchOpen")}</option>
-                          <option value="closed">{t(language, "hardware.switchClosed")}</option>
-                        </select>
-                      </label>
                     </div>
                     <fieldset className="feature-switch-buttons">
                       <legend>{t(language, "hardware.switchButtons")}</legend>
@@ -744,8 +729,6 @@ export function HardwareMapping({
                 id: `switch-${hardware.inputs.length + 1}`,
                 name: t(language, "hardware.switchDefaultName"),
                 gpio: editablePins.find((pin) => !inputPins.has(pin) && !oledPins.has(pin)) ?? 0,
-                normal_state: "open",
-                enabled_when: "closed",
                 buttons: [],
               }],
             })}><Plus size={16} />{t(language, "hardware.addSwitch")}</button>

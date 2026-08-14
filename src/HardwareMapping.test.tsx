@@ -450,7 +450,7 @@ test("accepts GPIO26 through GPIO29 across direct, matrix, and OLED ownership", 
   expect(within(sda).queryByRole("option", { name: "27" })).toBeNull();
 });
 
-test("configures feature switch polarity and affected buttons independently from key mappings", async () => {
+test("configures affected buttons without exposing switch polarity", async () => {
   const user = userEvent.setup();
   const onChange = renderMapping({
     profiles: [{
@@ -460,21 +460,17 @@ test("configures feature switch polarity and affected buttons independently from
         id: "mode",
         name: "Mode",
         gpio: 12,
-        normal_state: "open",
-        enabled_when: "closed",
         buttons: [],
       }],
     }],
   });
 
-  await user.selectOptions(screen.getByLabelText("常态"), "closed");
-  await user.selectOptions(screen.getByLabelText("以下状态启用按钮"), "open");
+  expect(screen.queryByLabelText("常态")).toBeNull();
+  expect(screen.queryByLabelText("以下状态启用按钮")).toBeNull();
   await user.click(screen.getByRole("checkbox", { name: "1" }));
 
   const updates = onChange.mock.calls.map(([profiles]) => (profiles as HardwareProfile[])[0].inputs[0]);
   expect(updates).toEqual(expect.arrayContaining([
-    expect.objectContaining({ normal_state: "closed" }),
-    expect.objectContaining({ enabled_when: "open" }),
     expect.objectContaining({ buttons: ["ONE"] }),
   ]));
 });

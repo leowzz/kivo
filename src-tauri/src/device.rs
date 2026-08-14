@@ -172,33 +172,6 @@ pub struct RuntimeProfileSnapshot {
     pub metric_attribution: MetricAttribution,
 }
 
-fn initial_feature_switch_states(
-    snapshot: Option<&RuntimeProfileSnapshot>,
-    previous: &BTreeMap<String, SwitchState>,
-) -> BTreeMap<String, SwitchState> {
-    snapshot
-        .and_then(|runtime| {
-            runtime
-                .profile
-                .hardware_profile(&runtime.hardware_profile_id)
-        })
-        .into_iter()
-        .flat_map(|hardware| &hardware.inputs)
-        .filter_map(|source| {
-            let InputSource::FeatureSwitch {
-                id, normal_state, ..
-            } = source
-            else {
-                return None;
-            };
-            Some((
-                id.clone(),
-                previous.get(id).copied().unwrap_or(*normal_state),
-            ))
-        })
-        .collect()
-}
-
 fn format_switch_state(state: SwitchState) -> &'static str {
     match state {
         SwitchState::Open => "open",
@@ -246,7 +219,6 @@ struct ActiveLearning {
 impl DeviceSession {
     #[cfg(test)]
     pub fn new(profile: RuntimeProfileSnapshot) -> Self {
-        let feature_switch_states = initial_feature_switch_states(Some(&profile), &BTreeMap::new());
         Self {
             profile: Some(Arc::new(profile)),
             candidate_board: crate::hardware::board_by_id(
@@ -267,7 +239,7 @@ impl DeviceSession {
             pending_receive_sequences: BTreeMap::new(),
             gesture_placeholders: BTreeMap::new(),
             trigger_metadata: BTreeMap::new(),
-            feature_switch_states,
+            feature_switch_states: BTreeMap::new(),
             active_receive_sequence: None,
             pending_paste: None,
             pending_reconfiguration: None,
@@ -309,8 +281,22 @@ impl DeviceSession {
         &mut self,
         snapshot: Option<Arc<RuntimeProfileSnapshot>>,
     ) -> SessionOutput {
-        self.feature_switch_states =
-            initial_feature_switch_states(snapshot.as_deref(), &BTreeMap::new());
+        let switch_ids = snapshot
+            .as_deref()
+            .and_then(|runtime| {
+                runtime
+                    .profile
+                    .hardware_profile(&runtime.hardware_profile_id)
+            })
+            .into_iter()
+            .flat_map(|hardware| &hardware.inputs)
+            .filter_map(|source| match source {
+                InputSource::FeatureSwitch { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        self.feature_switch_states
+            .retain(|id, _| switch_ids.contains(id.as_str()));
         self.profile = snapshot.clone();
         if let Some(pending) = self.pending_reconfiguration.as_mut() {
             pending.snapshot = snapshot;
@@ -331,8 +317,7 @@ impl DeviceSession {
         self.settle_placeholders(&mut output);
         self.ready = false;
         self.configuring = None;
-        self.feature_switch_states =
-            initial_feature_switch_states(snapshot.as_deref(), &self.feature_switch_states);
+        self.feature_switch_states.clear();
         self.profile = snapshot.clone();
         self.pending_reconfiguration = Some(PendingReconfiguration {
             snapshot,
@@ -665,12 +650,7 @@ impl DeviceSession {
                 .profile
                 .feature_switch_for(&runtime.hardware_profile_id, &input)
                 .and_then(|source| match source {
-                    InputSource::FeatureSwitch {
-                        id,
-                        normal_state,
-                        enabled_when,
-                        ..
-                    } => Some((id.clone(), *normal_state, *enabled_when)),
+                    InputSource::FeatureSwitch { id, .. } => Some(id.clone()),
                     _ => None,
                 })
         });
@@ -706,7 +686,7 @@ impl DeviceSession {
             activity.params.insert("button".into(), button);
         }
         output.activities.push(activity);
-        if let Some((id, normal_state, enabled_when)) = feature_switch {
+        if let Some(id) = feature_switch {
             let switch_state = match state {
                 InputState::Down => SwitchState::Closed,
                 InputState::Up => SwitchState::Open,
@@ -719,8 +699,6 @@ impl DeviceSession {
                 RuntimeActivity::new("feature_switch_changed")
                     .with_param("switch", id)
                     .with_param("state", format_switch_state(switch_state))
-                    .with_param("normalState", format_switch_state(normal_state))
-                    .with_param("enabledWhen", format_switch_state(enabled_when))
                     .with_context(context),
             );
             output.completed_receive_sequences.push(receive_sequence);
@@ -1004,8 +982,7 @@ impl DeviceSession {
         output: &mut SessionOutput,
     ) {
         self.profile = snapshot;
-        self.feature_switch_states =
-            initial_feature_switch_states(self.profile.as_deref(), &BTreeMap::new());
+        self.feature_switch_states.clear();
         self.ready = false;
         self.configuring = None;
         if self.hello.is_none() {
@@ -2685,7 +2662,7 @@ mod tests {
         paste::{ClipboardWriter, PasteCoordinator},
         profile::{
             ButtonAction, DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION,
-            Ssd1306Config, SwitchState,
+            Ssd1306Config,
         },
         protocol::{
             DISPLAY_LARGE_FONT_PROTOCOL_VERSION, DISPLAY_PROTOCOL_VERSION, DeviceMessage,
@@ -2784,8 +2761,6 @@ mod tests {
                 id: "mode".into(),
                 name: "Mode switch".into(),
                 gpio: 7,
-                normal_state: SwitchState::Open,
-                enabled_when: SwitchState::Closed,
                 buttons: BTreeSet::from(["A".into()]),
             });
         runtime.profile.validate().unwrap();
@@ -3253,24 +3228,9 @@ mod tests {
             pins: vec![6, 7],
         });
 
-        let disabled = session.on_message(
-            DeviceMessage::State {
-                event_id: 1,
-                input: PhysicalInput::Direct { gpio: 7 },
-                state: InputState::Up,
-            },
-            &mut |_| Ok(()),
-        );
-        assert!(
-            disabled
-                .activities
-                .iter()
-                .all(|activity| activity.code != "trigger_occurred")
-        );
-
         let blocked = session.on_message(
             DeviceMessage::State {
-                event_id: 2,
+                event_id: 1,
                 input: PhysicalInput::Direct { gpio: 6 },
                 state: InputState::Down,
             },
@@ -3338,6 +3298,37 @@ mod tests {
         );
         drop(store);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn feature_switch_state_survives_snapshot_updates_and_clears_on_reconfigure() {
+        let runtime = runtime_model_with_feature_switch();
+        let mut session = DeviceSession::new(runtime.clone());
+        session.ready = true;
+
+        session.on_message(
+            DeviceMessage::State {
+                event_id: 1,
+                input: PhysicalInput::Direct { gpio: 7 },
+                state: InputState::Down,
+            },
+            &mut |_| Ok(()),
+        );
+        assert_eq!(
+            session.feature_switch_states.get("mode"),
+            Some(&SwitchState::Closed)
+        );
+
+        let mut updated = runtime.clone();
+        updated.profile.profile.name = "Updated".into();
+        session.update_snapshot(Some(Arc::new(updated)));
+        assert_eq!(
+            session.feature_switch_states.get("mode"),
+            Some(&SwitchState::Closed)
+        );
+
+        session.reconfigure(Some(Arc::new(runtime)), 2);
+        assert!(session.feature_switch_states.is_empty());
     }
 
     #[test]

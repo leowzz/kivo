@@ -859,9 +859,7 @@ mod tests {
         display::{DisplayRegion, DrawOperation, Rect, SceneMode, SceneUpdate},
         hardware::board_by_id,
         model::{ButtonDefinition, ButtonGroup, ModelLayout},
-        profile::{
-            DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION, SwitchState,
-        },
+        profile::{DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION},
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -1515,8 +1513,6 @@ mod tests {
                 id: "mode".into(),
                 name: "Mode switch".into(),
                 gpio: 3,
-                normal_state: SwitchState::Open,
-                enabled_when: SwitchState::Closed,
                 buttons: BTreeSet::from(["A".into()]),
             });
         let hardware = model.hardware_profile("esp-primary").unwrap();

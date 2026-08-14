@@ -47,8 +47,7 @@ pub enum ActionTrigger {
     DoublePress,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SwitchState {
     Open,
     Closed,
@@ -187,8 +186,6 @@ pub enum InputSource {
         id: String,
         name: String,
         gpio: u8,
-        normal_state: SwitchState,
-        enabled_when: SwitchState,
         #[serde(default)]
         buttons: BTreeSet<String>,
     },
@@ -455,23 +452,12 @@ impl DeviceProfile {
             .into_iter()
             .flat_map(|hardware| &hardware.inputs)
             .filter_map(|source| {
-                let InputSource::FeatureSwitch {
-                    id,
-                    normal_state,
-                    enabled_when,
-                    buttons,
-                    ..
-                } = source
-                else {
+                let InputSource::FeatureSwitch { id, buttons, .. } = source else {
                     return None;
                 };
-                buttons
-                    .contains(button)
-                    .then_some((id, normal_state, enabled_when))
+                buttons.contains(button).then_some(id)
             })
-            .all(|(id, normal_state, enabled_when)| {
-                states.get(id).copied().unwrap_or(*normal_state) == *enabled_when
-            })
+            .all(|id| states.get(id) == Some(&SwitchState::Closed))
     }
 
     pub fn validate(&self) -> Result<(), AppError> {
@@ -574,8 +560,6 @@ impl DeviceProfile {
                         id: _,
                         name,
                         gpio,
-                        normal_state: _,
-                        enabled_when: _,
                         buttons: gated_buttons,
                     } => {
                         if name.trim().is_empty() {
@@ -902,22 +886,29 @@ mod tests {
                 id: "mode".into(),
                 name: "Mode switch".into(),
                 gpio: 7,
-                normal_state: SwitchState::Open,
-                enabled_when: SwitchState::Closed,
                 buttons: BTreeSet::from(["UP".into()]),
             });
 
         profile.validate().unwrap();
         let yaml = serde_yaml_ng::to_string(&profile).unwrap();
+        assert!(!yaml.contains("normal_state"));
+        assert!(!yaml.contains("enabled_when"));
         let restored: DeviceProfile = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(restored, profile);
+
+        let mut legacy = serde_yaml_ng::to_value(&profile).unwrap();
+        let feature_switch = legacy["hardware_profiles"][0]["inputs"][1]
+            .as_mapping_mut()
+            .unwrap();
+        feature_switch.insert("normal_state".into(), "closed".into());
+        feature_switch.insert("enabled_when".into(), "open".into());
+        let restored_legacy: DeviceProfile = serde_yaml_ng::from_value(legacy).unwrap();
+        assert_eq!(restored_legacy, profile);
 
         profile.hardware_profiles[0].inputs[1] = InputSource::FeatureSwitch {
             id: "mode".into(),
             name: "Mode switch".into(),
             gpio: 7,
-            normal_state: SwitchState::Open,
-            enabled_when: SwitchState::Closed,
             buttons: BTreeSet::from(["MISSING".into()]),
         };
         assert_eq!(
