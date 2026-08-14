@@ -53,7 +53,7 @@ test("creates a blank profile locally in preview mode", async () => {
   expect(invoke).not.toHaveBeenCalled();
 
   await user.click(within(setup).getByRole("button", { name: "关闭" }));
-  await user.click(screen.getByRole("button", { name: "配置文件" }));
+  await user.click(screen.getByRole("button", { name: "数据与备份" }));
   expect(screen.getByText("验收空白配置")).toBeInTheDocument();
   expect(screen.queryByLabelText("当前编辑配置")).not.toBeInTheDocument();
 });

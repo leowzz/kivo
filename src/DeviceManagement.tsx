@@ -1,16 +1,14 @@
-import { Check, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { Check, Pencil, RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ConfirmDialog } from "./ConfirmDialog";
+import { ActionEditor } from "./ActionEditor";
 import { ConfigurationSettingsDialog } from "./ConfigurationSettingsDialog";
 import { HardwareMapping } from "./HardwareMapping";
+import { Keypad } from "./Keypad";
 import { LayoutEditor } from "./LayoutEditor";
 import {
   candidateDisplayLabel,
-  compareDeviceAvailability,
   compatibleHardwareProfiles,
-  matchesDeviceFilter,
   primaryDeviceLabel,
-  type DeviceFilter,
 } from "./deviceStatus";
 import { candidateSetupId } from "./deviceSetupSession";
 import { t, type MessageKey } from "./i18n";
@@ -23,6 +21,7 @@ import type {
   HomeMetricsSnapshot,
   Language,
   RuntimeAssignment,
+  TriggerActions,
   TriggerSettings,
 } from "./types";
 
@@ -85,7 +84,6 @@ interface DeviceManagementProps {
   deviceProfiles: DeviceProfile[];
   metrics: { deviceId: string; snapshot: HomeMetricsSnapshot } | null;
   onRename(deviceId: string, name: string): void | Promise<void>;
-  onForget(deviceId: string): void | Promise<void>;
   onSaveRuntimeAssignment(
     deviceId: string,
     assignment: RuntimeAssignment,
@@ -96,11 +94,15 @@ interface DeviceManagementProps {
   selectedDeviceId?: string | null;
   onSelectedDeviceChange?(deviceId: string | null): void;
   onChangeProfile?(profile: DeviceProfile): void;
+  onChangeActions?(profile: DeviceProfile): void;
   onSaveSharedProfile?(profile: DeviceProfile): void | Promise<void>;
   onDuplicateProfileForDevice?(request: { deviceId: string; sourceProfile: DeviceProfile; name: string }): Promise<void>;
   onHardwareSelectionChange?(hardwareProfileId: string | null, deviceId: string | null): void;
   onBeginLearning?(hardwareProfileId: string, deviceId: string, pins: number[]): void;
   onEndLearning?(deviceId: string): void;
+  selectedButtonId: string | null;
+  onSelectedButtonChange(buttonId: string | null): void;
+  pressedButtonIds: Set<string>;
 }
 
 function assignmentLabel(device: DeviceStatus, profiles: DeviceProfile[]) {
@@ -112,12 +114,6 @@ function assignmentLabel(device: DeviceStatus, profiles: DeviceProfile[]) {
     return device.runtimeAssignment.device_profile_id;
   }
   return profile?.profile.name ?? device.runtimeAssignment.device_profile_id;
-}
-function matches(values: string[], query: string) {
-  const term = query.trim().toLocaleLowerCase();
-  return (
-    !term || values.some((value) => value.toLocaleLowerCase().includes(term))
-  );
 }
 function status(device: DeviceStatus, language: Language) {
   const keys: Record<string, string> = {
@@ -164,7 +160,6 @@ export function DeviceManagement({
   deviceProfiles,
   metrics,
   onRename,
-  onForget,
   onSaveRuntimeAssignment,
   onMetricsChange,
   onOpenSetup,
@@ -172,29 +167,28 @@ export function DeviceManagement({
   selectedDeviceId: controlledDeviceId,
   onSelectedDeviceChange,
   onChangeProfile,
+  onChangeActions,
   onSaveSharedProfile,
   onDuplicateProfileForDevice,
   onHardwareSelectionChange,
   onBeginLearning,
   onEndLearning,
+  selectedButtonId,
+  onSelectedButtonChange,
+  pressedButtonIds,
 }: DeviceManagementProps) {
-  const [filter, setFilter] = useState<DeviceFilter>("all");
-  const [query, setQuery] = useState("");
   const [selection, setSelection] = useState<Selection | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState("");
-  const [confirmId, setConfirmId] = useState<string | null>(null);
   const [error, setError] = useState<OperationError | null>(null);
   const [candidateRetrying, setCandidateRetrying] = useState(false);
-  const [forgetting, setForgetting] = useState(false);
   const [assignmentDraft, setAssignmentDraft] = useState<AssignmentDraft>({
     deviceProfileId: "",
     hardwareProfileId: "",
   });
   const [assignmentSaving, setAssignmentSaving] = useState(false);
-  const [workspaceTab, setWorkspaceTab] = useState<"overview" | "io" | "layout">("overview");
+  const [workspaceTab, setWorkspaceTab] = useState<"buttons" | "overview" | "io" | "layout">("buttons");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
   const previous = useRef<Row[]>([]);
   const candidateRetryInFlight = useRef(false);
   const pendingAssignment = useRef<RuntimeAssignment | null>(null);
@@ -213,34 +207,8 @@ export function DeviceManagement({
       ),
     [candidates, language],
   );
-  const visibleDevices = devices
-    .filter((device) =>
-      matchesDeviceFilter(device, filter, "") &&
-      matches([
-        device.name,
-        device.hardwareSerial,
-        device.deviceId,
-        device.boardProfileId,
-        boards.get(device.boardProfileId)?.displayName ?? "",
-        device.port ?? "",
-      ], query),
-    )
-    .sort(compareDeviceAvailability);
-  const visibleCandidates =
-    filter === "all" || filter === "attention"
-      ? candidates.filter((candidate) =>
-          matches(
-            [
-              candidate.rawSerial ?? "",
-              candidate.deviceId ?? "",
-              candidate.boardProfileId,
-              boards.get(candidate.boardProfileId)?.displayName ?? "",
-              candidate.port ?? "",
-            ],
-            query,
-          ),
-        )
-      : [];
+  const visibleDevices = devices.filter((device) => device.connection === "online");
+  const visibleCandidates = candidates;
   const rows = useMemo<Row[]>(
     () => [
       ...visibleDevices.map((device) => ({
@@ -311,18 +279,13 @@ export function DeviceManagement({
     selectedDevice && metrics?.deviceId === selectedDevice.deviceId
       ? metrics.snapshot
       : null;
-  const confirmDevice = confirmId
-    ? (devices.find(
-        (device) =>
-          device.deviceId === confirmId && device.connection === "offline",
-      ) ?? null)
-    : null;
   useEffect(() => {
     onMetricsChange(selectedDevice?.deviceId ?? null);
   }, [onMetricsChange, selectedDevice?.deviceId]);
   useEffect(() => {
     setRenaming(false);
     setName(selectedDevice?.name ?? "");
+    setWorkspaceTab("buttons");
   }, [selectedDevice?.deviceId]);
   useEffect(() => {
     const assignment = selectedDevice?.runtimeAssignment;
@@ -356,9 +319,6 @@ export function DeviceManagement({
       pendingAssignment.current = null;
     }
   }, [selectedDevice?.runtimeAssignment]);
-  useEffect(() => {
-    if (confirmId && !confirmDevice) setConfirmId(null);
-  }, [confirmDevice, confirmId]);
   const rename = async () => {
     if (!selectedDevice || !name.trim()) return;
     try {
@@ -372,22 +332,6 @@ export function DeviceManagement({
       });
     }
   };
-  const forget = async () => {
-    if (!confirmDevice || forgetting) return;
-    try {
-      setForgetting(true);
-      setError(null);
-      await onForget(confirmDevice.deviceId);
-      setConfirmId(null);
-    } catch (reason) {
-      setError({
-        owner: { kind: "device", id: confirmDevice.deviceId },
-        message: errorMessage(reason),
-      });
-    } finally {
-      setForgetting(false);
-    }
-  };
   const selectedDraftProfile = deviceProfiles.find(
     (item) => item.profile.id === assignmentDraft.deviceProfileId,
   );
@@ -398,10 +342,34 @@ export function DeviceManagement({
       )
     : [];
   const editingProfile = deviceProfiles.find((item) => item.profile.id === (assignmentDraft.deviceProfileId || selectedDevice?.runtimeAssignment?.device_profile_id));
+  const buttons = editingProfile?.profile.groups.flatMap((group) => group.buttons) ?? [];
+  const selectedButton = buttons.find((button) => button.id === selectedButtonId) ?? null;
+  const selectedActions: TriggerActions = editingProfile && selectedButtonId
+    ? editingProfile.actions[selectedButtonId] ?? {
+        press: [],
+        release: [],
+        long_press: [],
+        double_press: [],
+      }
+    : { press: [], release: [], long_press: [], double_press: [] };
   const sharedDeviceCount = editingProfile
     ? devices.filter((device) => device.runtimeAssignment?.device_profile_id === editingProfile.profile.id).length
     : 0;
   const updateEditingProfile = useCallback((next: DeviceProfile) => onChangeProfile?.(next), [onChangeProfile]);
+  const updateActionProfile = useCallback(
+    (next: DeviceProfile) => (onChangeActions ?? onChangeProfile)?.(next),
+    [onChangeActions, onChangeProfile],
+  );
+  useEffect(() => {
+    if (!buttons.some((button) => button.id === selectedButtonId)) {
+      onSelectedButtonChange(buttons[0]?.id ?? null);
+    }
+  }, [buttons, onSelectedButtonChange, selectedButtonId]);
+  useEffect(() => {
+    if (editingProfile && buttons.length === 0 && workspaceTab === "buttons") {
+      setWorkspaceTab("overview");
+    }
+  }, [buttons.length, editingProfile, workspaceTab]);
   const handleWorkspaceSelection = useCallback((hardwareProfileId: string | null, deviceId: string | null) => {
     onHardwareSelectionChange?.(hardwareProfileId, deviceId);
   }, [onHardwareSelectionChange]);
@@ -512,55 +480,15 @@ export function DeviceManagement({
     }
   };
   return (
-    <div className="device-management">
+    <div className={`device-management ${editingProfile && workspaceTab === "buttons" ? "is-workspace" : ""}`}>
       <section
         className="device-list-region"
         aria-label={t(language, "devices.list")}
       >
         <header className="device-list-header">
           <h2>{t(language, "nav.devices")}</h2>
-          <button
-            className="primary-button device-list-command"
-            type="button"
-            onClick={() => onOpenSetup(null)}
-          >
-            <Plus size={16} />
-            {t(language, "setup.addKeyboard")}
-          </button>
-          <label className="device-search">
-            <span>{t(language, "devices.search")}</span>
-            <input
-              type="search"
-              aria-label={t(language, "devices.search")}
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </label>
-          <div
-            className="device-filter"
-            role="group"
-            aria-label={t(language, "devices.filters")}
-          >
-            {(["all", "attention", "ready", "offline"] as const).map((item) => (
-              <button
-                key={item}
-                type="button"
-                className={filter === item ? "is-active" : ""}
-                aria-pressed={filter === item}
-                onClick={() => setFilter(item)}
-              >
-                {t(language, `devices.filter.${item}`)}
-              </button>
-            ))}
-          </div>
         </header>
-        <div className="device-table">
-          <div className="device-table-head" aria-hidden="true">
-            <span>{t(language, "devices.name")}</span>
-            <span>{t(language, "devices.board")}</span>
-            <span>{t(language, "devices.status")}</span>
-            <span>{t(language, "devices.assignment")}</span>
-          </div>
+        <div className="connected-device-list">
           <ul>
             {visibleDevices.map((device) => (
               <li key={device.deviceId}>
@@ -575,29 +503,25 @@ export function DeviceManagement({
                     selectRow({ kind: "device", id: device.deviceId })
                   }
                 >
-                  <strong title={device.name}>{device.name}</strong>
-                  <span title={boards.get(device.boardProfileId)?.displayName ?? device.boardProfileId}>
+                  <strong title={boards.get(device.boardProfileId)?.displayName ?? device.boardProfileId}>
                     {boards.get(device.boardProfileId)?.displayName ??
                       device.boardProfileId}
+                  </strong>
+                  <span className="device-row-meta">
+                    <span className="device-identifier" title={device.hardwareSerial}>{device.hardwareSerial}</span>
+                    <span className="device-connection-state"><i aria-hidden="true" />{t(language, "devices.connected")}</span>
+                    <span aria-hidden="true">·</span>
+                    <span className={`device-availability ${device.runtime === "ready" ? "is-available" : ""}`}>
+                      {device.runtime === "ready" ? t(language, "devices.available") : status(device, language)}
+                    </span>
                   </span>
-                  <span title={status(device, language)}>{status(device, language)}</span>
-                  <span title={assignmentLabel(device, deviceProfiles)}>{assignmentLabel(device, deviceProfiles)}</span>
                 </button>
               </li>
             ))}
-          </ul>
-        </div>
-        {visibleCandidates.length > 0 && (
-          <section
-            className="candidate-section"
-            aria-label={t(language, "devices.attentionSection")}
-          >
-            <h3>{t(language, "devices.attentionSection")}</h3>
-            <ul>
-              {visibleCandidates.map((candidate) => (
+            {visibleCandidates.map((candidate) => (
                 <li key={candidate.key}>
                   <button
-                  className={`device-row candidate-row ${activeSelection?.kind === "candidate" && activeSelection.id === candidate.key ? "is-selected" : ""}`}
+                    className={`device-row candidate-row ${activeSelection?.kind === "candidate" && activeSelection.id === candidate.key ? "is-selected" : ""}`}
                     type="button"
                     aria-pressed={
                     activeSelection?.kind === "candidate" &&
@@ -607,19 +531,24 @@ export function DeviceManagement({
                       selectRow({ kind: "candidate", id: candidate.key })
                     }
                   >
-                    <strong title={candidateLabels.get(candidate.key)}>{candidateLabels.get(candidate.key)}</strong>
-                    <span title={boards.get(candidate.boardProfileId)?.displayName ?? candidate.boardProfileId}>
+                    <strong title={boards.get(candidate.boardProfileId)?.displayName ?? candidate.boardProfileId}>
                       {boards.get(candidate.boardProfileId)?.displayName ??
                         candidate.boardProfileId}
+                    </strong>
+                    <span className="device-row-meta">
+                      <span className="device-identifier" title={candidate.rawSerial ?? candidateLabels.get(candidate.key)}>{candidateLabels.get(candidate.key)}</span>
+                      <span className="device-connection-state"><i aria-hidden="true" />{t(language, "devices.connected")}</span>
+                      <span aria-hidden="true">·</span>
+                      <span className="device-availability is-attention">{t(language, "devices.needsSetup")}</span>
                     </span>
-                    <span>{t(language, "devices.filter.attention")}</span>
-                    <span>-</span>
                   </button>
                 </li>
               ))}
-            </ul>
-          </section>
-        )}
+          </ul>
+          {visibleDevices.length === 0 && visibleCandidates.length === 0 && (
+            <p className="device-list-empty">{t(language, "devices.noConnected")}</p>
+          )}
+        </div>
       </section>
       <aside
         className="device-detail"
@@ -744,72 +673,89 @@ export function DeviceManagement({
                 </button>
               </div>
             )}
-            <Detail
+            {editingProfile && (
+              <div className="device-workspace-toolbar is-primary">
+                <div className="device-workspace-tabs" role="tablist" aria-label={t(language, "devices.detail")}>
+                  <button type="button" role="tab" aria-selected={workspaceTab === "buttons"} onClick={() => setWorkspaceTab("buttons")}>{t(language, "devices.workspaceButtons")}</button>
+                  <button type="button" role="tab" aria-selected={workspaceTab === "overview"} onClick={() => setWorkspaceTab("overview")}>{t(language, "devices.workspaceOverview")}</button>
+                  <button type="button" role="tab" aria-selected={workspaceTab === "layout"} onClick={() => setWorkspaceTab("layout")}>{t(language, "devices.workspaceLayout")}</button>
+                  <button type="button" role="tab" aria-selected={workspaceTab === "io"} onClick={() => setWorkspaceTab("io")}>{t(language, "devices.workspaceIo")}</button>
+                </div>
+                <button className="secondary-button" type="button" aria-label={t(language, "devices.configurationSettings")} onClick={() => setSettingsOpen(true)}>{t(language, "devices.configurationSettings")}</button>
+              </div>
+            )}
+            {(!editingProfile || workspaceTab === "overview") && <>
+              <Detail
               label={t(language, "devices.serial")}
               value={selectedDevice.hardwareSerial}
-            />
-            <Detail
+              />
+              <Detail
               label={t(language, "devices.board")}
               value={
                 boards.get(selectedDevice.boardProfileId)?.displayName ??
                 selectedDevice.boardProfileId
               }
-            />
-            <Detail
+              />
+              <Detail
               label={t(language, "devices.status")}
               value={status(selectedDevice, language)}
-            />
-            <Detail
+              />
+              <Detail
               label={t(language, "devices.assignment")}
               value={assignmentLabel(selectedDevice, deviceProfiles)}
-            />
-            {selectedDevice.connection === "online" &&
-              selectedDevice.mode === "runtime" &&
-              selectedDevice.identity === "valid" &&
-              selectedDevice.assignment === "unassigned" && (
-                <button
-                  className="primary-button setup-command"
-                  type="button"
-                  onClick={() => onOpenSetup(selectedDevice.deviceId)}
-                >
-                  {t(language, "setup.continue")}
-                </button>
-              )}
-            <section className="device-assignment" aria-label={t(language, "devices.assignment")}>
-              <label>
-                {t(language, "devices.useConfiguration")}
-                <select
-                  aria-label={t(language, "devices.useConfiguration")}
-                  value={assignmentDraft.deviceProfileId}
-                  disabled={assignmentSaving}
-                  onChange={(event) => void selectAssignment(event.target.value)}
-                >
-                  <option value="">{t(language, "model.select")}</option>
-                  {deviceProfiles.map((profile) => <option key={profile.profile.id} value={profile.profile.id}>{profile.profile.name}</option>)}
-                </select>
-              </label>
-              {!onChangeProfile && <label>
-                {t(language, "model.label")}
-                <select aria-label={t(language, "model.label")} value={assignmentDraft.deviceProfileId} disabled={assignmentSaving} onChange={(event) => void selectAssignment(event.target.value)}>
-                  <option value="">{t(language, "model.select")}</option>
-                  {deviceProfiles.map((profile) => <option key={profile.profile.id} value={profile.profile.id}>{profile.profile.name}</option>)}
-                </select>
-              </label>}
-              {selectedDraftProfile && compatibleHardware.length === 0 && (
-                <p className="field-error">{t(language, "devices.incompatibleProfile")}</p>
-              )}
-            </section>
-            {editingProfile && (
+              />
+              {selectedDevice.connection === "online" &&
+                selectedDevice.mode === "runtime" &&
+                selectedDevice.identity === "valid" &&
+                selectedDevice.assignment === "unassigned" && (
+                  <button
+                    className="primary-button setup-command"
+                    type="button"
+                    onClick={() => onOpenSetup(selectedDevice.deviceId)}
+                  >
+                    {t(language, "setup.continue")}
+                  </button>
+                )}
+              <section className="device-assignment" aria-label={t(language, "devices.assignment")}>
+                <label>
+                  {t(language, "devices.useConfiguration")}
+                  <select
+                    aria-label={t(language, "devices.useConfiguration")}
+                    value={assignmentDraft.deviceProfileId}
+                    disabled={assignmentSaving}
+                    onChange={(event) => void selectAssignment(event.target.value)}
+                  >
+                    <option value="">{t(language, "model.select")}</option>
+                    {deviceProfiles.map((profile) => <option key={profile.profile.id} value={profile.profile.id}>{profile.profile.name}</option>)}
+                  </select>
+                </label>
+                {!onChangeProfile && <label>
+                  {t(language, "model.label")}
+                  <select aria-label={t(language, "model.label")} value={assignmentDraft.deviceProfileId} disabled={assignmentSaving} onChange={(event) => void selectAssignment(event.target.value)}>
+                    <option value="">{t(language, "model.select")}</option>
+                    {deviceProfiles.map((profile) => <option key={profile.profile.id} value={profile.profile.id}>{profile.profile.name}</option>)}
+                  </select>
+                </label>}
+                {selectedDraftProfile && compatibleHardware.length === 0 && (
+                  <p className="field-error">{t(language, "devices.incompatibleProfile")}</p>
+                )}
+              </section>
+            </>}
+            {editingProfile && workspaceTab === "buttons" && (
+              <div className="keypad-stage device-keypad-stage" role="tabpanel" aria-label={t(language, "devices.workspaceButtons")}>
+                <Keypad
+                  layout={editingProfile.profile}
+                  actions={editingProfile.actions}
+                  selectedButtonId={selectedButtonId}
+                  pressedButtonIds={pressedButtonIds}
+                  actionCountLabel={(count) => t(language, "model.actionCount", { count })}
+                  onSelect={onSelectedButtonChange}
+                />
+              </div>
+            )}
+            {editingProfile && (workspaceTab === "layout" || workspaceTab === "io") && (
               <section className="device-workspace" aria-label={t(language, "devices.configurationSettings")}>
                 {selectedDevice.connection === "offline" && <p className="form-hint">{t(language, "devices.offlineEditing")}</p>}
-                <div className="device-workspace-toolbar">
-                  <button className="secondary-button" type="button" aria-label={t(language, "devices.configurationSettings")} onClick={() => setSettingsOpen(true)}>{t(language, "devices.configurationSettings")}</button>
-                  <div className="device-workspace-tabs" role="tablist" aria-label={t(language, "devices.detail")}>
-                    <button type="button" role="tab" aria-selected={workspaceTab === "overview"} onClick={() => setWorkspaceTab("overview")}>{t(language, "devices.workspaceOverview")}</button>
-                    <button type="button" role="tab" aria-selected={workspaceTab === "layout"} onClick={() => setWorkspaceTab("layout")}>{t(language, "devices.workspaceLayout")}</button>
-                    <button type="button" role="tab" aria-selected={workspaceTab === "io"} onClick={() => setWorkspaceTab("io")}>{t(language, "devices.workspaceIo")}</button>
-                  </div>
-                </div>
                 {(workspaceTab === "io" || workspaceTab === "layout") && sharedDeviceCount > 1 && (
                   <div className="shared-configuration-warning" role="status">
                     {t(language, "devices.sharedWarning", { name: editingProfile.profile.name, count: sharedDeviceCount })}
@@ -819,7 +765,7 @@ export function DeviceManagement({
                 )}
                 {workspaceTab === "io" && <div role="tabpanel" aria-label={t(language, "devices.workspaceIo")}>
                   <h3>{t(language, "hardware.title")}</h3>
-                  <HardwareMapping language={language} layout={editingProfile.profile} hardwareProfiles={editingProfile.hardware_profiles} boardProfiles={boardProfiles} devices={devices} learning={selectedDevice.learning} initialHardwareProfileId={assignmentDraft.hardwareProfileId || selectedDevice.runtimeAssignment?.hardware_profile_id} initialDeviceId={selectedDevice.deviceId} selectedButtonId={selectedButtonId} onSelectButton={setSelectedButtonId} onChange={(hardwareProfiles) => updateEditingProfile({ ...editingProfile, hardware_profiles: hardwareProfiles })} onSelectionChange={handleWorkspaceSelection} onBeginLearning={handleBeginLearning} onEndLearning={handleEndLearning} />
+                  <HardwareMapping language={language} layout={editingProfile.profile} hardwareProfiles={editingProfile.hardware_profiles} boardProfiles={boardProfiles} devices={devices} learning={selectedDevice.learning} initialHardwareProfileId={assignmentDraft.hardwareProfileId || selectedDevice.runtimeAssignment?.hardware_profile_id} initialDeviceId={selectedDevice.deviceId} selectedButtonId={selectedButtonId} onSelectButton={onSelectedButtonChange} onChange={(hardwareProfiles) => updateEditingProfile({ ...editingProfile, hardware_profiles: hardwareProfiles })} onSelectionChange={handleWorkspaceSelection} onBeginLearning={handleBeginLearning} onEndLearning={handleEndLearning} />
                 </div>}
                 {workspaceTab === "layout" && <div role="tabpanel" aria-label={t(language, "devices.workspaceLayout")}><LayoutEditor language={language} layout={editingProfile.profile} onChange={(layout) => updateEditingProfile({ ...editingProfile, profile: layout })} /></div>}
               </section>
@@ -830,7 +776,7 @@ export function DeviceManagement({
                 aria-label={editingProfile ? t(language, "devices.workspaceOverview") : undefined}
               >
                 {editingProfile && <p className="form-hint">{t(language, "devices.sharedWarning", { name: editingProfile.profile.name, count: sharedDeviceCount || 1 })}</p>}
-                <details className="device-technical-details" open>
+                <details className="device-technical-details">
                   <summary>{t(language, "setup.technicalDetails")}</summary>
                   <dl>
                     <TechnicalDetail
@@ -896,28 +842,36 @@ export function DeviceManagement({
                 {selectedError}
               </p>
             )}
-            <button
-              className="icon-button is-danger device-forget"
-              type="button"
-              aria-label={t(language, "devices.forget")}
-              title={t(language, "devices.forget")}
-              disabled={selectedDevice.connection !== "offline"}
-              onClick={() => setConfirmId(selectedDevice.deviceId)}
-            >
-              <Trash2 size={16} />
-            </button>
           </>
         )}
       </aside>
-      {confirmDevice && (
-        <ConfirmDialog
-          title={t(language, "devices.forget")}
-          body={t(language, "devices.forgetBody", { name: confirmDevice.name })}
-          confirmLabel={t(language, "common.confirm")}
-          cancelLabel={t(language, "common.cancel")}
-          danger
-          onCancel={() => setConfirmId(null)}
-          onConfirm={() => void forget()}
+      {editingProfile && workspaceTab === "buttons" && (
+        <ActionEditor
+          language={language}
+          button={selectedButton}
+          actions={selectedActions}
+          onChange={(actions) => {
+            if (!selectedButtonId) return;
+            updateActionProfile({
+              ...editingProfile,
+              actions: {
+                ...editingProfile.actions,
+                [selectedButtonId]: actions,
+              },
+            });
+          }}
+          onRename={(buttonId, label) => updateActionProfile({
+            ...editingProfile,
+            profile: {
+              ...editingProfile.profile,
+              groups: editingProfile.profile.groups.map((group) => ({
+                ...group,
+                buttons: group.buttons.map((button) =>
+                  button.id === buttonId ? { ...button, label } : button
+                ),
+              })),
+            },
+          })}
         />
       )}
       {editingProfile && <ConfigurationSettingsDialog open={settingsOpen} language={language} profile={editingProfile} sharedDeviceCount={sharedDeviceCount} onCancel={() => setSettingsOpen(false)} onSave={(settings: TriggerSettings) => { updateEditingProfile({ ...editingProfile, trigger_settings: settings }); setSettingsOpen(false); void onSaveSharedProfile?.({ ...editingProfile, trigger_settings: settings }); }} onDraftChange={(settings) => updateEditingProfile({ ...editingProfile, trigger_settings: settings })} onDuplicate={async (name) => { if (selectedDevice) await onDuplicateProfileForDevice?.({ deviceId: selectedDevice.deviceId, sourceProfile: { ...editingProfile }, name }); setSettingsOpen(false); }} />}

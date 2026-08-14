@@ -5,26 +5,20 @@ import {
   AlertTriangle,
   ArchiveRestore,
   DatabaseBackup,
-  Download,
   FileInput,
-  Home,
   Keyboard,
   Plus,
   Trash2,
   Upload,
-  Usb,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import brandIcon from "../src-tauri/icons/128x128.png";
-import { ActionEditor } from "./ActionEditor";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { CreateDeviceProfileForm } from "./CreateDeviceProfileForm";
 import { DeviceManagement } from "./DeviceManagement";
 import { DeviceSetupWizard } from "./DeviceSetupWizard";
 import { hardwareProfilesAreValid } from "./HardwareMapping";
-import { HomeDashboard } from "./HomeDashboard";
-import { Keypad } from "./Keypad";
 import { deviceSummary } from "./deviceStatus";
 import { reconcileSetupSession, setupPresence } from "./deviceSetupSession";
 import { t } from "./i18n";
@@ -49,7 +43,7 @@ import type {
 } from "./types";
 import { SerializedSaveQueue, useAutosave } from "./useAutosave";
 
-type View = "home" | "devices" | "behavior" | "data";
+type View = "devices" | "data";
 type Confirmation =
   | { kind: "import"; path: string; preview: ImportPreview }
   | { kind: "restore"; path: string; preview: BackupPreview }
@@ -84,10 +78,6 @@ function errorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   if (typeof error === "object" && error && "code" in error) return String(error.code);
   return String(error);
-}
-
-function allButtons(profile: DeviceProfile | undefined) {
-  return profile?.profile.groups.flatMap((group) => group.buttons) ?? [];
 }
 
 function isValidDraft(
@@ -235,7 +225,7 @@ export default function App() {
   });
   const [savedDeviceProfiles, setSavedDeviceProfiles] = useState<Record<string, string>>({});
   const [language, setLanguage] = useState<Language>("zh-CN");
-  const [view, setView] = useState<View>("home");
+  const [view, setView] = useState<View>("devices");
   const [homeMetrics, setHomeMetrics] = useState<AppSnapshot["homeMetrics"]>(null);
   const [deviceMetrics, setDeviceMetrics] = useState<{ deviceId: string; snapshot: HomeMetricsSnapshot } | null>(null);
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
@@ -263,6 +253,7 @@ export default function App() {
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const loadErrorMessageRef = useRef<string | null>(null);
   const selectedManagedDeviceIdRef = useRef<string | null>(null);
+  const homeMetricsRef = useRef(homeMetrics);
   const managedMetricsGenerationRef = useRef(0);
   const hardwareEditorTargetRef = useRef<HardwareEditorTarget | null>(null);
   const learningEditingRevisionRef = useRef(0);
@@ -493,16 +484,6 @@ export default function App() {
     }
   }, [language, replaceRegistrySnapshot]);
 
-  const forgetManagedDevice = useCallback(async (deviceId: string) => {
-    try {
-      const snapshot = await invoke<AppSnapshot>("forget_device", { deviceId });
-      if (mountedRef.current) replaceRegistrySnapshot(snapshot);
-    } catch (operationError) {
-      setError(`${t(language, "error.delete")}: ${errorMessage(operationError)}`);
-      throw operationError;
-    }
-  }, [language, replaceRegistrySnapshot]);
-
   const saveManagedRuntimeAssignment = useCallback(async (
     deviceId: string,
     assignment: RuntimeAssignment,
@@ -524,6 +505,11 @@ export default function App() {
     const generation = ++managedMetricsGenerationRef.current;
     if (!deviceId) {
       setDeviceMetrics(null);
+      return;
+    }
+    if (PREVIEW_MODE) {
+      const previewMetrics = homeMetricsRef.current;
+      setDeviceMetrics(previewMetrics ? { deviceId, snapshot: previewMetrics } : null);
       return;
     }
     setDeviceMetrics(null);
@@ -638,6 +624,7 @@ export default function App() {
   const selectedRef = useRef(selectedButtonId);
   const viewRef = useRef(view);
   profileRef.current = editorProfileConfig;
+  homeMetricsRef.current = homeMetrics;
   profilesRef.current = deviceProfiles;
   devicesRef.current = devices;
   hardwareEditorTargetRef.current = hardwareEditorTarget;
@@ -672,14 +659,13 @@ export default function App() {
           }
           if (payload.deviceId === selectedManagedDeviceIdRef.current) void refreshManagedDeviceMetrics(payload.deviceId);
           if (payload.input && payload.pressed !== null) {
-            const editorSnapshot = profileRef.current;
             const currentEditorTarget = hardwareEditorTargetRef.current;
             const activeLearningTarget = devicesRef.current.find(
               ({ deviceId }) => deviceId === currentEditorTarget?.deviceId,
             )?.learning;
             const currentProfile = activeLearningTarget
               ? profileDraftsRef.current.get(activeLearningTarget.deviceProfileId) ?? profilesRef.current.find((profile) => profile.profile.id === activeLearningTarget.deviceProfileId)
-              : editorSnapshot;
+              : profileRef.current;
             if (payload.code === "learning_input" && payload.pressed && payload.learningTarget
               && selectedRef.current && viewRef.current === "devices" && currentProfile && currentEditorTarget?.deviceId
               && activeLearningTarget && learningTargetsMatch(payload.learningTarget, activeLearningTarget)
@@ -705,12 +691,14 @@ export default function App() {
             }
             const emittingDevice = devicesRef.current.find((device) => device.deviceId === payload.deviceId);
             const assignment = emittingDevice?.runtimeAssignment;
-            if (payload.code === "input_state" && editorSnapshot
-              && payload.deviceProfileId === editorSnapshot.profile.id
+            const eventProfile = assignment
+              ? profileDraftsRef.current.get(assignment.device_profile_id) ?? profilesRef.current.find((profile) => profile.profile.id === assignment.device_profile_id)
+              : undefined;
+            if (payload.code === "input_state" && eventProfile
               && payload.hardwareProfileId
               && assignment?.device_profile_id === payload.deviceProfileId
               && assignment.hardware_profile_id === payload.hardwareProfileId) {
-              const eventHardware = editorSnapshot.hardware_profiles.find((hardware) =>
+              const eventHardware = eventProfile.hardware_profiles.find((hardware) =>
                 hardware.id === payload.hardwareProfileId
               );
               const buttonId = resolveButton(eventHardware, payload.input);
@@ -763,13 +751,6 @@ export default function App() {
     };
   }, [applySnapshot, refreshManagedDeviceMetrics, refreshRegistry]);
 
-  useEffect(() => {
-    const buttons = allButtons(editorProfileConfig);
-    if (!buttons.some((button) => button.id === selectedButtonId)) {
-      setSelectedButtonId(buttons[0]?.id ?? null);
-    }
-  }, [editorProfileConfig, selectedButtonId]);
-
   const updateProfile = useCallback((profileId: string, update: (profile: DeviceProfile) => DeviceProfile) => {
     if (!editorLearningActive || profileId !== editorProfileConfig?.profile.id) {
       setCapturedDraftProfileIds((current) => {
@@ -793,11 +774,6 @@ export default function App() {
     });
   }, [editorLearningActive, editorProfileConfig?.profile.id]);
 
-  const updateEditorProfile = useCallback((update: (profile: DeviceProfile) => DeviceProfile) => {
-    const profileId = editorProfileConfig?.profile.id;
-    if (profileId) updateProfile(profileId, update);
-  }, [editorProfileConfig?.profile.id, updateProfile]);
-
   const setSharedDraftPending = useCallback((profileId: string, pending: boolean) => {
     setPendingSharedDraftProfileIds((current) => {
       const next = new Set(current);
@@ -814,6 +790,10 @@ export default function App() {
     ).length;
     setSharedDraftPending(profile.profile.id, sharedDeviceCount > 1);
   }, [devices, setSharedDraftPending, updateProfile]);
+
+  const changeManagedActions = useCallback((profile: DeviceProfile) => {
+    updateProfile(profile.profile.id, () => profile);
+  }, [updateProfile]);
 
   const saveManagedSharedProfile = useCallback(async (profile: DeviceProfile) => {
     await autosave.flush();
@@ -1002,10 +982,14 @@ export default function App() {
     );
   };
 
-  const selectedButton = allButtons(editorProfileConfig).find((button) => button.id === selectedButtonId) ?? null;
-  const selectedActions = editorProfileConfig && selectedButtonId
-    ? editorProfileConfig.actions[selectedButtonId] ?? emptyTriggerActions()
-    : emptyTriggerActions();
+  const workspacePressedButtonIds = useMemo(
+    () => new Set(
+      selectedManagedDeviceId
+        ? pressedOwnersRef.current.get(selectedManagedDeviceId)?.buttonIds ?? []
+        : [],
+    ),
+    [pressedButtonIds, selectedManagedDeviceId],
+  );
 
   if (startupFailure) {
     const incompatible = startupFailure.code === "unsupported_profile_schema" ||
@@ -1050,6 +1034,24 @@ export default function App() {
           <b aria-hidden="true">{" · "}</b>
           <span className="summary-offline"><i />{summary.offline} {t(language, "device.offline")}</span>
         </div>
+        <nav className="topbar-nav" aria-label={t(language, "nav.primary")}>
+          <button
+            className={view === "devices" ? "is-active" : ""}
+            type="button"
+            aria-pressed={view === "devices"}
+            onClick={() => void navigate("devices")}
+          >
+            <Keyboard size={16} />{t(language, "nav.devices")}
+          </button>
+          <button
+            className={view === "data" ? "is-active" : ""}
+            type="button"
+            aria-pressed={view === "data"}
+            onClick={() => void navigate("data")}
+          >
+            <DatabaseBackup size={16} />{t(language, "nav.data")}
+          </button>
+        </nav>
         <div className={`save-state is-${autosave.status}`} aria-live="polite">
           {autosave.status === "saving" && t(language, "save.saving")}
           {autosave.status === "saved" && t(language, "save.saved")}
@@ -1068,29 +1070,7 @@ export default function App() {
         </div>
       )}
 
-      <div className={view === "home" || view === "devices" || view === "data" ? "product-workspace is-home" : "product-workspace"}>
-        <aside className="sidebar">
-          <button className={`home-nav-button ${view === "home" ? "is-active" : ""}`} type="button" onClick={() => void navigate("home")}>
-            <Home size={17} />{t(language, "nav.home")}
-          </button>
-
-          <button className={`devices-nav-button ${view === "devices" ? "is-active" : ""}`} type="button" onClick={() => void navigate("devices")}>
-            <Usb size={17} />{t(language, "nav.devices")}
-          </button>
-
-          <nav aria-label={t(language, "nav.configuration")}>
-            <span>{t(language, "nav.configuration")}</span>
-            <button className={view === "behavior" ? "is-active" : ""} type="button" onClick={() => void navigate("behavior")}>
-              <Keyboard size={17} />{t(language, "nav.behavior")}
-            </button>
-          </nav>
-
-          <button className={`data-nav-button ${view === "data" ? "is-active" : ""}`} type="button" onClick={() => void navigate("data")}>
-            <FileInput size={17} />{t(language, "nav.data")}
-          </button>
-
-        </aside>
-
+      <div className="product-workspace is-unified">
         <section className="content-panel">
           {view === "data" ? (
             <div className="data-page">
@@ -1147,7 +1127,7 @@ export default function App() {
                 </section>
               </div>
             </div>
-          ) : view === "devices" ? (
+          ) : (
             <DeviceManagement
               language={language}
               devices={devices}
@@ -1156,7 +1136,6 @@ export default function App() {
               deviceProfiles={deviceProfiles}
               metrics={deviceMetrics}
               onRename={renameManagedDevice}
-              onForget={forgetManagedDevice}
               onSaveRuntimeAssignment={saveManagedRuntimeAssignment}
               onMetricsChange={handleManagedMetricsChange}
               onOpenSetup={openSetup}
@@ -1164,85 +1143,18 @@ export default function App() {
               selectedDeviceId={selectedManagedDeviceId}
               onSelectedDeviceChange={setSelectedManagedDeviceId}
               onChangeProfile={changeManagedProfile}
+              onChangeActions={changeManagedActions}
               onSaveSharedProfile={saveManagedSharedProfile}
               onDuplicateProfileForDevice={duplicateManagedProfileForDevice}
               onHardwareSelectionChange={handleHardwareEditorSelection}
               onBeginLearning={beginManagedLearning}
               onEndLearning={endManagedLearning}
+              selectedButtonId={selectedButtonId}
+              onSelectedButtonChange={setSelectedButtonId}
+              pressedButtonIds={workspacePressedButtonIds}
             />
-          ) : view === "home" ? (
-            <HomeDashboard
-              devices={devices}
-              language={language}
-              metrics={homeMetrics}
-              profile={editorProfileConfig}
-            />
-          ) : !editorProfileConfig ? (
-            <div className="empty-workspace">
-              <Download size={28} />
-              <h2>{t(language, "model.empty")}</h2>
-              <div><button className="primary-button" type="button" onClick={() => void chooseImport()}>{t(language, "model.import")}</button><button type="button" onClick={() => void chooseRestore()}>{t(language, "model.restore")}</button></div>
-            </div>
-          ) : (
-            <>
-              <div className="content-heading">
-                <div>
-                  {view === "behavior" && <label className="model-picker">
-                    <span>{t(language, "model.select")}</span>
-                    <select
-                      aria-label={t(language, "model.select")}
-                      value={editorProfile ?? ""}
-                      disabled={!loaded || deviceProfiles.length === 0}
-                      onChange={(event) => void run(t(language, "error.save"), () => saveSettings(event.target.value, language))}
-                    >
-                      {deviceProfiles.map((profile) => (
-                        <option value={profile.profile.id} key={profile.profile.id}>{profile.profile.name}</option>
-                      ))}
-                    </select>
-                  </label>}
-                  <span>{editorProfileConfig.profile.name}</span>
-                  <h2>{t(language, "behavior.title")}</h2>
-                </div>
-                {view === "behavior" && selectedButton && <span className="selected-crumb">{t(language, "behavior.selected", { label: selectedButton.label })}</span>}
-              </div>
-              <div className="keypad-stage">
-                <Keypad
-                  layout={editorProfileConfig.profile}
-                  actions={editorProfileConfig.actions}
-                  selectedButtonId={selectedButtonId}
-                  pressedButtonIds={pressedButtonIds}
-                  actionCountLabel={(count) => t(language, "model.actionCount", { count })}
-                  onSelect={setSelectedButtonId}
-                />
-              </div>
-            </>
           )}
         </section>
-
-        {view === "behavior" && <ActionEditor
-          language={language}
-          button={selectedButton}
-          actions={selectedActions}
-          onChange={(actions: TriggerActions) => selectedButtonId && updateEditorProfile((profile) => ({
-            ...profile,
-            actions: {
-              ...profile.actions,
-              [selectedButtonId]: actions,
-            },
-          }))}
-          onRename={(buttonId, label) => updateEditorProfile((profile) => ({
-            ...profile,
-            profile: {
-              ...profile.profile,
-              groups: profile.profile.groups.map((group) => ({
-                ...group,
-                buttons: group.buttons.map((button) => button.id === buttonId
-                  ? { ...button, label }
-                  : button),
-              })),
-            },
-          }))}
-        />}
       </div>
 
       {profileCreatorOpen && (

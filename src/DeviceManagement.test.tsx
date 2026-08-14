@@ -81,18 +81,23 @@ function renderManagement(overrides: Partial<React.ComponentProps<typeof DeviceM
     deviceProfiles: profiles,
     metrics: { deviceId: "rp-a", snapshot: metrics },
     onRename: vi.fn(),
-    onForget: vi.fn(),
     onSaveRuntimeAssignment: vi.fn(),
     onMetricsChange: vi.fn(),
     onOpenSetup: vi.fn(),
     onRetryCandidate: vi.fn(),
+    selectedButtonId: null,
+    onSelectedButtonChange: vi.fn(),
+    pressedButtonIds: new Set(),
     ...overrides,
   };
   return { ...render(<DeviceManagement {...props} />), props };
 }
 
-test("keeps same-board devices as separate selectable rows across filters and search", async () => {
-  const user = userEvent.setup();
+function rowByIdentifier(identifier: string) {
+  return screen.getByTitle(identifier).closest("button") as HTMLButtonElement;
+}
+
+test("shows only currently connected devices without search, filters, or table columns", () => {
   renderManagement({ devices: [
     device(),
     device({ deviceId: "rp-b", name: "RP2040 B", hardwareSerial: "RP-B-002", port: "/dev/cu.rp-b" }),
@@ -100,47 +105,34 @@ test("keeps same-board devices as separate selectable rows across filters and se
     device({ deviceId: "esp-offline", name: "ESP32 Offline", connection: "offline", mode: null, runtime: "inactive", hardwareSerial: "ESP-OFF-004", port: null, controllerFamilyId: "esp32s3", boardProfileId: "esp32-pad", runtimeAssignment: null }),
   ] });
 
-  expect(screen.getAllByRole("button", { name: /RP2040/ })).toHaveLength(2);
-  await user.click(screen.getByRole("button", { name: "需处理" }));
-  expect(screen.getByRole("button", { name: /ESP32 A/ })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: /RP2040 A/ })).toBeNull();
-  await user.click(screen.getByRole("button", { name: "就绪" }));
-  expect(screen.getAllByRole("button", { name: /RP2040/ })).toHaveLength(2);
-  await user.click(screen.getByRole("button", { name: "离线" }));
-  expect(screen.getByRole("button", { name: /ESP32 Offline/ })).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "全部" }));
-  await user.type(screen.getByRole("searchbox", { name: "搜索设备" }), "ESP-A-003");
-  expect(screen.getByRole("button", { name: /ESP32 A/ })).toBeInTheDocument();
-  await user.clear(screen.getByRole("searchbox", { name: "搜索设备" }));
-  await user.type(screen.getByRole("searchbox", { name: "搜索设备" }), "RP2040 Pad");
-  expect(screen.getAllByRole("button", { name: /RP2040/ })).toHaveLength(2);
+  expect(screen.queryByRole("searchbox")).toBeNull();
+  expect(screen.queryByRole("group", { name: "设备筛选" })).toBeNull();
+  expect(screen.queryByText("设备名称")).toBeNull();
+  expect(rowByIdentifier("RP-A-001")).toBeInTheDocument();
+  expect(rowByIdentifier("RP-B-002")).toBeInTheDocument();
+  expect(rowByIdentifier("ESP-A-003")).toBeInTheDocument();
+  expect(screen.queryByTitle("ESP-OFF-004")).toBeNull();
+  expect(screen.getAllByText("已连接")).toHaveLength(4);
 });
 
-test("sorts Device rows by availability and preserves source order within each status", () => {
+test("preserves source order while omitting offline Devices", () => {
   const { container } = renderManagement({ devices: [
-    device({ deviceId: "offline-a", name: "Offline A", connection: "offline", mode: null, runtime: "inactive" }),
-    device({ deviceId: "attention-a", name: "Attention A", assignment: "invalid_assignment", runtime: "inactive" }),
-    device({ deviceId: "inactive-a", name: "Inactive A", runtime: "inactive" }),
-    device({ deviceId: "ready-a", name: "Ready A" }),
-    device({ deviceId: "progress-a", name: "Progress A", runtime: "configuring" }),
-    device({ deviceId: "offline-b", name: "Offline B", connection: "offline", mode: null, runtime: "inactive" }),
-    device({ deviceId: "ready-b", name: "Ready B" }),
-    device({ deviceId: "attention-b", name: "Attention B", runtime: "runtime_error" }),
+    device({ deviceId: "offline-a", hardwareSerial: "OFFLINE-A", connection: "offline", mode: null, runtime: "inactive" }),
+    device({ deviceId: "attention-a", hardwareSerial: "ATTENTION-A", assignment: "invalid_assignment", runtime: "inactive" }),
+    device({ deviceId: "ready-a", hardwareSerial: "READY-A" }),
+    device({ deviceId: "progress-a", hardwareSerial: "PROGRESS-A", runtime: "configuring" }),
+    device({ deviceId: "offline-b", hardwareSerial: "OFFLINE-B", connection: "offline", mode: null, runtime: "inactive" }),
   ] });
 
   expect(
-    Array.from(container.querySelectorAll(".device-table .device-row strong"), (name) =>
-      name.textContent,
+    Array.from(container.querySelectorAll(".connected-device-list .device-identifier"), (identifier) =>
+      identifier.textContent,
     ),
   ).toEqual([
-    "Ready A",
-    "Ready B",
-    "Progress A",
-    "Attention A",
-    "Attention B",
-    "Inactive A",
-    "Offline A",
-    "Offline B",
+    "ATTENTION-A",
+    "READY-A",
+    "PROGRESS-A",
+    "AD-001",
   ]);
 });
 
@@ -158,27 +150,23 @@ test("marks the selected Device ID for constrained wrapping", () => {
   );
 });
 
-test("composes visible Board Profile search with non-All filters", async () => {
-  const user = userEvent.setup();
+test("uses Board Profile as the primary line and identifier plus status as the second line", () => {
   renderManagement();
-  await user.click(screen.getByRole("button", { name: "就绪" }));
-  await user.type(screen.getByRole("searchbox", { name: "搜索设备" }), "RP2040 Pad");
-  expect(screen.getAllByRole("button", { name: /RP2040/ })).toHaveLength(2);
-  await user.clear(screen.getByRole("searchbox", { name: "搜索设备" }));
-  await user.click(screen.getByRole("button", { name: "需处理" }));
-  await user.type(screen.getByRole("searchbox", { name: "搜索设备" }), "ESP32-S3 Pad");
-  expect(screen.getByRole("button", { name: /AD-001/ })).toBeInTheDocument();
+  const row = rowByIdentifier("RP-A-001");
+  expect(within(row).getByText("RP2040 Pad")).toBeInTheDocument();
+  expect(within(row).getByText("已连接")).toBeInTheDocument();
+  expect(within(row).getByText("可用")).toBeInTheDocument();
 });
 
-test("uses assignment display names, retains missing IDs, and shows selected activity", async () => {
+test("keeps assignment details out of the compact rows while retaining selected activity", async () => {
   const user = userEvent.setup();
   renderManagement();
-  expect(screen.getAllByRole("button", { name: /RP2040 A.*Counter Profile/ })).toHaveLength(1);
+  expect(rowByIdentifier("RP-A-001")).not.toHaveTextContent("Counter Profile");
   expect(screen.getByText("A pressed")).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: /ESP32 A/ }));
-  expect(screen.getAllByText("Counter Profile")).toHaveLength(6);
+  await user.click(rowByIdentifier("ESP-A-003"));
+  expect(screen.getByRole("heading", { name: "ESP32 A" })).toBeInTheDocument();
   renderManagement({ devices: [device({ runtimeAssignment: { device_profile_id: "gone", hardware_profile_id: "missing" } })] });
-  expect(screen.getAllByText("gone")).toHaveLength(2);
+  expect(screen.getByText("gone")).toBeInTheDocument();
 });
 
 test("shows compact selected-Device metrics with event-time activity attribution", () => {
@@ -223,11 +211,11 @@ test("shows compact selected-Device metrics with event-time activity attribution
 
 test("preserves selected device identity across live replacements", () => {
   const { rerender, props } = renderManagement();
-  screen.getByRole("button", { name: /ESP32 A/ }).click();
+  rowByIdentifier("ESP-A-003").click();
   rerender(<DeviceManagement {...props} devices={props.devices.map((item) =>
     item.deviceId === "esp-a" ? { ...item, runtime: "runtime_error" } : item
   )} />);
-  expect(screen.getByRole("button", { name: /ESP32 A/ })).toHaveAttribute("aria-pressed", "true");
+  expect(rowByIdentifier("ESP-A-003")).toHaveAttribute("aria-pressed", "true");
 });
 
 test("applies a controlled non-first device before publishing selection", () => {
@@ -241,7 +229,7 @@ test("applies a controlled non-first device before publishing selection", () => 
     onSelectedDeviceChange,
   });
 
-  expect(screen.getByRole("button", { name: /RP2040 B/ })).toHaveAttribute(
+  expect(rowByIdentifier("RP-B-002")).toHaveAttribute(
     "aria-pressed",
     "true",
   );
@@ -253,24 +241,24 @@ test("publishes explicit device and candidate row selections", async () => {
   const onSelectedDeviceChange = vi.fn();
   renderManagement({ onSelectedDeviceChange });
 
-  await user.click(screen.getByRole("button", { name: /RP2040 B/ }));
+  await user.click(rowByIdentifier("RP-B-002"));
   expect(onSelectedDeviceChange).toHaveBeenLastCalledWith("rp-b");
 
-  await user.click(screen.getByRole("button", { name: /AD-001/ }));
+  await user.click(rowByIdentifier("BAD-001"));
   expect(onSelectedDeviceChange).toHaveBeenLastCalledWith(null);
 });
 
 test("moves candidate selection to the nearest remaining row when its observation disappears", () => {
   const { rerender, props } = renderManagement();
-  screen.getByRole("button", { name: /AD-001/ }).click();
+  rowByIdentifier("BAD-001").click();
   rerender(<DeviceManagement {...props} candidates={[]} />);
-  expect(screen.getByRole("button", { name: /ESP32 Offline/ })).toHaveAttribute("aria-pressed", "true");
+  expect(rowByIdentifier("ESP-A-003")).toHaveAttribute("aria-pressed", "true");
 });
 
 test("shows candidate diagnostics without mutable device actions", async () => {
   const user = userEvent.setup();
   renderManagement();
-  await user.click(screen.getByRole("button", { name: /AD-001/ }));
+  await user.click(rowByIdentifier("BAD-001"));
   expect(screen.getByText("identity rejected")).toBeInTheDocument();
   expect(screen.queryByRole("textbox", { name: "设备名称" })).toBeNull();
   expect(screen.queryByRole("button", { name: "忘记设备" })).toBeNull();
@@ -285,6 +273,8 @@ test("removes communication ports from rows and reveals them only in technical d
   expect(
     screen.queryByText("端口", { selector: ".device-table-head span" }),
   ).toBeNull();
+  expect(screen.getByText("/dev/cu.rp-a")).not.toBeVisible();
+  await user.click(screen.getByText("查看技术详情"));
   expect(screen.getByText("/dev/cu.rp-a")).toBeVisible();
   await user.click(screen.getByRole("button", { name: /AD-001/ }));
   expect(screen.getByText("/dev/cu.bad")).not.toBeVisible();
@@ -412,11 +402,11 @@ test("scopes an operation error to its originating row", async () => {
     "retry_unavailable",
   );
 
-  await user.click(screen.getByRole("button", { name: /RP2040 A/ }));
+  await user.click(rowByIdentifier("RP-A-001"));
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
-test("opens centralized setup from the page header and an unassigned Device", async () => {
+test("relies on automatic discovery and opens setup from an unassigned Device", async () => {
   const user = userEvent.setup();
   const onOpenSetup = vi.fn();
   renderManagement({
@@ -431,8 +421,7 @@ test("opens centralized setup from the page header and an unassigned Device", as
     onOpenSetup,
   });
 
-  await user.click(screen.getByRole("button", { name: "添加键盘" }));
-  expect(onOpenSetup).toHaveBeenCalledWith(null);
+  expect(screen.queryByRole("button", { name: "添加键盘" })).toBeNull();
   await user.click(screen.getByRole("button", { name: "继续设置" }));
   expect(onOpenSetup).toHaveBeenCalledWith("rp-a");
 });
@@ -458,37 +447,12 @@ test("renames exactly the selected device", async () => {
   const user = userEvent.setup();
   const onRename = vi.fn();
   renderManagement({ onRename });
-  await user.click(screen.getByRole("button", { name: /RP2040 B/ }));
+  await user.click(rowByIdentifier("RP-B-002"));
   await user.click(screen.getByRole("button", { name: "重命名设备" }));
   await user.clear(screen.getByRole("textbox", { name: "设备名称" }));
   await user.type(screen.getByRole("textbox", { name: "设备名称" }), "Counter B");
   await user.click(screen.getByRole("button", { name: "确认重命名" }));
   expect(onRename).toHaveBeenCalledWith("rp-b", "Counter B");
-});
-
-test("permits forget only after offline confirmation naming that device", async () => {
-  const user = userEvent.setup();
-  const onForget = vi.fn();
-  renderManagement({ onForget });
-  expect(screen.getByRole("button", { name: "忘记设备" })).toBeDisabled();
-  await user.click(screen.getByRole("button", { name: /ESP32 Offline/ }));
-  await user.click(screen.getByRole("button", { name: "忘记设备" }));
-  const dialog = screen.getByRole("dialog", { name: "忘记设备" });
-  expect(within(dialog).getByText(/ESP32 Offline/)).toBeInTheDocument();
-  await user.click(within(dialog).getByRole("button", { name: "确认" }));
-  expect(onForget).toHaveBeenCalledWith("esp-offline");
-  expect(screen.queryByRole("checkbox")).toBeNull();
-});
-
-test("closes stale forget confirmation when the device reconnects", async () => {
-  const user = userEvent.setup();
-  const onForget = vi.fn();
-  const { rerender, props } = renderManagement({ onForget });
-  await user.click(screen.getByRole("button", { name: /ESP32 Offline/ }));
-  await user.click(screen.getByRole("button", { name: "忘记设备" }));
-  rerender(<DeviceManagement {...props} devices={props.devices.map((item) => item.deviceId === "esp-offline" ? { ...item, connection: "online", mode: "runtime" } : item)} />);
-  expect(screen.queryByRole("dialog", { name: "忘记设备" })).toBeNull();
-  expect(onForget).not.toHaveBeenCalled();
 });
 
 test("saves the selected Device Profile immediately with its automatic hardware mapping", async () => {
@@ -513,7 +477,7 @@ test("does not fan an assignment out to another Device with the same Board Profi
 
   await user.selectOptions(screen.getByRole("combobox", { name: "设备配置" }), "profile-b");
   expect(onSaveRuntimeAssignment).toHaveBeenCalledTimes(1);
-  expect(screen.getAllByRole("button", { name: /Counter Profile/ })).toHaveLength(3);
+  expect(document.querySelectorAll(".connected-device-list .device-row")).toHaveLength(4);
 });
 
 test("shows no compatible hardware state without attempting an automatic save", async () => {
@@ -521,7 +485,7 @@ test("shows no compatible hardware state without attempting an automatic save", 
   const onSaveRuntimeAssignment = vi.fn();
   renderManagement({ onSaveRuntimeAssignment });
 
-  await user.click(screen.getByRole("button", { name: /ESP32 A/ }));
+  await user.click(rowByIdentifier("ESP-A-003"));
   await user.selectOptions(screen.getByRole("combobox", { name: "设备配置" }), "profile-a");
   expect(screen.getByText("此配置不适用于当前设备")).toBeInTheDocument();
   expect(onSaveRuntimeAssignment).not.toHaveBeenCalled();
@@ -557,7 +521,7 @@ test("repairs invalid stored IDs without exposing a clear-assignment action", as
     onSaveRuntimeAssignment,
   });
 
-  expect(screen.getAllByText("gone")).toHaveLength(2);
+  expect(screen.getByText("gone")).toBeInTheDocument();
   expect(screen.getByRole("combobox", { name: "设备配置" })).toHaveValue("");
   await user.selectOptions(screen.getByRole("combobox", { name: "设备配置" }), "profile-a");
   expect(onSaveRuntimeAssignment).toHaveBeenCalledWith("rp-a", {
@@ -578,7 +542,7 @@ test("retains both raw IDs when only the stored Hardware Profile is missing", ()
     })],
   });
 
-  expect(screen.getAllByText("profile-a")).toHaveLength(3);
+  expect(screen.getAllByText("profile-a")).toHaveLength(2);
 });
 
 test("retains both raw IDs when the stored Hardware Profile has the wrong Board Profile", () => {
@@ -592,7 +556,7 @@ test("retains both raw IDs when the stored Hardware Profile has the wrong Board 
     })],
   });
 
-  expect(screen.getAllByText("profile-b")).toHaveLength(2);
+  expect(screen.getByText("profile-b")).toBeInTheDocument();
 });
 
 test("locks assignment selection while an automatic save is pending", async () => {
@@ -635,10 +599,10 @@ test("embeds I/O Mapping and Key Layout as device workspace tabs", async () => {
     within(screen.getByRole("tablist", { name: "设备详情" }))
       .getAllByRole("tab")
       .map((tab) => tab.textContent),
-  ).toEqual(["概览", "按键布局", "I/O 映射"]);
-  await user.click(screen.getByRole("tab", { name: "I/O 映射" }));
-  expect(screen.getByRole("tabpanel", { name: "I/O 映射" })).toHaveTextContent("硬件配置");
-  expect(screen.queryByRole("dialog", { name: "I/O 映射" })).not.toBeInTheDocument();
+  ).toEqual(["按键", "设备设置", "按键布局", "高级 I/O"]);
+  await user.click(screen.getByRole("tab", { name: "高级 I/O" }));
+  expect(screen.getByRole("tabpanel", { name: "高级 I/O" })).toHaveTextContent("硬件配置");
+  expect(screen.queryByRole("dialog", { name: "高级 I/O" })).not.toBeInTheDocument();
   await user.click(screen.getByRole("tab", { name: "按键布局" }));
   expect(screen.getByRole("tabpanel", { name: "按键布局" })).toContainElement(
     screen.getByRole("button", { name: "添加按键组" }),
@@ -646,16 +610,49 @@ test("embeds I/O Mapping and Key Layout as device workspace tabs", async () => {
   expect(screen.queryByRole("dialog", { name: "按键布局" })).not.toBeInTheDocument();
 });
 
-test("shows technical details and activity only on Overview", async () => {
+test("keeps device selection, keypad, and actions in one workspace", async () => {
+  const onSelectedButtonChange = vi.fn();
+  const profile = structuredClone(profiles[0]);
+  profile.profile.groups = [{
+    id: "main",
+    columns: 2,
+    buttons: [{ id: "A", label: "A" }, { id: "B", label: "B" }],
+  }];
+  profile.actions = {
+    A: {
+      press: [{ type: "paste", text: "hello" }],
+      release: [],
+      long_press: [],
+      double_press: [],
+    },
+  };
+
+  renderManagement({
+    deviceProfiles: [profile, profiles[1], profiles[2]],
+    selectedButtonId: "A",
+    onSelectedButtonChange,
+    pressedButtonIds: new Set(["A"]),
+    onChangeProfile: vi.fn(),
+  });
+
+  expect(screen.getByRole("tab", { name: "按键" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("button", { name: "A，1 项行为" })).toHaveClass("is-pressed");
+  expect(screen.getByRole("complementary", { name: "A" })).toHaveTextContent("粘贴 - hello");
+
+  await userEvent.setup().click(screen.getByRole("button", { name: "B，0 项行为" }));
+  expect(onSelectedButtonChange).toHaveBeenCalledWith("B");
+});
+
+test("shows technical details and activity only in Device Settings", async () => {
   const user = userEvent.setup();
   renderManagement();
 
-  const overview = screen.getByRole("tabpanel", { name: "概览" });
-  expect(within(overview).getByText("查看技术详情").closest("details")).toHaveAttribute("open");
+  const overview = screen.getByRole("tabpanel", { name: "设备设置" });
+  expect(within(overview).getByText("查看技术详情").closest("details")).not.toHaveAttribute("open");
   expect(within(overview).getByLabelText("设备指标")).toBeInTheDocument();
   expect(within(overview).getByRole("table", { name: "设备动态" })).toHaveTextContent("A pressed");
 
-  await user.click(screen.getByRole("tab", { name: "I/O 映射" }));
+  await user.click(screen.getByRole("tab", { name: "高级 I/O" }));
   expect(screen.queryByText("查看技术详情")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("设备指标")).not.toBeInTheDocument();
   expect(screen.queryByRole("table", { name: "设备动态" })).not.toBeInTheDocument();
@@ -672,7 +669,7 @@ test("keeps overview diagnostics for a device without an editing profile", () =>
   });
 
   expect(screen.queryByRole("tablist", { name: "设备详情" })).not.toBeInTheDocument();
-  expect(screen.getByText("查看技术详情").closest("details")).toHaveAttribute("open");
+  expect(screen.getByText("查看技术详情").closest("details")).not.toHaveAttribute("open");
   expect(screen.getByLabelText("设备指标")).toBeInTheDocument();
   expect(screen.getByRole("table", { name: "设备动态" })).toHaveTextContent("A pressed");
 });
@@ -690,7 +687,7 @@ test("uses shared button primitives for device workspace commands", async () => 
   expect(screen.queryByRole("button", { name: "清除运行分配" })).toBeNull();
   expect(screen.getByRole("button", { name: "配置设置" })).toHaveClass("secondary-button");
 
-  await user.click(screen.getByRole("tab", { name: "I/O 映射" }));
+  await user.click(screen.getByRole("tab", { name: "高级 I/O" }));
   expect(screen.getByRole("button", { name: "保存共享配置" })).toHaveClass("secondary-button");
   expect(screen.getByRole("button", { name: "复制并仅用于此设备" })).toHaveClass("secondary-button");
 });
@@ -701,6 +698,6 @@ test("shows a persistent shared configuration warning with save action", async (
     selectedDeviceId: "rp-a",
   });
   expect(screen.getByText(/2 个设备/)).toBeInTheDocument();
-  await userEvent.setup().click(screen.getByRole("tab", { name: "I/O 映射" }));
+  await userEvent.setup().click(screen.getByRole("tab", { name: "高级 I/O" }));
   expect(screen.getByRole("button", { name: "保存共享配置" })).toBeInTheDocument();
 });
