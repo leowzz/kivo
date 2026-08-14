@@ -77,6 +77,7 @@ const candidateMessages: Record<
 };
 
 interface DeviceManagementProps {
+  client?: boolean;
   language: Language;
   devices: DeviceStatus[];
   candidates: CandidateStatus[];
@@ -154,6 +155,7 @@ function TechnicalDetail({ label, value, valueClassName }: { label: string; valu
 }
 
 export function DeviceManagement({
+  client = false,
   language,
   devices,
   candidates,
@@ -531,7 +533,7 @@ export function DeviceManagement({
     }
   };
   return (
-    <div className={`device-management ${editingProfile && workspaceTab === "buttons" ? "is-workspace" : ""}`}>
+    <div className={`device-management${client ? " is-client" : ""}${editingProfile && (client || workspaceTab === "buttons") ? " is-workspace" : ""}`}>
       <section
         className="device-list-region"
         aria-label={t(language, "devices.list")}
@@ -628,13 +630,15 @@ export function DeviceManagement({
                   {t(language, "setup.retry")}
                 </button>
               )}
-              <button
-                className="primary-button"
-                type="button"
-                onClick={() => onOpenSetup(candidateSetupId(selectedCandidate))}
-              >
-                {t(language, "setup.continue")}
-              </button>
+              {!client && (
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => onOpenSetup(candidateSetupId(selectedCandidate))}
+                >
+                  {t(language, "setup.continue")}
+                </button>
+              )}
             </div>
             <details className="device-technical-details">
               <summary>{t(language, "setup.technicalDetails")}</summary>
@@ -685,7 +689,7 @@ export function DeviceManagement({
               <h2>
                 {renaming ? t(language, "devices.rename") : selectedDevice.name}
               </h2>
-              {!renaming && (
+              {!client && !renaming && (
                 <button
                   className="icon-button"
                   type="button"
@@ -724,7 +728,7 @@ export function DeviceManagement({
                 </button>
               </div>
             )}
-            {editingProfile && (
+            {!client && editingProfile && (
               <div className="device-workspace-toolbar is-primary">
                 <div className="device-workspace-tabs" role="tablist" aria-label={t(language, "devices.detail")}>
                   <button type="button" role="tab" aria-selected={workspaceTab === "buttons"} onClick={() => setWorkspaceTab("buttons")}>{t(language, "devices.workspaceButtons")}</button>
@@ -735,7 +739,7 @@ export function DeviceManagement({
                 <button className="secondary-button" type="button" aria-label={t(language, "devices.configurationSettings")} onClick={() => setSettingsOpen(true)}>{t(language, "devices.configurationSettings")}</button>
               </div>
             )}
-            {(!editingProfile || workspaceTab === "overview") && <>
+            {(!editingProfile || (!client && workspaceTab === "overview")) && <>
               <Detail
               label={t(language, "devices.serial")}
               value={selectedDevice.hardwareSerial}
@@ -758,7 +762,8 @@ export function DeviceManagement({
               {selectedDevice.connection === "online" &&
                 selectedDevice.mode === "runtime" &&
                 selectedDevice.identity === "valid" &&
-                selectedDevice.assignment === "unassigned" && (
+                selectedDevice.assignment === "unassigned" &&
+                !client && (
                   <button
                     className="primary-button setup-command"
                     type="button"
@@ -767,7 +772,7 @@ export function DeviceManagement({
                     {t(language, "setup.continue")}
                   </button>
                 )}
-              {isProductDevice && (
+              {!client && isProductDevice && (
                 <section className="device-assignment" aria-label={t(language, "devices.copyProductConfig")}>
                   <label>
                     {t(language, "devices.copyProductConfig")}
@@ -794,7 +799,7 @@ export function DeviceManagement({
                   </button>
                 </section>
               )}
-              {!isProductDevice && <section className="device-assignment" aria-label={t(language, "devices.assignment")}>
+              {!client && !isProductDevice && <section className="device-assignment" aria-label={t(language, "devices.assignment")}>
                 <label>
                   {t(language, "devices.useConfiguration")}
                   <select
@@ -819,7 +824,7 @@ export function DeviceManagement({
                 )}
               </section>}
             </>}
-            {editingProfile && workspaceTab === "buttons" && (
+            {editingProfile && (client || workspaceTab === "buttons") && (
               <div className="keypad-stage device-keypad-stage" role="tabpanel" aria-label={t(language, "devices.workspaceButtons")}>
                 <Keypad
                   layout={editingProfile.profile}
@@ -831,7 +836,7 @@ export function DeviceManagement({
                 />
               </div>
             )}
-            {editingProfile && (workspaceTab === "layout" || workspaceTab === "io") && (
+            {!client && editingProfile && (workspaceTab === "layout" || workspaceTab === "io") && (
               <section className="device-workspace" aria-label={t(language, "devices.configurationSettings")}>
                 {selectedDevice.connection === "offline" && <p className="form-hint">{t(language, "devices.offlineEditing")}</p>}
                 {(workspaceTab === "io" || workspaceTab === "layout") && sharedDeviceCount > 1 && (
@@ -848,7 +853,7 @@ export function DeviceManagement({
                 {workspaceTab === "layout" && <div role="tabpanel" aria-label={t(language, "devices.workspaceLayout")}><LayoutEditor language={language} layout={editingProfile.profile} onChange={(layout) => updateEditingProfile({ ...editingProfile, profile: layout })} /></div>}
               </section>
             )}
-            {(!editingProfile || workspaceTab === "overview") && (
+            {!client && (!editingProfile || workspaceTab === "overview") && (
               <div
                 role={editingProfile ? "tabpanel" : undefined}
                 aria-label={editingProfile ? t(language, "devices.workspaceOverview") : undefined}
@@ -923,12 +928,12 @@ export function DeviceManagement({
           </>
         )}
       </aside>
-      {editingProfile && workspaceTab === "buttons" && (
+      {editingProfile && (client || workspaceTab === "buttons") && (
         <ActionEditor
           language={language}
           button={selectedButton}
           actions={selectedActions}
-          canRename={!isProductDevice}
+          canRename={!client && !isProductDevice}
           onChange={(actions) => {
             if (!selectedButtonId) return;
             updateActionProfile({
@@ -956,7 +961,7 @@ export function DeviceManagement({
           }}
         />
       )}
-      {editingProfile && <ConfigurationSettingsDialog open={settingsOpen} language={language} profile={editingProfile} sharedDeviceCount={sharedDeviceCount} allowDuplicate={!isProductDevice} onCancel={() => setSettingsOpen(false)} onSave={(settings: TriggerSettings) => { updateEditingProfile({ ...editingProfile, trigger_settings: settings }); setSettingsOpen(false); if (!isProductDevice) void onSaveSharedProfile?.({ ...editingProfile, trigger_settings: settings }); }} onDraftChange={isProductDevice ? undefined : (settings) => updateEditingProfile({ ...editingProfile, trigger_settings: settings })} onDuplicate={async (name) => { if (selectedDevice) await onDuplicateProfileForDevice?.({ deviceId: selectedDevice.deviceId, sourceProfile: { ...editingProfile }, name }); setSettingsOpen(false); }} />}
+      {!client && editingProfile && <ConfigurationSettingsDialog open={settingsOpen} language={language} profile={editingProfile} sharedDeviceCount={sharedDeviceCount} allowDuplicate={!isProductDevice} onCancel={() => setSettingsOpen(false)} onSave={(settings: TriggerSettings) => { updateEditingProfile({ ...editingProfile, trigger_settings: settings }); setSettingsOpen(false); if (!isProductDevice) void onSaveSharedProfile?.({ ...editingProfile, trigger_settings: settings }); }} onDraftChange={isProductDevice ? undefined : (settings) => updateEditingProfile({ ...editingProfile, trigger_settings: settings })} onDuplicate={async (name) => { if (selectedDevice) await onDuplicateProfileForDevice?.({ deviceId: selectedDevice.deviceId, sourceProfile: { ...editingProfile }, name }); setSettingsOpen(false); }} />}
     </div>
   );
 }

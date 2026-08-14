@@ -134,7 +134,7 @@ nvm install
 nvm use
 uv sync
 npm ci
-make helper
+make client
 ```
 
 `.env` 会被有意忽略，且只包含 `version=vX.Y.Z`。它为本地固件构建和 `make release` 提供仓库版本。

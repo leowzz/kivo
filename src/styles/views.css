@@ -269,6 +269,9 @@
 /* ===== 设备管理 ===== */
 .device-management { min-height: 0; flex: 1; display: grid; grid-template-columns: 248px minmax(0, 1fr); overflow: hidden; }
 .device-management.is-workspace { grid-template-columns: 248px minmax(360px, 1fr) minmax(300px, 360px); }
+.device-management.is-client .device-list-region { background: var(--gray-1); }
+.device-management.is-client.is-workspace .device-detail-title { min-height: 54px; flex: 0 0 auto; margin: -18px -18px 0; padding: 0 20px; border-bottom: 1px solid var(--border-subtle); }
+.device-management.is-client.is-workspace .device-keypad-stage { margin-top: 0; }
 .device-list-region { min-width: 0; overflow: auto; padding: 16px 12px; }
 .device-list-header { margin-bottom: 14px; }
 .device-list-header h2 { margin: 0; color: var(--gray-11); font-size: var(--text-17); }

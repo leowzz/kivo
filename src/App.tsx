@@ -214,7 +214,13 @@ function learningTargetsMatch(left: LearningTarget, right: LearningTarget) {
     left.pins.every((pin, index) => pin === right.pins[index]);
 }
 
-export default function App({ embedded = false }: { embedded?: boolean }) {
+export default function App({
+  embedded = false,
+  client = false,
+}: {
+  embedded?: boolean;
+  client?: boolean;
+}) {
   const queue = useRef(new SerializedSaveQueue()).current;
   const [registry, setRegistry] = useState<RegistryState>({
     deviceProfiles: [],
@@ -286,7 +292,7 @@ export default function App({ embedded = false }: { embedded?: boolean }) {
   );
 
   useEffect(() => {
-    if (!loaded) return;
+    if (client || !loaded) return;
     const next = reconcileSetupSession(
       setupSeenRef.current,
       currentSetupPresence,
@@ -296,7 +302,7 @@ export default function App({ embedded = false }: { embedded?: boolean }) {
       setSetupTargetId(next.autoTargetId);
       setSetupOpen(true);
     }
-  }, [currentSetupPresence, loaded, setupOpen]);
+  }, [client, currentSetupPresence, loaded, setupOpen]);
 
   const openSetup = useCallback((targetId: string | null = null) => {
     if (targetId) setupSeenRef.current.add(targetId);
@@ -1069,8 +1075,8 @@ export default function App({ embedded = false }: { embedded?: boolean }) {
   }
 
   return (
-    <main className={`product-shell${embedded ? " is-embedded" : ""}`}>
-      <header className={`topbar${embedded ? " is-embedded" : ""}`}>
+    <main className={`product-shell${embedded ? " is-embedded" : ""}${client ? " is-client" : ""}`}>
+      <header className={`topbar${embedded ? " is-embedded" : ""}${client ? " is-client" : ""}`}>
         {!embedded ? <div className="brand"><img src={brandIcon} alt="" /><h1>Kivo</h1></div> : null}
         <div className="device-summary" aria-label={t(language, "device.summary")}>
           <span className="summary-ready"><i />{summary.ready} {t(language, "device.ready")}</span>
@@ -1079,7 +1085,7 @@ export default function App({ embedded = false }: { embedded?: boolean }) {
           <b aria-hidden="true">{" · "}</b>
           <span className="summary-offline"><i />{summary.offline} {t(language, "device.offline")}</span>
         </div>
-        <nav className="topbar-nav" aria-label={t(language, "nav.primary")}>
+        {!client && <nav className="topbar-nav" aria-label={t(language, "nav.primary")}>
           <button
             className={view === "devices" ? "is-active" : ""}
             type="button"
@@ -1096,7 +1102,7 @@ export default function App({ embedded = false }: { embedded?: boolean }) {
           >
             <DatabaseBackup size={16} />{t(language, "nav.data")}
           </button>
-        </nav>
+        </nav>}
         <div className={`save-state is-${autosave.status}`} aria-live="polite">
           {autosave.status === "saving" && t(language, "save.saving")}
           {autosave.status === "saved" && t(language, "save.saved")}
@@ -1117,7 +1123,7 @@ export default function App({ embedded = false }: { embedded?: boolean }) {
 
       <div className="product-workspace is-unified">
         <section className="content-panel">
-          {view === "data" ? (
+          {!client && view === "data" ? (
             <div className="data-page">
               <div className="content-heading">
                 <div>
@@ -1174,6 +1180,7 @@ export default function App({ embedded = false }: { embedded?: boolean }) {
             </div>
           ) : (
             <DeviceManagement
+              client={client}
               language={language}
               devices={devices}
               candidates={candidates}
@@ -1203,7 +1210,7 @@ export default function App({ embedded = false }: { embedded?: boolean }) {
         </section>
       </div>
 
-      {profileCreatorOpen && (
+      {!client && profileCreatorOpen && (
         <div className="modal-backdrop" role="presentation">
           <section
             className="device-setup-dialog profile-create-dialog"
@@ -1248,22 +1255,24 @@ export default function App({ embedded = false }: { embedded?: boolean }) {
         </div>
       )}
 
-      <DeviceSetupWizard
-        open={setupOpen}
-        targetId={setupTargetId}
-        language={language}
-        devices={devices}
-        candidates={candidates}
-        boardProfiles={boardProfiles}
-        deviceProfiles={deviceProfiles}
-        onTargetChange={setSetupTargetId}
-        onRetryCandidate={retrySetupCandidate}
-        onCreateProfile={createDeviceProfile}
-        onComplete={completeDeviceSetup}
-        onClose={() => setSetupOpen(false)}
-      />
+      {!client && (
+        <DeviceSetupWizard
+          open={setupOpen}
+          targetId={setupTargetId}
+          language={language}
+          devices={devices}
+          candidates={candidates}
+          boardProfiles={boardProfiles}
+          deviceProfiles={deviceProfiles}
+          onTargetChange={setSetupTargetId}
+          onRetryCandidate={retrySetupCandidate}
+          onCreateProfile={createDeviceProfile}
+          onComplete={completeDeviceSetup}
+          onClose={() => setSetupOpen(false)}
+        />
+      )}
 
-      {confirmation && (
+      {!client && confirmation && (
         <ConfirmDialog
           title={confirmation.kind === "restore"
             ? t(language, confirmation.preview.kind === "product_devices"

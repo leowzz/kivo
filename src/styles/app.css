@@ -16,6 +16,7 @@
 /* ===== 顶栏 48px ===== */
 .topbar { display: grid; grid-template-columns: 180px minmax(280px, 1fr) auto auto; align-items: center; border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); }
 .topbar.is-embedded { grid-template-columns: minmax(280px, 1fr) auto auto; }
+.topbar.is-client { grid-template-columns: 180px minmax(240px, 1fr) auto; }
 .brand { height: 48px; display: flex; align-items: center; gap: 9px; padding: 0 var(--space-16); }
 .brand img { width: 26px; height: 26px; border-radius: var(--radius-6); }
 .brand h1 { margin: 0; font-size: var(--text-17); font-weight: var(--weight-bold); letter-spacing: 0; }
@@ -131,6 +132,7 @@
   .product-shell { grid-template-rows: auto minmax(0, 1fr); }
   .topbar { min-height: 48px; grid-template-columns: 120px 1fr; }
   .topbar.is-embedded { grid-template-columns: 1fr; }
+  .topbar.is-client { grid-template-columns: 120px 1fr; }
   .device-summary { justify-self: end; gap: 5px; padding: 0 var(--space-12); font-size: var(--text-11); }
   .device-summary span { min-width: auto; }
   .topbar-nav { grid-column: 1 / -1; justify-content: flex-start; padding: 4px var(--space-12); border-top: 1px solid var(--border-subtle); }

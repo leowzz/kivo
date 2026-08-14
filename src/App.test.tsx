@@ -421,6 +421,34 @@ test("does not override the WebView viewport height", async () => {
   );
 });
 
+test("keeps the client surface focused on devices and editable actions", async () => {
+  const user = userEvent.setup();
+  render(<App client />);
+
+  expect(await screen.findByRole("heading", { name: "我的键盘" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "数据与备份" })).toBeNull();
+  expect(screen.queryByRole("tab", { name: "设备设置" })).toBeNull();
+  expect(screen.queryByRole("tab", { name: "高级 I/O" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "配置设置" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "重命名设备" })).toBeNull();
+
+  await screen.findByRole("complementary", { name: "2" });
+  await addPasteAction(user, "client action");
+
+  await waitFor(
+    () => expect(invoke).toHaveBeenCalledWith("save_device_profile", {
+      profile: expect.objectContaining({
+        actions: expect.objectContaining({
+          DIGIT_2: expect.objectContaining({
+            press: [{ type: "paste", text: "client action" }],
+          }),
+        }),
+      }),
+    }),
+    { timeout: 1600 },
+  );
+});
+
 test("fills default trigger settings when a stale profile omits them", async () => {
   const staleProfile = structuredClone(currentSnapshot.deviceProfiles[0]) as Omit<DeviceProfile, "trigger_settings"> & {
     trigger_settings?: DeviceProfile["trigger_settings"];

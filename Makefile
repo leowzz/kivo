@@ -1,4 +1,4 @@
-.PHONY: all build build-esp32s3 build-rp2040 build-product download-mode upload upload-esp32s3 upload-rp2040 monitor monitor-esp32s3 monitor-rp2040 require-build-id require-product validate-env-build-id require-serial test helper studio helper-kill helper-build release
+.PHONY: all dev build build-esp32s3 build-rp2040 build-product download-mode upload upload-esp32s3 upload-rp2040 monitor monitor-esp32s3 monitor-rp2040 require-build-id require-product validate-env-build-id require-serial test client helper studio helper-kill helper-build release
 
 ENV_FILE ?= .env
 ifeq ($(origin BUILD_ID),undefined)
@@ -12,9 +12,9 @@ BAUD ?= 115200
 ESP32S3_BUILD = KIVO_FIRMWARE_BUILD_ID="$(BUILD_ID)" $(UV_CMD) run pio run -e esp32s3
 RP2040_BUILD = KIVO_FIRMWARE_BUILD_ID="$(BUILD_ID)" $(UV_CMD) run pio run -e rp2040
 
-all: helper
+all: client
 
-dev: helper
+dev: client
 
 require-serial:
 	@test -n "$(SERIAL)" || { echo "SERIAL is required" >&2; exit 2; }
@@ -108,8 +108,10 @@ test:
 	npm test
 	npm run build
 
-helper: helper-kill
+client: helper-kill
 	npm run tauri dev
+
+helper: client
 
 studio: helper-kill
 	KIVO_REPOSITORY_ROOT="$$(pwd -P)" npm run tauri -- dev --features product-studio --config src-tauri/tauri.studio.conf.json
