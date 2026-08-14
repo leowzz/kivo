@@ -1,0 +1,160 @@
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+
+import numpy as np
+import pytest
+import trimesh
+
+from scripts import integrated_workstation as workstation
+from scripts import macro_pad_variants as macro
+
+
+@pytest.fixture(scope="module")
+def generated_models() -> tuple[
+    trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
+]:
+    return (
+        workstation.generate_shell(),
+        workstation.generate_sloped_panel(),
+        workstation.generate_cover(),
+        workstation.generate_handset_base(),
+    )
+
+
+def test_generated_models_validate(
+    generated_models: tuple[
+        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
+    ],
+) -> None:
+    shell, panel, cover, handset_base = generated_models
+    report = workstation.validate_models(shell, panel, cover, handset_base)
+
+    assert report.key_count == 18
+    assert report.key_layout == (6, 3)
+    assert report.key_pitch == 19.05
+    assert report.key_plane_degrees == pytest.approx(30.0)
+    assert report.handset_pocket == (65.0, 80.0)
+    assert report.handset_clearance_per_side == 0.6
+    assert report.handset_screw_count == 4
+    assert report.controller_bay == (29.0, 58.0)
+    assert report.screen_board == (64.9, 35.03)
+    assert report.screen_plane_degrees == pytest.approx(30.0)
+    assert report.panel_screw_count == 6
+    assert report.shell_watertight
+    assert report.panel_watertight
+    assert report.cover_watertight
+    assert report.handset_base_watertight
+
+
+def test_switch_apertures_preserve_canonical_stepped_geometry(
+    generated_models: tuple[
+        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
+    ],
+) -> None:
+    _, panel, _, _ = generated_models
+
+    lower = macro.measure_switch_section(
+        panel, z=1.0, nominal_size=workstation.LOWER_SWITCH_APERTURE
+    )
+    upper = macro.measure_switch_section(
+        panel, z=2.7, nominal_size=workstation.UPPER_SWITCH_APERTURE
+    )
+
+    assert lower.centers.shape == (18, 2)
+    assert upper.centers.shape == (18, 2)
+    assert np.allclose(lower.sizes, 14.8, atol=0.003)
+    assert np.allclose(upper.sizes, 14.0, atol=0.003)
+    assert np.allclose(np.diff(lower.x_levels), 19.05, atol=0.003)
+    assert np.allclose(np.diff(lower.y_levels), 19.05, atol=0.003)
+
+
+def test_controller_bay_accepts_both_reference_boards() -> None:
+    bay = np.array(
+        [workstation.CONTROLLER_CLEAR_WIDTH, workstation.CONTROLLER_CLEAR_LENGTH]
+    )
+    rp2040 = np.array([22.86, 53.34])
+    esp32_s3 = np.array([25.4, 56.0])
+
+    assert np.all(bay > rp2040)
+    assert np.all(bay > esp32_s3)
+    assert np.all(bay - esp32_s3 >= np.array([3.6, 2.0]))
+
+
+def test_handset_base_has_four_aligned_bottom_up_screw_pairs(
+    generated_models: tuple[
+        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
+    ],
+) -> None:
+    shell, _, _, handset_base = generated_models
+
+    workstation.validate_handset_screw_holes(shell, handset_base)
+    assert workstation.HANDSET_SCREW_LOCAL_CENTERS.shape == (4, 2)
+    assert np.allclose(
+        workstation.handset_screw_world_centers()
+        - workstation.HANDSET_SCREW_LOCAL_CENTERS,
+        workstation.handset_base_origin(),
+    )
+
+
+def test_user_measured_heat_set_insert_holes_are_hidden_and_blind(
+    generated_models: tuple[
+        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
+    ],
+) -> None:
+    shell, _, cover, handset_base = generated_models
+
+    assert workstation.HEAT_SET_INSERT_NARROW_DIAMETER == 3.9
+    assert workstation.HEAT_SET_INSERT_WIDE_DIAMETER == 4.9
+    assert workstation.HEAT_SET_INSERT_LENGTH == 4.9
+    assert workstation.HEAT_SET_INSERT_HOLE_DIAMETER == 4.0
+    assert workstation.HEAT_SET_INSERT_LEAD_DIAMETER == 5.1
+    assert workstation.HEAT_SET_INSERT_HOLE_DEPTH == 5.4
+    assert workstation.M3_SCREW_THREAD_DIAMETER == 2.9
+    assert workstation.M3_SCREW_HEAD_DIAMETER == 5.3
+    assert workstation.M3_SCREW_HEAD_CLEARANCE_DIAMETER == 5.6
+    workstation.validate_handset_screw_holes(shell, handset_base)
+    workstation.validate_bottom_cover_attachment(shell, cover)
+
+
+def test_sloped_panel_is_flat_printable_and_has_six_aligned_screws(
+    generated_models: tuple[
+        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
+    ],
+) -> None:
+    shell, panel, _, _ = generated_models
+
+    workstation.validate_panel_attachment(shell, panel)
+    assert panel.bounds[0, 2] == pytest.approx(0.0, abs=0.003)
+    assert workstation.PANEL_SCREW_CENTERS.shape == (6, 2)
+
+
+def test_exported_stls_reload_as_closed_manifolds(
+    tmp_path: Path,
+    generated_models: tuple[
+        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
+    ],
+) -> None:
+    shell, panel, cover, handset_base = generated_models
+    targets = {
+        "shell": (shell, tmp_path / workstation.SHELL_FILENAME),
+        "panel": (panel, tmp_path / workstation.PANEL_FILENAME),
+        "cover": (cover, tmp_path / workstation.COVER_FILENAME),
+        "handset-base": (
+            handset_base,
+            tmp_path / workstation.HANDSET_BASE_FILENAME,
+        ),
+    }
+
+    hashes: dict[str, str] = {}
+    for label, (mesh, target) in targets.items():
+        workstation.export(mesh, target)
+        hashes[label] = hashlib.sha256(target.read_bytes()).hexdigest()
+        reloaded = trimesh.load_mesh(target, file_type="stl", process=False)
+        assert isinstance(reloaded, trimesh.Trimesh)
+        reloaded.merge_vertices()
+        reloaded.remove_unreferenced_vertices()
+        macro.assert_closed_manifold(reloaded, label)
+
+    assert len(set(hashes.values())) == len(hashes)
