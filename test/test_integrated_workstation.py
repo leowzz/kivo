@@ -38,10 +38,12 @@ def test_generated_models_validate(
     assert report.handset_pocket == (65.0, 80.0)
     assert report.handset_clearance_per_side == 0.6
     assert report.handset_screw_count == 4
-    assert report.controller_bay == (29.0, 58.0)
+    assert report.controller_bay == pytest.approx((28.64, 63.89))
+    assert report.controller_support_levels == (3.0, 6.5)
     assert report.screen_board == (64.9, 35.03)
     assert report.screen_plane_degrees == pytest.approx(30.0)
     assert report.panel_screw_count == 6
+    assert report.bottom_cover_screw_count == 6
     assert report.shell_watertight
     assert report.panel_watertight
     assert report.cover_watertight
@@ -74,12 +76,42 @@ def test_controller_bay_accepts_both_reference_boards() -> None:
     bay = np.array(
         [workstation.CONTROLLER_CLEAR_WIDTH, workstation.CONTROLLER_CLEAR_LENGTH]
     )
-    rp2040 = np.array([22.86, 53.34])
-    esp32_s3 = np.array([25.4, 56.0])
+    rp2040 = np.array([workstation.RP2040_BOARD_WIDTH, workstation.RP2040_BOARD_LENGTH])
+    esp32_s3 = np.array(
+        [workstation.ESP32_S3_BOARD_WIDTH, workstation.ESP32_S3_BOARD_LENGTH]
+    )
 
     assert np.all(bay > rp2040)
     assert np.all(bay > esp32_s3)
-    assert np.all(bay - esp32_s3 >= np.array([3.6, 2.0]))
+    assert bay - esp32_s3 == pytest.approx((0.7, 0.5))
+
+
+def test_controller_uses_two_level_snap_cradle_without_tie_slots(
+    generated_models: tuple[
+        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
+    ],
+) -> None:
+    _, _, cover, _ = generated_models
+
+    assert workstation.CONTROLLER_RP2040_RAISE == 3.0
+    assert workstation.CONTROLLER_ESP32_S3_RAISE == 6.5
+    assert not hasattr(workstation, "CONTROLLER_TIE_SLOT_CENTER_OFFSETS")
+    workstation.validate_controller_cradle(cover)
+
+
+def test_type_c_opening_and_controller_are_at_the_rear(
+    generated_models: tuple[
+        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
+    ],
+) -> None:
+    shell, _, _, _ = generated_models
+
+    assert workstation.CONTROLLER_Y1 == pytest.approx(100.0)
+    assert (
+        workstation.CONTROLLER_USB_OPENING_Y0
+        > (workstation.WEDGE_Y0 + workstation.WEDGE_Y1) / 2.0
+    )
+    workstation.validate_controller_connector_opening(shell)
 
 
 def test_screen_header_slot_is_on_left_and_covers_all_eight_pins(
@@ -135,6 +167,22 @@ def test_user_measured_heat_set_insert_holes_are_hidden_and_blind(
     workstation.validate_bottom_cover_attachment(shell, cover)
 
 
+def test_bottom_cover_supports_the_handset_tray_footprint(
+    generated_models: tuple[
+        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
+    ],
+) -> None:
+    shell, _, cover, _ = generated_models
+
+    assert cover.bounds[0, 0] == pytest.approx(0.0, abs=0.003)
+    assert cover.bounds[1, 0] == pytest.approx(workstation.WEDGE_X1, abs=0.003)
+    assert cover.bounds[0, 1] == pytest.approx(workstation.TRAY_BOTTOM_Y, abs=0.003)
+    assert cover.bounds[1, 1] == pytest.approx(workstation.WEDGE_Y1, abs=0.003)
+    assert workstation.HANDSET_COVER_SCREW_CENTERS.shape == (2, 2)
+    assert workstation.COVER_SCREW_CENTERS.shape == (6, 2)
+    workstation.validate_bottom_cover_attachment(shell, cover)
+
+
 def test_sloped_panel_is_flat_printable_and_has_six_aligned_screws(
     generated_models: tuple[
         trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
@@ -155,6 +203,21 @@ def test_shell_has_no_long_unsupported_rear_panel_bridge(
     shell, panel, _, _ = generated_models
 
     workstation.validate_panel_attachment(shell, panel)
+
+
+def test_rear_panel_screws_and_rails_do_not_protrude_behind_chassis(
+    generated_models: tuple[
+        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
+    ],
+) -> None:
+    shell, panel, _, _ = generated_models
+
+    assert np.all(workstation.PANEL_SCREW_CENTERS[-2:, 1] == 109.0)
+    assert workstation.PANEL_SIDE_SUPPORT_Y1 == 117.0
+    assert shell.bounds[1, 1] == pytest.approx(workstation.WEDGE_Y1, abs=0.003)
+    assert workstation.place_sloped_panel(panel).bounds[1, 1] <= (
+        workstation.WEDGE_Y1 + 0.003
+    )
 
 
 def test_exported_stls_reload_as_closed_manifolds(

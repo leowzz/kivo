@@ -52,18 +52,19 @@ KEY_Y0 = 12.0
 PANEL_X0 = 75.0
 PANEL_X1 = 207.0
 PANEL_Y0 = 3.0
-PANEL_Y1 = 121.0
+PANEL_Y1 = 120.0
 PANEL_CLEARANCE = 0.3
-PANEL_OPENING_REAR_OVERCUT = 2.0
+PANEL_OPENING_REAR_OVERCUT = 3.0
 PANEL_LIP_DEPTH = 2.4
+PANEL_SIDE_SUPPORT_Y1 = 117.0
 PANEL_SCREW_CENTERS = np.array(
     [
         [79.0, 12.0],
         [203.0, 12.0],
         [79.0, 62.0],
         [203.0, 62.0],
-        [79.0, 112.0],
-        [203.0, 112.0],
+        [79.0, 109.0],
+        [203.0, 109.0],
     ]
 )
 PANEL_HOLE_DIAMETER = 3.4
@@ -115,7 +116,7 @@ SCREEN_BOARD_HEIGHT = 35.03
 SCREEN_BEZEL_WIDTH = 76.0
 SCREEN_BEZEL_HEIGHT = 45.0
 SCREEN_BEZEL_X0 = 142.5 - SCREEN_BEZEL_WIDTH / 2.0
-SCREEN_BEZEL_Y0 = 74.0
+SCREEN_BEZEL_Y0 = 73.0
 SCREEN_BEZEL_RAISE = 2.0
 SCREEN_RECESS_CLEARANCE = 0.65
 SCREEN_BOARD_ORIGIN = np.array(
@@ -154,20 +155,48 @@ SCREEN_CABLE_SLOT_HEIGHT = 6.5
 SHELL_SCREW_CENTERS = np.array(
     [[77.0, 13.0], [205.0, 13.0], [77.0, 99.0], [205.0, 99.0]]
 )
+HANDSET_COVER_SCREW_CENTERS = np.array([[10.0, 30.0], [10.0, 70.0]])
+COVER_SCREW_CENTERS = np.vstack((SHELL_SCREW_CENTERS, HANDSET_COVER_SCREW_CENTERS))
 SHELL_BOSS_RADIUS = 5.0
 SHELL_BOSS_HEIGHT = 12.0
+HANDSET_COVER_BOSS_RADIUS = 5.0
+HANDSET_COVER_BOSS_HEIGHT = TRAY_ROOF_UNDERSIDE + 0.2
 
-COVER_WIDTH = WEDGE_X1 - WEDGE_X0
+COVER_WIDTH = WEDGE_X1
 COVER_LENGTH = WEDGE_Y1 - WEDGE_Y0
-COVER_CENTER = (141.0, 56.0)
+COVER_MAIN_WIDTH = WEDGE_X1 - WEDGE_X0
+COVER_MAIN_CENTER = ((WEDGE_X0 + WEDGE_X1) / 2.0, (WEDGE_Y0 + WEDGE_Y1) / 2.0)
 COVER_THICKNESS = 2.4
 COVER_HOLE_DIAMETER = 3.4
-CONTROLLER_CLEAR_WIDTH = 29.0
-CONTROLLER_CLEAR_LENGTH = 58.0
-CONTROLLER_X0 = 127.0
+RP2040_BOARD_WIDTH = 22.86
+RP2040_BOARD_LENGTH = 53.34
+ESP32_S3_BOARD_WIDTH = 27.94
+ESP32_S3_BOARD_LENGTH = 63.39
+CONTROLLER_CENTER_X = 141.5
+CONTROLLER_SIDE_CLEARANCE = 0.35
+CONTROLLER_END_CLEARANCE = 0.5
+CONTROLLER_CLEAR_WIDTH = ESP32_S3_BOARD_WIDTH + 2.0 * CONTROLLER_SIDE_CLEARANCE
+CONTROLLER_CLEAR_LENGTH = ESP32_S3_BOARD_LENGTH + CONTROLLER_END_CLEARANCE
+CONTROLLER_X0 = CONTROLLER_CENTER_X - CONTROLLER_CLEAR_WIDTH / 2.0
 CONTROLLER_X1 = CONTROLLER_X0 + CONTROLLER_CLEAR_WIDTH
-CONTROLLER_Y0 = 12.0
-CONTROLLER_Y1 = CONTROLLER_Y0 + CONTROLLER_CLEAR_LENGTH
+CONTROLLER_REAR_CLEARANCE = 5.0
+CONTROLLER_Y1 = WEDGE_Y1 - WEDGE_WALL - CONTROLLER_REAR_CLEARANCE
+CONTROLLER_Y0 = CONTROLLER_Y1 - CONTROLLER_CLEAR_LENGTH
+CONTROLLER_PCB_THICKNESS = 1.6
+CONTROLLER_RP2040_RAISE = 3.0
+CONTROLLER_ESP32_S3_RAISE = 6.5
+CONTROLLER_SUPPORT_RAIL_WIDTH = 1.8
+CONTROLLER_SNAP_STEM_THICKNESS = 1.0
+CONTROLLER_SNAP_LENGTH = 5.0
+CONTROLLER_SNAP_OVERLAP = 0.3
+CONTROLLER_SNAP_CLEARANCE = 0.15
+CONTROLLER_SNAP_RISE = 1.0
+CONTROLLER_USB_OPENING_X0 = 123.0
+CONTROLLER_USB_OPENING_X1 = 160.0
+CONTROLLER_USB_OPENING_Y0 = WEDGE_Y1 - WEDGE_WALL - 2.0
+CONTROLLER_USB_OPENING_Y1 = WEDGE_Y1 + 1.0
+CONTROLLER_USB_OPENING_Z0 = 2.0
+CONTROLLER_USB_OPENING_Z1 = 11.5
 
 DEFAULT_OUTPUT_ROOT = Path("models/3d-print/integrated-workstation")
 DEFAULT_PREVIEW_ROOT = Path("/tmp/kivo-integrated-workstation-previews")
@@ -201,9 +230,11 @@ class ValidationReport:
     handset_clearance_per_side: float
     handset_screw_count: int
     controller_bay: tuple[float, float]
+    controller_support_levels: tuple[float, float]
     screen_board: tuple[float, float]
     screen_plane_degrees: float
     panel_screw_count: int
+    bottom_cover_screw_count: int
     shell_watertight: bool
     panel_watertight: bool
     cover_watertight: bool
@@ -659,8 +690,14 @@ def panel_opening_cutter() -> trimesh.Trimesh:
 
 def build_panel_support_parts() -> list[trimesh.Trimesh]:
     parts = [
-        box((WEDGE_X0, 0.0, -PANEL_LIP_DEPTH), (82.0, 120.0, 0.0)),
-        box((200.0, 0.0, -PANEL_LIP_DEPTH), (WEDGE_X1, 120.0, 0.0)),
+        box(
+            (WEDGE_X0, 0.0, -PANEL_LIP_DEPTH),
+            (82.0, PANEL_SIDE_SUPPORT_Y1, 0.0),
+        ),
+        box(
+            (200.0, 0.0, -PANEL_LIP_DEPTH),
+            (WEDGE_X1, PANEL_SIDE_SUPPORT_Y1, 0.0),
+        ),
         box((82.0, 0.0, -PANEL_LIP_DEPTH), (200.0, 9.0, 0.0)),
     ]
     parts.extend(
@@ -688,7 +725,7 @@ def panel_insert_cutters() -> list[trimesh.Trimesh]:
 
 
 def build_shell_bosses() -> list[trimesh.Trimesh]:
-    return [
+    main_bosses = [
         cylinder(
             SHELL_BOSS_RADIUS,
             SHELL_BOSS_HEIGHT,
@@ -696,13 +733,33 @@ def build_shell_bosses() -> list[trimesh.Trimesh]:
         )
         for center in SHELL_SCREW_CENTERS
     ]
+    handset_cover_bosses = [
+        cylinder(
+            HANDSET_COVER_BOSS_RADIUS,
+            HANDSET_COVER_BOSS_HEIGHT,
+            (center[0], center[1], HANDSET_COVER_BOSS_HEIGHT / 2.0),
+        )
+        for center in HANDSET_COVER_SCREW_CENTERS
+    ]
+    return [*main_bosses, *handset_cover_bosses]
 
 
 def shell_cutters() -> list[trimesh.Trimesh]:
     cutters = [
-        # Wide front opening accepts the RP2040 single USB-C connector or the
+        # The rear opening accepts the RP2040 single USB-C connector or the
         # ESP32-S3 board's two adjacent USB-C connectors.
-        box((123.0, 2.0, 2.0), (160.0, 9.0, 11.5)),
+        box(
+            (
+                CONTROLLER_USB_OPENING_X0,
+                CONTROLLER_USB_OPENING_Y0,
+                CONTROLLER_USB_OPENING_Z0,
+            ),
+            (
+                CONTROLLER_USB_OPENING_X1,
+                CONTROLLER_USB_OPENING_Y1,
+                CONTROLLER_USB_OPENING_Z1,
+            ),
+        ),
         # Cable path from the handset tray to the controller chamber.
         cylinder(3.0, 40.0, (72.0, 50.0, 5.0), axis=0),
     ]
@@ -722,7 +779,7 @@ def shell_cutters() -> list[trimesh.Trimesh]:
     )
     cutters.extend(
         cutter
-        for center in SHELL_SCREW_CENTERS
+        for center in COVER_SCREW_CENTERS
         for cutter in heat_set_insert_cutters(center, 0.0, 1)
     )
     return cutters
@@ -744,60 +801,156 @@ def generate_shell() -> trimesh.Trimesh:
     return result
 
 
-def build_controller_mounts() -> list[trimesh.Trimesh]:
-    rail_height = 3.0
-    z1 = COVER_THICKNESS + rail_height
+def controller_board_bounds(
+    width: float, length: float
+) -> tuple[float, float, float, float]:
+    x0 = CONTROLLER_CENTER_X - width / 2.0
+    return x0, CONTROLLER_Y1 - length, x0 + width, CONTROLLER_Y1
+
+
+def build_controller_snap_tabs(
+    width: float, length: float, support_raise: float
+) -> list[trimesh.Trimesh]:
+    board_x0, board_y0, board_x1, _ = controller_board_bounds(width, length)
+    board_top_z = COVER_THICKNESS + support_raise + CONTROLLER_PCB_THICKNESS
+    tab_center_y = board_y0 + length * 0.55
+    tab_y0 = tab_center_y - CONTROLLER_SNAP_LENGTH / 2.0
+    tab_y1 = tab_center_y + CONTROLLER_SNAP_LENGTH / 2.0
+    stem_z0 = COVER_THICKNESS - 0.02
+    stem_z1 = board_top_z + CONTROLLER_SNAP_RISE
+
+    parts: list[trimesh.Trimesh] = []
+    for side, board_edge in ((-1, board_x0), (1, board_x1)):
+        stem_inner_x = board_edge + side * CONTROLLER_SIDE_CLEARANCE
+        stem_outer_x = stem_inner_x + side * CONTROLLER_SNAP_STEM_THICKNESS
+        parts.append(
+            box(
+                (
+                    min(stem_inner_x, stem_outer_x) - 0.05,
+                    tab_y0,
+                    stem_z0,
+                ),
+                (
+                    max(stem_inner_x, stem_outer_x) + 0.05,
+                    tab_y1,
+                    stem_z1,
+                ),
+            )
+        )
+
+        nub_tip_x = board_edge - side * CONTROLLER_SNAP_OVERLAP
+        nub_base_x = stem_inner_x - side * 0.05
+        nub_bottom_z = board_top_z + CONTROLLER_SNAP_CLEARANCE
+        nub_points = [
+            [x, y, z]
+            for y in (tab_y0, tab_y1)
+            for x, z in (
+                (nub_base_x, nub_bottom_z),
+                (nub_tip_x, nub_bottom_z),
+                (nub_base_x, stem_z1),
+            )
+        ]
+        parts.append(hull(nub_points))
+    return parts
+
+
+def build_controller_support_level(
+    width: float, length: float, support_raise: float
+) -> list[trimesh.Trimesh]:
+    board_x0, board_y0, board_x1, board_y1 = controller_board_bounds(width, length)
+    support_z = COVER_THICKNESS + support_raise
     overlap_z = COVER_THICKNESS - 0.02
-    mounts = [
+    mounts: list[trimesh.Trimesh] = [
         box(
-            (CONTROLLER_X0 - 2.0, CONTROLLER_Y0, overlap_z),
-            (CONTROLLER_X0, CONTROLLER_Y1 + 2.0, z1),
+            (
+                board_x0 - CONTROLLER_SIDE_CLEARANCE,
+                board_y0 - CONTROLLER_END_CLEARANCE,
+                overlap_z,
+            ),
+            (
+                board_x0 + CONTROLLER_SUPPORT_RAIL_WIDTH,
+                board_y1 - 2.0,
+                support_z,
+            ),
         ),
         box(
-            (CONTROLLER_X1, CONTROLLER_Y0, overlap_z),
-            (CONTROLLER_X1 + 2.0, CONTROLLER_Y1 + 2.0, z1),
+            (
+                board_x1 - CONTROLLER_SUPPORT_RAIL_WIDTH,
+                board_y0 - CONTROLLER_END_CLEARANCE,
+                overlap_z,
+            ),
+            (
+                board_x1 + CONTROLLER_SIDE_CLEARANCE,
+                board_y1 - 2.0,
+                support_z,
+            ),
         ),
         box(
-            (CONTROLLER_X0, CONTROLLER_Y1, overlap_z),
-            (CONTROLLER_X1, CONTROLLER_Y1 + 2.0, z1),
+            (
+                board_x0,
+                board_y0 - CONTROLLER_END_CLEARANCE,
+                overlap_z,
+            ),
+            (
+                board_x1,
+                board_y0,
+                support_z + CONTROLLER_PCB_THICKNESS / 2.0,
+            ),
         ),
     ]
-    pad_height = COVER_THICKNESS + 2.6
-    for x0 in (CONTROLLER_X0 + 0.5, CONTROLLER_X1 - 5.5):
-        for y0 in (CONTROLLER_Y0 + 2.0, CONTROLLER_Y1 - 6.0):
-            mounts.append(box((x0, y0, overlap_z), (x0 + 5.0, y0 + 5.0, pad_height)))
+    mounts.extend(build_controller_snap_tabs(width, length, support_raise))
     return mounts
 
 
-def cover_cutters() -> list[trimesh.Trimesh]:
-    cutters = [
-        box((122.0, 28.5, -1.0), (161.0, 31.5, COVER_THICKNESS + 1.0)),
-        box((122.0, 51.5, -1.0), (161.0, 54.5, COVER_THICKNESS + 1.0)),
+def build_controller_mounts() -> list[trimesh.Trimesh]:
+    return [
+        *build_controller_support_level(
+            RP2040_BOARD_WIDTH,
+            RP2040_BOARD_LENGTH,
+            CONTROLLER_RP2040_RAISE,
+        ),
+        *build_controller_support_level(
+            ESP32_S3_BOARD_WIDTH,
+            ESP32_S3_BOARD_LENGTH,
+            CONTROLLER_ESP32_S3_RAISE,
+        ),
     ]
+
+
+def cover_cutters() -> list[trimesh.Trimesh]:
+    cutters: list[trimesh.Trimesh] = []
     cutters.extend(
         cylinder(
             COVER_HOLE_DIAMETER / 2.0,
             COVER_THICKNESS + 2.0,
             (center[0], center[1], COVER_THICKNESS / 2.0),
         )
-        for center in SHELL_SCREW_CENTERS
+        for center in COVER_SCREW_CENTERS
     )
-    cutters.extend(countersink_cutter(center, 0.0, 1) for center in SHELL_SCREW_CENTERS)
+    cutters.extend(countersink_cutter(center, 0.0, 1) for center in COVER_SCREW_CENTERS)
     for y0 in (26.0, 38.0, 50.0, 62.0, 74.0):
         cutters.append(box((92.0, y0, -1.0), (114.0, y0 + 2.4, COVER_THICKNESS + 1.0)))
     return cutters
 
 
 def generate_cover() -> trimesh.Trimesh:
-    plate = rounded_prism(
-        COVER_WIDTH,
+    main_plate = rounded_prism(
+        COVER_MAIN_WIDTH,
         COVER_LENGTH,
         radius=4.0,
         z_min=0.0,
         height=COVER_THICKNESS,
-        center=COVER_CENTER,
+        center=COVER_MAIN_CENTER,
     )
-    combined = union([plate, *build_controller_mounts()])
+    handset_plate = rounded_prism(
+        TRAY_WIDTH,
+        TRAY_LENGTH,
+        radius=7.0,
+        z_min=0.0,
+        height=COVER_THICKNESS,
+        center=TRAY_CENTER,
+    )
+    combined = union([main_plate, handset_plate, *build_controller_mounts()])
     result = subtract(combined, cover_cutters())
     result.merge_vertices()
     result.remove_unreferenced_vertices()
@@ -861,6 +1014,95 @@ def validate_screen_header_access(panel: trimesh.Trimesh) -> None:
         )
         if intersection_volume(panel, probe) > 0.01:
             raise ValueError(f"screen header pin access is blocked: {pin}")
+
+
+def validate_controller_connector_opening(shell: trimesh.Trimesh) -> None:
+    rear_probe = box(
+        (
+            CONTROLLER_USB_OPENING_X0 + 1.0,
+            WEDGE_Y1 - WEDGE_WALL + 0.1,
+            CONTROLLER_USB_OPENING_Z0 + 0.5,
+        ),
+        (
+            CONTROLLER_USB_OPENING_X1 - 1.0,
+            WEDGE_Y1 - 0.1,
+            CONTROLLER_USB_OPENING_Z1 - 0.5,
+        ),
+    )
+    if intersection_volume(shell, rear_probe) > 0.01:
+        raise ValueError("rear Type-C opening is blocked")
+
+    front_probe = box(
+        (
+            CONTROLLER_USB_OPENING_X0 + 1.0,
+            WEDGE_Y0 + 0.1,
+            CONTROLLER_USB_OPENING_Z0 + 0.5,
+        ),
+        (
+            CONTROLLER_USB_OPENING_X1 - 1.0,
+            WEDGE_Y0 + WEDGE_WALL - 0.1,
+            CONTROLLER_USB_OPENING_Z1 - 0.5,
+        ),
+    )
+    if intersection_volume(shell, front_probe) < front_probe.volume - 0.05:
+        raise ValueError("front wall is not closed at the former Type-C opening")
+
+    connector_gap = CONTROLLER_USB_OPENING_Y0 - CONTROLLER_Y1
+    if not 2.0 <= connector_gap <= 5.0:
+        raise ValueError(f"controller-to-rear-opening gap drifted: {connector_gap}")
+
+
+def validate_controller_cradle(cover: trimesh.Trimesh) -> None:
+    lower_snap_top = (
+        COVER_THICKNESS
+        + CONTROLLER_RP2040_RAISE
+        + CONTROLLER_PCB_THICKNESS
+        + CONTROLLER_SNAP_RISE
+    )
+    upper_board_bottom = COVER_THICKNESS + CONTROLLER_ESP32_S3_RAISE
+    if lower_snap_top >= upper_board_bottom:
+        raise ValueError("RP2040 snap tabs collide with the upper ESP32-S3 tier")
+
+    for label, width, length, support_raise in (
+        (
+            "RP2040",
+            RP2040_BOARD_WIDTH,
+            RP2040_BOARD_LENGTH,
+            CONTROLLER_RP2040_RAISE,
+        ),
+        (
+            "ESP32-S3",
+            ESP32_S3_BOARD_WIDTH,
+            ESP32_S3_BOARD_LENGTH,
+            CONTROLLER_ESP32_S3_RAISE,
+        ),
+    ):
+        x0, y0, x1, y1 = controller_board_bounds(width, length)
+        board_probe = box(
+            (
+                x0 + 0.1,
+                y0 + 0.1,
+                COVER_THICKNESS + support_raise + 0.05,
+            ),
+            (
+                x1 - 0.1,
+                y1 - 0.1,
+                COVER_THICKNESS + support_raise + CONTROLLER_PCB_THICKNESS - 0.05,
+            ),
+        )
+        if intersection_volume(cover, board_probe) > 0.02:
+            raise ValueError(f"{label} board volume is blocked in the snap cradle")
+
+    # The former cable-tie slots must now be closed by the solid cover plate.
+    for slot_center_y in (60.0, 83.0):
+        closed_slot_probe = box(
+            (123.0, slot_center_y - 1.0, 0.2),
+            (160.0, slot_center_y + 1.0, COVER_THICKNESS - 0.2),
+        )
+        if intersection_volume(cover, closed_slot_probe) < (
+            closed_slot_probe.volume - 0.05
+        ):
+            raise ValueError(f"former cable-tie slot remains open at y={slot_center_y}")
 
 
 def place_handset_base(base: trimesh.Trimesh) -> trimesh.Trimesh:
@@ -1030,12 +1272,25 @@ def validate_panel_attachment(shell: trimesh.Trimesh, panel: trimesh.Trimesh) ->
     rear_strip_probe.apply_transform(DECK_TRANSFORM)
     if intersection_volume(shell, rear_strip_probe) > 0.01:
         raise ValueError("panel opening leaves an unsupported rear roof strip")
+    if shell.bounds[1, 1] > WEDGE_Y1 + 0.003:
+        raise ValueError(
+            f"panel supports protrude behind chassis: y={shell.bounds[1, 1]}"
+        )
+    placed_panel = place_sloped_panel(panel)
+    if placed_panel.bounds[1, 1] > WEDGE_Y1 + 0.003:
+        raise ValueError(
+            f"sloped panel protrudes behind chassis: y={placed_panel.bounds[1, 1]}"
+        )
 
 
 def validate_bottom_cover_attachment(
     shell: trimesh.Trimesh, cover: trimesh.Trimesh
 ) -> None:
-    for center in SHELL_SCREW_CENTERS:
+    expected_bounds = np.array([[0.0, WEDGE_Y0], [WEDGE_X1, WEDGE_Y1]], dtype=float)
+    if not np.allclose(cover.bounds[:, :2], expected_bounds, atol=0.003):
+        raise ValueError(f"bottom cover footprint drifted: {cover.bounds[:, :2]}")
+
+    for center in COVER_SCREW_CENTERS:
         cover_probe = cylinder(
             COVER_HOLE_DIAMETER / 2.0 - 0.05,
             COVER_THICKNESS,
@@ -1092,6 +1347,8 @@ def validate_models(
     macro.assert_closed_manifold(handset_base, "workstation handset base")
     validate_switch_geometry(panel)
     validate_screen_header_access(panel)
+    validate_controller_connector_opening(shell)
+    validate_controller_cradle(cover)
     validate_panel_attachment(shell, panel)
     validate_handset_fit(shell, handset_base)
     validate_handset_screw_holes(shell, handset_base)
@@ -1120,9 +1377,14 @@ def validate_models(
         handset_clearance_per_side=HANDSET_CLEARANCE,
         handset_screw_count=len(HANDSET_SCREW_LOCAL_CENTERS),
         controller_bay=(CONTROLLER_CLEAR_WIDTH, CONTROLLER_CLEAR_LENGTH),
+        controller_support_levels=(
+            CONTROLLER_RP2040_RAISE,
+            CONTROLLER_ESP32_S3_RAISE,
+        ),
         screen_board=(SCREEN_BOARD_WIDTH, SCREEN_BOARD_HEIGHT),
         screen_plane_degrees=plane_angle,
         panel_screw_count=len(PANEL_SCREW_CENTERS),
+        bottom_cover_screw_count=len(COVER_SCREW_CENTERS),
         shell_watertight=bool(shell.is_watertight),
         panel_watertight=bool(panel.is_watertight),
         cover_watertight=bool(cover.is_watertight),
@@ -1180,6 +1442,7 @@ def render_previews(
     )
     handset.render_preview(panel, preview_root / "sloped-panel-top.png", "top")
     handset.render_preview(cover, preview_root / "cover-isometric.png", "isometric")
+    handset.render_preview(cover, preview_root / "cover-top.png", "top")
     handset.render_preview(
         handset_base,
         preview_root / "handset-base-bottom.png",
