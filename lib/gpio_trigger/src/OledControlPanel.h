@@ -32,11 +32,15 @@ class OledControlPanel {
 
     bool update(bool pressed, std::uint32_t nowMs,
                 std::uint16_t debounceMs);
+    bool changedAtOrBefore(std::uint32_t timestamp) const {
+      return rawChangedMs <= timestamp;
+    }
   };
 
   enum class View { Closed, Menu, Status, InputTest, Brightness, DeviceInfo };
 
-  int encoderStep(const OledControlPanelSample &sample);
+  int encoderStep(const OledControlPanelSample &sample,
+                  std::uint32_t nowMs);
   OledControlPanelUpdate select();
 
   View view_ = View::Closed;
@@ -47,5 +51,7 @@ class OledControlPanel {
   bool encoderInitialized_ = false;
   std::uint8_t encoderState_ = 0;
   std::int8_t encoderAccumulator_ = 0;
+  bool encoderActivityInitialized_ = false;
+  std::uint32_t lastEncoderActivityMs_ = 0;
   std::uint8_t brightnessPercent_ = 100;
 };

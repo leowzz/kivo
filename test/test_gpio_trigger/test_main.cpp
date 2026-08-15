@@ -459,29 +459,29 @@ void test_oled_control_panel_navigates_status_and_back_to_live_view() {
                            panel.frame(status).lines[2].c_str());
 
   sample.confirmPressed = true;
-  panel.update(sample, 30, 10);
+  panel.update(sample, 50, 10);
   TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
-                    panel.update(sample, 40, 10));
+                    panel.update(sample, 60, 10));
   TEST_ASSERT_EQUAL_STRING("SYSTEM STATUS",
                            panel.frame(status).lines[0].c_str());
   TEST_ASSERT_EQUAL_STRING("12 D", panel.frame(status).lines[3].c_str());
 
   sample.confirmPressed = false;
-  panel.update(sample, 41, 10);
-  panel.update(sample, 51, 10);
+  panel.update(sample, 61, 10);
+  panel.update(sample, 71, 10);
   sample.backPressed = true;
-  panel.update(sample, 52, 10);
+  panel.update(sample, 72, 10);
   TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
-                    panel.update(sample, 62, 10));
+                    panel.update(sample, 82, 10));
   TEST_ASSERT_EQUAL_STRING("KIVO MENU", panel.frame(status).lines[0].c_str());
 
   sample.backPressed = false;
-  panel.update(sample, 63, 10);
-  panel.update(sample, 73, 10);
+  panel.update(sample, 83, 10);
+  panel.update(sample, 93, 10);
   sample.backPressed = true;
-  panel.update(sample, 74, 10);
+  panel.update(sample, 94, 10);
   TEST_ASSERT_EQUAL(OledControlPanelUpdate::Dismiss,
-                    panel.update(sample, 84, 10));
+                    panel.update(sample, 104, 10));
   TEST_ASSERT_FALSE(panel.active());
 }
 
@@ -501,6 +501,42 @@ void test_oled_control_panel_opens_on_encoder_rotation_when_closed() {
   TEST_ASSERT_TRUE(panel.active());
   TEST_ASSERT_EQUAL_STRING("  LIVE VIEW", panel.frame(DisplayFrame{}).lines[1].c_str());
   TEST_ASSERT_EQUAL_STRING("> SYSTEM STATUS", panel.frame(DisplayFrame{}).lines[2].c_str());
+}
+
+void test_oled_control_panel_ignores_push_noise_during_encoder_rotation() {
+  OledControlPanel panel;
+  OledControlPanelSample sample;
+  std::uint32_t nowMs = 0;
+
+  panel.update(sample, nowMs, 10);
+  sample.confirmPressed = true;
+  panel.update(sample, ++nowMs, 10);
+  nowMs += 10;
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
+                    panel.update(sample, nowMs, 10));
+  sample.confirmPressed = false;
+  panel.update(sample, ++nowMs, 10);
+  nowMs += 10;
+  panel.update(sample, nowMs, 10);
+
+  // The encoder push line goes low at the same time as the A/B transitions.
+  // It must not select LIVE VIEW and dismiss the menu.
+  sample.encoderPressed = true;
+  sample.encoderAHigh = false;
+  panel.update(sample, ++nowMs, 10);
+  sample.encoderBHigh = false;
+  panel.update(sample, ++nowMs, 10);
+  sample.encoderAHigh = true;
+  panel.update(sample, ++nowMs, 10);
+  sample.encoderBHigh = true;
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
+                    panel.update(sample, ++nowMs, 10));
+  nowMs += 10;
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::None,
+                    panel.update(sample, nowMs, 10));
+  TEST_ASSERT_TRUE(panel.active());
+  TEST_ASSERT_EQUAL_STRING("> SYSTEM STATUS",
+                           panel.frame(DisplayFrame{}).lines[2].c_str());
 }
 
 OledControlPanelUpdate rotateOledEncoder(OledControlPanel &panel,
@@ -551,6 +587,7 @@ void test_oled_control_panel_adjusts_brightness_with_the_encoder() {
   TEST_ASSERT_EQUAL_STRING("> BRIGHTNESS",
                            panel.frame(status).lines[3].c_str());
 
+  nowMs += 20;
   sample.confirmPressed = true;
   panel.update(sample, ++nowMs, 10);
   nowMs += 10;
@@ -586,7 +623,7 @@ void test_oled_control_panel_adjusts_brightness_with_the_encoder() {
 
   sample.backPressed = true;
   panel.update(sample, ++nowMs, 10);
-  nowMs += 10;
+  nowMs += 20;
   TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
                     panel.update(sample, nowMs, 10));
   TEST_ASSERT_EQUAL_STRING("KIVO MENU", panel.frame(status).lines[0].c_str());
@@ -2031,6 +2068,7 @@ int main(int, char **) {
   RUN_TEST(test_interactive_panel_returns_to_offline_status_without_remote_content);
   RUN_TEST(test_oled_control_panel_navigates_status_and_back_to_live_view);
   RUN_TEST(test_oled_control_panel_opens_on_encoder_rotation_when_closed);
+  RUN_TEST(test_oled_control_panel_ignores_push_noise_during_encoder_rotation);
   RUN_TEST(test_oled_control_panel_adjusts_brightness_with_the_encoder);
   RUN_TEST(test_display_transaction_commits_atomically);
   RUN_TEST(test_display_revision_rules_request_resync_without_mutation);

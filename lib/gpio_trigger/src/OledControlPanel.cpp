@@ -55,9 +55,12 @@ void OledControlPanel::reset() {
   encoderInitialized_ = false;
   encoderState_ = 0;
   encoderAccumulator_ = 0;
+  encoderActivityInitialized_ = false;
+  lastEncoderActivityMs_ = 0;
 }
 
-int OledControlPanel::encoderStep(const OledControlPanelSample &sample) {
+int OledControlPanel::encoderStep(const OledControlPanelSample &sample,
+                                  std::uint32_t nowMs) {
   const auto current = static_cast<std::uint8_t>(
       (sample.encoderAHigh ? 2U : 0U) | (sample.encoderBHigh ? 1U : 0U));
   if (!encoderInitialized_) {
@@ -67,6 +70,10 @@ int OledControlPanel::encoderStep(const OledControlPanelSample &sample) {
   }
   const auto transition = static_cast<std::uint8_t>((encoderState_ << 2U) |
                                                      current);
+  if (current != encoderState_) {
+    encoderActivityInitialized_ = true;
+    lastEncoderActivityMs_ = nowMs;
+  }
   encoderState_ = current;
   encoderAccumulator_ += kEncoderTransitions[transition];
   if (encoderAccumulator_ >= 4) {
@@ -112,15 +119,54 @@ OledControlPanelUpdate OledControlPanel::select() {
 OledControlPanelUpdate OledControlPanel::update(
     const OledControlPanelSample &sample, std::uint32_t nowMs,
     std::uint16_t debounceMs) {
-  const bool selectPressed = confirm_.update(sample.confirmPressed, nowMs,
-                                              debounceMs) |
-                             encoderPress_.update(sample.encoderPressed, nowMs,
-                                                  debounceMs);
+  const int step = encoderStep(sample, nowMs);
+  const bool confirmPressed =
+      confirm_.update(sample.confirmPressed, nowMs, debounceMs);
+  const bool encoderPressed =
+      encoderPress_.update(sample.encoderPressed, nowMs, debounceMs);
   const bool backPressed = back_.update(sample.backPressed, nowMs, debounceMs);
-  const int step = encoderStep(sample);
 
+  // EC11 contacts can couple into the push/back lines while rotating. Keep
+  // sampling those buttons so their debouncers recover, but do not dispatch
+  // a button action until the encoder has been quiet for two debounce windows.
+  const auto encoderSettled =
+      !encoderActivityInitialized_ ||
+      nowMs - lastEncoderActivityMs_ >=
+          static_cast<std::uint32_t>(debounceMs) * 2U;
+  const auto encoderPressStartedDuringMotion =
+      encoderActivityInitialized_ &&
+      encoderPress_.changedAtOrBefore(lastEncoderActivityMs_);
+  const auto backStartedDuringMotion =
+      encoderActivityInitialized_ &&
+      back_.changedAtOrBefore(lastEncoderActivityMs_);
+  const bool selectPressed =
+      confirmPressed || (encoderPressed && !encoderPressStartedDuringMotion);
+
+  if (step != 0) {
+    if (view_ == View::Brightness) {
+      const auto next = std::clamp(
+          static_cast<int>(brightnessPercent_) +
+              step * static_cast<int>(kBrightnessStepPercent),
+          static_cast<int>(kMinimumBrightnessPercent), 100);
+      if (next == brightnessPercent_) return OledControlPanelUpdate::None;
+      brightnessPercent_ = static_cast<std::uint8_t>(next);
+      return OledControlPanelUpdate::BrightnessChanged;
+    }
+    if (view_ == View::Closed) {
+      // Rotation is also a useful menu entry gesture when the panel is idle.
+      view_ = View::Menu;
+    } else if (view_ != View::Menu) {
+      return OledControlPanelUpdate::None;
+    }
+
+    const auto entryCount = static_cast<int>(kMenuEntries.size());
+    selected_ = static_cast<std::uint8_t>(
+        (static_cast<int>(selected_) + step + entryCount) % entryCount);
+    return OledControlPanelUpdate::Render;
+  }
+  if (!encoderSettled) return OledControlPanelUpdate::None;
   if (selectPressed) return select();
-  if (backPressed) {
+  if (backPressed && !backStartedDuringMotion) {
     if (view_ == View::Closed) return OledControlPanelUpdate::None;
     if (view_ == View::Menu) {
       view_ = View::Closed;
@@ -129,27 +175,7 @@ OledControlPanelUpdate OledControlPanel::update(
     view_ = View::Menu;
     return OledControlPanelUpdate::Render;
   }
-  if (step == 0) return OledControlPanelUpdate::None;
-  if (view_ == View::Brightness) {
-    const auto next = std::clamp(
-        static_cast<int>(brightnessPercent_) +
-            step * static_cast<int>(kBrightnessStepPercent),
-        static_cast<int>(kMinimumBrightnessPercent), 100);
-    if (next == brightnessPercent_) return OledControlPanelUpdate::None;
-    brightnessPercent_ = static_cast<std::uint8_t>(next);
-    return OledControlPanelUpdate::BrightnessChanged;
-  }
-  if (view_ == View::Closed) {
-    // Rotation is also a useful menu entry gesture when the panel is idle.
-    view_ = View::Menu;
-  } else if (view_ != View::Menu) {
-    return OledControlPanelUpdate::None;
-  }
-
-  const auto entryCount = static_cast<int>(kMenuEntries.size());
-  selected_ = static_cast<std::uint8_t>(
-      (static_cast<int>(selected_) + step + entryCount) % entryCount);
-  return OledControlPanelUpdate::Render;
+  return OledControlPanelUpdate::None;
 }
 
 DisplayFrame OledControlPanel::frame(const DisplayFrame &status) const {
