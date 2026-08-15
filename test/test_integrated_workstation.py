@@ -45,6 +45,8 @@ def test_generated_models_validate(
     assert report.controller_support_levels == (3.0, 6.5)
     assert report.screen_board == (64.9, 35.03)
     assert report.screen_plane_degrees == pytest.approx(30.0)
+    assert report.toggle_hole_count == 3
+    assert report.toggle_plane_degrees == pytest.approx(0.0)
     assert report.panel_screw_count == 6
     assert report.bottom_cover_screw_count == 4
     assert report.foot_pad_recess_count == 4
@@ -156,6 +158,43 @@ def test_screen_has_four_backside_heat_set_insert_through_holes(
         workstation.HEAT_SET_INSERT_LENGTH
     )
     workstation.validate_screen_insert_holes(panel)
+
+
+def test_panel_has_three_vertical_toggle_switches_on_horizontal_platform(
+    generated_models: GeneratedModels,
+) -> None:
+    shell, panel, _, _ = generated_models
+
+    assert workstation.SCREEN_BEZEL_X0 == workstation.PANEL_X0
+    assert workstation.SCREEN_BEZEL_CENTER_X == pytest.approx(113.0)
+    assert workstation.TOGGLE_SWITCH_CENTERS.shape == (3, 2)
+    assert workstation.TOGGLE_SWITCH_HOLE_DIAMETER == 12.0
+    assert workstation.TOGGLE_SWITCH_BODY_WIDTH == 15.0
+    assert workstation.TOGGLE_SWITCH_BODY_LENGTH == 29.0
+    assert workstation.TOGGLE_SWITCH_BODY_DEPTH == 27.0
+    assert workstation.TOGGLE_SWITCH_MOUNTING_PLATE_THICKNESS == pytest.approx(3.4)
+    assert (
+        workstation.TOGGLE_SWITCH_CAVITY_X1 - workstation.TOGGLE_SWITCH_CAVITY_X0
+        == (pytest.approx(47.6))
+    )
+    assert (
+        workstation.TOGGLE_SWITCH_CAVITY_Y1 - workstation.TOGGLE_SWITCH_CAVITY_Y0
+        == (pytest.approx(29.6))
+    )
+    assert workstation.TOGGLE_SWITCH_MAX_BRIDGE == pytest.approx(29.6)
+    assert np.allclose(
+        workstation.TOGGLE_SWITCH_CENTERS[:, 1],
+        workstation.TOGGLE_SWITCH_CENTER_Y,
+    )
+    assert np.allclose(
+        np.diff(workstation.TOGGLE_SWITCH_CENTERS[:, 0]),
+        workstation.TOGGLE_SWITCH_CENTER_PITCH,
+    )
+    assert (
+        workstation.TOGGLE_SWITCH_CENTER_PITCH - workstation.TOGGLE_SWITCH_BODY_WIDTH
+        >= 1.0
+    )
+    workstation.validate_toggle_switch_holes(panel, shell)
 
 
 def test_panel_has_six_support_free_recessed_fly_wire_clips(

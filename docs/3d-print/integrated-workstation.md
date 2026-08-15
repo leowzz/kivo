@@ -11,8 +11,8 @@ All dimensions are millimeters.
 - `kivo_integrated_workstation_shell.stl`: open-top `138 x 104` chassis,
   30-degree panel support lip, and six panel attachment holes.
 - `kivo_integrated_workstation_sloped_panel.stl`: removable `132 x 117` key and
-  display panel with six recessed fly-wire clips. It has no underside
-  protrusions and remains support-free when printed flat.
+  display panel with a raised horizontal three-switch pod and six recessed
+  fly-wire clips. It has no underside protrusions and prints flat.
 - `kivo_integrated_workstation_bottom_cover.stl`: removable `138 x 104` bottom
   cover with a two-level snap-fit controller cradle and ventilation slots.
 - `telephone_handset_switch_base_workstation_mount.stl`: independent handset
@@ -51,6 +51,13 @@ uv run --script scripts/modeling/integrated_workstation.py
 | Display attachment | Four `4.0` through bores with `5.1 x 0.6` backside lead-ins |
 | Display header | 8 pins on PCB left half, first pin at `x=11.38`, `2.54` pitch |
 | Display cable slot | `24.5 x 6.5`, aligned below the left-side header |
+| Display bezel position | Flush with the panel's left edge |
+| Toggle switch mounting plane | Horizontal, parallel to the workstation bottom |
+| Toggle switch openings | Three vertical `12.0` through-holes in one row |
+| Toggle switch body envelope | `15.0 x 29.0 x 27.0` |
+| Toggle switch body cavity | One shared `47.6 x 29.6` opening from the panel underside |
+| Toggle switch center pitch | `16.0` horizontally |
+| Toggle pod maximum roof bridge | `29.6` after removing both internal dividers |
 | Controller cradle | `28.64 x 63.89` maximum clear area |
 | RP2040 reference | `22.86 x 53.34` |
 | ESP32-S3 reference | `27.94 x 63.39` |
@@ -72,6 +79,15 @@ share one clip. Feed the thin wires into the `1.5` opening one at a time; the
 opening expands behind two internal lips into a `3.0` pocket that retains the
 bundle. The clips stop `1.2` short of the visible panel face.
 
+The toggle-switch area rises from the lower edge of the 30-degree panel into a
+horizontal mounting plane. Its three hole axes are vertical in the assembled
+workstation, so the `27.0`-deep switch bodies hang straight down instead of
+leaning into the rear wall. All three bodies share one continuous underside
+cavity; there are no walls between neighboring switches. The outer cavity
+boundary keeps `0.3` clearance around the combined body envelope. The complete
+body envelopes have been checked against the rear wall, right panel rail, and
+attachment bosses.
+
 ## Hardware And Assembly
 
 - 14 M3 heat-set brass inserts with the measured `3.9` body, `4.9` knurled
@@ -88,6 +104,9 @@ bundle. The clips stop `1.2` short of the visible panel face.
   panel face into inserts installed in the chassis support bosses. The insert
   openings are covered completely by the assembled panel.
 - 4 M3 x 10 screws for the display PCB.
+- 3 panel-mount toggle switches with `12 mm` threaded bushings and
+  `15 x 29 x 27 mm` bodies. Install them from the panel underside through the
+  shared rectangular cavity. Their mounting axes are vertical after assembly.
 - The RP2040 and ESP32-S3 reference boards have GPIO solder holes but no
   dedicated mechanical mounting holes. The controller cradle therefore uses
   two screw-free stepped support levels with flexible side catches.
@@ -101,10 +120,10 @@ bundle. The clips stop `1.2` short of the visible panel face.
    inner lower level; the larger ESP32-S3 uses the outer upper level. Press the
    two side catches outward when removing a board.
 3. Heat four inserts into the display holes from the panel's flat back side
-   until flush. Install all 18 switches and fasten the display PCB from the
-   front with four M3 x 10 screws. Fly-wire each three-key group and press its
-   wires individually into the nearest recessed clip before attaching the
-   panel to the chassis.
+   until flush. Install all 18 key switches and the three toggle switches, then
+   fasten the display PCB from the front with four M3 x 10 screws. Fly-wire each
+   three-key group and press its wires individually into the nearest recessed
+   clip before attaching the panel to the chassis.
 4. Heat six inserts into the chassis panel bosses from the sloped mating face.
    Place the completed panel on the support lip and drive six M3 x 10 screws
    through its face into the hidden inserts.
@@ -121,6 +140,10 @@ bundle. The clips stop `1.2` short of the visible panel face.
   the complete side-hanger interface prints without support.
 - Print the sloped panel separately with its large flat underside on the build
   plate. The switch steps and 2 mm screen bezel face upward and need no support.
+  The raised toggle pod has one uninterrupted underside cavity. With both
+  dividers removed, its longest roof span is `29.6 mm`; add build-plate-only
+  support inside this cavity if the printer cannot bridge that distance. The
+  support remains accessible and removable from the open panel underside.
   The six wire clips are recessed into that underside: their internal walls
   open at 45 degrees and their `3.0` pocket roofs are short bridges, so do not
   add support inside them. Use elephant-foot compensation if the `1.5` mouths

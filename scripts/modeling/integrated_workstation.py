@@ -95,7 +95,10 @@ SCREEN_BOARD_WIDTH = 64.90
 SCREEN_BOARD_HEIGHT = 35.03
 SCREEN_BEZEL_WIDTH = 76.0
 SCREEN_BEZEL_HEIGHT = 45.0
-SCREEN_BEZEL_X0 = 142.5 - SCREEN_BEZEL_WIDTH / 2.0
+# Keep the display tight against the panel's left frame. The raised bezel and
+# the upper-left mounting collar are allowed to merge into that outer frame.
+SCREEN_BEZEL_X0 = PANEL_X0
+SCREEN_BEZEL_CENTER_X = SCREEN_BEZEL_X0 + SCREEN_BEZEL_WIDTH / 2.0
 SCREEN_BEZEL_Y0 = 73.0
 SCREEN_BEZEL_RAISE = 2.0
 SCREEN_RECESS_CLEARANCE = 0.65
@@ -133,6 +136,62 @@ SCREEN_CABLE_SLOT_LOCAL_Y0 = 29.0
 SCREEN_CABLE_SLOT_WIDTH = 24.5
 SCREEN_CABLE_SLOT_HEIGHT = 6.5
 
+# Three panel-mounted toggle switches sit upright on a raised horizontal pod.
+# Coordinates here are in the assembled workstation's world XY plane, not the
+# removable panel's sloped local plane.
+TOGGLE_SWITCH_HOLE_DIAMETER = 12.0
+TOGGLE_SWITCH_BODY_WIDTH = 15.0
+TOGGLE_SWITCH_BODY_LENGTH = 29.0
+TOGGLE_SWITCH_BODY_DEPTH = 27.0
+TOGGLE_SWITCH_BODY_CLEARANCE = 0.3
+TOGGLE_SWITCH_FIRST_CENTER_X = 159.0
+TOGGLE_SWITCH_CENTER_Y = 78.0
+TOGGLE_SWITCH_CENTER_PITCH = 16.0
+TOGGLE_SWITCH_CENTERS = np.array(
+    [
+        [
+            TOGGLE_SWITCH_FIRST_CENTER_X + offset * TOGGLE_SWITCH_CENTER_PITCH,
+            TOGGLE_SWITCH_CENTER_Y,
+        ]
+        for offset in range(3)
+    ]
+)
+TOGGLE_SWITCH_CAVITY_X0 = (
+    TOGGLE_SWITCH_CENTERS[0, 0]
+    - TOGGLE_SWITCH_BODY_WIDTH / 2.0
+    - TOGGLE_SWITCH_BODY_CLEARANCE
+)
+TOGGLE_SWITCH_CAVITY_X1 = (
+    TOGGLE_SWITCH_CENTERS[-1, 0]
+    + TOGGLE_SWITCH_BODY_WIDTH / 2.0
+    + TOGGLE_SWITCH_BODY_CLEARANCE
+)
+TOGGLE_SWITCH_CAVITY_Y0 = (
+    TOGGLE_SWITCH_CENTER_Y
+    - TOGGLE_SWITCH_BODY_LENGTH / 2.0
+    - TOGGLE_SWITCH_BODY_CLEARANCE
+)
+TOGGLE_SWITCH_CAVITY_Y1 = (
+    TOGGLE_SWITCH_CENTER_Y
+    + TOGGLE_SWITCH_BODY_LENGTH / 2.0
+    + TOGGLE_SWITCH_BODY_CLEARANCE
+)
+TOGGLE_SWITCH_PLATFORM_X0 = 149.5
+TOGGLE_SWITCH_PLATFORM_X1 = 200.5
+TOGGLE_SWITCH_PLATFORM_Y0 = 61.5
+TOGGLE_SWITCH_PLATFORM_Y1 = 94.0
+TOGGLE_SWITCH_PLATFORM_REAR_RAISE = KEY_PLATE_THICKNESS
+TOGGLE_SWITCH_PLATFORM_TOP_Z = (
+    WEDGE_FRONT_HEIGHT
+    + np.tan(KEY_ANGLE) * (TOGGLE_SWITCH_PLATFORM_Y1 - WEDGE_Y0)
+    + TOGGLE_SWITCH_PLATFORM_REAR_RAISE
+)
+TOGGLE_SWITCH_MOUNTING_PLATE_THICKNESS = KEY_PLATE_THICKNESS
+TOGGLE_SWITCH_BODY_TOP_Z = (
+    TOGGLE_SWITCH_PLATFORM_TOP_Z - TOGGLE_SWITCH_MOUNTING_PLATE_THICKNESS
+)
+TOGGLE_SWITCH_MAX_BRIDGE = TOGGLE_SWITCH_CAVITY_Y1 - TOGGLE_SWITCH_CAVITY_Y0
+
 # Six recessed clips retain fly-wire bundles without adding protrusions to the
 # panel's print face. Each slot groups three neighboring switches. The mouth
 # expands into the pocket at 45 degrees and the 3 mm roof is a short bridge, so
@@ -145,6 +204,7 @@ WIRE_CLIP_TRANSITION_DEPTH = 0.75
 WIRE_CLIP_POCKET_DEPTH = 2.2
 WIRE_CLIP_FRONT_SKIN = KEY_PLATE_THICKNESS - WIRE_CLIP_POCKET_DEPTH
 WIRE_CLIP_X_CENTERS = np.array([KEY_X0 + 1.5 * KEY_PITCH, KEY_X0 + 4.5 * KEY_PITCH])
+WIRE_CLIP_RELOCATED_REAR_RIGHT_X = 141.0
 WIRE_CLIP_Y_CENTERS = np.array(
     [
         KEY_Y0 + KEY_PITCH,
@@ -156,6 +216,10 @@ WIRE_CLIP_Y_CENTERS = np.array(
 WIRE_CLIP_CENTERS = np.array(
     [[x, y] for y in WIRE_CLIP_Y_CENTERS for x in WIRE_CLIP_X_CENTERS]
 )
+# The horizontal toggle pod occupies the old rear-right clip location. Keep all
+# six clips by moving only that one into the clear strip below the display.
+WIRE_CLIP_CENTERS[-1, 0] = WIRE_CLIP_RELOCATED_REAR_RIGHT_X
+
 
 SHELL_SCREW_CENTERS = np.array(
     [[77.0, 13.0], [205.0, 13.0], [77.0, 99.0], [205.0, 99.0]]
@@ -289,6 +353,8 @@ class ValidationReport:
     controller_support_levels: tuple[float, float]
     screen_board: tuple[float, float]
     screen_plane_degrees: float
+    toggle_hole_count: int
+    toggle_plane_degrees: float
     panel_screw_count: int
     bottom_cover_screw_count: int
     foot_pad_recess_count: int
@@ -559,6 +625,25 @@ def build_panel_screen_parts() -> list[trimesh.Trimesh]:
     return [bezel, *collars]
 
 
+def panel_design_mesh_from_world(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    result = mesh.copy()
+    result.apply_transform(np.linalg.inv(DECK_TRANSFORM))
+    return result
+
+
+def build_toggle_switch_platform() -> trimesh.Trimesh:
+    # The lower face follows the 30-degree panel while the upper face stays
+    # horizontal in the assembled workstation. A slight overlap makes the pod
+    # a single watertight part with the removable panel.
+    world_points = [
+        [x, y, z]
+        for x in (TOGGLE_SWITCH_PLATFORM_X0, TOGGLE_SWITCH_PLATFORM_X1)
+        for y in (TOGGLE_SWITCH_PLATFORM_Y0, TOGGLE_SWITCH_PLATFORM_Y1)
+        for z in (wedge_top(y) - 0.08, TOGGLE_SWITCH_PLATFORM_TOP_Z)
+    ]
+    return panel_design_mesh_from_world(hull(world_points))
+
+
 def panel_screen_cutters() -> list[trimesh.Trimesh]:
     cable_x0 = SCREEN_BOARD_ORIGIN[0] + SCREEN_CABLE_SLOT_LOCAL_X0
     cable_y0 = SCREEN_BOARD_ORIGIN[1] + SCREEN_CABLE_SLOT_LOCAL_Y0
@@ -636,6 +721,39 @@ def wire_clip_cutters(center: Iterable[float]) -> list[trimesh.Trimesh]:
     return [mouth, transition, pocket]
 
 
+def toggle_switch_cavity_cutter() -> trimesh.Trimesh:
+    cavity = box(
+        (
+            TOGGLE_SWITCH_CAVITY_X0,
+            TOGGLE_SWITCH_CAVITY_Y0,
+            TOGGLE_SWITCH_BODY_TOP_Z - TOGGLE_SWITCH_BODY_DEPTH - 1.0,
+        ),
+        (
+            TOGGLE_SWITCH_CAVITY_X1,
+            TOGGLE_SWITCH_CAVITY_Y1,
+            TOGGLE_SWITCH_BODY_TOP_Z + 0.05,
+        ),
+    )
+    return panel_design_mesh_from_world(cavity)
+
+
+def toggle_switch_hole_cutter(center: Iterable[float]) -> trimesh.Trimesh:
+    center_xy = tuple(center)
+    if len(center_xy) != 2:
+        raise ValueError("toggle switch center must contain x and y")
+    center_x, center_y = center_xy
+    hole = cylinder(
+        TOGGLE_SWITCH_HOLE_DIAMETER / 2.0,
+        TOGGLE_SWITCH_MOUNTING_PLATE_THICKNESS + 1.2,
+        (
+            center_x,
+            center_y,
+            TOGGLE_SWITCH_BODY_TOP_Z + TOGGLE_SWITCH_MOUNTING_PLATE_THICKNESS / 2.0,
+        ),
+    )
+    return panel_design_mesh_from_world(hole)
+
+
 def panel_attachment_cutters() -> list[trimesh.Trimesh]:
     through_holes = [
         cylinder(
@@ -661,7 +779,9 @@ def generate_sloped_panel() -> trimesh.Trimesh:
         height=KEY_PLATE_THICKNESS,
         center=((PANEL_X0 + PANEL_X1) / 2.0, (PANEL_Y0 + PANEL_Y1) / 2.0),
     )
-    combined = union([plate, *build_panel_screen_parts()])
+    combined = union(
+        [plate, *build_panel_screen_parts(), build_toggle_switch_platform()]
+    )
     cutters: list[trimesh.Trimesh] = []
     for row in range(KEY_ROWS):
         for column in range(KEY_COLUMNS):
@@ -684,6 +804,10 @@ def generate_sloped_panel() -> trimesh.Trimesh:
                 )
             )
     cutters.extend(panel_screen_cutters())
+    cutters.append(toggle_switch_cavity_cutter())
+    cutters.extend(
+        toggle_switch_hole_cutter(center) for center in TOGGLE_SWITCH_CENTERS
+    )
     cutters.extend(
         cutter for center in WIRE_CLIP_CENTERS for cutter in wire_clip_cutters(center)
     )
@@ -1228,6 +1352,105 @@ def validate_screen_insert_holes(panel: trimesh.Trimesh) -> None:
             raise ValueError(f"screen insert lead-in is blocked: {screen_center}")
 
 
+def validate_toggle_switch_holes(
+    panel: trimesh.Trimesh, shell: trimesh.Trimesh
+) -> None:
+    body_half_extents = np.array(
+        [TOGGLE_SWITCH_BODY_WIDTH / 2.0, TOGGLE_SWITCH_BODY_LENGTH / 2.0]
+    )
+    hole_radius = TOGGLE_SWITCH_HOLE_DIAMETER / 2.0
+    if not np.allclose(TOGGLE_SWITCH_CENTERS[:, 1], TOGGLE_SWITCH_CENTER_Y):
+        raise ValueError("toggle switches are not arranged side by side")
+
+    screen_hardware_right = max(
+        SCREEN_BOARD_ORIGIN[0] + SCREEN_BOARD_WIDTH,
+        float((SCREEN_BOARD_HOLES + SCREEN_BOARD_ORIGIN)[:, 0].max()) + 4.8,
+    )
+    if np.any(
+        TOGGLE_SWITCH_CENTERS[:, 0] - body_half_extents[0] < screen_hardware_right + 3.0
+    ):
+        raise ValueError("toggle switch body overlaps the display hardware")
+    if TOGGLE_SWITCH_CENTER_PITCH - TOGGLE_SWITCH_BODY_WIDTH < 1.0:
+        raise ValueError("toggle switch body clearances leave too little material")
+    placed_panel = place_sloped_panel(panel)
+    for world_center in TOGGLE_SWITCH_CENTERS:
+        center_x, center_y = world_center
+        through_probe = cylinder(
+            hole_radius - 0.05,
+            TOGGLE_SWITCH_MOUNTING_PLATE_THICKNESS + 0.3,
+            (
+                center_x,
+                center_y,
+                TOGGLE_SWITCH_BODY_TOP_Z + TOGGLE_SWITCH_MOUNTING_PLATE_THICKNESS / 2.0,
+            ),
+        )
+        if intersection_volume(placed_panel, through_probe) > 0.01:
+            raise ValueError(f"toggle switch through hole is blocked: {world_center}")
+
+        body_probe = box(
+            (
+                center_x - body_half_extents[0] + 0.05,
+                center_y - body_half_extents[1] + 0.05,
+                TOGGLE_SWITCH_BODY_TOP_Z - TOGGLE_SWITCH_BODY_DEPTH + 0.05,
+            ),
+            (
+                center_x + body_half_extents[0] - 0.05,
+                center_y + body_half_extents[1] - 0.05,
+                TOGGLE_SWITCH_BODY_TOP_Z - 0.05,
+            ),
+        )
+        if intersection_volume(placed_panel, body_probe) > 0.01:
+            raise ValueError(f"toggle switch body cavity is blocked: {world_center}")
+        if intersection_volume(shell, body_probe) > 0.01:
+            raise ValueError(f"toggle switch body collides with shell: {world_center}")
+
+        outer = cylinder(
+            TOGGLE_SWITCH_BODY_WIDTH / 2.0 - 0.3,
+            TOGGLE_SWITCH_MOUNTING_PLATE_THICKNESS - 0.2,
+            (
+                center_x,
+                center_y,
+                TOGGLE_SWITCH_BODY_TOP_Z + TOGGLE_SWITCH_MOUNTING_PLATE_THICKNESS / 2.0,
+            ),
+        )
+        inner = cylinder(
+            hole_radius + 0.15,
+            TOGGLE_SWITCH_MOUNTING_PLATE_THICKNESS + 0.2,
+            (
+                center_x,
+                center_y,
+                TOGGLE_SWITCH_BODY_TOP_Z + TOGGLE_SWITCH_MOUNTING_PLATE_THICKNESS / 2.0,
+            ),
+        )
+        annulus_probe = subtract(outer, [inner])
+        if (
+            intersection_volume(placed_panel, annulus_probe)
+            < annulus_probe.volume - 0.02
+        ):
+            raise ValueError(
+                f"toggle switch mounting ring is incomplete: {world_center}"
+            )
+
+    divider_centers = (
+        TOGGLE_SWITCH_CENTERS[:-1, 0] + TOGGLE_SWITCH_CENTERS[1:, 0]
+    ) / 2.0
+    for divider_x in divider_centers:
+        divider_probe = box(
+            (
+                divider_x - 0.1,
+                TOGGLE_SWITCH_CAVITY_Y0 + 0.1,
+                TOGGLE_SWITCH_BODY_TOP_Z - TOGGLE_SWITCH_BODY_DEPTH + 0.1,
+            ),
+            (
+                divider_x + 0.1,
+                TOGGLE_SWITCH_CAVITY_Y1 - 0.1,
+                TOGGLE_SWITCH_BODY_TOP_Z - 0.1,
+            ),
+        )
+        if intersection_volume(placed_panel, divider_probe) > 0.01:
+            raise ValueError(f"toggle switch cavity divider remains: {divider_x}")
+
+
 def validate_wire_clips(panel: trimesh.Trimesh) -> None:
     side_expansion = (WIRE_CLIP_POCKET_WIDTH - WIRE_CLIP_MOUTH_WIDTH) / 2.0
     if side_expansion > WIRE_CLIP_TRANSITION_DEPTH + 1e-9:
@@ -1720,6 +1943,7 @@ def validate_models(
     validate_switch_geometry(panel)
     validate_screen_header_access(panel)
     validate_screen_insert_holes(panel)
+    validate_toggle_switch_holes(panel, shell)
     validate_wire_clips(panel)
     validate_controller_connector_opening(shell)
     validate_controller_cradle(cover)
@@ -1755,6 +1979,8 @@ def validate_models(
         ),
         screen_board=(SCREEN_BOARD_WIDTH, SCREEN_BOARD_HEIGHT),
         screen_plane_degrees=plane_angle,
+        toggle_hole_count=len(TOGGLE_SWITCH_CENTERS),
+        toggle_plane_degrees=0.0,
         panel_screw_count=len(PANEL_SCREW_CENTERS),
         bottom_cover_screw_count=len(COVER_SCREW_CENTERS),
         foot_pad_recess_count=len(FOOT_PAD_RECESS_CENTERS),
