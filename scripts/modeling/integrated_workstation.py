@@ -46,6 +46,7 @@ WEDGE_Y0 = 4.0
 WEDGE_Y1 = 108.0
 WEDGE_FRONT_HEIGHT = 16.0
 WEDGE_WALL = 3.0
+SHELL_REAR_CORNER_FLAT_LENGTH = 4.0
 
 KEY_X0 = 85.35
 KEY_Y0 = 12.0
@@ -77,14 +78,12 @@ PANEL_CLEARANCE = 0.3
 PANEL_OPENING_REAR_OVERCUT = 3.0
 PANEL_LIP_DEPTH = 2.4
 PANEL_SIDE_SUPPORT_Y1 = 117.0
-SCREEN_SIDE_REAR_ATTACHMENT_INDEX = 4
 PANEL_SCREW_CENTERS = np.array(
     [
         [79.0, 12.0],
         [203.0, 12.0],
         [79.0, 62.0],
         [203.0, 62.0],
-        [158.0, 109.0],
         [203.0, 109.0],
     ]
 )
@@ -244,17 +243,14 @@ WIRE_CLIP_CENTERS = np.array(
 # six clips by moving only that one into the clear strip below the display.
 WIRE_CLIP_CENTERS[-1, 0] = WIRE_CLIP_RELOCATED_REAR_RIGHT_X
 
-# The six panel insert bosses continue down to these six bottom-cover insert
-# bosses as one-to-one support-free pillars. The screen-side rear attachment is
-# moved outside the display envelope, with its bottom anchor kept clear of the
-# controller bay.
+# The five panel insert bosses continue down to these five bottom-cover insert
+# bosses as one-to-one support-free pillars.
 SHARED_ATTACHMENT_BOTTOM_CENTERS = np.array(
     [
         [77.0, 13.0],
         [205.0, 13.0],
         [77.0, 62.0],
         [205.0, 62.0],
-        [170.0, 99.0],
         [205.0, 99.0],
     ]
 )
@@ -573,6 +569,22 @@ def wedge_top(y: float) -> float:
     return WEDGE_FRONT_HEIGHT + np.tan(KEY_ANGLE) * (y - WEDGE_Y0)
 
 
+def rear_corner_flattening_cutters() -> list[trimesh.Trimesh]:
+    flat_y0 = WEDGE_Y1 - SHELL_REAR_CORNER_FLAT_LENGTH
+    flat_z = wedge_top(flat_y0)
+    cutter_z1 = wedge_top(WEDGE_Y1) + 1.0
+    return [
+        box(
+            (WEDGE_X0 - 1.0, flat_y0, flat_z),
+            (PANEL_X0, WEDGE_Y1 + 1.0, cutter_z1),
+        ),
+        box(
+            (PANEL_X1, flat_y0, flat_z),
+            (WEDGE_X1 + 1.0, WEDGE_Y1 + 1.0, cutter_z1),
+        ),
+    ]
+
+
 DECK_TRANSFORM = rotation_transform(
     KEY_ANGLE,
     (0.0, WEDGE_Y0, WEDGE_FRONT_HEIGHT - KEY_PLATE_THICKNESS / np.cos(KEY_ANGLE)),
@@ -619,7 +631,7 @@ def build_wedge_shell() -> trimesh.Trimesh:
         bottom=-1.0,
         top_offset=-KEY_PLATE_THICKNESS / np.cos(KEY_ANGLE),
     )
-    return subtract(outer, [inner])
+    return subtract(outer, [inner, *rear_corner_flattening_cutters()])
 
 
 def build_panel_screen_parts() -> list[trimesh.Trimesh]:
@@ -1803,6 +1815,29 @@ def place_sloped_panel(panel: trimesh.Trimesh) -> trimesh.Trimesh:
     return placed
 
 
+def validate_flattened_rear_corners(shell: trimesh.Trimesh) -> None:
+    flat_y0 = WEDGE_Y1 - SHELL_REAR_CORNER_FLAT_LENGTH
+    flat_z = wedge_top(flat_y0)
+    side_x_ranges = (
+        (WEDGE_X0 + 0.2, PANEL_X0 - PANEL_CLEARANCE - 0.2),
+        (PANEL_X1 + PANEL_CLEARANCE + 0.2, WEDGE_X1 - 0.2),
+    )
+    for x0, x1 in side_x_ranges:
+        high_probe = box(
+            (x0, flat_y0 + 0.2, flat_z + 0.05),
+            (x1, WEDGE_Y1 - 0.2, wedge_top(WEDGE_Y1) + 0.2),
+        )
+        if intersection_volume(shell, high_probe) > 0.01:
+            raise ValueError("rear side-wall corner still protrudes above flat cap")
+
+        cap_probe = box(
+            (x0, flat_y0 + 0.2, flat_z - 0.2),
+            (x1, WEDGE_Y1 - 0.2, flat_z - 0.05),
+        )
+        if intersection_volume(shell, cap_probe) < cap_probe.volume - 0.02:
+            raise ValueError("rear side-wall flat cap is incomplete")
+
+
 def validate_key_field_support_walls(shell: trimesh.Trimesh) -> None:
     walls = build_key_field_support_walls()
     if len(walls) != KEY_SUPPORT_WALL_COUNT:
@@ -1913,14 +1948,6 @@ def validate_shared_attachment_pillars(shell: trimesh.Trimesh) -> None:
 def validate_panel_attachment(shell: trimesh.Trimesh, panel: trimesh.Trimesh) -> None:
     if not np.isclose(panel.bounds[0, 2], 0.0, atol=0.003):
         raise ValueError("sloped panel does not have a flat print underside")
-    screen_side_center = PANEL_SCREW_CENTERS[SCREEN_SIDE_REAR_ATTACHMENT_INDEX]
-    screen_hardware_centers = SCREEN_BOARD_HOLES + SCREEN_BOARD_ORIGIN
-    screen_hardware_clearance = np.linalg.norm(
-        screen_hardware_centers - screen_side_center,
-        axis=1,
-    ).min() - (SCREEN_INSERT_COLLAR_RADIUS + M3_SCREW_HEAD_CLEARANCE_DIAMETER / 2.0)
-    if screen_hardware_clearance <= 0.0:
-        raise ValueError("screen-side panel attachment overlaps display hardware")
     for center in PANEL_SCREW_CENTERS:
         panel_center = center - np.array([PANEL_X0, PANEL_Y0])
         panel_probe = cylinder(
@@ -2296,6 +2323,7 @@ def validate_models(
     validate_wire_clips(panel)
     validate_controller_connector_opening(shell)
     validate_controller_cradle(cover)
+    validate_flattened_rear_corners(shell)
     validate_key_field_support_walls(shell)
     validate_shared_attachment_pillars(shell)
     validate_panel_attachment(shell, panel)

@@ -9,13 +9,14 @@ All dimensions are millimeters.
 ## Printed Parts
 
 - `kivo_integrated_workstation_shell.stl`: open-top `138 x 104` chassis,
-  30-degree panel support lip, and six continuous panel-to-bottom attachment
-  pillars, plus two solid support walls below the 18-key field.
+  30-degree panel support lip, and five continuous panel-to-bottom attachment
+  pillars, plus two solid support walls below the 18-key field. Both high rear
+  side-wall corners end in flat caps instead of sharp points.
 - `kivo_integrated_workstation_sloped_panel.stl`: removable `132 x 117` key and
   display panel with a raised horizontal two-switch pod and six recessed
   fly-wire clips. It has no underside protrusions and prints flat.
 - `kivo_integrated_workstation_bottom_cover.stl`: removable `138 x 104` bottom
-  cover with six countersunk attachment holes, a two-level slide-in controller
+  cover with five countersunk attachment holes, a two-level slide-in controller
   cradle, and ventilation slots.
 - `telephone_handset_switch_base_workstation_mount.stl`: independent handset
   base with two blind M3 heat-set insert pockets cut directly into its existing
@@ -39,7 +40,7 @@ uv run --script scripts/modeling/integrated_workstation.py
 | M3 countersunk screw | `2.9` thread, `5.3` measured head diameter |
 | Printed countersink | `3.4` through hole, `5.6 x 0.5` straight recess, then `90 degrees` |
 | Bottom cover | `138 x 104`, matching the controller chassis footprint |
-| Bottom cover attachment | Six countersunk M3 screws into the shared pillars |
+| Bottom cover attachment | Five countersunk M3 screws into the shared pillars |
 | Handset chassis holes | Two `3.4` round clearances at `y=47.2/90.0`, `z=4.6` |
 | Handset base inserts | Two `4.8 x 5.4` blind bores with `5.1 x 0.6` lead-ins |
 | Handset cable passage | One aligned `12.0` round opening at `y=76.5`, `z=9.6` |
@@ -48,14 +49,14 @@ uv run --script scripts/modeling/integrated_workstation.py
 | Key switches | `14.8` lower relief, `14.0` upper lip |
 | Key layout | `6 x 3`, `19.05` pitch |
 | Key plane | `30 degrees` above horizontal |
+| Rear side-wall caps | Two horizontal `4.0`-long flattened ends |
 | Key-field support walls | Two longitudinal `2.8` solid walls at `x=123.45/161.55` |
 | Support-wall extent | Local `y=4.0` to `62.625`, from chassis bottom to sloped panel seat |
 | Central wiring corridor | `35.3` clear width between the solid support walls |
 | Fly-wire retention | Six clips, one per three-key group |
 | Wire clip pocket | `16.0 x 3.0 x 2.2`, with a `1.5` snap-in mouth |
-| Sloped panel attachment | Six `3.4` clearances into hidden chassis inserts |
-| Screen-side rear attachment | Panel axis `[158, 109]`, clear of display hardware |
-| Shared attachment pillars | Six support-free columns with independent blind insert pockets at both ends |
+| Sloped panel attachment | Five `3.4` clearances into hidden chassis inserts |
+| Shared attachment pillars | Five support-free columns with independent blind insert pockets at both ends |
 | Display PCB | `64.90 x 35.03`, four backside-loaded heat-set insert holes |
 | Display attachment | Four `4.8` through bores with `5.1 x 0.6` backside lead-ins |
 | Display header | 8 pins on PCB left half, first pin at `x=11.38`, `2.54` pitch |
@@ -109,27 +110,26 @@ boundary keeps `0.3` clearance around the combined body envelope. The complete
 body envelopes have been checked against the rear wall, right panel rail, and
 attachment bosses.
 
-The six sloped-panel insert bosses continue to the chassis bottom as continuous
+The five sloped-panel insert bosses continue to the chassis bottom as continuous
 pillars. Each pillar has one blind insert pocket at the sloped end and a second
 blind pocket at the bottom end, so the panel and cover can be removed
-independently while reusing the same printed structure. The bottom locations
-retain the front pair and add one middle pair; the screen-side rear anchor is
-relocated with its panel attachment to avoid the display hardware.
+independently while reusing the same printed structure. The unused screen-side
+rear pillar and both of its attachment holes are omitted.
 
 ## Hardware And Assembly
 
-- 18 M3 heat-set brass inserts with the measured `3.9` body, `4.9` knurled
-  rings, and `4.9` length: 6 for the sloped-panel attachment, 4 for the display,
-  6 for the bottom cover, and 2 for the handset base. Receiving parts use a
+- 16 M3 heat-set brass inserts with the measured `3.9` body, `4.9` knurled
+  rings, and `4.9` length: 5 for the sloped-panel attachment, 4 for the display,
+  5 for the bottom cover, and 2 for the handset base. Receiving parts use a
   `4.8 x 5.4` blind bore with a shallow `5.1` lead-in; the four display bores
   pass through the panel and open from its back side.
 - The user-supplied screws measure `2.9` across the thread and `5.3` across
   the head. Exterior attachment holes use a `3.4` clearance bore and a
   `5.6 x 0.5` straight recess followed by a 90-degree countersink so the screw
   heads sit 0.5 mm deeper.
-- 6 M3 x 8 screws for the bottom cover. They pass through the outside cover
+- 5 M3 x 8 screws for the bottom cover. They pass through the outside cover
   and enter inserts installed from the hidden underside of the chassis.
-- 6 M3 x 10 screws for the removable sloped panel. They pass through the
+- 5 M3 x 10 screws for the removable sloped panel. They pass through the
   panel face into inserts installed in the chassis support bosses. The insert
   openings are covered completely by the assembled panel.
 - 4 M3 x 10 screws for the display PCB.
@@ -161,21 +161,22 @@ relocated with its panel attachment to avoid the display hardware.
    fasten the display PCB from the front with four M3 x 10 screws. Fly-wire each
    three-key group and press its wires individually into the nearest recessed
    clip before attaching the panel to the chassis.
-4. Heat six inserts into the chassis panel bosses from the sloped mating face.
-   Place the completed panel on the support lip and drive six M3 x 10 screws
+4. Heat five inserts into the chassis panel bosses from the sloped mating face.
+   Place the completed panel on the support lip and drive five M3 x 10 screws
    through its face into the hidden inserts.
-5. After testing the keypad and display, heat six inserts into the bottom ends
+5. After testing the keypad and display, heat five inserts into the bottom ends
    of the shared chassis pillars and fasten the bottom cover from outside.
    Future key or display changes require reprinting only the panel.
 
 ## Printing
 
-- Print the shell upright with its bottom rim on the build plate. All six shared
+- Print the shell upright with its bottom rim on the build plate. All five shared
   attachment pillars rise continuously from the build plate; their outer walls
   stay within 45 degrees, so the sloped insert bosses do not need support.
   The two solid key-field walls also start on the build plate and run
   continuously to the sloped panel seat. Leave the center wiring corridor free
-  of support.
+  of support. The two rear side-wall tips are truncated into horizontal 4 mm
+  caps, so there are no sharp peaks at the shell's highest corners.
 - Print the handset base upright in its modeled orientation. It has no external
   attachment protrusions. The two horizontal blind insert bores may print
   slightly flat at the top; clear them gently with a `4.8 mm` drill before
@@ -202,23 +203,20 @@ relocated with its panel attachment to avoid the display hardware.
   normally bridge without support; clear them with a `3.4 mm` drill if their top
   surfaces print slightly flat.
 - The chassis has no broad sloped roof, so it does not need support beneath the
-  key deck. The removable panel rests on two side rails, a front lip, six shared
+  key deck. The removable panel rests on two side rails, a front lip, five shared
   pillars, and the two solid key-field walls. Route wiring through the open
   center corridor between the walls.
-- The rear pair of panel screws is moved 3 mm toward the front and the side
+- The remaining rear panel screw is moved 3 mm toward the front and the side
   rails stop at local `y=117`, keeping every panel support at or in front of
   the chassis rear wall (`y=108` in assembled coordinates).
-- The screen-side rear panel screw and its chassis insert share `[158, 109]`.
-  Its lower pillar anchor is `[170, 99]`, avoiding both the display hardware and
-  the controller cradle while keeping the pillar support-free.
 - The removable panel's rear edge is shortened by 1 mm and the screen is moved
   forward by the same amount. In the assembled model its rear bound is
   `y=107.923`, so the panel also remains inside the `y=108` rear wall.
 
 The generator rejects any result that is not a single positive, watertight,
 consistently wound two-manifold mesh. It measures both levels of all 18 switch
-apertures directly on the flat-print panel and verifies the six panel screw
-paths, six bottom-cover screw paths, six continuous support-free pillars, two
+apertures directly on the flat-print panel and verifies the five panel screw
+paths, five bottom-cover screw paths, five continuous support-free pillars, two
 continuous solid key-field support walls,
 switch-body and wiring clearance, two blind handset insert bores, two same-height
 chassis holes, the aligned `12 mm` handset cable passage, bottom-cover height
