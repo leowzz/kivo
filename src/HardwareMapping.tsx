@@ -186,6 +186,101 @@ function pinOptions(
   return available.includes(current) ? available : [current, ...available];
 }
 
+type DisplayComponent = "none" | "ssd1306" | "sh1106";
+
+function selectedDisplayComponent(hardware: HardwareProfile): DisplayComponent {
+  if (hardware.sh1106) return "sh1106";
+  if (hardware.ssd1306) return "ssd1306";
+  return "none";
+}
+
+function configuredDisplayPins(hardware: HardwareProfile) {
+  const display = hardware.sh1106 ?? hardware.ssd1306;
+  if (!display) return [];
+  const panel = display.control_panel;
+  return [
+    display.sda,
+    display.scl,
+    ...(panel
+      ? [panel.confirm, panel.encoder_press, panel.encoder_a, panel.encoder_b, panel.back]
+      : []),
+  ];
+}
+
+function displayComponentCanFit(
+  component: DisplayComponent,
+  board: BoardProfileSummary | undefined,
+  availablePins: readonly number[],
+) {
+  if (component === "none") return true;
+  if (!board?.supportsOled) return false;
+  return availablePins.length >= (component === "sh1106" ? 7 : 2);
+}
+
+function configureDisplayComponent(
+  hardware: HardwareProfile,
+  component: DisplayComponent,
+  availablePins: readonly number[],
+) {
+  const next = { ...hardware };
+  if (component === "none") {
+    delete next.ssd1306;
+    delete next.sh1106;
+    return next;
+  }
+
+  const existing = hardware.sh1106 ?? hardware.ssd1306;
+  const keepBus = existing
+    && existing.sda !== existing.scl
+    && availablePins.includes(existing.sda)
+    && availablePins.includes(existing.scl);
+  const [sda, scl] = keepBus
+    ? [existing.sda, existing.scl]
+    : availablePins.slice(0, 2);
+  if (sda === undefined || scl === undefined) return hardware;
+
+  if (component === "ssd1306") {
+    next.ssd1306 = { sda, scl };
+    delete next.sh1106;
+    return next;
+  }
+
+  const controlCandidates = availablePins.filter((pin) => pin !== sda && pin !== scl);
+  const existingControl = existing?.control_panel;
+  const existingControlPins = existingControl
+    ? [
+        existingControl.confirm,
+        existingControl.encoder_press,
+        existingControl.encoder_a,
+        existingControl.encoder_b,
+        existingControl.back,
+      ]
+    : [];
+  const keepControl = existingControlPins.length === 5
+    && new Set(existingControlPins).size === existingControlPins.length
+    && existingControlPins.every((pin) => controlCandidates.includes(pin));
+  const [confirm, encoderPress, encoderA, encoderB, back] = keepControl
+    ? existingControlPins
+    : controlCandidates.slice(0, 5);
+  if ([confirm, encoderPress, encoderA, encoderB, back].some((pin) => pin === undefined)) {
+    return hardware;
+  }
+  next.sh1106 = {
+    sda,
+    scl,
+    control_panel: {
+      type: "ec11_confirm_back",
+      confirm,
+      encoder_press: encoderPress,
+      encoder_a: encoderA,
+      encoder_b: encoderB,
+      back,
+    },
+  };
+  delete next.ssd1306;
+  return next;
+}
+
 export function HardwareMapping({
   language,
   layout,
@@ -226,7 +321,8 @@ export function HardwareMapping({
   const hardware = hardwareProfiles.find(({ id }) => id === selectedId) ?? hardwareProfiles[0];
   const board = boardProfiles.find(({ id }) => id === hardware?.board_profile_id);
   const oled = hardware?.sh1106 ?? hardware?.ssd1306;
-  const oledIsSh1106 = Boolean(hardware?.sh1106);
+  const displayComponent = hardware ? selectedDisplayComponent(hardware) : "none";
+  const controlPanel = hardware?.sh1106?.control_panel;
   const compatibleDevices = devices.filter((device) =>
     device.connection === "online" &&
     device.mode === "runtime" &&
@@ -249,10 +345,7 @@ export function HardwareMapping({
     [hardware],
   );
   const oledPins = useMemo(
-    () => {
-      const configured = hardware?.sh1106 ?? hardware?.ssd1306;
-      return new Set(configured ? [configured.sda, configured.scl] : []);
-    },
+    () => new Set(hardware ? configuredDisplayPins(hardware) : []),
     [hardware],
   );
   const oledAvailablePins = editablePins.filter((pin) => !inputPins.has(pin));
@@ -491,39 +584,46 @@ export function HardwareMapping({
             </label>
           </div>
 
-          <section className="oled-editor" aria-label={t(language, oledIsSh1106 ? "hardware.sh1106Oled" : "hardware.oled")}>
+          <section className="oled-editor" aria-label={t(language, "hardware.displayComponent")}>
             <div className="oled-summary">
               <Monitor size={16} />
-              <label className="oled-toggle">
-                <input
-                  type="checkbox"
-                  checked={Boolean(oled)}
-                  disabled={!oled && (!board?.supportsOled || oledAvailablePins.length < 2)}
+              <label className="oled-type-field">
+                <span>{t(language, "hardware.displayComponent")}</span>
+                <select
+                  aria-label={t(language, "hardware.displayComponent")}
+                  value={displayComponent}
                   onChange={(event) => {
-                    if (event.target.checked) {
-                      const [sda, scl] = oledAvailablePins;
-                      if (sda === undefined || scl === undefined) return;
-                      replaceHardware({ ...hardware, ssd1306: { sda, scl } });
-                    } else {
-                      const next = { ...hardware };
-                      delete next.ssd1306;
-                      delete next.sh1106;
-                      replaceHardware(next);
-                    }
+                    replaceHardware(configureDisplayComponent(
+                      hardware,
+                      event.target.value as DisplayComponent,
+                      oledAvailablePins,
+                    ));
                   }}
-                />
-                <span>{t(language, oledIsSh1106 ? "hardware.sh1106Oled" : "hardware.oled")}</span>
+                >
+                  <option value="none">{t(language, "hardware.displayNone")}</option>
+                  <option
+                    value="ssd1306"
+                    disabled={displayComponent !== "ssd1306" && !displayComponentCanFit("ssd1306", board, oledAvailablePins)}
+                  >
+                    {t(language, "hardware.oled")}
+                  </option>
+                  <option
+                    value="sh1106"
+                    disabled={displayComponent !== "sh1106" && !displayComponentCanFit("sh1106", board, oledAvailablePins)}
+                  >
+                    {t(language, "hardware.sh1106Oled")}
+                  </option>
+                </select>
               </label>
-              <code>{t(language, oledIsSh1106 ? "hardware.sh1106Format" : "hardware.oledFormat")}</code>
+              {oled ? <code>{t(language, displayComponent === "sh1106" ? "hardware.sh1106Format" : "hardware.oledFormat")}</code> : null}
             </div>
             {oled && ([
               ["sda", t(language, "hardware.oledSda")],
               ["scl", t(language, "hardware.oledScl")],
             ] as const).map(([field, label]) => {
               const current = oled[field];
-              const counterpart = oled[field === "sda" ? "scl" : "sda"];
-              const excluded = new Set(inputPins);
-              if (counterpart !== undefined) excluded.add(counterpart);
+              const excluded = new Set([...inputPins, ...configuredDisplayPins(hardware)]);
+              excluded.delete(current);
               const unsafe = !new Set(boardSafePins(board)).has(current);
               const unsupported = !board?.supportsOled;
               const conflict = conflicts.has(current);
@@ -545,6 +645,57 @@ export function HardwareMapping({
                         return;
                       }
                       replaceHardware(next);
+                    }}
+                  >
+                    {pinOptions(current, editablePins, excluded).map((pin) => (
+                      <option value={pin} key={pin}>{pin}</option>
+                    ))}
+                  </select>
+                  {currentInvalid && (
+                    <small className="field-error">
+                      {unsupported
+                        ? t(language, "hardware.oledUnsupported")
+                        : conflict
+                          ? conflictMessage(language, current)
+                          : invalidMessage(language, [current])}
+                    </small>
+                  )}
+                </label>
+              );
+            })}
+            {controlPanel && ([
+              ["confirm", t(language, "hardware.oledConfirm")],
+              ["encoder_press", t(language, "hardware.oledEncoderPress")],
+              ["encoder_a", t(language, "hardware.oledEncoderA")],
+              ["encoder_b", t(language, "hardware.oledEncoderB")],
+              ["back", t(language, "hardware.oledBack")],
+            ] as const).map(([field, label]) => {
+              const current = controlPanel[field];
+              const excluded = new Set([...inputPins, ...configuredDisplayPins(hardware)]);
+              excluded.delete(current);
+              const unsafe = !new Set(boardSafePins(board)).has(current);
+              const unsupported = !board?.supportsOled;
+              const conflict = conflicts.has(current);
+              const currentInvalid = unsupported || unsafe || conflict;
+              return (
+                <label className="oled-pin-field" key={field}>
+                  <span>{label}</span>
+                  <select
+                    aria-label={label}
+                    aria-invalid={currentInvalid}
+                    value={current}
+                    onChange={(event) => {
+                      if (!hardware.sh1106?.control_panel) return;
+                      replaceHardware({
+                        ...hardware,
+                        sh1106: {
+                          ...hardware.sh1106,
+                          control_panel: {
+                            ...hardware.sh1106.control_panel,
+                            [field]: Number(event.target.value),
+                          },
+                        },
+                      });
                     }}
                   >
                     {pinOptions(current, editablePins, excluded).map((pin) => (

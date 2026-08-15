@@ -45,7 +45,7 @@ def test_generated_models_validate(
     assert report.controller_support_levels == (3.0, 6.5)
     assert report.screen_board == (64.9, 35.03)
     assert report.screen_plane_degrees == pytest.approx(30.0)
-    assert report.toggle_hole_count == 3
+    assert report.toggle_hole_count == 2
     assert report.toggle_plane_degrees == pytest.approx(0.0)
     assert report.panel_screw_count == 6
     assert report.bottom_cover_screw_count == 6
@@ -184,14 +184,15 @@ def test_screen_has_four_backside_heat_set_insert_through_holes(
     workstation.validate_screen_insert_holes(panel)
 
 
-def test_panel_has_three_vertical_toggle_switches_on_horizontal_platform(
+def test_panel_has_two_evenly_spaced_toggle_switches_on_horizontal_platform(
     generated_models: GeneratedModels,
 ) -> None:
     shell, panel, _, _ = generated_models
 
     assert workstation.SCREEN_BEZEL_X0 == workstation.PANEL_X0
     assert workstation.SCREEN_BEZEL_CENTER_X == pytest.approx(113.0)
-    assert workstation.TOGGLE_SWITCH_CENTERS.shape == (3, 2)
+    assert workstation.TOGGLE_SWITCH_COUNT == 2
+    assert workstation.TOGGLE_SWITCH_CENTERS.shape == (2, 2)
     assert workstation.TOGGLE_SWITCH_HOLE_DIAMETER == 12.0
     assert workstation.TOGGLE_SWITCH_BODY_WIDTH == 15.0
     assert workstation.TOGGLE_SWITCH_BODY_LENGTH == 29.0
@@ -199,7 +200,7 @@ def test_panel_has_three_vertical_toggle_switches_on_horizontal_platform(
     assert workstation.TOGGLE_SWITCH_MOUNTING_PLATE_THICKNESS == pytest.approx(3.4)
     assert (
         workstation.TOGGLE_SWITCH_CAVITY_X1 - workstation.TOGGLE_SWITCH_CAVITY_X0
-        == (pytest.approx(47.6))
+        == (pytest.approx(39.6))
     )
     assert (
         workstation.TOGGLE_SWITCH_CAVITY_Y1 - workstation.TOGGLE_SWITCH_CAVITY_Y0
@@ -217,6 +218,12 @@ def test_panel_has_three_vertical_toggle_switches_on_horizontal_platform(
     assert (
         workstation.TOGGLE_SWITCH_CENTER_PITCH - workstation.TOGGLE_SWITCH_BODY_WIDTH
         >= 1.0
+    )
+    assert workstation.TOGGLE_SWITCH_CENTER_PITCH == pytest.approx(24.0)
+    assert workstation.TOGGLE_SWITCH_CENTERS[:, 0] == pytest.approx((163.0, 187.0))
+    assert np.mean(workstation.TOGGLE_SWITCH_CENTERS[:, 0]) == pytest.approx(
+        (workstation.TOGGLE_SWITCH_PLATFORM_X0 + workstation.TOGGLE_SWITCH_PLATFORM_X1)
+        / 2.0
     )
     workstation.validate_toggle_switch_holes(panel, shell)
 
@@ -273,6 +280,9 @@ def test_bottom_cover_matches_controller_chassis_footprint(
         np.unique(workstation.COVER_SCREW_CENTERS[:, 1]),
         np.array([13.0, 62.0, 99.0]),
     )
+    assert workstation.SHARED_ATTACHMENT_BOTTOM_CENTERS[
+        workstation.SCREEN_SIDE_REAR_ATTACHMENT_INDEX
+    ] == pytest.approx((170.0, 99.0))
     assert not hasattr(workstation, "HANDSET_POCKET_WIDTH")
     workstation.validate_bottom_cover_attachment(shell, cover)
 
@@ -317,6 +327,19 @@ def test_sloped_panel_is_flat_printable_and_has_six_aligned_screws(
     workstation.validate_panel_attachment(shell, panel)
     assert panel.bounds[0, 2] == pytest.approx(0.0, abs=0.003)
     assert workstation.PANEL_SCREW_CENTERS.shape == (6, 2)
+    screen_side_center = workstation.PANEL_SCREW_CENTERS[
+        workstation.SCREEN_SIDE_REAR_ATTACHMENT_INDEX
+    ]
+    assert screen_side_center == pytest.approx((158.0, 109.0))
+    screen_hardware_centers = (
+        workstation.SCREEN_BOARD_HOLES + workstation.SCREEN_BOARD_ORIGIN
+    )
+    assert np.linalg.norm(
+        screen_hardware_centers - screen_side_center, axis=1
+    ).min() > (
+        workstation.SCREEN_INSERT_COLLAR_RADIUS
+        + workstation.M3_SCREW_HEAD_CLEARANCE_DIAMETER / 2.0
+    )
 
 
 def test_panel_bosses_continue_to_bottom_cover_as_six_support_free_pillars(

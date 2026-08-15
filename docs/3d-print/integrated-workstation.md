@@ -49,6 +49,7 @@ uv run --script scripts/modeling/integrated_workstation.py
 | Fly-wire retention | Six clips, one per three-key group |
 | Wire clip pocket | `16.0 x 3.0 x 2.2`, with a `1.5` snap-in mouth |
 | Sloped panel attachment | Six `3.4` clearances into hidden chassis inserts |
+| Screen-side rear attachment | Panel axis `[158, 109]`, clear of display hardware |
 | Shared attachment pillars | Six support-free columns with independent blind insert pockets at both ends |
 | Display PCB | `64.90 x 35.03`, four backside-loaded heat-set insert holes |
 | Display attachment | Four `4.0` through bores with `5.1 x 0.6` backside lead-ins |
@@ -56,12 +57,12 @@ uv run --script scripts/modeling/integrated_workstation.py
 | Display cable slot | `24.5 x 6.5`, aligned below the left-side header |
 | Display bezel position | Flush with the panel's left edge |
 | Toggle switch mounting plane | Horizontal, parallel to the workstation bottom |
-| Toggle switch openings | Three vertical `12.0` through-holes in one row |
+| Toggle switch openings | Two vertical `12.0` through-holes in one row |
 | Toggle switch body envelope | `15.0 x 29.0 x 27.0` |
-| Toggle switch body cavity | One shared `47.6 x 29.6` opening from the panel underside |
-| Toggle switch center pitch | `16.0` horizontally |
-| Toggle pod maximum roof bridge | `29.6` after removing both internal dividers |
-| Controller cradle | `28.64 x 63.89` maximum clear area |
+| Toggle switch body cavity | One shared `39.6 x 29.6` opening from the panel underside |
+| Toggle switch center pitch | `24.0` horizontally, centered on the pod |
+| Toggle pod maximum roof bridge | `29.6` with no internal divider |
+| Controller cradle | `28.64 x 57.65` maximum clear area |
 | RP2040 reference | `22.86 x 53.34` |
 | ESP32-S3 retained inner board | `27.94 x 57.15` |
 | RP2040 support level | PCB underside `3.0` above the cover inner face |
@@ -121,7 +122,7 @@ retain the original front and rear pairs and add one middle pair.
 - 4 M3 x 10 screws for the display PCB.
 - 2 M3 screws and 2 washers for the handset base. The washers sit against the
   chassis interior so both screw loads are spread over the side wall.
-- 3 panel-mount toggle switches with `12 mm` threaded bushings and
+- 2 panel-mount toggle switches with `12 mm` threaded bushings and
   `15 x 29 x 27 mm` bodies. Install them from the panel underside through the
   shared rectangular cavity. Their mounting axes are vertical after assembly.
 - The RP2040 and ESP32-S3 reference boards have GPIO solder holes but no
@@ -142,7 +143,7 @@ retain the original front and rear pairs and add one middle pair.
    Slide either board back out from the rear; the retainers are fixed and should
    not be bent.
 3. Heat four inserts into the display holes from the panel's flat back side
-   until flush. Install all 18 key switches and the three toggle switches, then
+   until flush. Install all 18 key switches and the two toggle switches, then
    fasten the display PCB from the front with four M3 x 10 screws. Fly-wire each
    three-key group and press its wires individually into the nearest recessed
    clip before attaching the panel to the chassis.
@@ -164,8 +165,8 @@ retain the original front and rear pairs and add one middle pair.
   heat-setting the inserts if needed.
 - Print the sloped panel separately with its large flat underside on the build
   plate. The switch steps and 2 mm screen bezel face upward and need no support.
-  The raised toggle pod has one uninterrupted underside cavity. With both
-  dividers removed, its longest roof span is `29.6 mm`; add build-plate-only
+  The raised toggle pod has one uninterrupted underside cavity. With no internal
+  divider, its longest roof span is `29.6 mm`; add build-plate-only
   support inside this cavity if the printer cannot bridge that distance. The
   support remains accessible and removable from the open panel underside.
   The six wire clips are recessed into that underside: their internal walls
@@ -189,6 +190,9 @@ retain the original front and rear pairs and add one middle pair.
 - The rear pair of panel screws is moved 3 mm toward the front and the side
   rails stop at local `y=117`, keeping every panel support at or in front of
   the chassis rear wall (`y=108` in assembled coordinates).
+- The screen-side rear panel screw and its chassis insert share `[158, 109]`.
+  Its lower pillar anchor is `[170, 99]`, avoiding both the display hardware and
+  the controller cradle while keeping the pillar support-free.
 - The removable panel's rear edge is shortened by 1 mm and the screen is moved
   forward by the same amount. In the assembled model its rear bound is
   `y=107.923`, so the panel also remains inside the `y=108` rear wall.

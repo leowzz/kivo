@@ -57,13 +57,14 @@ PANEL_CLEARANCE = 0.3
 PANEL_OPENING_REAR_OVERCUT = 3.0
 PANEL_LIP_DEPTH = 2.4
 PANEL_SIDE_SUPPORT_Y1 = 117.0
+SCREEN_SIDE_REAR_ATTACHMENT_INDEX = 4
 PANEL_SCREW_CENTERS = np.array(
     [
         [79.0, 12.0],
         [203.0, 12.0],
         [79.0, 62.0],
         [203.0, 62.0],
-        [79.0, 109.0],
+        [158.0, 109.0],
         [203.0, 109.0],
     ]
 )
@@ -111,6 +112,7 @@ SCREEN_BOARD_ORIGIN = np.array(
 )
 SCREEN_INSERT_THROUGH_DIAMETER = HEAT_SET_INSERT_HOLE_DIAMETER
 SCREEN_INSERT_MATERIAL_DEPTH = KEY_PLATE_THICKNESS + SCREEN_BEZEL_RAISE
+SCREEN_INSERT_COLLAR_RADIUS = 4.8
 SCREEN_BOARD_HOLES = np.array(
     [
         [2.95, 2.97],
@@ -137,7 +139,7 @@ SCREEN_CABLE_SLOT_LOCAL_Y0 = 29.0
 SCREEN_CABLE_SLOT_WIDTH = 24.5
 SCREEN_CABLE_SLOT_HEIGHT = 6.5
 
-# Three panel-mounted toggle switches sit upright on a raised horizontal pod.
+# Two panel-mounted toggle switches sit upright on a raised horizontal pod.
 # Coordinates here are in the assembled workstation's world XY plane, not the
 # removable panel's sloped local plane.
 TOGGLE_SWITCH_HOLE_DIAMETER = 12.0
@@ -145,16 +147,17 @@ TOGGLE_SWITCH_BODY_WIDTH = 15.0
 TOGGLE_SWITCH_BODY_LENGTH = 29.0
 TOGGLE_SWITCH_BODY_DEPTH = 27.0
 TOGGLE_SWITCH_BODY_CLEARANCE = 0.3
-TOGGLE_SWITCH_FIRST_CENTER_X = 159.0
+TOGGLE_SWITCH_COUNT = 2
+TOGGLE_SWITCH_FIRST_CENTER_X = 163.0
 TOGGLE_SWITCH_CENTER_Y = 78.0
-TOGGLE_SWITCH_CENTER_PITCH = 16.0
+TOGGLE_SWITCH_CENTER_PITCH = 24.0
 TOGGLE_SWITCH_CENTERS = np.array(
     [
         [
             TOGGLE_SWITCH_FIRST_CENTER_X + offset * TOGGLE_SWITCH_CENTER_PITCH,
             TOGGLE_SWITCH_CENTER_Y,
         ]
-        for offset in range(3)
+        for offset in range(TOGGLE_SWITCH_COUNT)
     ]
 )
 TOGGLE_SWITCH_CAVITY_X0 = (
@@ -222,16 +225,16 @@ WIRE_CLIP_CENTERS = np.array(
 WIRE_CLIP_CENTERS[-1, 0] = WIRE_CLIP_RELOCATED_REAR_RIGHT_X
 
 # The six panel insert bosses continue down to these six bottom-cover insert
-# bosses as one-to-one support-free pillars. The front and rear pairs preserve
-# the original cover hole locations; the middle pair reuses the middle panel
-# bosses without crowding the controller bay or foot-pad recesses.
+# bosses as one-to-one support-free pillars. The screen-side rear attachment is
+# moved outside the display envelope, with its bottom anchor kept clear of the
+# controller bay.
 SHARED_ATTACHMENT_BOTTOM_CENTERS = np.array(
     [
         [77.0, 13.0],
         [205.0, 13.0],
         [77.0, 62.0],
         [205.0, 62.0],
-        [77.0, 99.0],
+        [170.0, 99.0],
         [205.0, 99.0],
     ]
 )
@@ -615,7 +618,7 @@ def build_panel_screen_parts() -> list[trimesh.Trimesh]:
     bezel = subtract(bezel_outer, [bezel_inner])
     collars = [
         cylinder(
-            4.8,
+            SCREEN_INSERT_COLLAR_RADIUS,
             SCREEN_BEZEL_RAISE + 0.02,
             (
                 hole[0],
@@ -1363,6 +1366,9 @@ def validate_toggle_switch_holes(
     hole_radius = TOGGLE_SWITCH_HOLE_DIAMETER / 2.0
     if not np.allclose(TOGGLE_SWITCH_CENTERS[:, 1], TOGGLE_SWITCH_CENTER_Y):
         raise ValueError("toggle switches are not arranged side by side")
+    platform_center_x = (TOGGLE_SWITCH_PLATFORM_X0 + TOGGLE_SWITCH_PLATFORM_X1) / 2.0
+    if not np.isclose(np.mean(TOGGLE_SWITCH_CENTERS[:, 0]), platform_center_x):
+        raise ValueError("toggle switches are not centered on the horizontal platform")
 
     screen_hardware_right = max(
         SCREEN_BOARD_ORIGIN[0] + SCREEN_BOARD_WIDTH,
@@ -1738,6 +1744,14 @@ def validate_shared_attachment_pillars(shell: trimesh.Trimesh) -> None:
 def validate_panel_attachment(shell: trimesh.Trimesh, panel: trimesh.Trimesh) -> None:
     if not np.isclose(panel.bounds[0, 2], 0.0, atol=0.003):
         raise ValueError("sloped panel does not have a flat print underside")
+    screen_side_center = PANEL_SCREW_CENTERS[SCREEN_SIDE_REAR_ATTACHMENT_INDEX]
+    screen_hardware_centers = SCREEN_BOARD_HOLES + SCREEN_BOARD_ORIGIN
+    screen_hardware_clearance = np.linalg.norm(
+        screen_hardware_centers - screen_side_center,
+        axis=1,
+    ).min() - (SCREEN_INSERT_COLLAR_RADIUS + M3_SCREW_HEAD_CLEARANCE_DIAMETER / 2.0)
+    if screen_hardware_clearance <= 0.0:
+        raise ValueError("screen-side panel attachment overlaps display hardware")
     for center in PANEL_SCREW_CENTERS:
         panel_center = center - np.array([PANEL_X0, PANEL_Y0])
         panel_probe = cylinder(

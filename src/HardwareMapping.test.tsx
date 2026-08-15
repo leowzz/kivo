@@ -674,7 +674,10 @@ test("edits OLED SDA and OLED SCL through separate controlled selectors", async 
   };
   const { rerender } = render(<HardwareMapping {...props} hardwareProfiles={[profile]} />);
 
-  expect(screen.getByRole("checkbox", { name: "SSD1306 OLED" })).toBeChecked();
+  const displayComponent = screen.getByRole("combobox", { name: "显示组件" });
+  expect(displayComponent).toHaveValue("ssd1306");
+  expect(within(displayComponent).getByRole("option", { name: "SSD1306 OLED" })).toBeEnabled();
+  expect(within(displayComponent).getByRole("option", { name: "SH1106 OLED + EC11" })).toBeEnabled();
   expect(screen.getByText("128x32 / 0x3C")).toBeInTheDocument();
   expect(screen.getByRole("combobox", { name: "OLED SDA" })).toHaveValue("18");
   expect(screen.getByRole("combobox", { name: "OLED SCL" })).toHaveValue("19");
@@ -693,7 +696,7 @@ test("edits OLED SDA and OLED SCL through separate controlled selectors", async 
   expect(afterScl[0].ssd1306).toEqual({ sda: 20, scl: 21 });
 });
 
-test("enables OLED on the first two unowned safe pins", async () => {
+test("enables SSD1306 on the first two unowned safe pins", async () => {
   const user = userEvent.setup();
   const directKeys = Object.fromEntries(
     Array.from({ length: 18 }, (_, gpio) => [`KEY_${gpio}`, gpio]),
@@ -707,12 +710,90 @@ test("enables OLED on the first two unowned safe pins", async () => {
   };
   const onChange = renderMapping({ profiles: [profile] });
 
-  await user.click(screen.getByRole("checkbox", { name: "SSD1306 OLED" }));
+  const displayComponent = screen.getByRole("combobox", { name: "显示组件" });
+  expect(within(displayComponent).getByRole("option", { name: "SSD1306 OLED" })).toBeEnabled();
+  expect(within(displayComponent).getByRole("option", { name: "SH1106 OLED + EC11" })).toBeDisabled();
+  await user.selectOptions(displayComponent, "ssd1306");
 
   const updated = onChange.mock.calls.at(-1)?.[0] as Array<HardwareProfile & {
     ssd1306?: { sda: number; scl: number };
   }>;
   expect(updated[0].ssd1306).toEqual({ sda: 18, scl: 19 });
+});
+
+test("switches SSD1306 to SH1106 while reserving all seven display pins", async () => {
+  const user = userEvent.setup();
+  const profile: HardwareProfile = {
+    id: "display-module",
+    name: "Display module",
+    board_profile_id: "yd-rp2040",
+    debounce_ms: 30,
+    inputs: [{ type: "direct", id: "direct", keys: { ONE: 0 } }],
+  };
+  const onChange = vi.fn<(profiles: HardwareProfile[]) => void>();
+  const props = {
+    language: "zh-CN" as const,
+    layout,
+    boardProfiles,
+    devices: [] as DeviceStatus[],
+    selectedButtonId: null,
+    onSelectButton: vi.fn(),
+    onChange,
+    onSelectionChange: vi.fn(),
+    learning: null,
+    onBeginLearning: vi.fn(),
+    onEndLearning: vi.fn(),
+  };
+  const { rerender } = render(<HardwareMapping {...props} hardwareProfiles={[profile]} />);
+
+  let displayComponent = screen.getByRole("combobox", { name: "显示组件" });
+  expect(within(displayComponent).getByRole("option", { name: "SSD1306 OLED" })).toBeEnabled();
+  expect(within(displayComponent).getByRole("option", { name: "SH1106 OLED + EC11" })).toBeEnabled();
+  await user.selectOptions(displayComponent, "ssd1306");
+
+  const withSsd1306 = onChange.mock.calls.at(-1)?.[0] as HardwareProfile[];
+  expect(withSsd1306[0].ssd1306).toEqual({ sda: 1, scl: 2 });
+  expect(withSsd1306[0].sh1106).toBeUndefined();
+  rerender(<HardwareMapping {...props} hardwareProfiles={withSsd1306} />);
+
+  displayComponent = screen.getByRole("combobox", { name: "显示组件" });
+  await user.selectOptions(displayComponent, "sh1106");
+
+  const withSh1106 = onChange.mock.calls.at(-1)?.[0] as HardwareProfile[];
+  expect(withSh1106[0].ssd1306).toBeUndefined();
+  expect(withSh1106[0].sh1106).toEqual({
+    sda: 1,
+    scl: 2,
+    control_panel: {
+      type: "ec11_confirm_back",
+      confirm: 3,
+      encoder_press: 4,
+      encoder_a: 5,
+      encoder_b: 6,
+      back: 7,
+    },
+  });
+  rerender(<HardwareMapping {...props} hardwareProfiles={withSh1106} />);
+
+  expect(screen.getByRole("combobox", { name: "显示组件" })).toHaveValue("sh1106");
+  expect(screen.getByText("1.3 英寸 / 128x64 / 0x3C / 7 IO")).toBeInTheDocument();
+  expect(screen.getByRole("combobox", { name: "OLED SDA" })).toHaveValue("1");
+  expect(screen.getByRole("combobox", { name: "OLED SCL" })).toHaveValue("2");
+  expect(screen.getByRole("combobox", { name: "确认 KEY1" })).toHaveValue("3");
+  expect(screen.getByRole("combobox", { name: "编码器按压 PSH" })).toHaveValue("4");
+  expect(screen.getByRole("combobox", { name: "编码器 A 相 TRA" })).toHaveValue("5");
+  expect(screen.getByRole("combobox", { name: "编码器 B 相 TRB" })).toHaveValue("6");
+  expect(screen.getByRole("combobox", { name: "返回 KEY0" })).toHaveValue("7");
+
+  const direct = screen.getByRole("combobox", { name: "1 GPIO" });
+  for (let pin = 1; pin <= 7; pin += 1) {
+    expect(within(direct).queryByRole("option", { name: String(pin) })).toBeNull();
+  }
+
+  await user.click(screen.getByText("适配新设备"));
+  for (let pin = 1; pin <= 7; pin += 1) {
+    expect(screen.queryByRole("checkbox", { name: `GPIO ${pin}` })).toBeNull();
+  }
 });
 
 test("rejects unsupported, unsafe, same-pin, conflicting, and duplicate pin ownership", () => {
