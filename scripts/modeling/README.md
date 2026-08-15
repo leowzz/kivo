@@ -6,7 +6,7 @@ correctly.
 
 | Generator | Output |
 |---|---|
-| `integrated_workstation.py` | Integrated workstation shell, sloped panel, bottom cover, and side-mount handset base |
+| `integrated_workstation.py` | Integrated workstation shell, sloped panel, bottom cover, standalone controller-cradle test module, and side-mount handset base |
 | `telephone_handset_switch_base.py` | Standalone telephone handset switch base |
 | `macro_pad_variants.py` | Macro-pad enclosure size variants |
 

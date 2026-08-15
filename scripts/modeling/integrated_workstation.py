@@ -208,6 +208,16 @@ COVER_WIDTH = WEDGE_X1 - WEDGE_X0
 COVER_CENTER = ((WEDGE_X0 + WEDGE_X1) / 2.0, (WEDGE_Y0 + WEDGE_Y1) / 2.0)
 COVER_THICKNESS = 2.4
 COVER_HOLE_DIAMETER = 3.4
+FOOT_PAD_RECESS_DIAMETER = 15.0
+FOOT_PAD_RECESS_DEPTH = 1.5
+FOOT_PAD_RECESS_CUTTER_OVERSHOOT = 0.1
+FOOT_PAD_RECESS_CENTERS = np.array(
+    [
+        [x, y]
+        for y in (WEDGE_Y0 + 14.0, WEDGE_Y1 - 14.0)
+        for x in (WEDGE_X0 + 16.0, WEDGE_X1 - 16.0)
+    ]
+)
 RP2040_BOARD_WIDTH = 22.86
 RP2040_BOARD_LENGTH = 53.34
 ESP32_S3_BOARD_WIDTH = 27.94
@@ -237,12 +247,19 @@ CONTROLLER_USB_OPENING_Y0 = WEDGE_Y1 - WEDGE_WALL - 2.0
 CONTROLLER_USB_OPENING_Y1 = WEDGE_Y1 + 1.0
 CONTROLLER_USB_OPENING_Z0 = 2.0
 CONTROLLER_USB_OPENING_Z1 = 11.5
+CONTROLLER_CRADLE_MODULE_MARGIN = 3.0
+CONTROLLER_CRADLE_MODULE_X0 = CONTROLLER_USB_OPENING_X0
+CONTROLLER_CRADLE_MODULE_X1 = CONTROLLER_USB_OPENING_X1
+CONTROLLER_CRADLE_MODULE_Y0 = CONTROLLER_Y0 - CONTROLLER_CRADLE_MODULE_MARGIN
+CONTROLLER_CRADLE_MODULE_Y1 = CONTROLLER_Y1 + CONTROLLER_CRADLE_MODULE_MARGIN
+CONTROLLER_CRADLE_MODULE_CORNER_RADIUS = 3.0
 
 DEFAULT_OUTPUT_ROOT = Path("models/3d-print/integrated-workstation")
 DEFAULT_PREVIEW_ROOT = Path("/tmp/kivo-integrated-workstation-previews")
 SHELL_FILENAME = "kivo_integrated_workstation_shell.stl"
 PANEL_FILENAME = "kivo_integrated_workstation_sloped_panel.stl"
 COVER_FILENAME = "kivo_integrated_workstation_bottom_cover.stl"
+CONTROLLER_CRADLE_MODULE_FILENAME = "kivo_controller_cradle_test_module.stl"
 HANDSET_MOUNT_FILENAME = "telephone_handset_switch_base_workstation_mount.stl"
 
 BOOLEAN_TOLERANCE = 5e-5
@@ -274,6 +291,7 @@ class ValidationReport:
     screen_plane_degrees: float
     panel_screw_count: int
     bottom_cover_screw_count: int
+    foot_pad_recess_count: int
     handset_hanger_count: int
     shell_watertight: bool
     panel_watertight: bool
@@ -1054,6 +1072,27 @@ def build_controller_mounts() -> list[trimesh.Trimesh]:
     ]
 
 
+def generate_controller_cradle_module() -> trimesh.Trimesh:
+    base = rounded_prism(
+        CONTROLLER_CRADLE_MODULE_X1 - CONTROLLER_CRADLE_MODULE_X0,
+        CONTROLLER_CRADLE_MODULE_Y1 - CONTROLLER_CRADLE_MODULE_Y0,
+        radius=CONTROLLER_CRADLE_MODULE_CORNER_RADIUS,
+        z_min=0.0,
+        height=COVER_THICKNESS,
+        center=(
+            (CONTROLLER_CRADLE_MODULE_X0 + CONTROLLER_CRADLE_MODULE_X1) / 2.0,
+            (CONTROLLER_CRADLE_MODULE_Y0 + CONTROLLER_CRADLE_MODULE_Y1) / 2.0,
+        ),
+    )
+    result = union([base, *build_controller_mounts()])
+    result.apply_translation(
+        [-CONTROLLER_CRADLE_MODULE_X0, -CONTROLLER_CRADLE_MODULE_Y0, 0.0]
+    )
+    result.merge_vertices()
+    result.remove_unreferenced_vertices()
+    return result
+
+
 def cover_cutters() -> list[trimesh.Trimesh]:
     cutters: list[trimesh.Trimesh] = []
     cutters.extend(
@@ -1065,6 +1104,19 @@ def cover_cutters() -> list[trimesh.Trimesh]:
         for center in COVER_SCREW_CENTERS
     )
     cutters.extend(countersink_cutter(center, 0.0, 1) for center in COVER_SCREW_CENTERS)
+    cutters.extend(
+        cylinder(
+            FOOT_PAD_RECESS_DIAMETER / 2.0,
+            FOOT_PAD_RECESS_DEPTH + FOOT_PAD_RECESS_CUTTER_OVERSHOOT,
+            (
+                center[0],
+                center[1],
+                (FOOT_PAD_RECESS_DEPTH - FOOT_PAD_RECESS_CUTTER_OVERSHOOT)
+                / 2.0,
+            ),
+        )
+        for center in FOOT_PAD_RECESS_CENTERS
+    )
     for y0 in (26.0, 38.0, 50.0, 62.0, 74.0):
         cutters.append(box((92.0, y0, -1.0), (114.0, y0 + 2.4, COVER_THICKNESS + 1.0)))
     return cutters
@@ -1322,6 +1374,38 @@ def validate_controller_cradle(cover: trimesh.Trimesh) -> None:
             raise ValueError(f"former cable-tie slot remains open at y={slot_center_y}")
 
 
+def place_controller_cradle_module(module: trimesh.Trimesh) -> trimesh.Trimesh:
+    placed = module.copy()
+    placed.apply_translation(
+        [CONTROLLER_CRADLE_MODULE_X0, CONTROLLER_CRADLE_MODULE_Y0, 0.0]
+    )
+    return placed
+
+
+def validate_controller_cradle_module(module: trimesh.Trimesh) -> None:
+    macro.assert_closed_manifold(module, "standalone controller cradle module")
+    expected_bounds = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [
+                CONTROLLER_CRADLE_MODULE_X1 - CONTROLLER_CRADLE_MODULE_X0,
+                CONTROLLER_CRADLE_MODULE_Y1 - CONTROLLER_CRADLE_MODULE_Y0,
+                CONTROLLER_USB_OPENING_Z1,
+            ],
+        ]
+    )
+    if not np.allclose(module.bounds, expected_bounds, atol=0.003):
+        raise ValueError(f"controller cradle module bounds drifted: {module.bounds}")
+
+    placed = place_controller_cradle_module(module)
+    validate_controller_cradle(placed)
+    for index, mount in enumerate(build_controller_mounts()):
+        if intersection_volume(placed, mount) < mount.volume - 0.02:
+            raise ValueError(
+                f"controller cradle module is missing mount geometry: {index}"
+            )
+
+
 def intersection_volume(mesh: trimesh.Trimesh, probe: trimesh.Trimesh) -> float:
     intersection = macro.boolean_meshes([mesh, probe], "intersection")
     return 0.0 if intersection.is_empty else float(intersection.volume)
@@ -1429,6 +1513,50 @@ def validate_panel_attachment(shell: trimesh.Trimesh, panel: trimesh.Trimesh) ->
         )
 
 
+def validate_foot_pad_recesses(cover: trimesh.Trimesh) -> None:
+    if FOOT_PAD_RECESS_DEPTH >= COVER_THICKNESS:
+        raise ValueError("foot pad recesses break through the bottom cover")
+    if len(FOOT_PAD_RECESS_CENTERS) != 4:
+        raise ValueError("bottom cover must have four foot pad recesses")
+
+    radius = FOOT_PAD_RECESS_DIAMETER / 2.0
+    for center in FOOT_PAD_RECESS_CENTERS:
+        recess_probe = cylinder(
+            radius - 0.05,
+            FOOT_PAD_RECESS_DEPTH - 0.1,
+            (center[0], center[1], (FOOT_PAD_RECESS_DEPTH - 0.1) / 2.0),
+        )
+        if intersection_volume(cover, recess_probe) > 0.01:
+            raise ValueError(f"foot pad recess is blocked: {center}")
+
+        floor_height = COVER_THICKNESS - FOOT_PAD_RECESS_DEPTH - 0.2
+        floor_probe = cylinder(
+            radius - 0.2,
+            floor_height,
+            (
+                center[0],
+                center[1],
+                FOOT_PAD_RECESS_DEPTH + 0.1 + floor_height / 2.0,
+            ),
+        )
+        if intersection_volume(cover, floor_probe) < floor_probe.volume - 0.02:
+            raise ValueError(f"foot pad recess lacks a complete blind floor: {center}")
+
+        outer = cylinder(
+            radius + 0.2,
+            FOOT_PAD_RECESS_DEPTH - 0.2,
+            (center[0], center[1], FOOT_PAD_RECESS_DEPTH / 2.0),
+        )
+        inner = cylinder(
+            radius + 0.05,
+            FOOT_PAD_RECESS_DEPTH,
+            (center[0], center[1], FOOT_PAD_RECESS_DEPTH / 2.0),
+        )
+        rim_probe = subtract(outer, [inner])
+        if intersection_volume(cover, rim_probe) < rim_probe.volume - 0.02:
+            raise ValueError(f"foot pad recess rim is incomplete: {center}")
+
+
 def validate_bottom_cover_attachment(
     shell: trimesh.Trimesh, cover: trimesh.Trimesh
 ) -> None:
@@ -1437,6 +1565,7 @@ def validate_bottom_cover_attachment(
     )
     if not np.allclose(cover.bounds[:, :2], expected_bounds, atol=0.003):
         raise ValueError(f"bottom cover footprint drifted: {cover.bounds[:, :2]}")
+    validate_foot_pad_recesses(cover)
 
     for center in COVER_SCREW_CENTERS:
         cover_probe = cylinder(
@@ -1628,6 +1757,7 @@ def validate_models(
         screen_plane_degrees=plane_angle,
         panel_screw_count=len(PANEL_SCREW_CENTERS),
         bottom_cover_screw_count=len(COVER_SCREW_CENTERS),
+        foot_pad_recess_count=len(FOOT_PAD_RECESS_CENTERS),
         handset_hanger_count=len(HANDSET_HANGER_LOCAL_Y_CENTERS),
         shell_watertight=bool(shell.is_watertight),
         panel_watertight=bool(panel.is_watertight),
@@ -1687,6 +1817,7 @@ def render_previews(
     handset.render_preview(panel, preview_root / "sloped-panel-top.png", "top")
     handset.render_preview(cover, preview_root / "cover-isometric.png", "isometric")
     handset.render_preview(cover, preview_root / "cover-top.png", "top")
+    handset.render_preview(cover, preview_root / "cover-bottom.png", "bottom")
     handset.render_preview(
         handset_mount,
         preview_root / "handset-mount-isometric.png",
@@ -1720,27 +1851,48 @@ def main(argv: list[str] | None = None) -> int:
     shell = generate_shell()
     panel = generate_sloped_panel()
     cover = generate_cover()
+    controller_cradle_module = generate_controller_cradle_module()
     handset_mount = generate_handset_mount()
     report = validate_models(shell, panel, cover, handset_mount)
+    validate_controller_cradle_module(controller_cradle_module)
 
     shell_target = arguments.output_root / SHELL_FILENAME
     panel_target = arguments.output_root / PANEL_FILENAME
     cover_target = arguments.output_root / COVER_FILENAME
+    controller_cradle_module_target = (
+        arguments.output_root / CONTROLLER_CRADLE_MODULE_FILENAME
+    )
     handset_mount_target = arguments.output_root / HANDSET_MOUNT_FILENAME
     export(shell, shell_target)
     export(panel, panel_target)
     export(cover, cover_target)
+    export(controller_cradle_module, controller_cradle_module_target)
     export(handset_mount, handset_mount_target)
     render_previews(shell, panel, cover, handset_mount, arguments.preview_root)
+    handset.render_preview(
+        controller_cradle_module,
+        arguments.preview_root / "controller-cradle-test-module-isometric.png",
+        "isometric",
+    )
 
     payload = asdict(report)
     payload["shell_path"] = str(shell_target)
     payload["panel_path"] = str(panel_target)
     payload["cover_path"] = str(cover_target)
+    payload["controller_cradle_module_path"] = str(controller_cradle_module_target)
+    payload["controller_cradle_module_extents"] = tuple(
+        float(value) for value in controller_cradle_module.extents
+    )
+    payload["controller_cradle_module_watertight"] = bool(
+        controller_cradle_module.is_watertight
+    )
     payload["handset_mount_path"] = str(handset_mount_target)
     payload["shell_sha256"] = hashlib.sha256(shell_target.read_bytes()).hexdigest()
     payload["panel_sha256"] = hashlib.sha256(panel_target.read_bytes()).hexdigest()
     payload["cover_sha256"] = hashlib.sha256(cover_target.read_bytes()).hexdigest()
+    payload["controller_cradle_module_sha256"] = hashlib.sha256(
+        controller_cradle_module_target.read_bytes()
+    ).hexdigest()
     payload["handset_mount_sha256"] = hashlib.sha256(
         handset_mount_target.read_bytes()
     ).hexdigest()

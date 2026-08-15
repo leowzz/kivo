@@ -25,6 +25,11 @@ def generated_models() -> GeneratedModels:
     )
 
 
+@pytest.fixture(scope="module")
+def controller_cradle_module() -> trimesh.Trimesh:
+    return workstation.generate_controller_cradle_module()
+
+
 def test_generated_models_validate(
     generated_models: GeneratedModels,
 ) -> None:
@@ -42,6 +47,7 @@ def test_generated_models_validate(
     assert report.screen_plane_degrees == pytest.approx(30.0)
     assert report.panel_screw_count == 6
     assert report.bottom_cover_screw_count == 4
+    assert report.foot_pad_recess_count == 4
     assert report.handset_hanger_count == 2
     assert report.shell_watertight
     assert report.panel_watertight
@@ -92,6 +98,22 @@ def test_controller_uses_two_level_snap_cradle_without_tie_slots(
     assert workstation.CONTROLLER_ESP32_S3_RAISE == 6.5
     assert not hasattr(workstation, "CONTROLLER_TIE_SLOT_CENTER_OFFSETS")
     workstation.validate_controller_cradle(cover)
+
+
+def test_standalone_controller_cradle_module_reuses_cover_mount_geometry(
+    controller_cradle_module: trimesh.Trimesh,
+) -> None:
+    workstation.validate_controller_cradle_module(controller_cradle_module)
+
+    assert controller_cradle_module.bounds[0] == pytest.approx((0.0, 0.0, 0.0))
+    assert controller_cradle_module.extents == pytest.approx(
+        (37.0, 69.89, 11.5), abs=0.003
+    )
+    placed = workstation.place_controller_cradle_module(controller_cradle_module)
+    for mount in workstation.build_controller_mounts():
+        assert workstation.intersection_volume(placed, mount) == pytest.approx(
+            mount.volume, abs=0.02
+        )
 
 
 def test_type_c_opening_and_controller_are_at_the_rear(
@@ -240,12 +262,17 @@ def test_rear_panel_screws_and_rails_do_not_protrude_behind_chassis(
 def test_exported_stls_reload_as_closed_manifolds(
     tmp_path: Path,
     generated_models: GeneratedModels,
+    controller_cradle_module: trimesh.Trimesh,
 ) -> None:
     shell, panel, cover, handset_mount = generated_models
     targets = {
         "shell": (shell, tmp_path / workstation.SHELL_FILENAME),
         "panel": (panel, tmp_path / workstation.PANEL_FILENAME),
         "cover": (cover, tmp_path / workstation.COVER_FILENAME),
+        "controller_cradle_module": (
+            controller_cradle_module,
+            tmp_path / workstation.CONTROLLER_CRADLE_MODULE_FILENAME,
+        ),
         "handset_mount": (
             handset_mount,
             tmp_path / workstation.HANDSET_MOUNT_FILENAME,
