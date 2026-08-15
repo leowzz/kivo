@@ -10,9 +10,9 @@ All dimensions are millimeters.
 
 - `kivo_integrated_workstation_shell.stl`: open-top `138 x 104` chassis,
   30-degree panel support lip, and six continuous panel-to-bottom attachment
-  pillars.
+  pillars, plus an open two-rail skeleton below the 18-key field.
 - `kivo_integrated_workstation_sloped_panel.stl`: removable `132 x 117` key and
-  display panel with a raised horizontal three-switch pod and six recessed
+  display panel with a raised horizontal two-switch pod and six recessed
   fly-wire clips. It has no underside protrusions and prints flat.
 - `kivo_integrated_workstation_bottom_cover.stl`: removable `138 x 104` bottom
   cover with six countersunk attachment holes, a two-level slide-in controller
@@ -46,6 +46,10 @@ uv run --script scripts/modeling/integrated_workstation.py
 | Key switches | `14.8` lower relief, `14.0` upper lip |
 | Key layout | `6 x 3`, `19.05` pitch |
 | Key plane | `30 degrees` above horizontal |
+| Key-field support rails | Two longitudinal `2.8` rails at `x=123.45/161.55` |
+| Front rail anchors | Two `8.0 x 9.0` tabs bonded into the front lip |
+| Key-field support legs | Six open ribs, three below each longitudinal rail |
+| Central wiring corridor | `35.3` clear width between the longitudinal support ribs |
 | Fly-wire retention | Six clips, one per three-key group |
 | Wire clip pocket | `16.0 x 3.0 x 2.2`, with a `1.5` snap-in mouth |
 | Sloped panel attachment | Six `3.4` clearances into hidden chassis inserts |
@@ -88,10 +92,16 @@ share one clip. Feed the thin wires into the `1.5` opening one at a time; the
 opening expands behind two internal lips into a `3.0` pocket that retains the
 bundle. The clips stop `1.2` short of the visible panel face.
 
+The chassis supports key presses with two narrow longitudinal rails placed in
+column gaps, not a closed internal deck. Two `8.0`-wide tabs enlarge the rails'
+bond to the front lip. Six ribs carry the rails down to the chassis bottom plane
+while leaving the `35.3`-wide center corridor open. The removable bottom cover
+stays a separate part while carrying compression loads after assembly.
+
 The toggle-switch area rises from the lower edge of the 30-degree panel into a
-horizontal mounting plane. Its three hole axes are vertical in the assembled
+horizontal mounting plane. Its two hole axes are vertical in the assembled
 workstation, so the `27.0`-deep switch bodies hang straight down instead of
-leaning into the rear wall. All three bodies share one continuous underside
+leaning into the rear wall. Both bodies share one continuous underside
 cavity; there are no walls between neighboring switches. The outer cavity
 boundary keeps `0.3` clearance around the combined body envelope. The complete
 body envelopes have been checked against the rear wall, right panel rail, and
@@ -101,7 +111,8 @@ The six sloped-panel insert bosses continue to the chassis bottom as continuous
 pillars. Each pillar has one blind insert pocket at the sloped end and a second
 blind pocket at the bottom end, so the panel and cover can be removed
 independently while reusing the same printed structure. The bottom locations
-retain the original front and rear pairs and add one middle pair.
+retain the front pair and add one middle pair; the screen-side rear anchor is
+relocated with its panel attachment to avoid the display hardware.
 
 ## Hardware And Assembly
 
@@ -159,6 +170,10 @@ retain the original front and rear pairs and add one middle pair.
 - Print the shell upright with its bottom rim on the build plate. All six shared
   attachment pillars rise continuously from the build plate; their outer walls
   stay within 45 degrees, so the sloped insert bosses do not need support.
+  The six key-field ribs also start on the build plate and join two narrow
+  longitudinal rails. The front joints expand into `8.0`-wide tabs. The largest
+  unsupported span is `13.05 mm`; leave the center corridor and the gaps between
+  ribs free of support.
 - Print the handset base upright in its modeled orientation. It has no external
   attachment protrusions. The two horizontal blind insert bores may print
   slightly flat at the top; clear them gently with a `4.0 mm` drill before
@@ -184,9 +199,9 @@ retain the original front and rear pairs and add one middle pair.
   normally bridge without support; clear them with a `3.4 mm` drill if their top
   surfaces print slightly flat.
 - The chassis has no broad sloped roof, so it does not need support beneath the
-  key deck. The removable panel rests on two side rails, a front lip, and the
-  six shared pillars. Its rear center remains open, avoiding a long unsupported
-  cross bridge at the top of the chassis.
+  key deck. The removable panel rests on two side rails, a front lip, six shared
+  pillars, and the two open key-field rails. The skeleton remains open between
+  its ribs for routing wires.
 - The rear pair of panel screws is moved 3 mm toward the front and the side
   rails stop at local `y=117`, keeping every panel support at or in front of
   the chassis rear wall (`y=108` in assembled coordinates).
@@ -201,5 +216,7 @@ The generator rejects any result that is not a single positive, watertight,
 consistently wound two-manifold mesh. It measures both levels of all 18 switch
 apertures directly on the flat-print panel and verifies the six panel screw
 paths, six bottom-cover screw paths, six continuous support-free pillars, two
-blind handset insert bores, two same-height chassis holes, bottom-cover height
-compensation, inside washer clearance, and assembly clearance.
+key-field support rails, two widened front anchors, six open support ribs,
+switch-body and wiring clearance, two blind handset insert bores, two same-height
+chassis holes, bottom-cover height compensation, inside washer clearance, and
+assembly clearance.
