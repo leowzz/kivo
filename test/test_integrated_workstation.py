@@ -54,6 +54,7 @@ def test_generated_models_validate(
     assert report.bottom_cover_screw_count == 6
     assert report.handset_mount_insert_count == 2
     assert report.handset_side_hole_count == 2
+    assert report.handset_cable_hole_count == 1
     assert report.shell_watertight
     assert report.panel_watertight
     assert report.cover_watertight
@@ -343,6 +344,14 @@ def test_handset_base_sits_flat_and_flush_to_rear_on_two_same_height_holes(
     )
     assert np.ptp(workstation.HANDSET_SIDE_HOLE_CENTERS[:, 1]) == pytest.approx(0.0)
     assert workstation.HANDSET_SIDE_HOLE_DIAMETER == 3.4
+    assert workstation.HANDSET_CABLE_HOLE_DIAMETER == 12.0
+    assert workstation.HANDSET_CABLE_HOLE_LOCAL_CENTER == pytest.approx((47.3, 12.0))
+    assert workstation.HANDSET_CABLE_HOLE_CENTER == pytest.approx((76.5, 9.6))
+    assert np.allclose(
+        workstation.HANDSET_CABLE_HOLE_CENTER,
+        workstation.HANDSET_MOUNT_ORIGIN[1:]
+        + workstation.HANDSET_CABLE_HOLE_LOCAL_CENTER,
+    )
     assert workstation.HANDSET_MOUNT_INSERT_BLIND_FLOOR == pytest.approx(1.2)
     assert workstation.HANDSET_MOUNT_ORIGIN[2] == pytest.approx(
         -workstation.COVER_THICKNESS

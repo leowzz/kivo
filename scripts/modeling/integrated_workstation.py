@@ -283,8 +283,9 @@ COVER_THICKNESS = 2.4
 
 # Two blind M3 heat-set insert pockets are cut directly into the handset base's
 # existing right wall. Both screw axes share one Z level. The base's rear face is
-# flush with the chassis rear for cable access, and its bottom is lowered by the
-# bottom-cover thickness so both printed parts rest on the same surface.
+# flush with the chassis rear, and its bottom is lowered by the bottom-cover
+# thickness so both printed parts rest on the same surface. A large cable hole
+# passes directly through both mating side walls between the two screws.
 HANDSET_MOUNT_INSERT_LOCAL_CENTERS = np.array([[18.0, 7.0], [60.8, 7.0]])
 HANDSET_MOUNT_INSERT_SURFACE_X = handset.OUTER_WIDTH
 HANDSET_MOUNT_INSERT_BLIND_FLOOR = 1.2
@@ -299,6 +300,11 @@ HANDSET_SIDE_HOLE_CENTERS = (
     HANDSET_MOUNT_ORIGIN[1:] + HANDSET_MOUNT_INSERT_LOCAL_CENTERS
 )
 HANDSET_SIDE_HOLE_DIAMETER = 3.4
+HANDSET_CABLE_HOLE_DIAMETER = 12.0
+HANDSET_CABLE_HOLE_LOCAL_CENTER = np.array([47.3, 12.0])
+HANDSET_CABLE_HOLE_CENTER = (
+    HANDSET_MOUNT_ORIGIN[1:] + HANDSET_CABLE_HOLE_LOCAL_CENTER
+)
 
 COVER_LENGTH = WEDGE_Y1 - WEDGE_Y0
 COVER_WIDTH = WEDGE_X1 - WEDGE_X0
@@ -405,6 +411,7 @@ class ValidationReport:
     foot_pad_recess_count: int
     handset_mount_insert_count: int
     handset_side_hole_count: int
+    handset_cable_hole_count: int
     shell_watertight: bool
     panel_watertight: bool
     cover_watertight: bool
@@ -1085,6 +1092,34 @@ def handset_side_hole_cutters() -> list[trimesh.Trimesh]:
     ]
 
 
+def handset_shell_cable_hole_cutter() -> trimesh.Trimesh:
+    return cylinder(
+        HANDSET_CABLE_HOLE_DIAMETER / 2.0,
+        WEDGE_WALL + 2.0,
+        (
+            WEDGE_X0 + WEDGE_WALL / 2.0,
+            HANDSET_CABLE_HOLE_CENTER[0],
+            HANDSET_CABLE_HOLE_CENTER[1],
+        ),
+        axis=0,
+    )
+
+
+def handset_mount_cable_hole_cutter() -> trimesh.Trimesh:
+    local_y, local_z = HANDSET_CABLE_HOLE_LOCAL_CENTER
+    cutter_length = handset.LOWER_INSET + 2.0
+    return cylinder(
+        HANDSET_CABLE_HOLE_DIAMETER / 2.0,
+        cutter_length,
+        (
+            HANDSET_MOUNT_INSERT_SURFACE_X - handset.LOWER_INSET / 2.0,
+            local_y,
+            local_z,
+        ),
+        axis=0,
+    )
+
+
 def shell_cutters() -> list[trimesh.Trimesh]:
     cutters = [
         # The rear opening accepts the RP2040 single USB-C connector or the
@@ -1109,6 +1144,7 @@ def shell_cutters() -> list[trimesh.Trimesh]:
         for cutter in heat_set_insert_cutters(center, 0.0, 1)
     )
     cutters.extend(handset_side_hole_cutters())
+    cutters.append(handset_shell_cable_hole_cutter())
     return cutters
 
 
@@ -1133,6 +1169,7 @@ def generate_handset_mount() -> trimesh.Trimesh:
         for local_center in HANDSET_MOUNT_INSERT_LOCAL_CENTERS
         for cutter in handset_mount_insert_cutters(local_center)
     ]
+    cutters.append(handset_mount_cable_hole_cutter())
     result = subtract(base, cutters)
     result.merge_vertices()
     result.remove_unreferenced_vertices()
@@ -2122,6 +2159,12 @@ def validate_handset_mount_attachment(
         raise ValueError("handset screw holes are not at the same height")
     if not np.isclose(HANDSET_MOUNT_ORIGIN[2], -COVER_THICKNESS, atol=1e-9):
         raise ValueError("handset mount does not account for bottom-cover thickness")
+    if not np.allclose(
+        HANDSET_CABLE_HOLE_CENTER,
+        HANDSET_MOUNT_ORIGIN[1:] + HANDSET_CABLE_HOLE_LOCAL_CENTER,
+        atol=1e-9,
+    ):
+        raise ValueError("handset cable holes are not coaxial")
 
     if not np.isclose(shell.bounds[0, 0], WEDGE_X0, atol=0.003):
         raise ValueError("chassis still includes a handset hanger protrusion")
@@ -2209,6 +2252,73 @@ def validate_handset_mount_attachment(
                 f"handset side hole lacks inside washer clearance: {(center_y, center_z)}"
             )
 
+    cable_radius = HANDSET_CABLE_HOLE_DIAMETER / 2.0
+    cable_y, cable_z = HANDSET_CABLE_HOLE_CENTER
+    local_cable_y, local_cable_z = HANDSET_CABLE_HOLE_LOCAL_CENTER
+    if cable_z - cable_radius <= 0.0 or cable_y - cable_radius <= WEDGE_Y0:
+        raise ValueError("handset cable hole runs outside the chassis wall")
+    if cable_z + cable_radius >= wedge_top(cable_y):
+        raise ValueError("handset cable hole reaches the sloped wall edge")
+    if (
+        local_cable_y - cable_radius <= 0.0
+        or local_cable_y + cable_radius >= handset.OUTER_LENGTH
+        or local_cable_z - cable_radius <= 0.0
+        or local_cable_z + cable_radius >= handset.OUTER_HEIGHT
+    ):
+        raise ValueError("handset cable hole runs outside the handset wall")
+
+    screw_axis_clearances = np.linalg.norm(
+        HANDSET_SIDE_HOLE_CENTERS - HANDSET_CABLE_HOLE_CENTER,
+        axis=1,
+    ) - (cable_radius + 3.5)
+    if np.min(screw_axis_clearances) < 2.0:
+        raise ValueError("handset cable hole is too close to a screw washer")
+
+    shell_cable_probe = cylinder(
+        cable_radius - 0.05,
+        WEDGE_WALL - 0.1,
+        (WEDGE_X0 + WEDGE_WALL / 2.0, cable_y, cable_z),
+        axis=0,
+    )
+    if intersection_volume(shell, shell_cable_probe) > 0.01:
+        raise ValueError("chassis handset cable hole is blocked")
+
+    mount_cable_probe = cylinder(
+        cable_radius - 0.05,
+        handset.LOWER_INSET - 0.1,
+        (
+            HANDSET_MOUNT_INSERT_SURFACE_X - handset.LOWER_INSET / 2.0,
+            local_cable_y,
+            local_cable_z,
+        ),
+        axis=0,
+    )
+    if intersection_volume(handset_mount, mount_cable_probe) > 0.01:
+        raise ValueError("handset mount cable hole is blocked")
+
+    handset.require_circular_loop(
+        handset.measured_section_loops(
+            shell,
+            axis=0,
+            level=WEDGE_X0 + WEDGE_WALL / 2.0,
+        ),
+        HANDSET_CABLE_HOLE_CENTER,
+        cable_radius,
+        "chassis handset cable hole profile",
+        0.01,
+    )
+    handset.require_circular_loop(
+        handset.measured_section_loops(
+            handset_mount,
+            axis=0,
+            level=HANDSET_MOUNT_INSERT_SURFACE_X - 1.0,
+        ),
+        HANDSET_CABLE_HOLE_LOCAL_CENTER,
+        cable_radius,
+        "handset mount cable hole profile",
+        0.01,
+    )
+
 
 def validate_models(
     shell: trimesh.Trimesh,
@@ -2271,6 +2381,7 @@ def validate_models(
         foot_pad_recess_count=len(FOOT_PAD_RECESS_CENTERS),
         handset_mount_insert_count=len(HANDSET_MOUNT_INSERT_LOCAL_CENTERS),
         handset_side_hole_count=2,
+        handset_cable_hole_count=1,
         shell_watertight=bool(shell.is_watertight),
         panel_watertight=bool(panel.is_watertight),
         cover_watertight=bool(cover.is_watertight),

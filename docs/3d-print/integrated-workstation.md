@@ -20,7 +20,8 @@ All dimensions are millimeters.
 - `telephone_handset_switch_base_workstation_mount.stl`: independent handset
   base with two blind M3 heat-set insert pockets cut directly into its existing
   right wall. They align with two round holes at the same height in the chassis
-  left wall, keeping the handset base horizontal.
+  left wall, keeping the handset base horizontal. A `12 mm` cable passage runs
+  directly through both mating walls between the screws.
 
 The generator is `scripts/modeling/integrated_workstation.py`. Run it from the
 repository root with:
@@ -41,6 +42,7 @@ uv run --script scripts/modeling/integrated_workstation.py
 | Bottom cover attachment | Six countersunk M3 screws into the shared pillars |
 | Handset chassis holes | Two `3.4` round clearances at `y=47.2/90.0`, `z=4.6` |
 | Handset base inserts | Two `4.8 x 5.4` blind bores with `5.1 x 0.6` lead-ins |
+| Handset cable passage | One aligned `12.0` round opening at `y=76.5`, `z=9.6` |
 | Handset base installed bottom | `z=-2.4`, aligned with the bottom-cover underside |
 | Handset base installed rear | `y=108`, flush with the chassis rear for cable access |
 | Key switches | `14.8` lower relief, `14.0` upper lip |
@@ -144,7 +146,8 @@ relocated with its panel attachment to avoid the display hardware.
 1. Heat two inserts directly into the handset base's right wall. Hold the base
    horizontal with its bottom aligned to the installed bottom cover, then pass
    two M3 screws and washers through the round chassis holes into the inserts.
-   Tighten both screws and keep both washers on the chassis interior.
+   Feed the handset cable through the aligned `12 mm` center passage, tighten
+   both screws, and keep both washers on the chassis interior.
 2. Place the controller USB end toward the wide rear connector opening and
    slide the board lengthwise into its slot until it reaches the front stop. The
    PCB's USB edge then sits directly against the rear wall inner face so its
@@ -177,7 +180,8 @@ relocated with its panel attachment to avoid the display hardware.
 - Print the handset base upright in its modeled orientation. It has no external
   attachment protrusions. The two horizontal blind insert bores may print
   slightly flat at the top; clear them gently with a `4.8 mm` drill before
-  heat-setting the inserts if needed.
+  heat-setting the inserts if needed. The horizontal `12 mm` cable opening may
+  also print slightly flat at its top; deburr it after printing if needed.
 - Print the sloped panel separately with its large flat underside on the build
   plate. The switch steps and 2 mm screen bezel face upward and need no support.
   The raised toggle pod has one uninterrupted underside cavity. With no internal
@@ -218,5 +222,5 @@ apertures directly on the flat-print panel and verifies the six panel screw
 paths, six bottom-cover screw paths, six continuous support-free pillars, two
 key-field support rails, two widened front anchors, six open support ribs,
 switch-body and wiring clearance, two blind handset insert bores, two same-height
-chassis holes, bottom-cover height compensation, inside washer clearance, and
-assembly clearance.
+chassis holes, the aligned `12 mm` handset cable passage, bottom-cover height
+compensation, inside washer clearance, and assembly clearance.
