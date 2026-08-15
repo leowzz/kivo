@@ -1859,6 +1859,7 @@ fn migrate_schema_v1_model(legacy: LegacyModelConfig) -> Result<DeviceProfile, A
             board_profile_id: board.id.into(),
             debounce_ms: legacy.hardware.debounce_ms,
             ssd1306: None,
+            sh1106: None,
             inputs: legacy.hardware.inputs,
         }],
         actions: legacy
@@ -2095,6 +2096,7 @@ mod tests {
             board_profile_id: board_profile_id.into(),
             debounce_ms: 30,
             ssd1306: None,
+            sh1106: None,
             inputs: Vec::new(),
         }
     }
@@ -2145,6 +2147,7 @@ mod tests {
                 board_profile_id: crate::hardware::YD_RP2040_BOARD_ID.into(),
                 debounce_ms: 30,
                 ssd1306: None,
+                sh1106: None,
                 inputs: vec![InputSource::Direct {
                     id: "direct".into(),
                     keys: BTreeMap::from([("A".into(), 0), ("B".into(), 1), ("C".into(), 2)]),

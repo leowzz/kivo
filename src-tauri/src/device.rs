@@ -8,8 +8,8 @@ use crate::{
         WorkerLauncher, WorkerRendererRegistry, WorkerStart,
     },
     display::{
-        DisplayRenderer, DisplaySnapshot, RenderedScene, RendererRegistry, SceneTracker,
-        SceneUpdate, built_in_renderer_registry,
+        DisplayRenderer, DisplaySnapshot, RenderedScene, RendererRegistry, SH1106_PANEL_ID,
+        SSD1306_PANEL_ID, SceneTracker, SceneUpdate, built_in_renderer_registry,
     },
     hardware::{BoardProfile, DeviceId},
     metrics::{HomeMetricsSnapshot, MetricAttribution, MetricsStore},
@@ -19,8 +19,9 @@ use crate::{
     protocol::{
         ACTION_RUN_PROTOCOL_VERSION, ActionSequence, DISPLAY_LARGE_FONT_PROTOCOL_VERSION,
         DISPLAY_PROTOCOL_VERSION, DeviceMessage, HelloCapabilities, InputState,
-        OLED_PROTOCOL_VERSION, PhysicalInput, ProductDefinitionTransfer, display_commands,
-        format_paste_command, is_hello_line, parse_device, topology_commands, validate_hello,
+        OLED_PROTOCOL_VERSION, PhysicalInput, ProductDefinitionTransfer, SH1106_PROTOCOL_VERSION,
+        display_commands, format_paste_command, is_hello_line, parse_device, topology_commands,
+        validate_hello,
     },
     trigger::{TriggerEdge, TriggerOccurrence, TriggerTracker},
 };
@@ -46,7 +47,6 @@ use std::process::Command;
 const ACTION_ACK_TIMEOUT: Duration = Duration::from_millis(1800);
 const DISPLAY_ACK_TIMEOUT: Duration = Duration::from_secs(2);
 const PRODUCT_READ_TIMEOUT: Duration = Duration::from_secs(15);
-const SSD1306_PANEL_ID: &str = "ssd1306_128x32_mono";
 const EMPTY_TOPOLOGY_DEBOUNCE_MS: u16 = 30;
 pub(crate) const SERIAL_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(10);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1024,10 +1024,18 @@ impl DeviceSession {
                 .push(RuntimeActivity::new("assignment_board_mismatch"));
             return;
         }
-        if hardware.ssd1306.is_some() && hello.protocol < OLED_PROTOCOL_VERSION {
+        let required_oled_protocol = if hardware.sh1106.is_some() {
+            Some(SH1106_PROTOCOL_VERSION)
+        } else if hardware.ssd1306.is_some() {
+            Some(OLED_PROTOCOL_VERSION)
+        } else {
+            None
+        };
+        if let Some(required) = required_oled_protocol.filter(|required| hello.protocol < *required)
+        {
             output.activities.push(activity_from_error(
                 crate::workspace::AppError::new("protocol_mismatch")
-                    .with_param("expected", OLED_PROTOCOL_VERSION.to_string())
+                    .with_param("expected", required.to_string())
                     .with_param("actual", hello.protocol.to_string()),
             ));
             return;
@@ -1779,7 +1787,15 @@ impl DeviceDisplayLink {
                     .profile
                     .hardware_profile(&runtime.hardware_profile_id)
             })
-            .and_then(|hardware| hardware.ssd1306.as_ref().map(|_| SSD1306_PANEL_ID));
+            .and_then(|hardware| {
+                if hardware.sh1106.is_some() && protocol >= SH1106_PROTOCOL_VERSION {
+                    Some(SH1106_PANEL_ID)
+                } else if hardware.ssd1306.is_some() && protocol >= OLED_PROTOCOL_VERSION {
+                    Some(SSD1306_PANEL_ID)
+                } else {
+                    None
+                }
+            });
         self.configure_panel(protocol, panel_id, registry);
     }
 
@@ -2792,7 +2808,7 @@ mod tests {
         product::{PRODUCT_DEFINITION_SCHEMA_VERSION, ProductDefinition, ProductIdentity},
         profile::{
             ButtonAction, DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION,
-            Ssd1306Config,
+            Sh1106Config, Ssd1306Config,
         },
         protocol::{
             DISPLAY_LARGE_FONT_PROTOCOL_VERSION, DISPLAY_PROTOCOL_VERSION, DeviceMessage,
@@ -2864,6 +2880,7 @@ mod tests {
                 board_profile_id: crate::hardware::YD_RP2040_BOARD_ID.into(),
                 debounce_ms: 30,
                 ssd1306: None,
+                sh1106: None,
                 inputs: vec![InputSource::Direct {
                     id: "direct".into(),
                     keys: BTreeMap::from([("K1".into(), 0)]),
@@ -2947,6 +2964,7 @@ mod tests {
                     board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
                     debounce_ms: 30,
                     ssd1306: None,
+                    sh1106: None,
                     inputs: vec![InputSource::Direct {
                         id: "direct".into(),
                         keys: BTreeMap::from([("A".into(), 6)]),
@@ -2978,6 +2996,18 @@ mod tests {
         });
         runtime.metric_attribution.device_id =
             DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "ABCDEF123456").unwrap();
+        runtime
+    }
+
+    fn sh1106_runtime_model() -> RuntimeProfileSnapshot {
+        let mut runtime = oled_runtime_model();
+        let hardware = &mut runtime.profile.hardware_profiles[0];
+        let ssd1306 = hardware.ssd1306.take().unwrap();
+        hardware.sh1106 = Some(Sh1106Config {
+            sda: ssd1306.sda,
+            scl: ssd1306.scl,
+            control_panel: None,
+        });
         runtime
     }
 
@@ -3075,7 +3105,7 @@ mod tests {
     }
 
     #[test]
-    fn protocol_seven_oled_starts_with_a_full_scene_at_base_zero() {
+    fn protocol_seven_ssd1306_starts_with_a_full_scene_at_base_zero() {
         let registry = built_in_renderer_registry();
         let mut link = DeviceDisplayLink::default();
         link.configure(
@@ -3133,6 +3163,40 @@ mod tests {
             version_eight_lines
                 .iter()
                 .any(|line| line.starts_with("DISPLAY_TEXT 0 9 22 2 "))
+        );
+    }
+
+    #[test]
+    fn sh1106_requires_protocol_eleven_and_uses_the_full_panel() {
+        let registry = built_in_renderer_registry();
+        let now = Instant::now();
+        let mut version_ten = DeviceDisplayLink::default();
+        version_ten.configure(
+            SH1106_PROTOCOL_VERSION - 1,
+            Some(&sh1106_runtime_model()),
+            &registry,
+        );
+        version_ten.update_desired(display_snapshot(3)).unwrap();
+        assert!(version_ten.next_lines(now).unwrap().is_empty());
+
+        let mut version_eleven = DeviceDisplayLink::default();
+        version_eleven.configure(
+            SH1106_PROTOCOL_VERSION,
+            Some(&sh1106_runtime_model()),
+            &registry,
+        );
+        version_eleven.update_desired(display_snapshot(3)).unwrap();
+        let version_eleven_lines = version_eleven.next_lines(now).unwrap();
+
+        assert!(
+            version_eleven_lines
+                .iter()
+                .any(|line| line == "DISPLAY_REGION 0 0 0 128 64\n")
+        );
+        assert!(
+            version_eleven_lines
+                .iter()
+                .any(|line| line.starts_with("DISPLAY_TEXT 0 9 38 2 "))
         );
     }
 

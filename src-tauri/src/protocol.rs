@@ -10,17 +10,18 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-pub const HOST_PROTOCOL_VERSION: u16 = 10;
+pub const HOST_PROTOCOL_VERSION: u16 = 11;
 pub const DISPLAY_PROTOCOL_VERSION: u16 = 7;
 pub const DISPLAY_LARGE_FONT_PROTOCOL_VERSION: u16 = 8;
 pub const ACTION_RUN_PROTOCOL_VERSION: u16 = 6;
 pub const OLED_PROTOCOL_VERSION: u16 = 4;
+pub const SH1106_PROTOCOL_VERSION: u16 = 11;
 pub const OLED_CONTROL_PANEL_PROTOCOL_VERSION: u16 = 10;
 pub const ADVANCED_ACTION_PROTOCOL_VERSION: u16 = 5;
 const PRODUCT_DEFINITION_PROTOCOL_VERSION: u16 = 9;
 const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 3;
 const DISPLAY_WIDTH: u16 = 128;
-const DISPLAY_HEIGHT: u16 = 32;
+const DISPLAY_HEIGHT: u16 = 64;
 const DISPLAY_MAX_REGIONS: usize = 8;
 const DISPLAY_MAX_OPERATIONS: usize = 24;
 const DISPLAY_MAX_TEXT_BYTES: usize = 48;
@@ -594,6 +595,9 @@ pub fn topology_commands(
         AppError::new("unknown_board_profile")
             .with_param("board_profile", &hardware.board_profile_id)
     })?;
+    if hardware.ssd1306.is_some() && hardware.sh1106.is_some() {
+        return Err(AppError::new("multiple_oled_displays"));
+    }
     if let Some(ssd1306) = &hardware.ssd1306 {
         if !board.supports_oled {
             return Err(AppError::new("oled_not_supported").with_param("board_profile", board.id));
@@ -607,6 +611,25 @@ pub fn topology_commands(
             let unique = pins
                 .into_iter()
                 .chain([ssd1306.sda, ssd1306.scl])
+                .collect::<BTreeSet<_>>();
+            if unique.len() != 7 {
+                return Err(AppError::new("gpio_used_by_multiple_sources"));
+            }
+        }
+    }
+    if let Some(sh1106) = &hardware.sh1106 {
+        if !board.supports_oled {
+            return Err(AppError::new("oled_not_supported").with_param("board_profile", board.id));
+        }
+        if sh1106.sda == sh1106.scl {
+            return Err(AppError::new("gpio_used_by_multiple_sources")
+                .with_param("gpio", sh1106.sda.to_string()));
+        }
+        if let Some(control_panel) = &sh1106.control_panel {
+            let pins = control_panel.pins();
+            let unique = pins
+                .into_iter()
+                .chain([sh1106.sda, sh1106.scl])
                 .collect::<BTreeSet<_>>();
             if unique.len() != 7 {
                 return Err(AppError::new("gpio_used_by_multiple_sources"));
@@ -628,6 +651,18 @@ pub fn topology_commands(
             ssd1306.sda, ssd1306.scl
         ));
         if let Some(control_panel) = &ssd1306.control_panel {
+            let [confirm, encoder_press, encoder_a, encoder_b, back] = control_panel.pins();
+            lines.push(format!(
+                "CONFIG_OLED_CONTROL {revision} {confirm} {encoder_press} {encoder_a} {encoder_b} {back}\n"
+            ));
+        }
+    }
+    if let Some(sh1106) = &hardware.sh1106 {
+        lines.push(format!(
+            "CONFIG_SH1106 {revision} {} {}\n",
+            sh1106.sda, sh1106.scl
+        ));
+        if let Some(control_panel) = &sh1106.control_panel {
             let [confirm, encoder_press, encoder_a, encoder_b, back] = control_panel.pins();
             lines.push(format!(
                 "CONFIG_OLED_CONTROL {revision} {confirm} {encoder_press} {encoder_a} {encoder_b} {back}\n"
@@ -690,6 +725,13 @@ fn hardware_pins(hardware: &HardwareProfile) -> BTreeSet<u8> {
         pins.insert(ssd1306.sda);
         pins.insert(ssd1306.scl);
         if let Some(control_panel) = &ssd1306.control_panel {
+            pins.extend(control_panel.pins());
+        }
+    }
+    if let Some(sh1106) = &hardware.sh1106 {
+        pins.insert(sh1106.sda);
+        pins.insert(sh1106.scl);
+        if let Some(control_panel) = &sh1106.control_panel {
             pins.extend(control_panel.pins());
         }
     }
@@ -1120,6 +1162,7 @@ mod tests {
                 board_profile_id: "yd-esp32-s3".into(),
                 debounce_ms: 30,
                 ssd1306: None,
+                sh1106: None,
                 inputs: vec![InputSource::ContactMatrix {
                     id: "matrix".into(),
                     pins: vec![1, 2, 12, 13],
@@ -1165,6 +1208,15 @@ mod tests {
 
     fn ssd1306_hardware() -> HardwareProfile {
         ssd1306_hardware_for("yd-rp2040", 4, 5)
+    }
+
+    fn sh1106_hardware() -> HardwareProfile {
+        serde_yaml_ng::from_str(
+            &serde_yaml_ng::to_string(&ssd1306_hardware())
+                .unwrap()
+                .replace("ssd1306:", "sh1106:"),
+        )
+        .unwrap()
     }
 
     fn display_update(
@@ -1875,7 +1927,7 @@ mod tests {
     }
 
     #[test]
-    fn ssd1306_topology_commands_precede_input_commands() {
+    fn ssd1306_topology_commands_remain_backward_compatible() {
         assert_eq!(
             topology_commands(&ssd1306_hardware(), 7, &BTreeSet::from([4, 5, 6])).unwrap(),
             vec![
@@ -1888,9 +1940,22 @@ mod tests {
     }
 
     #[test]
+    fn sh1106_uses_its_own_topology_command() {
+        assert_eq!(
+            topology_commands(&sh1106_hardware(), 7, &BTreeSet::from([4, 5, 6])).unwrap(),
+            vec![
+                "CONFIG_BEGIN 7 30\n",
+                "CONFIG_SH1106 7 4 5\n",
+                "CONFIG_DIRECT 7 0 1 6\n",
+                "CONFIG_COMMIT 7\n",
+            ]
+        );
+    }
+
+    #[test]
     fn oled_control_panel_precedes_inputs_and_requires_all_reported_pins() {
-        let mut hardware = ssd1306_hardware();
-        hardware.ssd1306.as_mut().unwrap().control_panel =
+        let mut hardware = sh1106_hardware();
+        hardware.sh1106.as_mut().unwrap().control_panel =
             Some(OledControlPanelConfig::Ec11ConfirmBack {
                 confirm: 19,
                 encoder_press: 20,
@@ -1904,7 +1969,7 @@ mod tests {
             topology_commands(&hardware, 7, &pins).unwrap(),
             vec![
                 "CONFIG_BEGIN 7 30\n",
-                "CONFIG_OLED 7 4 5\n",
+                "CONFIG_SH1106 7 4 5\n",
                 "CONFIG_OLED_CONTROL 7 19 20 21 22 26\n",
                 "CONFIG_DIRECT 7 0 1 6\n",
                 "CONFIG_COMMIT 7\n",

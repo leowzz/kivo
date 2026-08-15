@@ -74,6 +74,8 @@ grep -Fq 'void serviceDisplay();' "$PLATFORM_HEADER"
 grep -Fq 'bool configureDisplay(const std::optional<OledConfig> &config)' \
   "$RP2040_PLATFORM"
 grep -Fq 'new (std::nothrow)' "$RP2040_PLATFORM"
+grep -Fq 'U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C' "$RP2040_PLATFORM"
+grep -Fq 'U8G2_SH1106_128X64_NONAME_F_HW_I2C' "$RP2040_PLATFORM"
 grep -Fq 'if (!display->begin())' "$RP2040_PLATFORM"
 grep -Fq 'bool renderLocalDisplay(const DisplayFrame &frame)' "$RP2040_PLATFORM"
 grep -Fq 'bool renderRemoteDisplay(const RemoteDisplayCommit &scene,' "$RP2040_PLATFORM"
@@ -141,7 +143,7 @@ done
 
 require_serial_body="$(target_body require-serial)"
 grep -Fq 'test -n "$(SERIAL)"' <<<"$require_serial_body"
-grep -Fq 'expected = ["HELLO", "10", family, board, build, "-"]' "$ROOT/scripts/verify_runtime_firmware.py"
+grep -Fq 'expected = ["HELLO", "11", family, board, build, "-"]' "$ROOT/scripts/verify_runtime_firmware.py"
 
 for target in upload-esp32s3 upload-rp2040; do
   ! grep -Eq "^${target}:[[:space:]].*require-serial([[:space:]]|$)" "$MAKEFILE"

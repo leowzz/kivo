@@ -1623,7 +1623,7 @@ mod tests {
     }
 
     #[test]
-    fn board_summaries_report_ssd1306_support() {
+    fn board_summaries_report_sh1106_support() {
         let summaries = BOARD_PROFILES
             .iter()
             .map(BoardProfileSummary::from)
@@ -1862,6 +1862,7 @@ mod tests {
                 board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
                 debounce_ms: 30,
                 ssd1306: None,
+                sh1106: None,
                 inputs: vec![InputSource::Direct {
                     id: "direct".into(),
                     keys: BTreeMap::from([("UP".into(), 6)]),

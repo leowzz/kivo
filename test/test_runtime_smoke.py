@@ -78,10 +78,10 @@ def test_smoke_accepts_generic_protocol_v9_hello() -> None:
     )
 
 
-def test_smoke_accepts_generic_protocol_v10_hello() -> None:
+def test_smoke_accepts_generic_protocol_v11_hello() -> None:
     device = FakeSerial(
         [
-            b"HELLO 10 rp2040 yd-rp2040 test-build - 2 1 2\n",
+            b"HELLO 11 rp2040 yd-rp2040 test-build - 2 1 2\n",
             b"CONFIG_OK 1\n",
             b"LEARN_OK 2\n",
             b"LEARN_OK 2\n",
@@ -95,7 +95,7 @@ def test_smoke_accepts_generic_protocol_v10_hello() -> None:
         build="test-build",
         valid_pins=[1, 2],
         rejected_pins=[],
-        protocol_version=10,
+        protocol_version=11,
     )
 
 def test_smoke_ignores_duplicate_hello_before_command_ack() -> None:

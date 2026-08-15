@@ -252,14 +252,29 @@ test("automatic GPIO assignment never falls back to GPIO 0", async () => {
   expect(within(screen.getByRole("combobox", { name: "K2" })).getByRole("option", { name: "GPIO 0" })).toBeEnabled();
 });
 
-test("the EC11 display module configures seven pins without adding layout keys", async () => {
+test("keeps the two-pin SSD1306 separate from the seven-pin SH1106 module", async () => {
   const user = userEvent.setup();
   render(<DisplayModuleHarness />);
 
   await user.click(screen.getByRole("button", { name: "Direct" }));
+  const displayComponent = screen.getByRole("combobox", { name: "显示组件" });
+  expect(within(displayComponent).getByRole("option", {
+    name: "SSD1306 128x32 @ 0x3C（2 IO）",
+  })).toBeEnabled();
+  expect(within(displayComponent).getByRole("option", {
+    name: "SH1106 1.3 英寸 128x64 + EC11 + 确认/返回（7 IO）",
+  })).toBeEnabled();
+
+  await user.selectOptions(displayComponent, "ssd1306");
+
+  expect(screen.getByRole("combobox", { name: "SDA" })).toHaveValue("9");
+  expect(screen.getByRole("combobox", { name: "SCL" })).toHaveValue("10");
+  expect(screen.queryByRole("combobox", { name: "确认 KEY1" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "编码器按压 PSH" })).toBeNull();
+
   await user.selectOptions(
-    screen.getByRole("combobox", { name: "显示组件" }),
-    "ec11_confirm_back",
+    displayComponent,
+    "sh1106_ec11",
   );
 
   expect(screen.getByRole("combobox", { name: "K1" })).toHaveValue("1");

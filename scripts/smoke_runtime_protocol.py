@@ -122,7 +122,7 @@ def run_smoke(
 ) -> None:
     if not valid_pins:
         raise RuntimeError("valid pins are required")
-    if protocol_version < 3 or protocol_version > 10:
+    if protocol_version < 3 or protocol_version > 11:
         raise RuntimeError("unsupported protocol version")
     write_line(device, "HELLO\n")
     validate_hello(read_line(device), family, board, build, protocol_version)

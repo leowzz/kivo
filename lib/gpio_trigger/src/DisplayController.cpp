@@ -4,6 +4,8 @@ DisplayUpdate DisplayController::showLocal(const DisplayFrame &frame,
                                            LocalDisplayPriority priority) {
   if (disconnected_) return localUpdate();
   local_ = frame;
+  if (priority == LocalDisplayPriority::Critical) interactive_.reset();
+  if (interactive_.has_value()) return {};
   if (priority == LocalDisplayPriority::Startup) {
     if (localOverride_) {
       source_ = DisplaySource::Local;
@@ -25,6 +27,23 @@ DisplayUpdate DisplayController::showLocal(const DisplayFrame &frame,
   return localUpdate();
 }
 
+DisplayUpdate DisplayController::showInteractive(const DisplayFrame &frame) {
+  interactive_ = frame;
+  source_ = DisplaySource::Local;
+  return localUpdate();
+}
+
+DisplayUpdate DisplayController::clearInteractive() {
+  if (!interactive_.has_value()) return {};
+  interactive_.reset();
+  if (disconnected_ || localOverride_ || !remote_.has_value()) {
+    source_ = DisplaySource::Local;
+    return localUpdate();
+  }
+  source_ = DisplaySource::Remote;
+  return remoteUpdate(true);
+}
+
 DisplayUpdate DisplayController::clearLocalOverride() {
   if (!localOverride_) return {};
   localOverride_ = false;
@@ -40,7 +59,7 @@ DisplayUpdate DisplayController::commitRemote(
     const RemoteDisplayCommit &scene) {
   if (!connected_ || (!remote_.has_value() && !scene.full)) return {};
   remote_ = scene;
-  if (localOverride_) return {};
+  if (localOverride_ || interactive_.has_value()) return {};
   source_ = DisplaySource::Remote;
   return remoteUpdate(scene.full);
 }
@@ -68,6 +87,7 @@ DisplayUpdate DisplayController::helperDisconnected(
 }
 
 DisplayUpdate DisplayController::displayReconfigured() const {
+  if (interactive_.has_value()) return localUpdate();
   return source_ == DisplaySource::Remote ? remoteUpdate(true) : localUpdate();
 }
 
@@ -80,6 +100,9 @@ std::uint32_t DisplayController::remoteRevision() const {
 }
 
 DisplayUpdate DisplayController::localUpdate() const {
+  if (interactive_.has_value()) {
+    return {DisplayUpdateKind::Local, &*interactive_, nullptr, true};
+  }
   if (!local_.has_value()) return {};
   return {DisplayUpdateKind::Local, &*local_, nullptr, true};
 }

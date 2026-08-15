@@ -86,6 +86,18 @@ export interface HardwareProfile {
       back: number;
     };
   };
+  sh1106?: {
+    sda: number;
+    scl: number;
+    control_panel?: {
+      type: "ec11_confirm_back";
+      confirm: number;
+      encoder_press: number;
+      encoder_a: number;
+      encoder_b: number;
+      back: number;
+    };
+  };
   inputs: InputSource[];
 }
 

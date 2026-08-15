@@ -100,15 +100,15 @@ workbench-one-k18-mic-disp-encp-r01
 
 YD-RP2040 的 UF2 bootloader USB 标识为 `2e8a:0003`。Kivo 会先校验 USB 身份，再通过 `HELLO` 协议确认板卡和固件；不受该 Board Profile 支持的 GPIO 会被拒绝。
 
-YD-RP2040 的 Hardware Profile 还可以启用固定为 `128x32`、地址为 `0x3C` 的 SSD1306 OLED，并分别选择 SDA 与 SCL 引脚。OLED 占用的两个 GPIO 不会再出现在按键输入或学习模式中；运行时配置成功后屏幕才会开始显示状态。
+YD-RP2040 的 Hardware Profile 支持两种地址为 `0x3C` 的 OLED：原有 SSD1306 128x32 模块占用 SDA/SCL 两个 GPIO；`sh1106-1.3-128x64-ec11` 模块使用 SH1106 128x64 屏，并带 EC11 旋转、EC11 按压、确认和返回，共占用七个 GPIO。OLED 和控制面板占用的 GPIO 不会再分配给按键输入或学习模式。
 
 ## Codex 状态屏
 
 启用 OLED 的设备会显示本机 Codex 任务的低干扰状态：汇总画面为 `CODEX <N> RUN`，需要操作时显示 `NEEDS INPUT` 或 `APPROVAL NEEDED`，响应生成后短暂显示 `RESPONSE READY`，数据源不可用时显示 `CODEX OFFLINE`。Codex 数据源异常不会停止 Kivo 的按键 Runtime。
 
-Kivo 只消费任务身份、工作目录和状态/生命周期信号；对话正文、推理、工具内容和最终回复不会显示或保留。固件协议 3-6 不接收显示命令，继续显示原有本地调试画面。V1 面板固定为 rotation 0 的 SSD1306 128x32 单色屏，现有 Device Profile YAML 无需迁移。
+Kivo 只消费任务身份、工作目录和状态/生命周期信号；对话正文、推理、工具内容和最终回复不会显示或保留。SSD1306 继续使用原有 `ssd1306` 配置和 128x32 渲染器；SH1106 使用独立的 `sh1106` 配置、128x64 渲染器和协议 11 固件。两种屏均固定为 rotation 0，互不迁移。
 
-刷入协议 7 固件后仍需在实体 OLED 上检查文字、状态切换和持续按键输入。自动测试和固件构建不能替代物理屏幕与输入验收。
+刷入固件后仍需分别在实体 SSD1306 和 SH1106 上检查文字与状态切换，并在 SH1106 模块上检查旋钮方向、按压、确认和返回。自动测试和固件构建不能替代物理屏幕与输入验收。
 
 ![小黑同时给 ESP32-S3 和 YD-RP2040 两台设备上弦](assets/readme-illustrations/03-parallel-devices.png)
 

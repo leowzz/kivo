@@ -723,10 +723,10 @@ test("rejects unsupported, unsafe, same-pin, conflicting, and duplicate pin owne
     debounce_ms: 30,
     inputs: [] as HardwareProfile["inputs"],
   };
-  const withOled = (ssd1306: NonNullable<HardwareProfile["ssd1306"]>, inputs = base.inputs) => ({
+  const withOled = (sh1106: NonNullable<HardwareProfile["sh1106"]>, inputs = base.inputs) => ({
     ...base,
     inputs,
-    ssd1306,
+    sh1106,
   });
 
   expect(hardwareProfilesAreValid([

@@ -65,6 +65,16 @@ bool TopologyBuilder::addPins(std::uint8_t sourceIndex,
 
 bool TopologyBuilder::addOled(std::uint32_t revision, std::uint8_t sda,
                               std::uint8_t scl) {
+  return addOled(revision, sda, scl, OledDriver::Ssd1306);
+}
+
+bool TopologyBuilder::addSh1106(std::uint32_t revision, std::uint8_t sda,
+                                std::uint8_t scl) {
+  return addOled(revision, sda, scl, OledDriver::Sh1106);
+}
+
+bool TopologyBuilder::addOled(std::uint32_t revision, std::uint8_t sda,
+                              std::uint8_t scl, OledDriver driver) {
   const std::vector<std::uint8_t> pins{sda, scl};
   if (!pending_.has_value() || pending_->revision != revision ||
       !profile_.supportsOled || pending_->oled.has_value() ||
@@ -72,7 +82,7 @@ bool TopologyBuilder::addOled(std::uint32_t revision, std::uint8_t sda,
     return false;
   }
   ownedPins_.insert(ownedPins_.end(), pins.begin(), pins.end());
-  pending_->oled = OledConfig{sda, scl};
+  pending_->oled = OledConfig{sda, scl, driver};
   return true;
 }
 

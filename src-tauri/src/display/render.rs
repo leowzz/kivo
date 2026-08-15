@@ -2,24 +2,10 @@ use std::{cmp::Reverse, collections::BTreeMap, sync::Arc};
 
 use super::{DisplayItem, DisplaySnapshot, DisplayState, SourceHealth};
 
-const PANEL_ID: &str = "ssd1306_128x32_mono";
+pub(crate) const SSD1306_PANEL_ID: &str = "ssd1306_128x32_mono";
+pub(crate) const SH1106_PANEL_ID: &str = "sh1106-1.3-128x64-ec11";
 const SUMMARY_ID: &str = "codex.summary";
 const EMPTY_TEXT: &str = "";
-const COMPACT_FONT: FontMetrics = FontMetrics {
-    id: 0,
-    advance: 6,
-    baseline_y: 21,
-};
-const MEDIUM_FONT: FontMetrics = FontMetrics {
-    id: 1,
-    advance: 9,
-    baseline_y: 21,
-};
-const LARGE_FONT: FontMetrics = FontMetrics {
-    id: 2,
-    advance: 10,
-    baseline_y: 22,
-};
 
 #[derive(Clone, Copy)]
 struct FontMetrics {
@@ -27,6 +13,36 @@ struct FontMetrics {
     advance: u16,
     baseline_y: u16,
 }
+
+#[derive(Clone, Copy)]
+struct PanelLayout {
+    height: u16,
+    split_y: u16,
+    top_baseline: u16,
+    bottom_baseline: u16,
+    compact_baseline: u16,
+    medium_baseline: u16,
+    large_baseline: u16,
+}
+
+const SSD1306_LAYOUT: PanelLayout = PanelLayout {
+    height: 32,
+    split_y: 16,
+    top_baseline: 12,
+    bottom_baseline: 29,
+    compact_baseline: 21,
+    medium_baseline: 21,
+    large_baseline: 22,
+};
+const SH1106_LAYOUT: PanelLayout = PanelLayout {
+    height: 64,
+    split_y: 32,
+    top_baseline: 23,
+    bottom_baseline: 55,
+    compact_baseline: 37,
+    medium_baseline: 38,
+    large_baseline: 38,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Rect {
@@ -148,6 +164,22 @@ impl DisplayCapabilities {
             rotation_degrees: 0,
         }
     }
+
+    pub(crate) const fn sh1106_128x64_mono() -> Self {
+        Self {
+            width: 128,
+            height: 64,
+            ascii_font_id: 0,
+            max_font_id: 2,
+            max_regions: 8,
+            max_operations: 24,
+            max_text_bytes: 48,
+            tile_width: 8,
+            tile_height: 8,
+            pixel_format: PixelFormat::Mono1,
+            rotation_degrees: 0,
+        }
+    }
 }
 
 pub(crate) trait DisplayRenderer: Send + Sync {
@@ -203,13 +235,17 @@ pub(crate) fn built_in_renderer_registry() -> RendererRegistry {
         .register(Arc::new(MonoText128x32Renderer))
         .expect("built-in renderer panel IDs are unique");
     registry
+        .register(Arc::new(MonoText128x64Renderer))
+        .expect("built-in renderer panel IDs are unique");
+    registry
 }
 
+pub(crate) struct MonoText128x64Renderer;
 pub(crate) struct MonoText128x32Renderer;
 
 impl DisplayRenderer for MonoText128x32Renderer {
     fn panel_id(&self) -> &'static str {
-        PANEL_ID
+        SSD1306_PANEL_ID
     }
 
     fn capabilities(&self) -> &DisplayCapabilities {
@@ -218,7 +254,7 @@ impl DisplayRenderer for MonoText128x32Renderer {
     }
 
     fn render(&self, snapshot: &DisplaySnapshot) -> Result<RenderedScene, &'static str> {
-        self.render_with_font_limit(snapshot, self.capabilities().max_font_id)
+        render_snapshot(snapshot, self.capabilities().max_font_id, SSD1306_LAYOUT)
     }
 
     fn render_with_font_limit(
@@ -226,55 +262,104 @@ impl DisplayRenderer for MonoText128x32Renderer {
         snapshot: &DisplaySnapshot,
         max_font_id: u8,
     ) -> Result<RenderedScene, &'static str> {
-        let (left, right, bottom) = match select_view(snapshot) {
-            View::Task {
-                label,
-                message,
-                additional_waits,
-            } => {
-                let (left, right) = split_task_label(&label, additional_waits);
-                (left, right, message)
-            }
-            View::Summary {
-                running,
-                needs_input,
-            } => (
-                "CODEX".to_owned(),
-                format!("{} RUN", compact_count(running)),
-                if needs_input == 0 {
-                    String::new()
-                } else {
-                    format!("{} NEEDS INPUT", compact_count(needs_input))
-                },
-            ),
-            View::Offline => (
-                "CODEX".to_owned(),
-                "OFFLINE".to_owned(),
-                "KIVO READY".to_owned(),
-            ),
-            View::Idle => (
-                "CODEX".to_owned(),
-                "IDLE".to_owned(),
-                "KIVO READY".to_owned(),
-            ),
-        };
-
-        if max_font_id > 0
-            && let Some(text) = single_visual_line(&left, &right, &bottom)
-        {
-            return Ok(RenderedScene {
-                regions: vec![single_line_region(text, max_font_id)],
-            });
-        }
-
-        Ok(RenderedScene {
-            regions: vec![
-                text_region(0, "row0_left", Rect::new(0, 0, 64, 16), left),
-                text_region(1, "row0_right", Rect::new(64, 0, 64, 16), right),
-                text_region(2, "row1", Rect::new(0, 16, 128, 16), bottom),
-            ],
-        })
+        render_snapshot(snapshot, max_font_id, SSD1306_LAYOUT)
     }
+}
+
+impl DisplayRenderer for MonoText128x64Renderer {
+    fn panel_id(&self) -> &'static str {
+        SH1106_PANEL_ID
+    }
+
+    fn capabilities(&self) -> &DisplayCapabilities {
+        static CAPABILITIES: DisplayCapabilities = DisplayCapabilities::sh1106_128x64_mono();
+        &CAPABILITIES
+    }
+
+    fn render(&self, snapshot: &DisplaySnapshot) -> Result<RenderedScene, &'static str> {
+        render_snapshot(snapshot, self.capabilities().max_font_id, SH1106_LAYOUT)
+    }
+
+    fn render_with_font_limit(
+        &self,
+        snapshot: &DisplaySnapshot,
+        max_font_id: u8,
+    ) -> Result<RenderedScene, &'static str> {
+        render_snapshot(snapshot, max_font_id, SH1106_LAYOUT)
+    }
+}
+
+fn render_snapshot(
+    snapshot: &DisplaySnapshot,
+    max_font_id: u8,
+    layout: PanelLayout,
+) -> Result<RenderedScene, &'static str> {
+    let (left, right, bottom) = match select_view(snapshot) {
+        View::Task {
+            label,
+            message,
+            additional_waits,
+        } => {
+            let (left, right) = split_task_label(&label, additional_waits);
+            (left, right, message)
+        }
+        View::Summary {
+            running,
+            needs_input,
+        } => (
+            "CODEX".to_owned(),
+            format!("{} RUN", compact_count(running)),
+            if needs_input == 0 {
+                String::new()
+            } else {
+                format!("{} NEEDS INPUT", compact_count(needs_input))
+            },
+        ),
+        View::Offline => (
+            "CODEX".to_owned(),
+            "OFFLINE".to_owned(),
+            "KIVO READY".to_owned(),
+        ),
+        View::Idle => (
+            "CODEX".to_owned(),
+            "IDLE".to_owned(),
+            "KIVO READY".to_owned(),
+        ),
+    };
+
+    if max_font_id > 0
+        && let Some(text) = single_visual_line(&left, &right, &bottom)
+    {
+        return Ok(RenderedScene {
+            regions: vec![single_line_region(text, max_font_id, layout)],
+        });
+    }
+
+    Ok(RenderedScene {
+        regions: vec![
+            text_region(
+                0,
+                "row0_left",
+                Rect::new(0, 0, 64, layout.split_y),
+                left,
+                layout,
+            ),
+            text_region(
+                1,
+                "row0_right",
+                Rect::new(64, 0, 64, layout.split_y),
+                right,
+                layout,
+            ),
+            text_region(
+                2,
+                "row1",
+                Rect::new(0, layout.split_y, 128, layout.split_y),
+                bottom,
+                layout,
+            ),
+        ],
+    })
 }
 
 fn single_visual_line(left: &str, right: &str, bottom: &str) -> Option<String> {
@@ -291,18 +376,35 @@ fn single_visual_line(left: &str, right: &str, bottom: &str) -> Option<String> {
     }
 }
 
-fn single_line_region(text: String, max_font_id: u8) -> DisplayRegion {
-    let font = [LARGE_FONT, MEDIUM_FONT, COMPACT_FONT]
+fn single_line_region(text: String, max_font_id: u8, layout: PanelLayout) -> DisplayRegion {
+    let fonts = [
+        FontMetrics {
+            id: 2,
+            advance: 10,
+            baseline_y: layout.large_baseline,
+        },
+        FontMetrics {
+            id: 1,
+            advance: 9,
+            baseline_y: layout.medium_baseline,
+        },
+        FontMetrics {
+            id: 0,
+            advance: 6,
+            baseline_y: layout.compact_baseline,
+        },
+    ];
+    let font = fonts
         .into_iter()
         .find(|font| {
             font.id <= max_font_id && (text.len() as u16).saturating_mul(font.advance) <= 128
         })
-        .unwrap_or(COMPACT_FONT);
+        .unwrap_or(fonts[2]);
     let text_width = (text.len() as u16).saturating_mul(font.advance);
     DisplayRegion::new(
         0,
         "single_line",
-        Rect::new(0, 0, 128, 32),
+        Rect::new(0, 0, 128, layout.height),
         vec![
             DrawOperation::ClearRegion,
             DrawOperation::Text {
@@ -463,12 +565,22 @@ fn split_task_label(label: &str, additional_waits: u32) -> (String, String) {
     (left, right)
 }
 
-fn text_region(slot: u8, id: &'static str, bounds: Rect, text: String) -> DisplayRegion {
+fn text_region(
+    slot: u8,
+    id: &'static str,
+    bounds: Rect,
+    text: String,
+    layout: PanelLayout,
+) -> DisplayRegion {
     let mut operations = vec![DrawOperation::ClearRegion];
     if !text.is_empty() {
         operations.push(DrawOperation::Text {
             x: bounds.x,
-            baseline_y: if bounds.y == 0 { 12 } else { 29 },
+            baseline_y: if bounds.y == 0 {
+                layout.top_baseline
+            } else {
+                layout.bottom_baseline
+            },
             font_id: 0,
             text,
         });
@@ -551,6 +663,22 @@ mod tests {
 
     #[test]
     fn single_summary_row_uses_the_largest_fitting_centered_font() {
+        let scene = MonoText128x64Renderer
+            .render(&summary_snapshot(3, 0))
+            .unwrap();
+
+        assert_eq!(
+            region_layout(&scene),
+            vec![(0, "single_line", Rect::new(0, 0, 128, 64))]
+        );
+        assert_eq!(
+            text_details(&scene, "single_line"),
+            Some((9, 38, 2, "CODEX 3 RUN"))
+        );
+    }
+
+    #[test]
+    fn ssd1306_renderer_preserves_the_128x32_geometry() {
         let scene = MonoText128x32Renderer
             .render(&summary_snapshot(3, 0))
             .unwrap();
@@ -563,35 +691,36 @@ mod tests {
             text_details(&scene, "single_line"),
             Some((9, 22, 2, "CODEX 3 RUN"))
         );
+        assert_eq!(MonoText128x32Renderer.capabilities().height, 32);
     }
 
     #[test]
     fn single_row_falls_back_through_the_declared_font_sizes() {
-        let medium = single_line_region("CODEX 999+ RUN".into(), 2);
-        let compact = single_line_region("1234567890123456".into(), 2);
+        let medium = single_line_region("CODEX 999+ RUN".into(), 2, SH1106_LAYOUT);
+        let compact = single_line_region("1234567890123456".into(), 2, SH1106_LAYOUT);
 
         assert_eq!(
             region_text_details(&medium),
-            Some((1, 21, 1, "CODEX 999+ RUN"))
+            Some((1, 38, 1, "CODEX 999+ RUN"))
         );
         assert_eq!(
             region_text_details(&compact),
-            Some((16, 21, 0, "1234567890123456"))
+            Some((16, 37, 0, "1234567890123456"))
         );
     }
 
     #[test]
     fn font_zero_limit_preserves_the_legacy_three_region_layout() {
-        let scene = MonoText128x32Renderer
+        let scene = MonoText128x64Renderer
             .render_with_font_limit(&summary_snapshot(3, 0), 0)
             .unwrap();
 
         assert_eq!(
             region_layout(&scene),
             vec![
-                (0, "row0_left", Rect::new(0, 0, 64, 16)),
-                (1, "row0_right", Rect::new(64, 0, 64, 16)),
-                (2, "row1", Rect::new(0, 16, 128, 16)),
+                (0, "row0_left", Rect::new(0, 0, 64, 32)),
+                (1, "row0_right", Rect::new(64, 0, 64, 32)),
+                (2, "row1", Rect::new(0, 32, 128, 32)),
             ]
         );
         assert_eq!(scene.text("row0_left"), "CODEX");
@@ -621,7 +750,7 @@ mod tests {
         )
         .unwrap()
         .with_updated_at(now + Duration::from_secs(1));
-        let scene = MonoText128x32Renderer
+        let scene = MonoText128x64Renderer
             .render(&DisplaySnapshot {
                 items: vec![approval, error],
                 health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
@@ -646,7 +775,7 @@ mod tests {
         .with_updated_at(now)
         .with_expiry(now - Duration::from_secs(1));
 
-        let scene = MonoText128x32Renderer.render(&snapshot(item)).unwrap();
+        let scene = MonoText128x64Renderer.render(&snapshot(item)).unwrap();
 
         assert_eq!(scene.text("row1"), "RESPONSE READY");
     }
@@ -663,21 +792,21 @@ mod tests {
         .unwrap()
         .with_metric("running", 1)
         .with_metric("needs_input", 1);
-        let scene = MonoText128x32Renderer
+        let scene = MonoText128x64Renderer
             .render(&DisplaySnapshot {
                 items: vec![summary],
                 health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
             })
             .unwrap();
 
-        assert_eq!(text_position(&scene, "row0_left"), Some((0, 12)));
-        assert_eq!(text_position(&scene, "row0_right"), Some((64, 12)));
-        assert_eq!(text_position(&scene, "row1"), Some((0, 29)));
+        assert_eq!(text_position(&scene, "row0_left"), Some((0, 23)));
+        assert_eq!(text_position(&scene, "row0_right"), Some((64, 23)));
+        assert_eq!(text_position(&scene, "row1"), Some((0, 55)));
     }
 
     #[test]
     fn capabilities_declare_mono_one_bit_pixels_without_rotation() {
-        let capabilities = MonoText128x32Renderer.capabilities();
+        let capabilities = MonoText128x64Renderer.capabilities();
 
         assert_eq!(capabilities.pixel_format, PixelFormat::Mono1);
         assert_eq!(capabilities.rotation_degrees, 0);
@@ -695,7 +824,7 @@ mod tests {
         .unwrap()
         .with_metric("running", u32::MAX)
         .with_metric("needs_input", u32::MAX);
-        let scene = MonoText128x32Renderer
+        let scene = MonoText128x64Renderer
             .render(&DisplaySnapshot {
                 items: vec![summary],
                 health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
@@ -719,7 +848,7 @@ mod tests {
         )
         .unwrap();
 
-        let scene = MonoText128x32Renderer.render(&snapshot(item)).unwrap();
+        let scene = MonoText128x64Renderer.render(&snapshot(item)).unwrap();
 
         assert_eq!(scene.text("row0_left"), "TASK A3F");
         assert_eq!(scene.text("row0_right"), "2");
@@ -793,7 +922,7 @@ mod tests {
         ];
 
         for (snapshot, expected) in cases {
-            let scene = MonoText128x32Renderer.render(&snapshot).unwrap();
+            let scene = MonoText128x64Renderer.render(&snapshot).unwrap();
             assert_eq!(
                 [
                     scene.text("row0_left"),
@@ -827,7 +956,7 @@ mod tests {
         .unwrap()
         .with_updated_at(now + Duration::from_secs(1));
 
-        let scene = MonoText128x32Renderer
+        let scene = MonoText128x64Renderer
             .render(&DisplaySnapshot {
                 items: vec![error, success],
                 health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
@@ -859,7 +988,7 @@ mod tests {
         .unwrap()
         .with_updated_at(now + Duration::from_secs(1));
 
-        let scene = MonoText128x32Renderer
+        let scene = MonoText128x64Renderer
             .render(&DisplaySnapshot {
                 items: vec![success, warning],
                 health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
@@ -875,7 +1004,7 @@ mod tests {
         let older = waiting_item("codex.task.older", "other", now);
         let newer = waiting_item("codex.task.newer", "kivo", now + Duration::from_secs(1));
 
-        let scene = MonoText128x32Renderer
+        let scene = MonoText128x64Renderer
             .render(&DisplaySnapshot {
                 items: vec![older, newer],
                 health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
@@ -893,7 +1022,7 @@ mod tests {
         let selected = waiting_item("codex.task.a", "1234567890ABCDEF", now);
         let other = waiting_item("codex.task.b", "other", now - Duration::from_secs(1));
 
-        let scene = MonoText128x32Renderer
+        let scene = MonoText128x64Renderer
             .render(&DisplaySnapshot {
                 items: vec![selected, other],
                 health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
@@ -919,7 +1048,7 @@ mod tests {
                 waiting_item("codex.task.b", "beta", now),
             ],
         ] {
-            let scene = MonoText128x32Renderer
+            let scene = MonoText128x64Renderer
                 .render(&DisplaySnapshot {
                     items,
                     health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
@@ -944,7 +1073,7 @@ mod tests {
             })
             .collect();
 
-        let scene = MonoText128x32Renderer
+        let scene = MonoText128x64Renderer
             .render(&DisplaySnapshot {
                 items,
                 health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
@@ -959,7 +1088,7 @@ mod tests {
     #[test]
     fn clearing_all_waits_switches_to_the_single_summary_row() {
         let now = Instant::now();
-        let waiting_scene = MonoText128x32Renderer
+        let waiting_scene = MonoText128x64Renderer
             .render(&DisplaySnapshot {
                 items: vec![
                     waiting_item("codex.task.a", "kivo", now),
@@ -978,7 +1107,7 @@ mod tests {
         .unwrap()
         .with_metric("running", 2)
         .with_metric("needs_input", 0);
-        let summary_scene = MonoText128x32Renderer
+        let summary_scene = MonoText128x64Renderer
             .render(&DisplaySnapshot {
                 items: vec![summary],
                 health: BTreeMap::from([("codex".to_owned(), SourceHealth::Healthy)]),
@@ -989,7 +1118,7 @@ mod tests {
         assert_ne!(region_layout(&waiting_scene), region_layout(&summary_scene));
         assert_eq!(
             region_layout(&summary_scene),
-            vec![(0, "single_line", Rect::new(0, 0, 128, 32))]
+            vec![(0, "single_line", Rect::new(0, 0, 128, 64))]
         );
     }
 
@@ -1055,11 +1184,11 @@ mod tests {
     #[test]
     fn registry_rejects_duplicate_panel_ids() {
         let mut registry = RendererRegistry::default();
-        registry.register(Arc::new(MonoText128x32Renderer)).unwrap();
+        registry.register(Arc::new(MonoText128x64Renderer)).unwrap();
 
         assert_eq!(
             registry
-                .register(Arc::new(MonoText128x32Renderer))
+                .register(Arc::new(MonoText128x64Renderer))
                 .unwrap_err(),
             "display_renderer_duplicate_panel"
         );
@@ -1072,9 +1201,9 @@ mod tests {
     #[test]
     fn content_hash_changes_with_text_and_stays_stable() {
         let bounds = Rect::new(0, 0, 64, 16);
-        let first = text_region(0, "row0_left", bounds, "CODEX".into());
-        let same = text_region(0, "row0_left", bounds, "CODEX".into());
-        let changed = text_region(0, "row0_left", bounds, "KIVO".into());
+        let first = text_region(0, "row0_left", bounds, "CODEX".into(), SH1106_LAYOUT);
+        let same = text_region(0, "row0_left", bounds, "CODEX".into(), SH1106_LAYOUT);
+        let changed = text_region(0, "row0_left", bounds, "KIVO".into(), SH1106_LAYOUT);
 
         assert_eq!(first.content_hash, same.content_hash);
         assert_ne!(first.content_hash, changed.content_hash);

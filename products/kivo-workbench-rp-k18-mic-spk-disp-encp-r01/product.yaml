@@ -64,7 +64,7 @@ hardware_profile:
   name: Default hardware
   board_profile_id: yd-rp2040
   debounce_ms: 30
-  ssd1306:
+  sh1106:
     sda: 28
     scl: 29
     control_panel:

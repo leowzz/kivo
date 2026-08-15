@@ -223,7 +223,7 @@ std::optional<HelperCommand> parseHelperCommand(std::string_view line) {
     return command;
   }
 
-  if (*kind == "CONFIG_OLED") {
+  if (*kind == "CONFIG_OLED" || *kind == "CONFIG_SH1106") {
     const auto revision = takeNumber(line);
     const auto sda = takeNumber(line);
     const auto scl = takeNumber(line);
@@ -231,7 +231,9 @@ std::optional<HelperCommand> parseHelperCommand(std::string_view line) {
         !scl.has_value() || *scl > 255 || takeToken(line).has_value()) {
       return std::nullopt;
     }
-    HelperCommand command{HelperCommandKind::ConfigOled};
+    HelperCommand command{*kind == "CONFIG_OLED"
+                              ? HelperCommandKind::ConfigOled
+                              : HelperCommandKind::ConfigSh1106};
     command.revision = *revision;
     command.oledSda = static_cast<std::uint8_t>(*sda);
     command.oledScl = static_cast<std::uint8_t>(*scl);

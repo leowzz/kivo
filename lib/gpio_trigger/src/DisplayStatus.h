@@ -8,7 +8,7 @@
 #include "GpioTriggerController.h"
 
 struct DisplayFrame {
-  std::array<std::string, 3> lines;
+  std::array<std::string, 4> lines;
 
   bool operator==(const DisplayFrame &other) const {
     return lines == other.lines;

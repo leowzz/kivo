@@ -33,7 +33,7 @@ import type {
 
 type Tab = "identity" | "layout" | "hardware" | "definition";
 type CreateMode = "new" | "copy";
-type DisplayComponent = "none" | "ssd1306" | "ec11_confirm_back";
+type DisplayComponent = "none" | "ssd1306" | "sh1106_ec11";
 
 const CAPABILITIES = ["mic", "spk", "disp", "enc", "encp"] as const;
 
@@ -87,8 +87,12 @@ function usedHardwarePins(hardware: HardwareProfile) {
   if (hardware.ssd1306) {
     used.add(hardware.ssd1306.sda);
     used.add(hardware.ssd1306.scl);
-    if (hardware.ssd1306.control_panel) {
-      const panel = hardware.ssd1306.control_panel;
+  }
+  if (hardware.sh1106) {
+    used.add(hardware.sh1106.sda);
+    used.add(hardware.sh1106.scl);
+    if (hardware.sh1106.control_panel) {
+      const panel = hardware.sh1106.control_panel;
       [panel.confirm, panel.encoder_press, panel.encoder_a, panel.encoder_b, panel.back]
         .forEach((pin) => used.add(pin));
     }
@@ -102,13 +106,14 @@ function usedHardwarePins(hardware: HardwareProfile) {
 }
 
 function usedInputPins(hardware: HardwareProfile) {
-  const withoutDisplay = { ...hardware, ssd1306: undefined };
+  const withoutDisplay = { ...hardware, ssd1306: undefined, sh1106: undefined };
   return usedHardwarePins(withoutDisplay);
 }
 
 function selectedDisplayComponent(hardware: HardwareProfile): DisplayComponent {
-  if (!hardware.ssd1306) return "none";
-  return hardware.ssd1306.control_panel ? "ec11_confirm_back" : "ssd1306";
+  if (hardware.sh1106) return "sh1106_ec11";
+  if (hardware.ssd1306) return "ssd1306";
+  return "none";
 }
 
 function displayComponentCanFit(
@@ -117,7 +122,7 @@ function displayComponentCanFit(
   board: StudioBoard,
 ) {
   if (!board.supportsOled) return false;
-  const requiredPins = component === "ec11_confirm_back" ? 7 : 2;
+  const requiredPins = component === "sh1106_ec11" ? 7 : 2;
   const occupied = usedInputPins(hardware);
   return orderedAssignablePins(board.safePins).filter((pin) => !occupied.has(pin)).length
     >= requiredPins;
@@ -131,12 +136,13 @@ function configureDisplayComponent(
   const hardware = definition.hardware_profile;
   if (component === "none") {
     hardware.ssd1306 = undefined;
+    hardware.sh1106 = undefined;
     return;
   }
 
   const capabilities = new Set(definition.product.capabilities);
   capabilities.add("disp");
-  if (component === "ec11_confirm_back") {
+  if (component === "sh1106_ec11") {
     capabilities.add("encp");
     capabilities.delete("enc");
   }
@@ -144,7 +150,7 @@ function configureDisplayComponent(
 
   const occupied = usedInputPins(hardware);
   const available = orderedAssignablePins(board.safePins).filter((pin) => !occupied.has(pin));
-  const existing = hardware.ssd1306;
+  const existing = hardware.sh1106 ?? hardware.ssd1306;
   const canKeepBus = existing
     && existing.sda !== existing.scl
     && available.includes(existing.sda)
@@ -155,6 +161,7 @@ function configureDisplayComponent(
 
   if (component === "ssd1306") {
     hardware.ssd1306 = { sda, scl };
+    hardware.sh1106 = undefined;
     return;
   }
 
@@ -176,7 +183,7 @@ function configureDisplayComponent(
     ? existingControlPins
     : controlPins.slice(0, 5);
   if ([confirm, encoderPress, encoderA, encoderB, back].some((pin) => pin === undefined)) return;
-  hardware.ssd1306 = {
+  hardware.sh1106 = {
     sda,
     scl,
     control_panel: {
@@ -188,6 +195,7 @@ function configureDisplayComponent(
       back,
     },
   };
+  hardware.ssd1306 = undefined;
 }
 
 function boundHardwareButtons(inputs: InputSource[]) {
@@ -814,6 +822,8 @@ export function HardwareEditor({ definition, boards, update }: {
   const buttons = definition.layout.groups.flatMap((group) => group.buttons);
   const unavailablePins = usedHardwarePins(hardware);
   const displayComponent = selectedDisplayComponent(hardware);
+  const activeDisplay = hardware.sh1106 ?? hardware.ssd1306;
+  const controlPanel = hardware.sh1106?.control_panel;
   const addSource = (type: InputSource["type"]) => update((draft) => {
     const inputs = draft.hardware_profile.inputs;
     if (type === "direct") {
@@ -849,7 +859,7 @@ export function HardwareEditor({ definition, boards, update }: {
     <section className="editor-section hardware-editor">
       <h2>硬件实现</h2>
       <div className="form-grid">
-        <Field label="Board Profile" wide><select value={hardware.board_profile_id} onChange={(event) => update((draft) => { draft.hardware_profile.board_profile_id = event.target.value; draft.hardware_profile.ssd1306 = undefined; draft.hardware_profile.inputs = []; })}>{boards.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select></Field>
+        <Field label="Board Profile" wide><select value={hardware.board_profile_id} onChange={(event) => update((draft) => { draft.hardware_profile.board_profile_id = event.target.value; draft.hardware_profile.ssd1306 = undefined; draft.hardware_profile.sh1106 = undefined; draft.hardware_profile.inputs = []; })}>{boards.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select></Field>
         <Field label="Hardware ID"><input value={hardware.id} onChange={(event) => update((draft) => { draft.hardware_profile.id = event.target.value; })} /></Field>
         <Field label="Debounce (ms)"><input type="number" min={1} max={1000} value={hardware.debounce_ms} onChange={(event) => update((draft) => { draft.hardware_profile.debounce_ms = Number(event.target.value); })} /></Field>
       </div>
@@ -859,20 +869,20 @@ export function HardwareEditor({ definition, boards, update }: {
             configureDisplayComponent(draft, board, event.target.value as DisplayComponent);
           })}>
             <option value="none">无</option>
-            <option value="ssd1306" disabled={!displayComponentCanFit("ssd1306", hardware, board)}>SSD1306 OLED（2 IO）</option>
-            <option value="ec11_confirm_back" disabled={!displayComponentCanFit("ec11_confirm_back", hardware, board)}>OLED + EC11 + 确认/返回（7 IO）</option>
+            <option value="ssd1306" disabled={!displayComponentCanFit("ssd1306", hardware, board)}>SSD1306 128x32 @ 0x3C（2 IO）</option>
+            <option value="sh1106_ec11" disabled={!displayComponentCanFit("sh1106_ec11", hardware, board)}>SH1106 1.3 英寸 128x64 + EC11 + 确认/返回（7 IO）</option>
           </select>
         </Field>
-        {hardware.ssd1306 ? (
+        {activeDisplay ? (
           <div className="display-pin-grid">
-            <Field label="SDA"><PinSelect value={hardware.ssd1306.sda} board={board} unavailablePins={unavailablePins} onChange={(value) => update((draft) => { if (draft.hardware_profile.ssd1306) draft.hardware_profile.ssd1306.sda = value; })} /></Field>
-            <Field label="SCL"><PinSelect value={hardware.ssd1306.scl} board={board} unavailablePins={unavailablePins} onChange={(value) => update((draft) => { if (draft.hardware_profile.ssd1306) draft.hardware_profile.ssd1306.scl = value; })} /></Field>
-            {hardware.ssd1306.control_panel ? <>
-              <Field label="确认 KEY1"><PinSelect value={hardware.ssd1306.control_panel.confirm} board={board} unavailablePins={unavailablePins} onChange={(value) => update((draft) => { if (draft.hardware_profile.ssd1306?.control_panel) draft.hardware_profile.ssd1306.control_panel.confirm = value; })} /></Field>
-              <Field label="编码器按压 PSH"><PinSelect value={hardware.ssd1306.control_panel.encoder_press} board={board} unavailablePins={unavailablePins} onChange={(value) => update((draft) => { if (draft.hardware_profile.ssd1306?.control_panel) draft.hardware_profile.ssd1306.control_panel.encoder_press = value; })} /></Field>
-              <Field label="编码器 A 相 TRA"><PinSelect value={hardware.ssd1306.control_panel.encoder_a} board={board} unavailablePins={unavailablePins} onChange={(value) => update((draft) => { if (draft.hardware_profile.ssd1306?.control_panel) draft.hardware_profile.ssd1306.control_panel.encoder_a = value; })} /></Field>
-              <Field label="编码器 B 相 TRB"><PinSelect value={hardware.ssd1306.control_panel.encoder_b} board={board} unavailablePins={unavailablePins} onChange={(value) => update((draft) => { if (draft.hardware_profile.ssd1306?.control_panel) draft.hardware_profile.ssd1306.control_panel.encoder_b = value; })} /></Field>
-              <Field label="返回 KEY0"><PinSelect value={hardware.ssd1306.control_panel.back} board={board} unavailablePins={unavailablePins} onChange={(value) => update((draft) => { if (draft.hardware_profile.ssd1306?.control_panel) draft.hardware_profile.ssd1306.control_panel.back = value; })} /></Field>
+            <Field label="SDA"><PinSelect value={activeDisplay.sda} board={board} unavailablePins={unavailablePins} onChange={(value) => update((draft) => { const display = draft.hardware_profile.sh1106 ?? draft.hardware_profile.ssd1306; if (display) display.sda = value; })} /></Field>
+            <Field label="SCL"><PinSelect value={activeDisplay.scl} board={board} unavailablePins={unavailablePins} onChange={(value) => update((draft) => { const display = draft.hardware_profile.sh1106 ?? draft.hardware_profile.ssd1306; if (display) display.scl = value; })} /></Field>
+            {controlPanel ? <>
+              <Field label="确认 KEY1"><PinSelect value={controlPanel.confirm} board={board} unavailablePins={unavailablePins} onChange={(value) => update((draft) => { if (draft.hardware_profile.sh1106?.control_panel) draft.hardware_profile.sh1106.control_panel.confirm = value; })} /></Field>
+              <Field label="编码器按压 PSH"><PinSelect value={controlPanel.encoder_press} board={board} unavailablePins={unavailablePins} onChange={(value) => update((draft) => { if (draft.hardware_profile.sh1106?.control_panel) draft.hardware_profile.sh1106.control_panel.encoder_press = value; })} /></Field>
+              <Field label="编码器 A 相 TRA"><PinSelect value={controlPanel.encoder_a} board={board} unavailablePins={unavailablePins} onChange={(value) => update((draft) => { if (draft.hardware_profile.sh1106?.control_panel) draft.hardware_profile.sh1106.control_panel.encoder_a = value; })} /></Field>
+              <Field label="编码器 B 相 TRB"><PinSelect value={controlPanel.encoder_b} board={board} unavailablePins={unavailablePins} onChange={(value) => update((draft) => { if (draft.hardware_profile.sh1106?.control_panel) draft.hardware_profile.sh1106.control_panel.encoder_b = value; })} /></Field>
+              <Field label="返回 KEY0"><PinSelect value={controlPanel.back} board={board} unavailablePins={unavailablePins} onChange={(value) => update((draft) => { if (draft.hardware_profile.sh1106?.control_panel) draft.hardware_profile.sh1106.control_panel.back = value; })} /></Field>
             </> : null}
           </div>
         ) : null}

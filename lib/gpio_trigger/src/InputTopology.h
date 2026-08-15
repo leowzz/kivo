@@ -34,9 +34,12 @@ struct MatrixInputSource {
   std::vector<std::uint8_t> columns;
 };
 
+enum class OledDriver { Ssd1306, Sh1106 };
+
 struct OledConfig {
   std::uint8_t sda;
   std::uint8_t scl;
+  OledDriver driver = OledDriver::Ssd1306;
 };
 
 struct OledControlPanelConfig {
@@ -70,6 +73,8 @@ class TopologyBuilder {
                  std::vector<std::uint8_t> columns);
   bool addOled(std::uint32_t revision, std::uint8_t sda,
                std::uint8_t scl);
+  bool addSh1106(std::uint32_t revision, std::uint8_t sda,
+                 std::uint8_t scl);
   bool addOledControlPanel(std::uint32_t revision, std::uint8_t confirm,
                            std::uint8_t encoderPress,
                            std::uint8_t encoderA, std::uint8_t encoderB,
@@ -81,6 +86,8 @@ class TopologyBuilder {
   bool pinsAvailable(const std::vector<std::uint8_t> &pins) const;
   bool addPins(std::uint8_t sourceIndex,
                const std::vector<std::uint8_t> &pins);
+  bool addOled(std::uint32_t revision, std::uint8_t sda, std::uint8_t scl,
+               OledDriver driver);
 
   std::optional<RuntimeTopology> pending_;
   const BoardProfile &profile_;

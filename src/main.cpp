@@ -13,6 +13,7 @@
 #include "GpioTriggerController.h"
 #include "Handshake.h"
 #include "KeyActivityIndicator.h"
+#include "OledControlPanel.h"
 #include "RemoteDisplay.h"
 #include "StandaloneDebugTopology.h"
 #include "TriggerProtocol.h"
@@ -31,6 +32,7 @@ ResponseLineBuffer responseLines(kMaxResponseLineLength);
 TopologyBuilder topologyBuilder(platform::boardProfile());
 DisplayStatusModel displayStatus;
 DisplayController displayController;
+OledControlPanel oledControlPanel;
 std::optional<RemoteDisplay> remoteDisplay{std::in_place};
 bool helperConnected = false;
 bool standaloneDisplayPending = false;
@@ -137,6 +139,11 @@ void showStatus(LocalDisplayPriority priority) {
                                                  priority));
 }
 
+void showControlPanel() {
+  applyDisplayUpdate(displayController.showInteractive(
+      oledControlPanel.frame(displayStatus.frame())));
+}
+
 DisplayFrame helperOfflineFrame() {
   auto frame = displayStatus.frame();
   frame.lines[1] = "HELPER OFFLINE  ";
@@ -147,6 +154,17 @@ DisplayFrame helperOfflineFrame() {
 bool isActiveOledPin(std::uint8_t pin) {
   const auto &oled = controller.topology().oled;
   return oled.has_value() && (pin == oled->sda || pin == oled->scl);
+}
+
+void applyOledControlPanelPinModes() {
+  if (const auto &panel = controller.topology().oledControlPanel;
+      panel.has_value()) {
+    pinMode(panel->confirm, INPUT_PULLUP);
+    pinMode(panel->encoderPress, INPUT_PULLUP);
+    pinMode(panel->encoderA, INPUT_PULLUP);
+    pinMode(panel->encoderB, INPUT_PULLUP);
+    pinMode(panel->back, INPUT_PULLUP);
+  }
 }
 
 void applyRuntimePinModes() {
@@ -162,14 +180,7 @@ void applyRuntimePinModes() {
     for (const auto gpio : source.rows) pinMode(gpio, INPUT_PULLUP);
     for (const auto gpio : source.columns) pinMode(gpio, INPUT_PULLUP);
   }
-  if (const auto &panel = controller.topology().oledControlPanel;
-      panel.has_value()) {
-    pinMode(panel->confirm, INPUT_PULLUP);
-    pinMode(panel->encoderPress, INPUT_PULLUP);
-    pinMode(panel->encoderA, INPUT_PULLUP);
-    pinMode(panel->encoderB, INPUT_PULLUP);
-    pinMode(panel->back, INPUT_PULLUP);
-  }
+  applyOledControlPanelPinModes();
 }
 
 void applyLearningPinModes() {
@@ -181,9 +192,11 @@ void applyLearningPinModes() {
   for (const auto gpio : controller.learningPins()) {
     pinMode(gpio, INPUT_PULLUP);
   }
+  applyOledControlPanelPinModes();
 }
 
 void configError(std::uint32_t revision, const char *code) {
+  oledControlPanel.reset();
   displayStatus.setConfigError();
   showStatus(LocalDisplayPriority::Critical);
   writeLine("CONFIG_ERROR " + std::to_string(revision) + " " + code + "\n");
@@ -195,6 +208,8 @@ void resetKeyIndicator() {
 }
 
 void applyTopologyState(const RuntimeTopology &topology, std::uint32_t nowMs) {
+  oledControlPanel.reset();
+  (void)displayController.clearInteractive();
   resetKeyIndicator();
   pendingDelay.reset();
   actionRuns.reset();
@@ -294,6 +309,13 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
                                    command->oledScl)) {
         topologyBuilder.cancel();
         configError(command->revision, "invalid_oled");
+      }
+      return;
+    case HelperCommandKind::ConfigSh1106:
+      if (!topologyBuilder.addSh1106(command->revision, command->oledSda,
+                                     command->oledScl)) {
+        topologyBuilder.cancel();
+        configError(command->revision, "invalid_sh1106");
       }
       return;
     case HelperCommandKind::ConfigOledControl:
@@ -452,8 +474,12 @@ void resetHelperInput() {
 void emitInput(const std::optional<InputEvent> &event, bool learning) {
   if (event.has_value()) {
     displayStatus.recordInput(*event);
-    showStatus(learning ? LocalDisplayPriority::Critical
-                        : LocalDisplayPriority::Normal);
+    if (oledControlPanel.active()) {
+      showControlPanel();
+    } else {
+      showStatus(learning ? LocalDisplayPriority::Critical
+                          : LocalDisplayPriority::Normal);
+    }
     switch (keyIndicator.handle(event->state)) {
       case KeyIndicatorAction::ShowRandomColor:
         platform::showRandomKeyColor();
@@ -465,6 +491,29 @@ void emitInput(const std::optional<InputEvent> &event, bool learning) {
         break;
     }
     writeLine(learning ? formatLearningEvent(*event) : formatInputEvent(*event));
+  }
+}
+
+void scanOledControlPanel(std::uint32_t nowMs) {
+  const auto &panel = controller.topology().oledControlPanel;
+  if (!panel.has_value()) return;
+  const OledControlPanelSample sample{
+      digitalRead(panel->confirm) == LOW,
+      digitalRead(panel->encoderPress) == LOW,
+      digitalRead(panel->encoderA) == HIGH,
+      digitalRead(panel->encoderB) == HIGH,
+      digitalRead(panel->back) == LOW,
+  };
+  switch (oledControlPanel.update(sample, nowMs,
+                                  controller.topology().debounceMs)) {
+    case OledControlPanelUpdate::Render:
+      showControlPanel();
+      break;
+    case OledControlPanelUpdate::Dismiss:
+      applyDisplayUpdate(displayController.clearInteractive());
+      break;
+    case OledControlPanelUpdate::None:
+      break;
   }
 }
 
@@ -554,6 +603,7 @@ void loop() {
       applyDisplayUpdate(
           displayController.helperDisconnected(helperOfflineFrame()));
     }
+    if (oledControlPanel.active()) showControlPanel();
   }
   helperConnected = connected;
   servicePendingDelay(nowMs);
@@ -564,6 +614,7 @@ void loop() {
   } else {
     scanRuntimeInputs(nowMs);
   }
+  scanOledControlPanel(nowMs);
   platform::serviceDisplay();
   platform::delayMs(1);
 }

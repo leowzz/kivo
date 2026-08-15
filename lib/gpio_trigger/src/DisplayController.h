@@ -21,6 +21,8 @@ class DisplayController {
  public:
   DisplayUpdate showLocal(const DisplayFrame &frame,
                           LocalDisplayPriority priority);
+  DisplayUpdate showInteractive(const DisplayFrame &frame);
+  DisplayUpdate clearInteractive();
   DisplayUpdate clearLocalOverride();
   DisplayUpdate commitRemote(const RemoteDisplayCommit &scene);
   DisplayUpdate helperConnected(const DisplayFrame &ready);
@@ -42,5 +44,6 @@ class DisplayController {
   bool disconnected_ = false;
   bool resumeLocalOverride_ = false;
   std::optional<DisplayFrame> local_;
+  std::optional<DisplayFrame> interactive_;
   std::optional<RemoteDisplayCommit> remote_;
 };

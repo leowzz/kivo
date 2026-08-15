@@ -27,23 +27,30 @@ constexpr std::uint8_t kOledI2cAddress = 0x3C;
 constexpr std::uint32_t kOledI2cClockHz = 100000;
 constexpr std::uint8_t kDisplayWidth = 128;
 constexpr std::uint8_t kDisplayWidthTiles = 16;
-constexpr std::uint8_t kDisplayHeightTiles = 4;
+constexpr std::uint8_t kSsd1306HeightTiles = 4;
+constexpr std::uint8_t kSh1106HeightTiles = 8;
 constexpr std::size_t kDisplayServiceDataBytes = 64;
 constexpr bool kPartialUpdateSupported = true;
 constexpr std::uint16_t kDisplayRotationDegrees = 0;
-constexpr std::array<std::uint8_t, 2> kStatusBaselines = {10, 29};
-constexpr std::uint8_t kInputBaseline = 20;
-std::unique_ptr<U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C> i2c0Display;
-std::unique_ptr<U8G2_SSD1306_128X32_UNIVISION_F_2ND_HW_I2C> i2c1Display;
-std::unique_ptr<U8G2_SSD1306_128X32_UNIVISION_F_SW_I2C> softwareDisplay;
+constexpr std::array<std::uint8_t, 2> kSsd1306StatusBaselines = {10, 29};
+constexpr std::uint8_t kSsd1306InputBaseline = 20;
+constexpr std::array<std::uint8_t, 4> kSh1106LocalBaselines = {12, 28, 44, 60};
+std::unique_ptr<U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C> ssd1306I2c0Display;
+std::unique_ptr<U8G2_SSD1306_128X32_UNIVISION_F_2ND_HW_I2C> ssd1306I2c1Display;
+std::unique_ptr<U8G2_SSD1306_128X32_UNIVISION_F_SW_I2C> ssd1306SoftwareDisplay;
+std::unique_ptr<U8G2_SH1106_128X64_NONAME_F_HW_I2C> sh1106I2c0Display;
+std::unique_ptr<U8G2_SH1106_128X64_NONAME_F_2ND_HW_I2C> sh1106I2c1Display;
+std::unique_ptr<U8G2_SH1106_128X64_NONAME_F_SW_I2C> sh1106SoftwareDisplay;
 U8G2 *display = nullptr;
 TwoWire *displayWire = nullptr;
+OledDriver displayDriver = OledDriver::Ssd1306;
+std::uint8_t displayHeightTiles = kSsd1306HeightTiles;
 std::optional<DisplayFrame> lastDisplayFrame;
 enum class DisplayBufferSource { None, Local, Remote };
 DisplayBufferSource displayBufferSource = DisplayBufferSource::None;
 bool displayRequested = false;
 bool displayHealthy = false;
-DirtyTiles dirtyTiles(kDisplayWidthTiles, kDisplayHeightTiles);
+DirtyTiles dirtyTiles(kDisplayWidthTiles, kSh1106HeightTiles);
 RefreshMode refreshMode = RefreshMode::Full;
 
 void stopDisplay() {
@@ -55,9 +62,12 @@ void stopDisplay() {
   }
   displayHealthy = false;
   display = nullptr;
-  i2c0Display.reset();
-  i2c1Display.reset();
-  softwareDisplay.reset();
+  ssd1306I2c0Display.reset();
+  ssd1306I2c1Display.reset();
+  ssd1306SoftwareDisplay.reset();
+  sh1106I2c0Display.reset();
+  sh1106I2c1Display.reset();
+  sh1106SoftwareDisplay.reset();
   if (displayWire) displayWire->end();
   displayWire = nullptr;
   lastDisplayFrame.reset();
@@ -91,12 +101,21 @@ bool supportsRemoteScene(const RemoteDisplayCommit &scene) {
       scene.dirtyCount > kMaxDisplayRegions) {
     return false;
   }
+  const auto displayHeight = static_cast<std::uint16_t>(displayHeightTiles * 8U);
+  for (std::size_t index = 0; index < scene.regionCount; ++index) {
+    const auto &bounds = scene.regions[index].bounds;
+    if (bounds.x + bounds.width > kDisplayWidth ||
+        bounds.y + bounds.height > displayHeight) {
+      return false;
+    }
+  }
   for (std::size_t index = 0; index < scene.operationCount; ++index) {
     const auto &operation = scene.operations[index];
     if (operation.kind == DisplayOperationKind::Clear) continue;
     if (operation.kind != DisplayOperationKind::Text ||
         operation.fontId > kRemoteDisplayMaxFontId ||
-        remoteDisplayFont(operation.fontId) == nullptr) {
+        remoteDisplayFont(operation.fontId) == nullptr ||
+        operation.x >= kDisplayWidth || operation.baselineY > displayHeight) {
       return false;
     }
   }
@@ -165,27 +184,52 @@ bool configureDisplay(const std::optional<OledConfig> &config) {
   stopDisplay();
   displayRequested = config.has_value();
   if (!displayRequested) return true;
+  displayDriver = config->driver;
+  displayHeightTiles = displayDriver == OledDriver::Sh1106
+                           ? kSh1106HeightTiles
+                           : kSsd1306HeightTiles;
 
   switch (selectRp2040OledBus(config->sda, config->scl)) {
     case Rp2040OledBus::I2c0:
       startHardwareI2c(Wire, config->sda, config->scl);
-      i2c0Display.reset(
-          new (std::nothrow) U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C(
-              U8G2_R0, U8X8_PIN_NONE));
-      display = i2c0Display.get();
+      if (displayDriver == OledDriver::Sh1106) {
+        sh1106I2c0Display.reset(
+            new (std::nothrow) U8G2_SH1106_128X64_NONAME_F_HW_I2C(
+                U8G2_R0, U8X8_PIN_NONE));
+        display = sh1106I2c0Display.get();
+      } else {
+        ssd1306I2c0Display.reset(
+            new (std::nothrow) U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C(
+                U8G2_R0, U8X8_PIN_NONE));
+        display = ssd1306I2c0Display.get();
+      }
       break;
     case Rp2040OledBus::I2c1:
       startHardwareI2c(Wire1, config->sda, config->scl);
-      i2c1Display.reset(
-          new (std::nothrow) U8G2_SSD1306_128X32_UNIVISION_F_2ND_HW_I2C(
-              U8G2_R0, U8X8_PIN_NONE));
-      display = i2c1Display.get();
+      if (displayDriver == OledDriver::Sh1106) {
+        sh1106I2c1Display.reset(
+            new (std::nothrow) U8G2_SH1106_128X64_NONAME_F_2ND_HW_I2C(
+                U8G2_R0, U8X8_PIN_NONE));
+        display = sh1106I2c1Display.get();
+      } else {
+        ssd1306I2c1Display.reset(
+            new (std::nothrow) U8G2_SSD1306_128X32_UNIVISION_F_2ND_HW_I2C(
+                U8G2_R0, U8X8_PIN_NONE));
+        display = ssd1306I2c1Display.get();
+      }
       break;
     case Rp2040OledBus::Software:
-      softwareDisplay.reset(
-          new (std::nothrow) U8G2_SSD1306_128X32_UNIVISION_F_SW_I2C(
-              U8G2_R0, config->scl, config->sda, U8X8_PIN_NONE));
-      display = softwareDisplay.get();
+      if (displayDriver == OledDriver::Sh1106) {
+        sh1106SoftwareDisplay.reset(
+            new (std::nothrow) U8G2_SH1106_128X64_NONAME_F_SW_I2C(
+                U8G2_R0, config->scl, config->sda, U8X8_PIN_NONE));
+        display = sh1106SoftwareDisplay.get();
+      } else {
+        ssd1306SoftwareDisplay.reset(
+            new (std::nothrow) U8G2_SSD1306_128X32_UNIVISION_F_SW_I2C(
+                U8G2_R0, config->scl, config->sda, U8X8_PIN_NONE));
+        display = ssd1306SoftwareDisplay.get();
+      }
       break;
   }
   if (!display) {
@@ -217,15 +261,25 @@ bool renderLocalDisplay(const DisplayFrame &frame) {
   dirtyTiles.clear();
   display->setFont(u8g2_font_6x13_tf);
   display->clearBuffer();
-  for (std::size_t index = 0; index < kStatusBaselines.size(); ++index) {
-    display->drawStr(0, kStatusBaselines[index], frame.lines[index].c_str());
-  }
-  if (!frame.lines[2].empty()) {
-    const auto inputWidth = display->getStrWidth(frame.lines[2].c_str());
-    const auto inputX = inputWidth < kDisplayWidth
-                            ? static_cast<std::uint8_t>(kDisplayWidth - inputWidth)
-                            : 0;
-    display->drawStr(inputX, kInputBaseline, frame.lines[2].c_str());
+  if (displayDriver == OledDriver::Sh1106) {
+    for (std::size_t index = 0; index < kSh1106LocalBaselines.size(); ++index) {
+      display->drawStr(0, kSh1106LocalBaselines[index],
+                       frame.lines[index].c_str());
+    }
+  } else {
+    for (std::size_t index = 0; index < kSsd1306StatusBaselines.size();
+         ++index) {
+      display->drawStr(0, kSsd1306StatusBaselines[index],
+                       frame.lines[index].c_str());
+    }
+    if (!frame.lines[2].empty()) {
+      const auto inputWidth = display->getStrWidth(frame.lines[2].c_str());
+      const auto inputX = inputWidth < kDisplayWidth
+                              ? static_cast<std::uint8_t>(kDisplayWidth - inputWidth)
+                              : 0;
+      display->drawStr(inputX, kSsd1306InputBaseline,
+                       frame.lines[2].c_str());
+    }
   }
   display->sendBuffer();
   lastDisplayFrame = frame;
@@ -264,8 +318,9 @@ bool renderRemoteDisplay(const RemoteDisplayCommit &scene,
                      operation.text.c_str());
   }
   if (redrawAll) {
-    dirtyTiles.markPixels({0, 0, kDisplayWidth,
-                           kDisplayHeightTiles * 8U});
+    dirtyTiles.markPixels(
+        {0, 0, kDisplayWidth,
+         static_cast<std::uint16_t>(displayHeightTiles * 8U)});
   } else {
     for (std::size_t index = 0; index < scene.dirtyCount; ++index) {
       dirtyTiles.markPixels(scene.dirtyBounds[index]);

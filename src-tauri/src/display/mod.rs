@@ -22,8 +22,8 @@ pub(crate) use provider::{DisplayProvider, ProviderRegistry, ProviderUpdate};
 #[allow(unused_imports)]
 pub(crate) use render::{
     DisplayCapabilities, DisplayRegion, DisplayRenderer, DrawOperation, MonoText128x32Renderer,
-    PixelFormat, Rect, RenderedScene, RendererRegistry, ascii_project_title,
-    built_in_renderer_registry,
+    MonoText128x64Renderer, PixelFormat, Rect, RenderedScene, RendererRegistry, SH1106_PANEL_ID,
+    SSD1306_PANEL_ID, ascii_project_title, built_in_renderer_registry,
 };
 #[allow(unused_imports)]
 pub(crate) use scene::{SceneMode, SceneTracker, SceneUpdate};
@@ -84,7 +84,7 @@ mod tests {
 
     use super::{
         DisplayItem, DisplayPriority, DisplayProvider, DisplayRenderer, DisplayService,
-        DisplaySnapshot, DisplayState, MonoText128x32Renderer, Rect, SceneMode, SceneTracker,
+        DisplaySnapshot, DisplayState, MonoText128x64Renderer, Rect, SceneMode, SceneTracker,
         SourceHealth, ascii_project_title, built_in_provider_registry, built_in_renderer_registry,
         registry_with_codex_provider,
     };
@@ -147,7 +147,7 @@ mod tests {
         let service = DisplayService::spawn(providers, Arc::clone(&stop), sender).unwrap();
 
         let snapshot = snapshots.recv_timeout(Duration::from_secs(1)).unwrap();
-        let scene = MonoText128x32Renderer.render(&snapshot).unwrap();
+        let scene = MonoText128x64Renderer.render(&snapshot).unwrap();
 
         assert_eq!(scene.text("row0_left"), "CODEX");
         assert_eq!(scene.text("row0_right"), "OFFLINE");
@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn renders_running_summary_into_three_tile_aligned_regions() {
-        let scene = MonoText128x32Renderer.render(&snapshot(3, 1)).unwrap();
+        let scene = MonoText128x64Renderer.render(&snapshot(3, 1)).unwrap();
         assert_eq!(
             scene
                 .regions
@@ -165,9 +165,9 @@ mod tests {
                 .map(|r| (r.id, r.bounds))
                 .collect::<Vec<_>>(),
             vec![
-                ("row0_left", Rect::new(0, 0, 64, 16)),
-                ("row0_right", Rect::new(64, 0, 64, 16)),
-                ("row1", Rect::new(0, 16, 128, 16)),
+                ("row0_left", Rect::new(0, 0, 64, 32)),
+                ("row0_right", Rect::new(64, 0, 64, 32)),
+                ("row1", Rect::new(0, 32, 128, 32)),
             ]
         );
         assert_eq!(scene.text("row0_left"), "CODEX");
@@ -179,11 +179,11 @@ mod tests {
     fn changing_only_running_count_emits_only_row0_right() {
         let mut tracker = SceneTracker::default();
         let first = tracker
-            .prepare(MonoText128x32Renderer.render(&snapshot(3, 1)).unwrap())
+            .prepare(MonoText128x64Renderer.render(&snapshot(3, 1)).unwrap())
             .unwrap();
         tracker.ack(first.new_revision).unwrap();
         let second = tracker
-            .prepare(MonoText128x32Renderer.render(&snapshot(4, 1)).unwrap())
+            .prepare(MonoText128x64Renderer.render(&snapshot(4, 1)).unwrap())
             .unwrap();
         assert_eq!(second.mode, SceneMode::Delta);
         assert_eq!(
@@ -198,8 +198,11 @@ mod tests {
     }
 
     #[test]
-    fn built_in_renderer_registry_contains_only_the_v1_panel() {
+    fn built_in_renderer_registry_contains_both_oled_panels() {
         let registry = built_in_renderer_registry();
-        assert_eq!(registry.panel_ids(), vec!["ssd1306_128x32_mono"]);
+        assert_eq!(
+            registry.panel_ids(),
+            vec!["sh1106-1.3-128x64-ec11", "ssd1306_128x32_mono"]
+        );
     }
 }

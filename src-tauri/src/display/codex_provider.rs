@@ -150,7 +150,7 @@ mod tests {
     use super::*;
     use crate::display::{
         CodexInputNeed, CodexSourceSnapshot, CodexTerminalEvent, DisplayProvider, DisplayRenderer,
-        DisplaySnapshot, DisplayState, MergedCodexTask, MonoText128x32Renderer, SourceHealth,
+        DisplaySnapshot, DisplayState, MergedCodexTask, MonoText128x64Renderer, SourceHealth,
     };
 
     struct FakeCodexTaskReader {
@@ -315,7 +315,7 @@ mod tests {
             .find(|item| item.id == "codex.task.a3f2-rest")
             .unwrap();
         assert_eq!(task.title, "");
-        let scene = MonoText128x32Renderer
+        let scene = MonoText128x64Renderer
             .render(&DisplaySnapshot {
                 items: update.items,
                 health: BTreeMap::from([("codex".to_owned(), update.health)]),

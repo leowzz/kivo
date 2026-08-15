@@ -17,6 +17,7 @@ enum class HelperCommandKind {
   ConfigDirect,
   ConfigMatrix,
   ConfigOled,
+  ConfigSh1106,
   ConfigOledControl,
   ConfigCommit,
   DisplayBegin,
