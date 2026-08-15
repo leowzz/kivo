@@ -7,6 +7,7 @@ correctly.
 | Generator | Output |
 |---|---|
 | `integrated_workstation.py` | Integrated workstation shell, sloped panel, bottom cover, standalone controller-cradle test module, and side-mount handset base |
+| `heat_set_insert_test_plate.py` | Labeled M3 heat-set insert calibration plate with 4.3-4.8 mm through holes |
 | `telephone_handset_switch_base.py` | Standalone telephone handset switch base |
 | `macro_pad_variants.py` | Macro-pad enclosure size variants |
 

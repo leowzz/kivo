@@ -34,13 +34,13 @@ uv run --script scripts/modeling/integrated_workstation.py
 | Item | Designed interface |
 |---|---:|
 | Heat-set insert supplied | `3.9` body, `4.9` knurled rings, `4.9` long |
-| Heat-set insert pocket | `4.0 x 5.4` blind bore, `5.1 x 0.6` lead-in |
+| Heat-set insert pocket | `4.8 x 5.4` blind bore, `5.1 x 0.6` lead-in |
 | M3 countersunk screw | `2.9` thread, `5.3` measured head diameter |
 | Printed countersink | `3.4` through hole, `5.6 x 0.5` straight recess, then `90 degrees` |
 | Bottom cover | `138 x 104`, matching the controller chassis footprint |
 | Bottom cover attachment | Six countersunk M3 screws into the shared pillars |
 | Handset chassis holes | Two `3.4` round clearances at `y=47.2/90.0`, `z=4.6` |
-| Handset base inserts | Two `4.0 x 5.4` blind bores with `5.1 x 0.6` lead-ins |
+| Handset base inserts | Two `4.8 x 5.4` blind bores with `5.1 x 0.6` lead-ins |
 | Handset base installed bottom | `z=-2.4`, aligned with the bottom-cover underside |
 | Handset base installed rear | `y=108`, flush with the chassis rear for cable access |
 | Key switches | `14.8` lower relief, `14.0` upper lip |
@@ -56,7 +56,7 @@ uv run --script scripts/modeling/integrated_workstation.py
 | Screen-side rear attachment | Panel axis `[158, 109]`, clear of display hardware |
 | Shared attachment pillars | Six support-free columns with independent blind insert pockets at both ends |
 | Display PCB | `64.90 x 35.03`, four backside-loaded heat-set insert holes |
-| Display attachment | Four `4.0` through bores with `5.1 x 0.6` backside lead-ins |
+| Display attachment | Four `4.8` through bores with `5.1 x 0.6` backside lead-ins |
 | Display header | 8 pins on PCB left half, first pin at `x=11.38`, `2.54` pitch |
 | Display cable slot | `24.5 x 6.5`, aligned below the left-side header |
 | Display bezel position | Flush with the panel's left edge |
@@ -81,7 +81,7 @@ uv run --script scripts/modeling/integrated_workstation.py
 The display PCB sits on the removable panel in a rounded locating bezel with
 `0.65` clearance on each edge. The bezel rises only `2.0` above the 30-degree
 key plane. Four M3 heat-set inserts are installed from the panel's flat back
-side; their `4.0` bores pass through the full `5.4` mounting thickness, with a
+side; their `4.8` bores pass through the full `5.4` mounting thickness, with a
 `5.1 x 0.6` lead-in on the back. The dimensioned reference places its eight-pin
 header on the left half of the board, so a hidden `24.5 x 6.5` slot is aligned
 below that header rather than centered beneath the PCB.
@@ -119,7 +119,7 @@ relocated with its panel attachment to avoid the display hardware.
 - 18 M3 heat-set brass inserts with the measured `3.9` body, `4.9` knurled
   rings, and `4.9` length: 6 for the sloped-panel attachment, 4 for the display,
   6 for the bottom cover, and 2 for the handset base. Receiving parts use a
-  `4.0 x 5.4` blind bore with a shallow `5.1` lead-in; the four display bores
+  `4.8 x 5.4` blind bore with a shallow `5.1` lead-in; the four display bores
   pass through the panel and open from its back side.
 - The user-supplied screws measure `2.9` across the thread and `5.3` across
   the head. Exterior attachment holes use a `3.4` clearance bore and a
@@ -176,7 +176,7 @@ relocated with its panel attachment to avoid the display hardware.
   ribs free of support.
 - Print the handset base upright in its modeled orientation. It has no external
   attachment protrusions. The two horizontal blind insert bores may print
-  slightly flat at the top; clear them gently with a `4.0 mm` drill before
+  slightly flat at the top; clear them gently with a `4.8 mm` drill before
   heat-setting the inserts if needed.
 - Print the sloped panel separately with its large flat underside on the build
   plate. The switch steps and 2 mm screen bezel face upward and need no support.

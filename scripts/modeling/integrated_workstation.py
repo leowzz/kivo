@@ -115,7 +115,7 @@ PANEL_HOLE_DIAMETER = 3.4
 HEAT_SET_INSERT_NARROW_DIAMETER = 3.9
 HEAT_SET_INSERT_WIDE_DIAMETER = 4.9
 HEAT_SET_INSERT_LENGTH = 4.9
-HEAT_SET_INSERT_HOLE_DIAMETER = 4.0
+HEAT_SET_INSERT_HOLE_DIAMETER = 4.8
 HEAT_SET_INSERT_LEAD_DIAMETER = 5.1
 HEAT_SET_INSERT_LEAD_DEPTH = 0.6
 HEAT_SET_INSERT_DEPTH_CLEARANCE = 0.5
@@ -707,7 +707,7 @@ def panel_screen_cutters() -> list[trimesh.Trimesh]:
     ]
     for hole in SCREEN_BOARD_HOLES + SCREEN_BOARD_ORIGIN:
         # The display inserts are installed from the panel's flat underside.
-        # Their 4 mm bores continue through the screen collars so the PCB-side
+        # Their 4.8 mm bores continue through the screen collars so the PCB-side
         # screws can enter the inserts without a trapped plastic floor.
         cutters.extend(
             [

@@ -219,7 +219,7 @@ def test_screen_has_four_backside_heat_set_insert_through_holes(
     _, panel, _, _ = generated_models
 
     assert workstation.SCREEN_BOARD_HOLES.shape == (4, 2)
-    assert workstation.SCREEN_INSERT_THROUGH_DIAMETER == 4.0
+    assert workstation.SCREEN_INSERT_THROUGH_DIAMETER == 4.8
     assert workstation.SCREEN_INSERT_MATERIAL_DEPTH == pytest.approx(5.4)
     assert workstation.SCREEN_INSERT_MATERIAL_DEPTH >= (
         workstation.HEAT_SET_INSERT_LENGTH
@@ -294,7 +294,7 @@ def test_user_measured_heat_set_insert_holes_are_hidden_and_blind(
     assert workstation.HEAT_SET_INSERT_NARROW_DIAMETER == 3.9
     assert workstation.HEAT_SET_INSERT_WIDE_DIAMETER == 4.9
     assert workstation.HEAT_SET_INSERT_LENGTH == 4.9
-    assert workstation.HEAT_SET_INSERT_HOLE_DIAMETER == 4.0
+    assert workstation.HEAT_SET_INSERT_HOLE_DIAMETER == 4.8
     assert workstation.HEAT_SET_INSERT_LEAD_DIAMETER == 5.1
     assert workstation.HEAT_SET_INSERT_HOLE_DEPTH == 5.4
     assert workstation.M3_SCREW_THREAD_DIAMETER == 2.9
