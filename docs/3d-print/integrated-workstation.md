@@ -15,7 +15,7 @@ All dimensions are millimeters.
   display panel with a raised horizontal three-switch pod and six recessed
   fly-wire clips. It has no underside protrusions and prints flat.
 - `kivo_integrated_workstation_bottom_cover.stl`: removable `138 x 104` bottom
-  cover with six countersunk attachment holes, a two-level snap-fit controller
+  cover with six countersunk attachment holes, a two-level slide-in controller
   cradle, and ventilation slots.
 - `telephone_handset_switch_base_workstation_mount.stl`: independent handset
   base with two blind M3 heat-set insert pockets cut directly into its existing
@@ -36,12 +36,13 @@ uv run --script scripts/modeling/integrated_workstation.py
 | Heat-set insert supplied | `3.9` body, `4.9` knurled rings, `4.9` long |
 | Heat-set insert pocket | `4.0 x 5.4` blind bore, `5.1 x 0.6` lead-in |
 | M3 countersunk screw | `2.9` thread, `5.3` measured head diameter |
-| Printed countersink | `3.4` through hole, `5.6` diameter, `90 degrees` |
+| Printed countersink | `3.4` through hole, `5.6 x 0.5` straight recess, then `90 degrees` |
 | Bottom cover | `138 x 104`, matching the controller chassis footprint |
 | Bottom cover attachment | Six countersunk M3 screws into the shared pillars |
-| Handset chassis holes | Two `3.4` round clearances at `y=34.6/77.4`, `z=4.6` |
+| Handset chassis holes | Two `3.4` round clearances at `y=47.2/90.0`, `z=4.6` |
 | Handset base inserts | Two `4.0 x 5.4` blind bores with `5.1 x 0.6` lead-ins |
 | Handset base installed bottom | `z=-2.4`, aligned with the bottom-cover underside |
+| Handset base installed rear | `y=108`, flush with the chassis rear for cable access |
 | Key switches | `14.8` lower relief, `14.0` upper lip |
 | Key layout | `6 x 3`, `19.05` pitch |
 | Key plane | `30 degrees` above horizontal |
@@ -64,7 +65,10 @@ uv run --script scripts/modeling/integrated_workstation.py
 | RP2040 reference | `22.86 x 53.34` |
 | ESP32-S3 reference | `27.94 x 63.39` |
 | RP2040 support level | PCB underside `3.0` above the cover inner face |
+| RP2040 locating slot | `23.0` clear width, `2.4` walls rising `2.5` above support |
+| RP2040 top clip | `10.0` wide with `1.0` PCB overlap |
 | ESP32-S3 support level | PCB underside `6.5` above the cover inner face |
+| ESP32-S3 retaining lips | `12.0` long, `1.8` stem, `0.8` PCB overlap |
 | Controller USB opening | Rear wall, `37.0 x 9.5` |
 
 The display PCB sits on the removable panel in a rounded locating bezel with
@@ -105,7 +109,8 @@ retain the original front and rear pairs and add one middle pair.
   pass through the panel and open from its back side.
 - The user-supplied screws measure `2.9` across the thread and `5.3` across
   the head. Exterior attachment holes use a `3.4` clearance bore and a
-  `5.6`, 90-degree countersink so the screw heads can sit flush.
+  `5.6 x 0.5` straight recess followed by a 90-degree countersink so the screw
+  heads sit 0.5 mm deeper.
 - 6 M3 x 8 screws for the bottom cover. They pass through the outside cover
   and enter inserts installed from the hidden underside of the chassis.
 - 6 M3 x 10 screws for the removable sloped panel. They pass through the
@@ -118,17 +123,20 @@ retain the original front and rear pairs and add one middle pair.
   `15 x 29 x 27 mm` bodies. Install them from the panel underside through the
   shared rectangular cavity. Their mounting axes are vertical after assembly.
 - The RP2040 and ESP32-S3 reference boards have GPIO solder holes but no
-  dedicated mechanical mounting holes. The controller cradle therefore uses
-  two screw-free stepped support levels with flexible side catches.
+  dedicated mechanical mounting holes. The RP2040 uses a `23.0 mm` U-shaped
+  locating slot with one wide top clip; the ESP32-S3 uses the outer support
+  level with fixed horizontal retaining lips.
 
 1. Heat two inserts directly into the handset base's right wall. Hold the base
    horizontal with its bottom aligned to the installed bottom cover, then pass
    two M3 screws and washers through the round chassis holes into the inserts.
    Tighten both screws and keep both washers on the chassis interior.
 2. Place the controller USB end toward the wide rear connector opening and
-   press the board into its matching snap level. The narrower RP2040 uses the
-   inner lower level; the larger ESP32-S3 uses the outer upper level. Press the
-   two side catches outward when removing a board.
+   slide the board lengthwise into its slot until it reaches the front stop. The
+   RP2040 runs inside the `23.0 mm` lower U-slot and under its single top clip;
+   the larger ESP32-S3 uses the outer upper level and horizontal side lips.
+   Slide either board back out from the rear; the retainers are fixed and should
+   not be bent.
 3. Heat four inserts into the display holes from the panel's flat back side
    until flush. Install all 18 key switches and the three toggle switches, then
    fasten the display PCB from the front with four M3 x 10 screws. Fly-wire each
@@ -161,9 +169,9 @@ retain the original front and rear pairs and add one middle pair.
   add support inside them. Use elephant-foot compensation if the `1.5` mouths
   print too tight.
 - Print the bottom cover flat with the controller rails facing upward.
-- The controller catches are thin vertical cantilevers. Print them in the
-  modeled orientation and avoid adding support between a catch and the board
-  pocket.
+- The RP2040 slot uses continuous `2.4 mm` walls and one `10 mm` top clip. The
+  ESP32-S3 retainers use `1.8 mm` fixed stems and `12 mm` horizontal lips.
+  Their short overhangs print without support; slide controllers in from the rear.
 - Start with a 0.4 nozzle, 0.2 layer height, 4 perimeters, and 20 percent
   infill.
 - The main shell and cover both remain `138 mm` wide; there is no separate

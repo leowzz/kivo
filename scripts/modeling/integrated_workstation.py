@@ -86,6 +86,7 @@ HEAT_SET_INSERT_CUTTER_OVERSHOOT = 1.0
 M3_SCREW_THREAD_DIAMETER = 2.9
 M3_SCREW_HEAD_DIAMETER = 5.3
 M3_SCREW_HEAD_CLEARANCE_DIAMETER = 5.6
+M3_SCREW_HEAD_RECESS_DEPTH = 0.5
 M3_SCREW_COUNTERSINK_ANGLE_DEGREES = 90.0
 M3_SCREW_COUNTERSINK_CUTTER_OVERSHOOT = 0.1
 PANEL_INSERT_BOSS_RADIUS = 5.5
@@ -240,15 +241,16 @@ SHARED_ATTACHMENT_BASE_HEIGHT = PANEL_INSERT_BOSS_DEPTH
 COVER_THICKNESS = 2.4
 
 # Two blind M3 heat-set insert pockets are cut directly into the handset base's
-# existing right wall. Both screw axes share one Z level, and the base is lowered
-# by the bottom-cover thickness so both printed parts rest on the same surface.
+# existing right wall. Both screw axes share one Z level. The base's rear face is
+# flush with the chassis rear for cable access, and its bottom is lowered by the
+# bottom-cover thickness so both printed parts rest on the same surface.
 HANDSET_MOUNT_INSERT_LOCAL_CENTERS = np.array([[18.0, 7.0], [60.8, 7.0]])
 HANDSET_MOUNT_INSERT_SURFACE_X = handset.OUTER_WIDTH
 HANDSET_MOUNT_INSERT_BLIND_FLOOR = 1.2
 HANDSET_MOUNT_ORIGIN = np.array(
     [
         WEDGE_X0 - handset.OUTER_WIDTH,
-        (WEDGE_Y0 + WEDGE_Y1 - handset.OUTER_LENGTH) / 2.0,
+        WEDGE_Y1 - handset.OUTER_LENGTH,
         -COVER_THICKNESS,
     ]
 )
@@ -273,6 +275,13 @@ FOOT_PAD_RECESS_CENTERS = np.array(
 )
 RP2040_BOARD_WIDTH = 22.86
 RP2040_BOARD_LENGTH = 53.34
+RP2040_SLOT_CLEAR_WIDTH = 23.0
+RP2040_SLOT_WALL_THICKNESS = 2.4
+RP2040_SLOT_WALL_HEIGHT = 2.5
+RP2040_SLOT_STOP_THICKNESS = 2.0
+RP2040_TOP_CLIP_WIDTH = 10.0
+RP2040_TOP_CLIP_OVERLAP = 1.0
+RP2040_TOP_CLIP_CLEARANCE = 0.2
 ESP32_S3_BOARD_WIDTH = 27.94
 ESP32_S3_BOARD_LENGTH = 63.39
 CONTROLLER_CENTER_X = 141.5
@@ -289,11 +298,11 @@ CONTROLLER_PCB_THICKNESS = 1.6
 CONTROLLER_RP2040_RAISE = 3.0
 CONTROLLER_ESP32_S3_RAISE = 6.5
 CONTROLLER_SUPPORT_RAIL_WIDTH = 1.8
-CONTROLLER_SNAP_STEM_THICKNESS = 1.0
-CONTROLLER_SNAP_LENGTH = 5.0
-CONTROLLER_SNAP_OVERLAP = 0.3
-CONTROLLER_SNAP_CLEARANCE = 0.15
-CONTROLLER_SNAP_RISE = 1.0
+CONTROLLER_RETAINER_STEM_THICKNESS = 1.8
+CONTROLLER_RETAINER_LENGTH = 12.0
+CONTROLLER_RETAINER_OVERLAP = 0.8
+CONTROLLER_RETAINER_CLEARANCE = 0.2
+CONTROLLER_RETAINER_LIP_THICKNESS = 0.8
 CONTROLLER_USB_OPENING_X0 = 123.0
 CONTROLLER_USB_OPENING_X1 = 160.0
 CONTROLLER_USB_OPENING_Y0 = WEDGE_Y1 - WEDGE_WALL - 2.0
@@ -451,13 +460,16 @@ def countersink_cutter(
     half_angle = np.deg2rad(M3_SCREW_COUNTERSINK_ANGLE_DEGREES / 2.0)
     radial_per_depth = np.tan(half_angle)
     opening_radius = M3_SCREW_HEAD_CLEARANCE_DIAMETER / 2.0
-    cutter_radius = (
-        opening_radius + M3_SCREW_COUNTERSINK_CUTTER_OVERSHOOT * radial_per_depth
+    countersink_tip_depth = (
+        M3_SCREW_HEAD_RECESS_DEPTH + opening_radius / radial_per_depth
     )
-    cutter_height = cutter_radius / radial_per_depth
-    result = trimesh.creation.cone(
-        radius=cutter_radius,
-        height=cutter_height,
+    result = trimesh.creation.revolve(
+        linestring=[
+            [0.0, -M3_SCREW_COUNTERSINK_CUTTER_OVERSHOOT],
+            [opening_radius, -M3_SCREW_COUNTERSINK_CUTTER_OVERSHOOT],
+            [opening_radius, M3_SCREW_HEAD_RECESS_DEPTH],
+            [0.0, countersink_tip_depth],
+        ],
         sections=CIRCLE_SEGMENTS,
     )
     if inward_direction == -1:
@@ -468,8 +480,7 @@ def countersink_cutter(
         (
             center_xy[0],
             center_xy[1],
-            exterior_surface_z
-            - inward_direction * M3_SCREW_COUNTERSINK_CUTTER_OVERSHOOT,
+            exterior_surface_z,
         )
     )
     return result
@@ -1007,49 +1018,122 @@ def controller_board_bounds(
     return x0, CONTROLLER_Y1 - length, x0 + width, CONTROLLER_Y1
 
 
-def build_controller_snap_tabs(
+def build_rp2040_slot() -> list[trimesh.Trimesh]:
+    board_x0, board_y0, board_x1, board_y1 = controller_board_bounds(
+        RP2040_BOARD_WIDTH,
+        RP2040_BOARD_LENGTH,
+    )
+    slot_x0 = CONTROLLER_CENTER_X - RP2040_SLOT_CLEAR_WIDTH / 2.0
+    slot_x1 = CONTROLLER_CENTER_X + RP2040_SLOT_CLEAR_WIDTH / 2.0
+    support_z = COVER_THICKNESS + CONTROLLER_RP2040_RAISE
+    wall_top_z = support_z + RP2040_SLOT_WALL_HEIGHT
+    overlap_z = COVER_THICKNESS - 0.02
+    rail_y0 = board_y0 - RP2040_SLOT_STOP_THICKNESS
+    rail_y1 = board_y1 - 2.0
+
+    parts = [
+        box(
+            (
+                slot_x0 - RP2040_SLOT_WALL_THICKNESS,
+                rail_y0,
+                overlap_z,
+            ),
+            (slot_x0, rail_y1, wall_top_z),
+        ),
+        box(
+            (slot_x1, rail_y0, overlap_z),
+            (
+                slot_x1 + RP2040_SLOT_WALL_THICKNESS,
+                rail_y1,
+                wall_top_z,
+            ),
+        ),
+        box(
+            (slot_x0, rail_y0, overlap_z),
+            (
+                slot_x1,
+                board_y0,
+                support_z + CONTROLLER_PCB_THICKNESS / 2.0,
+            ),
+        ),
+    ]
+
+    clip_x0 = CONTROLLER_CENTER_X - RP2040_TOP_CLIP_WIDTH / 2.0
+    clip_x1 = CONTROLLER_CENTER_X + RP2040_TOP_CLIP_WIDTH / 2.0
+    board_top_z = support_z + CONTROLLER_PCB_THICKNESS
+    clip_bottom_z = board_top_z + RP2040_TOP_CLIP_CLEARANCE
+    parts.extend(
+        [
+            box(
+                (clip_x0, rail_y0, overlap_z),
+                (clip_x1, board_y0, wall_top_z),
+            ),
+            box(
+                (clip_x0, board_y0 - 0.05, clip_bottom_z),
+                (
+                    clip_x1,
+                    board_y0 + RP2040_TOP_CLIP_OVERLAP,
+                    wall_top_z,
+                ),
+            ),
+        ]
+    )
+
+    # These ledges support the PCB while the 23 mm slot walls locate its edges.
+    parts.extend(
+        [
+            box(
+                (slot_x0, rail_y0, overlap_z),
+                (board_x0 + CONTROLLER_SUPPORT_RAIL_WIDTH, rail_y1, support_z),
+            ),
+            box(
+                (board_x1 - CONTROLLER_SUPPORT_RAIL_WIDTH, rail_y0, overlap_z),
+                (slot_x1, rail_y1, support_z),
+            ),
+        ]
+    )
+    return parts
+
+
+def build_controller_retaining_lips(
     width: float, length: float, support_raise: float
 ) -> list[trimesh.Trimesh]:
     board_x0, board_y0, board_x1, _ = controller_board_bounds(width, length)
     board_top_z = COVER_THICKNESS + support_raise + CONTROLLER_PCB_THICKNESS
-    tab_center_y = board_y0 + length * 0.55
-    tab_y0 = tab_center_y - CONTROLLER_SNAP_LENGTH / 2.0
-    tab_y1 = tab_center_y + CONTROLLER_SNAP_LENGTH / 2.0
+    retainer_center_y = board_y0 + length * 0.55
+    retainer_y0 = retainer_center_y - CONTROLLER_RETAINER_LENGTH / 2.0
+    retainer_y1 = retainer_center_y + CONTROLLER_RETAINER_LENGTH / 2.0
     stem_z0 = COVER_THICKNESS - 0.02
-    stem_z1 = board_top_z + CONTROLLER_SNAP_RISE
+    lip_z0 = board_top_z + CONTROLLER_RETAINER_CLEARANCE
+    lip_z1 = lip_z0 + CONTROLLER_RETAINER_LIP_THICKNESS
 
     parts: list[trimesh.Trimesh] = []
     for side, board_edge in ((-1, board_x0), (1, board_x1)):
         stem_inner_x = board_edge + side * CONTROLLER_SIDE_CLEARANCE
-        stem_outer_x = stem_inner_x + side * CONTROLLER_SNAP_STEM_THICKNESS
+        stem_outer_x = stem_inner_x + side * CONTROLLER_RETAINER_STEM_THICKNESS
         parts.append(
             box(
                 (
                     min(stem_inner_x, stem_outer_x) - 0.05,
-                    tab_y0,
+                    retainer_y0,
                     stem_z0,
                 ),
                 (
                     max(stem_inner_x, stem_outer_x) + 0.05,
-                    tab_y1,
-                    stem_z1,
+                    retainer_y1,
+                    lip_z1,
                 ),
             )
         )
 
-        nub_tip_x = board_edge - side * CONTROLLER_SNAP_OVERLAP
-        nub_base_x = stem_inner_x - side * 0.05
-        nub_bottom_z = board_top_z + CONTROLLER_SNAP_CLEARANCE
-        nub_points = [
-            [x, y, z]
-            for y in (tab_y0, tab_y1)
-            for x, z in (
-                (nub_base_x, nub_bottom_z),
-                (nub_tip_x, nub_bottom_z),
-                (nub_base_x, stem_z1),
+        lip_tip_x = board_edge - side * CONTROLLER_RETAINER_OVERLAP
+        lip_base_x = stem_inner_x - side * 0.05
+        parts.append(
+            box(
+                (min(lip_tip_x, lip_base_x), retainer_y0, lip_z0),
+                (max(lip_tip_x, lip_base_x), retainer_y1, lip_z1),
             )
-        ]
-        parts.append(hull(nub_points))
+        )
     return parts
 
 
@@ -1097,17 +1181,13 @@ def build_controller_support_level(
             ),
         ),
     ]
-    mounts.extend(build_controller_snap_tabs(width, length, support_raise))
+    mounts.extend(build_controller_retaining_lips(width, length, support_raise))
     return mounts
 
 
 def build_controller_mounts() -> list[trimesh.Trimesh]:
     return [
-        *build_controller_support_level(
-            RP2040_BOARD_WIDTH,
-            RP2040_BOARD_LENGTH,
-            CONTROLLER_RP2040_RAISE,
-        ),
+        *build_rp2040_slot(),
         *build_controller_support_level(
             ESP32_S3_BOARD_WIDTH,
             ESP32_S3_BOARD_LENGTH,
@@ -1464,15 +1544,25 @@ def validate_controller_connector_opening(shell: trimesh.Trimesh) -> None:
 
 
 def validate_controller_cradle(cover: trimesh.Trimesh) -> None:
-    lower_snap_top = (
-        COVER_THICKNESS
-        + CONTROLLER_RP2040_RAISE
-        + CONTROLLER_PCB_THICKNESS
-        + CONTROLLER_SNAP_RISE
+    rp2040_slot_top = (
+        COVER_THICKNESS + CONTROLLER_RP2040_RAISE + RP2040_SLOT_WALL_HEIGHT
     )
     upper_board_bottom = COVER_THICKNESS + CONTROLLER_ESP32_S3_RAISE
-    if lower_snap_top >= upper_board_bottom:
-        raise ValueError("RP2040 snap tabs collide with the upper ESP32-S3 tier")
+    if rp2040_slot_top >= upper_board_bottom:
+        raise ValueError("RP2040 slot collides with the upper ESP32-S3 tier")
+    rp2040_slot_clearance = RP2040_SLOT_CLEAR_WIDTH - RP2040_BOARD_WIDTH
+    if not np.isclose(rp2040_slot_clearance, 0.14, atol=1e-9):
+        raise ValueError(f"RP2040 slot width drifted: {rp2040_slot_clearance}")
+    if RP2040_SLOT_WALL_HEIGHT < CONTROLLER_PCB_THICKNESS + 0.8:
+        raise ValueError("RP2040 slot walls are too low")
+    if RP2040_TOP_CLIP_WIDTH < 10.0 or RP2040_TOP_CLIP_OVERLAP < 1.0:
+        raise ValueError("RP2040 top clip is too small")
+    if CONTROLLER_RETAINER_STEM_THICKNESS < 1.8:
+        raise ValueError("ESP32-S3 retainer stems are too thin")
+    if CONTROLLER_RETAINER_LENGTH < 12.0:
+        raise ValueError("ESP32-S3 retaining lips are too short")
+    if CONTROLLER_RETAINER_OVERLAP < 0.8:
+        raise ValueError("ESP32-S3 retaining lips do not capture enough PCB edge")
 
     for label, width, length, support_raise in (
         (
@@ -1502,7 +1592,16 @@ def validate_controller_cradle(cover: trimesh.Trimesh) -> None:
             ),
         )
         if intersection_volume(cover, board_probe) > 0.02:
-            raise ValueError(f"{label} board volume is blocked in the snap cradle")
+            raise ValueError(f"{label} board volume is blocked in the retaining cradle")
+
+        for rearward_offset in np.linspace(0.0, length, 6):
+            sliding_probe = board_probe.copy()
+            sliding_probe.apply_translation([0.0, rearward_offset, 0.0])
+            if intersection_volume(cover, sliding_probe) > 0.02:
+                raise ValueError(
+                    f"{label} board rear slide-in path is blocked at "
+                    f"{rearward_offset} mm"
+                )
 
     # The former cable-tie slots must now be closed by the solid cover plate.
     for slot_center_y in (60.0, 83.0):
@@ -1576,9 +1675,9 @@ def validate_countersink_opening(
     label: str,
 ) -> None:
     center_xy = tuple(center)
-    probe_depth = 0.08
+    probe_depth = M3_SCREW_HEAD_RECESS_DEPTH - 0.05
     probe = cylinder(
-        M3_SCREW_HEAD_DIAMETER / 2.0 - 0.03,
+        M3_SCREW_HEAD_CLEARANCE_DIAMETER / 2.0 - 0.03,
         probe_depth,
         (
             center_xy[0],
@@ -1836,6 +1935,8 @@ def validate_handset_mount_attachment(
         raise ValueError("handset mount wall does not sit flush against chassis")
     if not np.isclose(placed_mount.bounds[0, 2], -COVER_THICKNESS, atol=0.003):
         raise ValueError("handset mount bottom does not align with installed cover")
+    if not np.isclose(placed_mount.bounds[1, 1], WEDGE_Y1, atol=0.003):
+        raise ValueError("handset mount rear does not align with chassis rear")
     shell_mount_collision = macro.boolean_meshes([shell, placed_mount], "intersection")
     shell_mount_collision_volume = mesh_volume(shell_mount_collision)
     if shell_mount_collision_volume > 0.03:

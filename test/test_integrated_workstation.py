@@ -91,13 +91,28 @@ def test_controller_bay_accepts_both_reference_boards() -> None:
     assert bay - esp32_s3 == pytest.approx((0.7, 0.5))
 
 
-def test_controller_uses_two_level_snap_cradle_without_tie_slots(
+def test_controller_uses_23_mm_rp2040_slot_and_esp_retaining_lips(
     generated_models: GeneratedModels,
 ) -> None:
     _, _, cover, _ = generated_models
 
     assert workstation.CONTROLLER_RP2040_RAISE == 3.0
     assert workstation.CONTROLLER_ESP32_S3_RAISE == 6.5
+    assert workstation.RP2040_SLOT_CLEAR_WIDTH == 23.0
+    assert workstation.RP2040_SLOT_CLEAR_WIDTH - workstation.RP2040_BOARD_WIDTH == (
+        pytest.approx(0.14)
+    )
+    assert workstation.RP2040_SLOT_WALL_THICKNESS == 2.4
+    assert workstation.RP2040_SLOT_WALL_HEIGHT == 2.5
+    assert workstation.RP2040_TOP_CLIP_WIDTH == 10.0
+    assert workstation.RP2040_TOP_CLIP_OVERLAP == 1.0
+    assert workstation.RP2040_TOP_CLIP_CLEARANCE == 0.2
+    assert workstation.CONTROLLER_RETAINER_STEM_THICKNESS == 1.8
+    assert workstation.CONTROLLER_RETAINER_LENGTH == 12.0
+    assert workstation.CONTROLLER_RETAINER_OVERLAP == 0.8
+    assert workstation.CONTROLLER_RETAINER_CLEARANCE == 0.2
+    assert workstation.CONTROLLER_RETAINER_LIP_THICKNESS == 0.8
+    assert not hasattr(workstation, "CONTROLLER_SNAP_STEM_THICKNESS")
     assert not hasattr(workstation, "CONTROLLER_TIE_SLOT_CENTER_OFFSETS")
     workstation.validate_controller_cradle(cover)
 
@@ -226,6 +241,7 @@ def test_user_measured_heat_set_insert_holes_are_hidden_and_blind(
     assert workstation.M3_SCREW_THREAD_DIAMETER == 2.9
     assert workstation.M3_SCREW_HEAD_DIAMETER == 5.3
     assert workstation.M3_SCREW_HEAD_CLEARANCE_DIAMETER == 5.6
+    assert workstation.M3_SCREW_HEAD_RECESS_DEPTH == 0.5
     workstation.validate_bottom_cover_attachment(shell, cover)
 
 
@@ -252,7 +268,7 @@ def test_bottom_cover_matches_controller_chassis_footprint(
     workstation.validate_bottom_cover_attachment(shell, cover)
 
 
-def test_handset_base_sits_flat_on_two_same_height_screw_holes(
+def test_handset_base_sits_flat_and_flush_to_rear_on_two_same_height_holes(
     generated_models: GeneratedModels,
 ) -> None:
     shell, _, cover, handset_mount = generated_models
@@ -261,7 +277,7 @@ def test_handset_base_sits_flat_on_two_same_height_screw_holes(
     assert workstation.HANDSET_MOUNT_INSERT_SURFACE_X == workstation.handset.OUTER_WIDTH
     assert np.allclose(
         workstation.HANDSET_SIDE_HOLE_CENTERS,
-        np.array([[34.6, 4.6], [77.4, 4.6]]),
+        np.array([[47.2, 4.6], [90.0, 4.6]]),
     )
     assert np.ptp(workstation.HANDSET_SIDE_HOLE_CENTERS[:, 1]) == pytest.approx(0.0)
     assert workstation.HANDSET_SIDE_HOLE_DIAMETER == 3.4
@@ -276,6 +292,7 @@ def test_handset_base_sits_flat_on_two_same_height_screw_holes(
         placed_cover.bounds[0, 2], abs=0.003
     )
     assert placed_mount.bounds[1, 0] == pytest.approx(workstation.WEDGE_X0, abs=0.003)
+    assert placed_mount.bounds[1, 1] == pytest.approx(workstation.WEDGE_Y1, abs=0.003)
     assert not hasattr(workstation, "HANDSET_SIDE_ARC_RADIUS")
     assert not hasattr(workstation, "HANDSET_MOUNT_BOSS_LOCAL_X0")
     assert shell.bounds[0, 0] == pytest.approx(workstation.WEDGE_X0, abs=0.003)
