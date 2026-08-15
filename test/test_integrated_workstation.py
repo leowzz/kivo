@@ -41,7 +41,7 @@ def test_generated_models_validate(
     assert report.key_pitch == 19.05
     assert report.key_plane_degrees == pytest.approx(30.0)
     assert report.wire_clip_count == 6
-    assert report.controller_bay == pytest.approx((28.64, 63.89))
+    assert report.controller_bay == pytest.approx((28.64, 57.65))
     assert report.controller_support_levels == (3.0, 6.5)
     assert report.screen_board == (64.9, 35.03)
     assert report.screen_plane_degrees == pytest.approx(30.0)
@@ -89,6 +89,11 @@ def test_controller_bay_accepts_both_reference_boards() -> None:
     assert np.all(bay > rp2040)
     assert np.all(bay > esp32_s3)
     assert bay - esp32_s3 == pytest.approx((0.7, 0.5))
+    assert workstation.ESP32_S3_INNER_BOARD_LENGTH == pytest.approx(57.15)
+    assert workstation.ESP32_S3_BOARD_LENGTH == pytest.approx(57.15)
+    assert (
+        workstation.ESP32_S3_BOARD_LENGTH - workstation.CONTROLLER_USB_END_RELIEF
+    ) == pytest.approx(55.15)
 
 
 def test_controller_uses_23_mm_rp2040_slot_and_esp_retaining_lips(
@@ -124,7 +129,7 @@ def test_standalone_controller_cradle_module_reuses_cover_mount_geometry(
 
     assert controller_cradle_module.bounds[0] == pytest.approx((0.0, 0.0, 0.0))
     assert controller_cradle_module.extents == pytest.approx(
-        (37.0, 69.89, 11.5), abs=0.003
+        (37.0, 63.65, 11.5), abs=0.003
     )
     placed = workstation.place_controller_cradle_module(controller_cradle_module)
     for mount in workstation.build_controller_mounts():
@@ -138,7 +143,11 @@ def test_type_c_opening_and_controller_are_at_the_rear(
 ) -> None:
     shell, _, _, _ = generated_models
 
-    assert workstation.CONTROLLER_Y1 == pytest.approx(100.0)
+    assert workstation.CONTROLLER_Y1 == pytest.approx(
+        workstation.WEDGE_Y1 - workstation.WEDGE_WALL
+    )
+    assert workstation.CONTROLLER_Y1 == pytest.approx(105.0)
+    assert workstation.CONTROLLER_USB_OPENING_Y0 <= workstation.CONTROLLER_Y1
     assert (
         workstation.CONTROLLER_USB_OPENING_Y0
         > (workstation.WEDGE_Y0 + workstation.WEDGE_Y1) / 2.0

@@ -283,16 +283,19 @@ RP2040_TOP_CLIP_WIDTH = 10.0
 RP2040_TOP_CLIP_OVERLAP = 1.0
 RP2040_TOP_CLIP_CLEARANCE = 0.2
 ESP32_S3_BOARD_WIDTH = 27.94
-ESP32_S3_BOARD_LENGTH = 63.39
+ESP32_S3_INNER_BOARD_LENGTH = 57.15
+ESP32_S3_BOARD_LENGTH = ESP32_S3_INNER_BOARD_LENGTH
 CONTROLLER_CENTER_X = 141.5
 CONTROLLER_SIDE_CLEARANCE = 0.35
 CONTROLLER_END_CLEARANCE = 0.5
+CONTROLLER_USB_END_RELIEF = 2.0
 CONTROLLER_CLEAR_WIDTH = ESP32_S3_BOARD_WIDTH + 2.0 * CONTROLLER_SIDE_CLEARANCE
 CONTROLLER_CLEAR_LENGTH = ESP32_S3_BOARD_LENGTH + CONTROLLER_END_CLEARANCE
 CONTROLLER_X0 = CONTROLLER_CENTER_X - CONTROLLER_CLEAR_WIDTH / 2.0
 CONTROLLER_X1 = CONTROLLER_X0 + CONTROLLER_CLEAR_WIDTH
-CONTROLLER_REAR_CLEARANCE = 5.0
-CONTROLLER_Y1 = WEDGE_Y1 - WEDGE_WALL - CONTROLLER_REAR_CLEARANCE
+# Put the PCB's USB edge directly against the rear wall's inner face so the
+# connector reaches through the rear opening without a buried cable gap.
+CONTROLLER_Y1 = WEDGE_Y1 - WEDGE_WALL
 CONTROLLER_Y0 = CONTROLLER_Y1 - CONTROLLER_CLEAR_LENGTH
 CONTROLLER_PCB_THICKNESS = 1.6
 CONTROLLER_RP2040_RAISE = 3.0
@@ -1029,7 +1032,7 @@ def build_rp2040_slot() -> list[trimesh.Trimesh]:
     wall_top_z = support_z + RP2040_SLOT_WALL_HEIGHT
     overlap_z = COVER_THICKNESS - 0.02
     rail_y0 = board_y0 - RP2040_SLOT_STOP_THICKNESS
-    rail_y1 = board_y1 - 2.0
+    rail_y1 = board_y1 - CONTROLLER_USB_END_RELIEF
 
     parts = [
         box(
@@ -1152,7 +1155,7 @@ def build_controller_support_level(
             ),
             (
                 board_x0 + CONTROLLER_SUPPORT_RAIL_WIDTH,
-                board_y1 - 2.0,
+                board_y1 - CONTROLLER_USB_END_RELIEF,
                 support_z,
             ),
         ),
@@ -1164,7 +1167,7 @@ def build_controller_support_level(
             ),
             (
                 board_x1 + CONTROLLER_SIDE_CLEARANCE,
-                board_y1 - 2.0,
+                board_y1 - CONTROLLER_USB_END_RELIEF,
                 support_z,
             ),
         ),
@@ -1538,9 +1541,11 @@ def validate_controller_connector_opening(shell: trimesh.Trimesh) -> None:
     if intersection_volume(shell, front_probe) < front_probe.volume - 0.05:
         raise ValueError("front wall is not closed at the former Type-C opening")
 
-    connector_gap = CONTROLLER_USB_OPENING_Y0 - CONTROLLER_Y1
-    if not 2.0 <= connector_gap <= 5.0:
-        raise ValueError(f"controller-to-rear-opening gap drifted: {connector_gap}")
+    rear_inner_face_y = WEDGE_Y1 - WEDGE_WALL
+    if not np.isclose(CONTROLLER_Y1, rear_inner_face_y):
+        raise ValueError("controller USB edge is not flush with the rear inner wall")
+    if CONTROLLER_USB_OPENING_Y0 > CONTROLLER_Y1:
+        raise ValueError("rear Type-C opening does not reach the controller USB edge")
 
 
 def validate_controller_cradle(cover: trimesh.Trimesh) -> None:
@@ -1563,6 +1568,9 @@ def validate_controller_cradle(cover: trimesh.Trimesh) -> None:
         raise ValueError("ESP32-S3 retaining lips are too short")
     if CONTROLLER_RETAINER_OVERLAP < 0.8:
         raise ValueError("ESP32-S3 retaining lips do not capture enough PCB edge")
+    esp32_retained_length = ESP32_S3_BOARD_LENGTH - CONTROLLER_USB_END_RELIEF
+    if not np.isclose(esp32_retained_length, 55.15):
+        raise ValueError(f"ESP32-S3 retained length drifted: {esp32_retained_length}")
 
     for label, width, length, support_raise in (
         (

@@ -63,13 +63,15 @@ uv run --script scripts/modeling/integrated_workstation.py
 | Toggle pod maximum roof bridge | `29.6` after removing both internal dividers |
 | Controller cradle | `28.64 x 63.89` maximum clear area |
 | RP2040 reference | `22.86 x 53.34` |
-| ESP32-S3 reference | `27.94 x 63.39` |
+| ESP32-S3 retained inner board | `27.94 x 57.15` |
 | RP2040 support level | PCB underside `3.0` above the cover inner face |
 | RP2040 locating slot | `23.0` clear width, `2.4` walls rising `2.5` above support |
 | RP2040 top clip | `10.0` wide with `1.0` PCB overlap |
 | ESP32-S3 support level | PCB underside `6.5` above the cover inner face |
 | ESP32-S3 retaining lips | `12.0` long, `1.8` stem, `0.8` PCB overlap |
+| ESP32-S3 retained length | `55.15` from the front stop to the USB-end relief |
 | Controller USB opening | Rear wall, `37.0 x 9.5` |
+| Controller USB edge | Flush with the rear wall inner face |
 
 The display PCB sits on the removable panel in a rounded locating bezel with
 `0.65` clearance on each edge. The bezel rises only `2.0` above the 30-degree
@@ -133,6 +135,8 @@ retain the original front and rear pairs and add one middle pair.
    Tighten both screws and keep both washers on the chassis interior.
 2. Place the controller USB end toward the wide rear connector opening and
    slide the board lengthwise into its slot until it reaches the front stop. The
+   PCB's USB edge then sits directly against the rear wall inner face so its
+   Type-C connector reaches the outside of the chassis without a recessed gap. The
    RP2040 runs inside the `23.0 mm` lower U-slot and under its single top clip;
    the larger ESP32-S3 uses the outer upper level and horizontal side lips.
    Slide either board back out from the rear; the retainers are fixed and should
