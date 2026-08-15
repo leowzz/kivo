@@ -41,7 +41,7 @@ def test_generated_models_validate(
     assert report.key_pitch == 19.05
     assert report.key_plane_degrees == pytest.approx(30.0)
     assert report.key_support_rail_count == 2
-    assert report.key_support_leg_count == 6
+    assert report.key_support_wall_count == 2
     assert report.key_support_center_corridor_width == pytest.approx(35.3)
     assert report.wire_clip_count == 6
     assert report.controller_bay == pytest.approx((28.64, 57.65))
@@ -81,44 +81,29 @@ def test_switch_apertures_preserve_canonical_stepped_geometry(
     assert np.allclose(np.diff(lower.y_levels), 19.05, atol=0.003)
 
 
-def test_shell_has_open_key_field_support_skeleton(
+def test_shell_has_two_solid_key_field_support_walls(
     generated_models: GeneratedModels,
 ) -> None:
     shell, _, cover, _ = generated_models
 
     assert workstation.KEY_SUPPORT_RAIL_X_CENTERS == pytest.approx((123.45, 161.55))
-    assert workstation.KEY_SUPPORT_LONGITUDINAL_RAIL_COUNT == 2
     assert workstation.KEY_SUPPORT_RAIL_COUNT == 2
-    assert workstation.KEY_SUPPORT_FRONT_ANCHOR_COUNT == 2
-    assert workstation.KEY_SUPPORT_LEG_COUNT == 6
+    assert workstation.KEY_SUPPORT_WALL_COUNT == 2
     assert workstation.KEY_SUPPORT_RAIL_WIDTH == pytest.approx(2.8)
-    assert workstation.KEY_SUPPORT_FRONT_ANCHOR_WIDTH == pytest.approx(8.0)
-    assert workstation.KEY_SUPPORT_RAIL_Y1 == pytest.approx(62.625)
+    assert workstation.KEY_SUPPORT_WALL_Y0 == pytest.approx(4.0)
+    assert workstation.KEY_SUPPORT_WALL_Y1 == pytest.approx(62.625)
     assert workstation.KEY_SUPPORT_CENTER_CORRIDOR_WIDTH == pytest.approx(35.3)
-    assert workstation.KEY_SUPPORT_MAX_UNSUPPORTED_SPAN == pytest.approx(13.05)
-    skeleton_parts = workstation.build_key_field_support_skeleton()
-    assert len(skeleton_parts) == 10
-
-    longitudinal_rail_end = workstation.KEY_SUPPORT_LONGITUDINAL_RAIL_COUNT
-    front_anchor_end = (
-        longitudinal_rail_end + workstation.KEY_SUPPORT_FRONT_ANCHOR_COUNT
-    )
-    longitudinal_leg_end = (
-        front_anchor_end + workstation.KEY_SUPPORT_LONGITUDINAL_LEG_COUNT
-    )
-    front_anchors = skeleton_parts[longitudinal_rail_end:front_anchor_end]
-    longitudinal_legs = skeleton_parts[front_anchor_end:longitudinal_leg_end]
-
-    for anchor in front_anchors:
-        assert anchor.extents[0] == pytest.approx(8.0, abs=0.003)
-    for leg in longitudinal_legs:
-        assert leg.bounds[0, 2] == pytest.approx(0.0, abs=0.003)
+    walls = workstation.build_key_field_support_walls()
+    assert len(walls) == 2
+    assert not hasattr(workstation, "KEY_SUPPORT_LEG_COUNT")
+    for wall in walls:
+        assert wall.bounds[0, 2] == pytest.approx(0.0, abs=0.003)
 
     placed_cover = cover.copy()
     placed_cover.apply_translation([0.0, 0.0, -workstation.COVER_THICKNESS])
-    skeleton = workstation.union(skeleton_parts)
-    assert workstation.intersection_volume(skeleton, placed_cover) < 0.01
-    workstation.validate_key_field_support_skeleton(shell)
+    combined_walls = workstation.union(walls)
+    assert workstation.intersection_volume(combined_walls, placed_cover) < 0.01
+    workstation.validate_key_field_support_walls(shell)
 
 
 def test_controller_bay_accepts_both_reference_boards() -> None:

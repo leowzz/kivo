@@ -54,17 +54,8 @@ KEY_SUPPORT_RAIL_X_CENTERS = np.array(
 )
 KEY_SUPPORT_RAIL_WIDTH = 2.8
 KEY_SUPPORT_RAIL_DEPTH = 2.4
-KEY_SUPPORT_RAIL_Y0 = 8.5
-KEY_SUPPORT_FRONT_ANCHOR_WIDTH = 8.0
-KEY_SUPPORT_FRONT_ANCHOR_Y0 = 4.0
-KEY_SUPPORT_FRONT_ANCHOR_Y1 = 13.0
-KEY_SUPPORT_LEG_Y_CENTERS = np.array(
-    [KEY_Y0 + (row + 0.5) * KEY_PITCH for row in range(KEY_ROWS)]
-)
-KEY_SUPPORT_LEG_LENGTH = 6.0
-KEY_SUPPORT_RAIL_Y1 = KEY_SUPPORT_LEG_Y_CENTERS[-1] + KEY_SUPPORT_LEG_LENGTH / 2.0
-KEY_SUPPORT_FOOT_LENGTH = 8.0
-KEY_SUPPORT_FOOT_HEIGHT = 1.2
+KEY_SUPPORT_WALL_Y0 = 4.0
+KEY_SUPPORT_WALL_Y1 = KEY_Y0 + (KEY_ROWS - 0.5) * KEY_PITCH + 3.0
 KEY_SUPPORT_SWITCH_KEEP_OUT = 15.8
 KEY_SUPPORT_SWITCH_KEEP_OUT_DEPTH = 16.0
 KEY_SUPPORT_CENTER_CORRIDOR_X0 = (
@@ -73,20 +64,11 @@ KEY_SUPPORT_CENTER_CORRIDOR_X0 = (
 KEY_SUPPORT_CENTER_CORRIDOR_X1 = (
     KEY_SUPPORT_RAIL_X_CENTERS[1] - KEY_SUPPORT_RAIL_WIDTH / 2.0
 )
-KEY_SUPPORT_LONGITUDINAL_RAIL_COUNT = len(KEY_SUPPORT_RAIL_X_CENTERS)
-KEY_SUPPORT_FRONT_ANCHOR_COUNT = KEY_SUPPORT_LONGITUDINAL_RAIL_COUNT
-KEY_SUPPORT_RAIL_COUNT = KEY_SUPPORT_LONGITUDINAL_RAIL_COUNT
-KEY_SUPPORT_LONGITUDINAL_LEG_COUNT = KEY_SUPPORT_LONGITUDINAL_RAIL_COUNT * len(
-    KEY_SUPPORT_LEG_Y_CENTERS
-)
-KEY_SUPPORT_LEG_COUNT = KEY_SUPPORT_LONGITUDINAL_LEG_COUNT
-KEY_SUPPORT_PART_COUNT = (
-    KEY_SUPPORT_RAIL_COUNT + KEY_SUPPORT_FRONT_ANCHOR_COUNT + KEY_SUPPORT_LEG_COUNT
-)
+KEY_SUPPORT_RAIL_COUNT = len(KEY_SUPPORT_RAIL_X_CENTERS)
+KEY_SUPPORT_WALL_COUNT = KEY_SUPPORT_RAIL_COUNT
 KEY_SUPPORT_CENTER_CORRIDOR_WIDTH = (
     KEY_SUPPORT_CENTER_CORRIDOR_X1 - KEY_SUPPORT_CENTER_CORRIDOR_X0
 )
-KEY_SUPPORT_MAX_UNSUPPORTED_SPAN = KEY_PITCH - KEY_SUPPORT_LEG_LENGTH
 PANEL_X0 = 75.0
 PANEL_X1 = 207.0
 PANEL_Y0 = 3.0
@@ -397,7 +379,7 @@ class ValidationReport:
     key_pitch: float
     key_plane_degrees: float
     key_support_rail_count: int
-    key_support_leg_count: int
+    key_support_wall_count: int
     key_support_center_corridor_width: float
     wire_clip_count: int
     controller_bay: tuple[float, float]
@@ -921,83 +903,35 @@ def build_shared_attachment_pillar(
     return hull(np.vstack((bottom_boss.vertices, panel_boss.vertices)))
 
 
-def build_key_support_leg(center_x: float, center_y: float) -> trimesh.Trimesh:
-    top_pad = box(
+def build_key_support_wall(center_x: float) -> trimesh.Trimesh:
+    top_rail = box(
         (
             center_x - KEY_SUPPORT_RAIL_WIDTH / 2.0,
-            center_y - KEY_SUPPORT_LEG_LENGTH / 2.0,
+            KEY_SUPPORT_WALL_Y0,
             -KEY_SUPPORT_RAIL_DEPTH,
         ),
         (
             center_x + KEY_SUPPORT_RAIL_WIDTH / 2.0,
-            center_y + KEY_SUPPORT_LEG_LENGTH / 2.0,
+            KEY_SUPPORT_WALL_Y1,
             0.0,
         ),
     )
-    top_pad.apply_transform(DECK_TRANSFORM)
-    top_center = trimesh.transform_points(
-        [[center_x, center_y, -KEY_SUPPORT_RAIL_DEPTH / 2.0]],
-        DECK_TRANSFORM,
-    )[0]
-    foot = box(
-        (
-            center_x - KEY_SUPPORT_RAIL_WIDTH / 2.0,
-            top_center[1] - KEY_SUPPORT_FOOT_LENGTH / 2.0,
-            0.0,
-        ),
-        (
-            center_x + KEY_SUPPORT_RAIL_WIDTH / 2.0,
-            top_center[1] + KEY_SUPPORT_FOOT_LENGTH / 2.0,
-            KEY_SUPPORT_FOOT_HEIGHT,
-        ),
+    top_rail.apply_transform(DECK_TRANSFORM)
+    bottom_vertices = np.array(
+        [
+            [center_x - KEY_SUPPORT_RAIL_WIDTH / 2.0, top_rail.bounds[0, 1], 0.0],
+            [center_x + KEY_SUPPORT_RAIL_WIDTH / 2.0, top_rail.bounds[0, 1], 0.0],
+            [center_x - KEY_SUPPORT_RAIL_WIDTH / 2.0, top_rail.bounds[1, 1], 0.0],
+            [center_x + KEY_SUPPORT_RAIL_WIDTH / 2.0, top_rail.bounds[1, 1], 0.0],
+        ]
     )
-    return hull(np.vstack((foot.vertices, top_pad.vertices)))
+    return hull(np.vstack((bottom_vertices, top_rail.vertices)))
 
 
-def build_key_field_support_skeleton() -> list[trimesh.Trimesh]:
-    rails: list[trimesh.Trimesh] = []
-    for center_x in KEY_SUPPORT_RAIL_X_CENTERS:
-        rail = box(
-            (
-                center_x - KEY_SUPPORT_RAIL_WIDTH / 2.0,
-                KEY_SUPPORT_RAIL_Y0,
-                -KEY_SUPPORT_RAIL_DEPTH,
-            ),
-            (
-                center_x + KEY_SUPPORT_RAIL_WIDTH / 2.0,
-                KEY_SUPPORT_RAIL_Y1,
-                0.0,
-            ),
-        )
-        rail.apply_transform(DECK_TRANSFORM)
-        rails.append(rail)
-
-    front_anchors: list[trimesh.Trimesh] = []
-    for center_x in KEY_SUPPORT_RAIL_X_CENTERS:
-        anchor = box(
-            (
-                center_x - KEY_SUPPORT_FRONT_ANCHOR_WIDTH / 2.0,
-                KEY_SUPPORT_FRONT_ANCHOR_Y0,
-                -KEY_SUPPORT_RAIL_DEPTH,
-            ),
-            (
-                center_x + KEY_SUPPORT_FRONT_ANCHOR_WIDTH / 2.0,
-                KEY_SUPPORT_FRONT_ANCHOR_Y1,
-                0.0,
-            ),
-        )
-        anchor.apply_transform(DECK_TRANSFORM)
-        front_anchors.append(anchor)
-
-    longitudinal_legs = [
-        build_key_support_leg(center_x, center_y)
-        for center_x in KEY_SUPPORT_RAIL_X_CENTERS
-        for center_y in KEY_SUPPORT_LEG_Y_CENTERS
-    ]
+def build_key_field_support_walls() -> list[trimesh.Trimesh]:
     return [
-        *rails,
-        *front_anchors,
-        *longitudinal_legs,
+        build_key_support_wall(center_x)
+        for center_x in KEY_SUPPORT_RAIL_X_CENTERS
     ]
 
 
@@ -1015,7 +949,7 @@ def build_panel_support_parts() -> list[trimesh.Trimesh]:
     ]
     for part in parts:
         part.apply_transform(DECK_TRANSFORM)
-    parts.extend(build_key_field_support_skeleton())
+    parts.extend(build_key_field_support_walls())
     parts.extend(
         build_shared_attachment_pillar(panel_center, bottom_center)
         for panel_center, bottom_center in zip(
@@ -1869,28 +1803,58 @@ def place_sloped_panel(panel: trimesh.Trimesh) -> trimesh.Trimesh:
     return placed
 
 
-def validate_key_field_support_skeleton(shell: trimesh.Trimesh) -> None:
-    skeleton_parts = build_key_field_support_skeleton()
-    if len(skeleton_parts) != KEY_SUPPORT_PART_COUNT:
-        raise ValueError("key support skeleton part count drifted")
+def validate_key_field_support_walls(shell: trimesh.Trimesh) -> None:
+    walls = build_key_field_support_walls()
+    if len(walls) != KEY_SUPPORT_WALL_COUNT:
+        raise ValueError("key support wall count drifted")
 
-    longitudinal_rail_end = KEY_SUPPORT_LONGITUDINAL_RAIL_COUNT
-    front_anchor_end = longitudinal_rail_end + KEY_SUPPORT_FRONT_ANCHOR_COUNT
-    front_anchors = skeleton_parts[longitudinal_rail_end:front_anchor_end]
-    skeleton = union(skeleton_parts)
-    if intersection_volume(shell, skeleton) < skeleton.volume - 0.05:
-        raise ValueError("key support skeleton is not fully joined to the chassis")
+    combined_walls = union(walls)
+    if intersection_volume(shell, combined_walls) < combined_walls.volume - 0.05:
+        raise ValueError("key support walls are not fully joined to the chassis")
 
     front_lip = box((82.0, 0.0, -PANEL_LIP_DEPTH), (200.0, 9.0, 0.0))
     front_lip.apply_transform(DECK_TRANSFORM)
-    expected_anchor_overlap = (
-        KEY_SUPPORT_FRONT_ANCHOR_WIDTH
-        * (9.0 - KEY_SUPPORT_FRONT_ANCHOR_Y0)
+    expected_front_overlap = (
+        KEY_SUPPORT_RAIL_WIDTH
+        * (9.0 - KEY_SUPPORT_WALL_Y0)
         * KEY_SUPPORT_RAIL_DEPTH
     )
-    for anchor in front_anchors:
-        if intersection_volume(front_lip, anchor) < expected_anchor_overlap * 0.9:
-            raise ValueError("key support front anchor has too little lip contact")
+    for wall in walls:
+        if not np.isclose(wall.bounds[0, 2], 0.0, atol=0.003):
+            raise ValueError("key support wall does not reach the chassis bottom")
+        if intersection_volume(front_lip, wall) < expected_front_overlap * 0.9:
+            raise ValueError("key support wall has too little front-lip contact")
+
+    sample_y_levels = np.linspace(
+        KEY_SUPPORT_WALL_Y0 + 2.0,
+        KEY_SUPPORT_WALL_Y1 - 2.0,
+        4,
+    )
+    for center_x in KEY_SUPPORT_RAIL_X_CENTERS:
+        for design_y in sample_y_levels:
+            rail_underside = trimesh.transform_points(
+                [[center_x, design_y, -KEY_SUPPORT_RAIL_DEPTH]],
+                DECK_TRANSFORM,
+            )[0]
+            continuity_probe = box(
+                (
+                    center_x - KEY_SUPPORT_RAIL_WIDTH / 2.0 + 0.1,
+                    rail_underside[1] - 0.1,
+                    0.1,
+                ),
+                (
+                    center_x + KEY_SUPPORT_RAIL_WIDTH / 2.0 - 0.1,
+                    rail_underside[1] + 0.1,
+                    rail_underside[2] - 0.1,
+                ),
+            )
+            if (
+                intersection_volume(combined_walls, continuity_probe)
+                < continuity_probe.volume - 0.02
+            ):
+                raise ValueError(
+                    f"key support wall is not continuous: {(center_x, design_y)}"
+                )
 
     for row in range(KEY_ROWS):
         for column in range(KEY_COLUMNS):
@@ -1909,15 +1873,10 @@ def validate_key_field_support_skeleton(shell: trimesh.Trimesh) -> None:
                 ),
             )
             switch_keep_out.apply_transform(DECK_TRANSFORM)
-            if intersection_volume(skeleton, switch_keep_out) > 0.01:
+            if intersection_volume(combined_walls, switch_keep_out) > 0.01:
                 raise ValueError(
-                    f"key support skeleton blocks switch body: {(column, row)}"
+                    f"key support wall blocks switch body: {(column, row)}"
                 )
-
-    if KEY_SUPPORT_MAX_UNSUPPORTED_SPAN > 15.0:
-        raise ValueError(
-            "key support rail bridge is too long for support-free printing"
-        )
 
 
 def validate_shared_attachment_pillars(shell: trimesh.Trimesh) -> None:
@@ -2337,7 +2296,7 @@ def validate_models(
     validate_wire_clips(panel)
     validate_controller_connector_opening(shell)
     validate_controller_cradle(cover)
-    validate_key_field_support_skeleton(shell)
+    validate_key_field_support_walls(shell)
     validate_shared_attachment_pillars(shell)
     validate_panel_attachment(shell, panel)
     validate_bottom_cover_attachment(shell, cover)
@@ -2364,7 +2323,7 @@ def validate_models(
         key_pitch=KEY_PITCH,
         key_plane_degrees=plane_angle,
         key_support_rail_count=KEY_SUPPORT_RAIL_COUNT,
-        key_support_leg_count=KEY_SUPPORT_LEG_COUNT,
+        key_support_wall_count=KEY_SUPPORT_WALL_COUNT,
         key_support_center_corridor_width=KEY_SUPPORT_CENTER_CORRIDOR_WIDTH,
         wire_clip_count=len(WIRE_CLIP_CENTERS),
         controller_bay=(CONTROLLER_CLEAR_WIDTH, CONTROLLER_CLEAR_LENGTH),
