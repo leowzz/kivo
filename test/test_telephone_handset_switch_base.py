@@ -9,8 +9,8 @@ import pytest
 import trimesh
 from PIL import Image
 
-from scripts import macro_pad_variants as macro
-from scripts import telephone_handset_switch_base as base
+from scripts.modeling import macro_pad_variants as macro
+from scripts.modeling import telephone_handset_switch_base as base
 
 
 def test_parametric_switch_cell_contract() -> None:

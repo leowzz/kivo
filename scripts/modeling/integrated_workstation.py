@@ -21,8 +21,8 @@ import numpy as np
 import trimesh
 
 if __package__:
-    from scripts import macro_pad_variants as macro
-    from scripts import telephone_handset_switch_base as handset
+    from scripts.modeling import macro_pad_variants as macro
+    from scripts.modeling import telephone_handset_switch_base as handset
 else:
     import macro_pad_variants as macro
     import telephone_handset_switch_base as handset
@@ -90,26 +90,6 @@ M3_SCREW_COUNTERSINK_ANGLE_DEGREES = 90.0
 M3_SCREW_COUNTERSINK_CUTTER_OVERSHOOT = 0.1
 PANEL_INSERT_BOSS_RADIUS = 5.5
 PANEL_INSERT_BOSS_DEPTH = HEAT_SET_INSERT_HOLE_DEPTH + HEAT_SET_INSERT_BLIND_FLOOR
-
-TRAY_WIDTH = 76.0
-TRAY_LENGTH = 92.0
-TRAY_CENTER = (38.0, 50.0)
-TRAY_BOTTOM_Y = 4.0
-TRAY_HEIGHT = 12.0
-TRAY_ROOF_UNDERSIDE = 9.2
-HANDSET_WIDTH = 63.8
-HANDSET_LENGTH = 78.8
-HANDSET_CLEARANCE = 0.6
-HANDSET_POCKET_WIDTH = HANDSET_WIDTH + 2.0 * HANDSET_CLEARANCE
-HANDSET_POCKET_LENGTH = HANDSET_LENGTH + 2.0 * HANDSET_CLEARANCE
-HANDSET_POCKET_FLOOR = 10.8
-HANDSET_SOURCE_MODEL = Path(
-    "models/3d-print/telephone-handset-switch-base/telephone_handset_switch_base.stl"
-)
-HANDSET_SCREW_LOCAL_CENTERS = np.array(
-    [[8.0, 8.0], [55.8, 8.0], [8.0, 70.8], [55.8, 70.8]]
-)
-HANDSET_TRAY_HOLE_DIAMETER = 3.4
 
 SCREEN_BOARD_WIDTH = 64.90
 SCREEN_BOARD_HEIGHT = 35.03
@@ -180,17 +160,52 @@ WIRE_CLIP_CENTERS = np.array(
 SHELL_SCREW_CENTERS = np.array(
     [[77.0, 13.0], [205.0, 13.0], [77.0, 99.0], [205.0, 99.0]]
 )
-HANDSET_COVER_SCREW_CENTERS = np.array([[10.0, 30.0], [10.0, 70.0]])
-COVER_SCREW_CENTERS = np.vstack((SHELL_SCREW_CENTERS, HANDSET_COVER_SCREW_CENTERS))
+COVER_SCREW_CENTERS = SHELL_SCREW_CENTERS.copy()
 SHELL_BOSS_RADIUS = 5.0
 SHELL_BOSS_HEIGHT = 12.0
-HANDSET_COVER_BOSS_RADIUS = 5.0
-HANDSET_COVER_BOSS_HEIGHT = TRAY_ROOF_UNDERSIDE + 0.2
 
-COVER_WIDTH = WEDGE_X1
+# Two upward T-rails on the chassis slide into downward-opening slots added to
+# the handset cradle. All rail and housing geometry starts on the print bed.
+HANDSET_HANGER_LOCAL_Y_CENTERS = np.array([18.0, 60.8])
+HANDSET_BASE_RIGHT_X = 64.5
+HANDSET_MOUNT_ORIGIN = np.array(
+    [
+        HANDSET_BASE_RIGHT_X - handset.OUTER_WIDTH,
+        (WEDGE_Y0 + WEDGE_Y1 - handset.OUTER_LENGTH) / 2.0,
+        0.0,
+    ]
+)
+HANDSET_HANGER_CLEARANCE = 0.3
+HANDSET_HANGER_OUTER_X0 = 64.2
+HANDSET_HANGER_OUTER_X1 = 71.0
+HANDSET_HANGER_OUTER_HALF_WIDTH = 7.5
+HANDSET_HANGER_HEIGHT = 20.2
+HANDSET_HANGER_SLOT_MAIN_TOP = 14.0
+HANDSET_HANGER_SLOT_ROOF_TOP = 19.8
+HANDSET_HANGER_SLOT_ROOF_HALF_WIDTH = 0.05
+HANDSET_HANGER_ENTRY_HEIGHT = 2.0
+HANDSET_HANGER_ENTRY_EXTRA_CLEARANCE = 0.6
+HANDSET_HANGER_HEAD_X0 = 66.2
+HANDSET_HANGER_HEAD_X1 = 69.4
+HANDSET_HANGER_HEAD_HALF_WIDTH = 5.5
+HANDSET_HANGER_NECK_X0 = 69.2
+HANDSET_HANGER_NECK_X1 = WEDGE_X0 + 0.2
+HANDSET_HANGER_NECK_HALF_WIDTH = 3.5
+HANDSET_HANGER_RAIL_HEIGHT = 13.6
+HANDSET_HANGER_SLOT_HEAD_X0 = HANDSET_HANGER_HEAD_X0 - HANDSET_HANGER_CLEARANCE
+HANDSET_HANGER_SLOT_HEAD_X1 = HANDSET_HANGER_HEAD_X1 + HANDSET_HANGER_CLEARANCE
+HANDSET_HANGER_SLOT_HEAD_HALF_WIDTH = (
+    HANDSET_HANGER_HEAD_HALF_WIDTH + HANDSET_HANGER_CLEARANCE
+)
+HANDSET_HANGER_SLOT_NECK_X0 = HANDSET_HANGER_NECK_X0 - HANDSET_HANGER_CLEARANCE
+HANDSET_HANGER_SLOT_NECK_X1 = WEDGE_X0 + 1.0
+HANDSET_HANGER_SLOT_NECK_HALF_WIDTH = (
+    HANDSET_HANGER_NECK_HALF_WIDTH + HANDSET_HANGER_CLEARANCE
+)
+
 COVER_LENGTH = WEDGE_Y1 - WEDGE_Y0
-COVER_MAIN_WIDTH = WEDGE_X1 - WEDGE_X0
-COVER_MAIN_CENTER = ((WEDGE_X0 + WEDGE_X1) / 2.0, (WEDGE_Y0 + WEDGE_Y1) / 2.0)
+COVER_WIDTH = WEDGE_X1 - WEDGE_X0
+COVER_CENTER = ((WEDGE_X0 + WEDGE_X1) / 2.0, (WEDGE_Y0 + WEDGE_Y1) / 2.0)
 COVER_THICKNESS = 2.4
 COVER_HOLE_DIAMETER = 3.4
 RP2040_BOARD_WIDTH = 22.86
@@ -228,7 +243,7 @@ DEFAULT_PREVIEW_ROOT = Path("/tmp/kivo-integrated-workstation-previews")
 SHELL_FILENAME = "kivo_integrated_workstation_shell.stl"
 PANEL_FILENAME = "kivo_integrated_workstation_sloped_panel.stl"
 COVER_FILENAME = "kivo_integrated_workstation_bottom_cover.stl"
-HANDSET_BASE_FILENAME = "telephone_handset_switch_base_workstation_mount.stl"
+HANDSET_MOUNT_FILENAME = "telephone_handset_switch_base_workstation_mount.stl"
 
 BOOLEAN_TOLERANCE = 5e-5
 CIRCLE_SEGMENTS = 64
@@ -247,24 +262,23 @@ class ValidationReport:
     shell_extents: tuple[float, float, float]
     panel_extents: tuple[float, float, float]
     cover_extents: tuple[float, float, float]
+    handset_mount_extents: tuple[float, float, float]
     key_count: int
     key_layout: tuple[int, int]
     key_pitch: float
     key_plane_degrees: float
     wire_clip_count: int
-    handset_pocket: tuple[float, float]
-    handset_clearance_per_side: float
-    handset_screw_count: int
     controller_bay: tuple[float, float]
     controller_support_levels: tuple[float, float]
     screen_board: tuple[float, float]
     screen_plane_degrees: float
     panel_screw_count: int
     bottom_cover_screw_count: int
+    handset_hanger_count: int
     shell_watertight: bool
     panel_watertight: bool
     cover_watertight: bool
-    handset_base_watertight: bool
+    handset_mount_watertight: bool
 
 
 def mesh_to_manifold(mesh: trimesh.Trimesh) -> manifold3d.Manifold:
@@ -444,19 +458,6 @@ DECK_TRANSFORM = rotation_transform(
 )
 
 
-def handset_base_origin() -> np.ndarray:
-    return np.array(
-        [
-            TRAY_CENTER[0] - HANDSET_WIDTH / 2.0,
-            TRAY_CENTER[1] - HANDSET_LENGTH / 2.0,
-        ]
-    )
-
-
-def handset_screw_world_centers() -> np.ndarray:
-    return HANDSET_SCREW_LOCAL_CENTERS + handset_base_origin()
-
-
 def wedge_prism(
     x0: float,
     x1: float,
@@ -498,78 +499,6 @@ def build_wedge_shell() -> trimesh.Trimesh:
         top_offset=-KEY_PLATE_THICKNESS / np.cos(KEY_ANGLE),
     )
     return subtract(outer, [inner])
-
-
-def build_handset_tray() -> trimesh.Trimesh:
-    outer = rounded_prism(
-        TRAY_WIDTH,
-        TRAY_LENGTH,
-        radius=7.0,
-        z_min=0.0,
-        height=TRAY_HEIGHT,
-        center=TRAY_CENTER,
-    )
-    underside = rounded_prism(
-        TRAY_WIDTH - 6.0,
-        TRAY_LENGTH - 6.0,
-        radius=5.0,
-        z_min=-1.0,
-        height=TRAY_ROOF_UNDERSIDE + 1.0,
-        center=TRAY_CENTER,
-    )
-    pocket = rounded_prism(
-        HANDSET_POCKET_WIDTH,
-        HANDSET_POCKET_LENGTH,
-        radius=6.6,
-        z_min=HANDSET_POCKET_FLOOR,
-        height=TRAY_HEIGHT - HANDSET_POCKET_FLOOR + 1.0,
-        center=TRAY_CENTER,
-    )
-    access = rounded_prism(
-        42.0,
-        57.0,
-        radius=2.2,
-        z_min=TRAY_ROOF_UNDERSIDE - 0.5,
-        height=TRAY_HEIGHT - TRAY_ROOF_UNDERSIDE + 1.5,
-        center=TRAY_CENTER,
-    )
-    rear_cable_chute = box((34.0, 76.0, 8.5), (42.0, 97.0, 13.0))
-    return subtract(outer, [underside, pocket, access, rear_cable_chute])
-
-
-def load_handset_source() -> trimesh.Trimesh:
-    base = trimesh.load_mesh(HANDSET_SOURCE_MODEL, file_type="stl", process=False)
-    if not isinstance(base, trimesh.Trimesh):
-        raise TypeError(f"expected one handset mesh in {HANDSET_SOURCE_MODEL}")
-    base.merge_vertices()
-    base.remove_unreferenced_vertices()
-    macro.assert_closed_manifold(base, "source handset base")
-    return base
-
-
-def generate_handset_base() -> trimesh.Trimesh:
-    insert_cutters = [
-        cutter
-        for center in HANDSET_SCREW_LOCAL_CENTERS
-        for cutter in heat_set_insert_cutters(center, 0.0, 1)
-    ]
-    source = load_handset_source()
-    for center in HANDSET_SCREW_LOCAL_CENTERS:
-        keepout = cylinder(
-            HEAT_SET_INSERT_LEAD_DIAMETER / 2.0 + 1.2,
-            HEAT_SET_INSERT_HOLE_DEPTH,
-            (center[0], center[1], HEAT_SET_INSERT_HOLE_DEPTH / 2.0),
-        )
-        source_material = intersection_volume(source, keepout)
-        if source_material < 65.0:
-            raise ValueError(
-                f"handset insert hole lacks surrounding material: {center}, "
-                f"volume={source_material}"
-            )
-    result = subtract(source, insert_cutters)
-    result.merge_vertices()
-    result.remove_unreferenced_vertices()
-    return result
 
 
 def build_panel_screen_parts() -> list[trimesh.Trimesh]:
@@ -802,7 +731,7 @@ def panel_insert_cutters() -> list[trimesh.Trimesh]:
 
 
 def build_shell_bosses() -> list[trimesh.Trimesh]:
-    main_bosses = [
+    return [
         cylinder(
             SHELL_BOSS_RADIUS,
             SHELL_BOSS_HEIGHT,
@@ -810,15 +739,147 @@ def build_shell_bosses() -> list[trimesh.Trimesh]:
         )
         for center in SHELL_SCREW_CENTERS
     ]
-    handset_cover_bosses = [
-        cylinder(
-            HANDSET_COVER_BOSS_RADIUS,
-            HANDSET_COVER_BOSS_HEIGHT,
-            (center[0], center[1], HANDSET_COVER_BOSS_HEIGHT / 2.0),
+
+
+def build_handset_hanger_rails() -> list[trimesh.Trimesh]:
+    parts: list[trimesh.Trimesh] = []
+    for local_y in HANDSET_HANGER_LOCAL_Y_CENTERS:
+        world_y = HANDSET_MOUNT_ORIGIN[1] + local_y
+        parts.extend(
+            [
+                box(
+                    (
+                        HANDSET_HANGER_HEAD_X0,
+                        world_y - HANDSET_HANGER_HEAD_HALF_WIDTH,
+                        0.0,
+                    ),
+                    (
+                        HANDSET_HANGER_HEAD_X1,
+                        world_y + HANDSET_HANGER_HEAD_HALF_WIDTH,
+                        HANDSET_HANGER_RAIL_HEIGHT,
+                    ),
+                ),
+                box(
+                    (
+                        HANDSET_HANGER_NECK_X0,
+                        world_y - HANDSET_HANGER_NECK_HALF_WIDTH,
+                        0.0,
+                    ),
+                    (
+                        HANDSET_HANGER_NECK_X1,
+                        world_y + HANDSET_HANGER_NECK_HALF_WIDTH,
+                        HANDSET_HANGER_RAIL_HEIGHT,
+                    ),
+                ),
+            ]
         )
-        for center in HANDSET_COVER_SCREW_CENTERS
+    return parts
+
+
+def handset_hanger_housings() -> list[trimesh.Trimesh]:
+    x0 = HANDSET_HANGER_OUTER_X0 - HANDSET_MOUNT_ORIGIN[0]
+    x1 = HANDSET_HANGER_OUTER_X1 - HANDSET_MOUNT_ORIGIN[0]
+    return [
+        box(
+            (x0, center_y - HANDSET_HANGER_OUTER_HALF_WIDTH, 0.0),
+            (
+                x1,
+                center_y + HANDSET_HANGER_OUTER_HALF_WIDTH,
+                HANDSET_HANGER_HEIGHT,
+            ),
+        )
+        for center_y in HANDSET_HANGER_LOCAL_Y_CENTERS
     ]
-    return [*main_bosses, *handset_cover_bosses]
+
+
+def tapered_slot_cutter(
+    x0: float,
+    x1: float,
+    center_y: float,
+    lower_half_width: float,
+    upper_half_width: float,
+    z0: float,
+    z1: float,
+    lower_x_extra: float = 0.0,
+) -> trimesh.Trimesh:
+    return hull(
+        [
+            [x, y, z]
+            for z, x_extra, half_width in (
+                (z0, lower_x_extra, lower_half_width),
+                (z1, 0.0, upper_half_width),
+            )
+            for x in (x0 - x_extra, x1 + x_extra)
+            for y in (center_y - half_width, center_y + half_width)
+        ]
+    )
+
+
+def handset_hanger_slot_cutters(center_y: float) -> list[trimesh.Trimesh]:
+    origin_x = HANDSET_MOUNT_ORIGIN[0]
+    head_x0 = HANDSET_HANGER_SLOT_HEAD_X0 - origin_x
+    head_x1 = HANDSET_HANGER_SLOT_HEAD_X1 - origin_x
+    neck_x0 = HANDSET_HANGER_SLOT_NECK_X0 - origin_x
+    neck_x1 = HANDSET_HANGER_SLOT_NECK_X1 - origin_x
+    entry_extra = HANDSET_HANGER_ENTRY_EXTRA_CLEARANCE
+    roof_z0 = HANDSET_HANGER_SLOT_MAIN_TOP - 0.02
+
+    return [
+        box(
+            (head_x0, center_y - HANDSET_HANGER_SLOT_HEAD_HALF_WIDTH, -1.0),
+            (
+                head_x1,
+                center_y + HANDSET_HANGER_SLOT_HEAD_HALF_WIDTH,
+                HANDSET_HANGER_SLOT_MAIN_TOP,
+            ),
+        ),
+        box(
+            (neck_x0, center_y - HANDSET_HANGER_SLOT_NECK_HALF_WIDTH, -1.0),
+            (
+                neck_x1,
+                center_y + HANDSET_HANGER_SLOT_NECK_HALF_WIDTH,
+                HANDSET_HANGER_SLOT_MAIN_TOP,
+            ),
+        ),
+        tapered_slot_cutter(
+            head_x0,
+            head_x1,
+            center_y,
+            HANDSET_HANGER_SLOT_HEAD_HALF_WIDTH + entry_extra,
+            HANDSET_HANGER_SLOT_HEAD_HALF_WIDTH,
+            -0.5,
+            HANDSET_HANGER_ENTRY_HEIGHT,
+            lower_x_extra=entry_extra,
+        ),
+        tapered_slot_cutter(
+            neck_x0,
+            neck_x1,
+            center_y,
+            HANDSET_HANGER_SLOT_NECK_HALF_WIDTH + entry_extra,
+            HANDSET_HANGER_SLOT_NECK_HALF_WIDTH,
+            -0.5,
+            HANDSET_HANGER_ENTRY_HEIGHT,
+            lower_x_extra=entry_extra,
+        ),
+        tapered_slot_cutter(
+            head_x0,
+            head_x1,
+            center_y,
+            HANDSET_HANGER_SLOT_HEAD_HALF_WIDTH,
+            HANDSET_HANGER_SLOT_ROOF_HALF_WIDTH,
+            roof_z0,
+            HANDSET_HANGER_SLOT_ROOF_TOP,
+        ),
+        tapered_slot_cutter(
+            neck_x0,
+            neck_x1,
+            center_y,
+            HANDSET_HANGER_SLOT_NECK_HALF_WIDTH,
+            HANDSET_HANGER_SLOT_ROOF_HALF_WIDTH,
+            roof_z0,
+            HANDSET_HANGER_SLOT_ROOF_TOP,
+        ),
+    ]
 
 
 def shell_cutters() -> list[trimesh.Trimesh]:
@@ -836,24 +897,9 @@ def shell_cutters() -> list[trimesh.Trimesh]:
                 CONTROLLER_USB_OPENING_Y1,
                 CONTROLLER_USB_OPENING_Z1,
             ),
-        ),
-        # Cable path from the handset tray to the controller chamber.
-        cylinder(3.0, 40.0, (72.0, 50.0, 5.0), axis=0),
+        )
     ]
     cutters.extend(panel_insert_cutters())
-    cutters.extend(
-        cylinder(
-            HANDSET_TRAY_HOLE_DIAMETER / 2.0,
-            5.0,
-            (center[0], center[1], 10.5),
-            axis=2,
-        )
-        for center in handset_screw_world_centers()
-    )
-    cutters.extend(
-        countersink_cutter(center, TRAY_ROOF_UNDERSIDE, 1)
-        for center in handset_screw_world_centers()
-    )
     cutters.extend(
         cutter
         for center in COVER_SCREW_CENTERS
@@ -867,12 +913,26 @@ def generate_shell() -> trimesh.Trimesh:
     combined = union(
         [
             open_wedge,
-            build_handset_tray(),
             *build_panel_support_parts(),
             *build_shell_bosses(),
+            *build_handset_hanger_rails(),
         ]
     )
     result = subtract(combined, shell_cutters())
+    result.merge_vertices()
+    result.remove_unreferenced_vertices()
+    return result
+
+
+def generate_handset_mount() -> trimesh.Trimesh:
+    base = handset.generate_base()
+    joined = union([base, *handset_hanger_housings()])
+    cutters = [
+        cutter
+        for center_y in HANDSET_HANGER_LOCAL_Y_CENTERS
+        for cutter in handset_hanger_slot_cutters(center_y)
+    ]
+    result = subtract(joined, cutters)
     result.merge_vertices()
     result.remove_unreferenced_vertices()
     return result
@@ -1012,22 +1072,14 @@ def cover_cutters() -> list[trimesh.Trimesh]:
 
 def generate_cover() -> trimesh.Trimesh:
     main_plate = rounded_prism(
-        COVER_MAIN_WIDTH,
+        COVER_WIDTH,
         COVER_LENGTH,
         radius=4.0,
         z_min=0.0,
         height=COVER_THICKNESS,
-        center=COVER_MAIN_CENTER,
+        center=COVER_CENTER,
     )
-    handset_plate = rounded_prism(
-        TRAY_WIDTH,
-        TRAY_LENGTH,
-        radius=7.0,
-        z_min=0.0,
-        height=COVER_THICKNESS,
-        center=TRAY_CENTER,
-    )
-    combined = union([main_plate, handset_plate, *build_controller_mounts()])
+    combined = union([main_plate, *build_controller_mounts()])
     result = subtract(combined, cover_cutters())
     result.merge_vertices()
     result.remove_unreferenced_vertices()
@@ -1270,13 +1322,6 @@ def validate_controller_cradle(cover: trimesh.Trimesh) -> None:
             raise ValueError(f"former cable-tie slot remains open at y={slot_center_y}")
 
 
-def place_handset_base(base: trimesh.Trimesh) -> trimesh.Trimesh:
-    base = base.copy()
-    origin = handset_base_origin()
-    base.apply_translation([origin[0], origin[1], HANDSET_POCKET_FLOOR + 0.02])
-    return base
-
-
 def intersection_volume(mesh: trimesh.Trimesh, probe: trimesh.Trimesh) -> float:
     intersection = macro.boolean_meshes([mesh, probe], "intersection")
     return 0.0 if intersection.is_empty else float(intersection.volume)
@@ -1302,70 +1347,6 @@ def validate_countersink_opening(
     )
     if intersection_volume(mesh, probe) > 0.01:
         raise ValueError(f"{label} countersink is blocked: {center_xy}")
-
-
-def validate_handset_fit(shell: trimesh.Trimesh, handset_base: trimesh.Trimesh) -> None:
-    base = place_handset_base(handset_base)
-    collision = macro.boolean_meshes([shell, base], "intersection")
-    if not collision.is_empty and collision.volume > 0.03:
-        raise ValueError(f"handset pocket collision: {collision.volume}")
-
-
-def validate_handset_screw_holes(
-    shell: trimesh.Trimesh, handset_base: trimesh.Trimesh
-) -> None:
-    for local_center, world_center in zip(
-        HANDSET_SCREW_LOCAL_CENTERS,
-        handset_screw_world_centers(),
-        strict=True,
-    ):
-        tray_probe = cylinder(
-            HANDSET_TRAY_HOLE_DIAMETER / 2.0 - 0.05,
-            3.0,
-            (world_center[0], world_center[1], 10.5),
-        )
-        if intersection_volume(shell, tray_probe) > 0.01:
-            raise ValueError(f"handset tray screw hole is blocked: {world_center}")
-        validate_countersink_opening(
-            shell,
-            world_center,
-            TRAY_ROOF_UNDERSIDE,
-            1,
-            "handset tray",
-        )
-        base_probe = cylinder(
-            HEAT_SET_INSERT_HOLE_DIAMETER / 2.0 - 0.05,
-            HEAT_SET_INSERT_HOLE_DEPTH - 0.2,
-            (
-                local_center[0],
-                local_center[1],
-                HEAT_SET_INSERT_HOLE_DEPTH / 2.0,
-            ),
-        )
-        if intersection_volume(handset_base, base_probe) > 0.01:
-            raise ValueError(f"handset base insert hole is blocked: {local_center}")
-        lead_probe = cylinder(
-            HEAT_SET_INSERT_LEAD_DIAMETER / 2.0 - 0.05,
-            HEAT_SET_INSERT_LEAD_DEPTH - 0.1,
-            (
-                local_center[0],
-                local_center[1],
-                HEAT_SET_INSERT_LEAD_DEPTH / 2.0,
-            ),
-        )
-        if intersection_volume(handset_base, lead_probe) > 0.01:
-            raise ValueError(f"handset base insert lead-in is blocked: {local_center}")
-        floor_probe = cylinder(
-            1.0,
-            HEAT_SET_INSERT_BLIND_FLOOR / 2.0,
-            (
-                local_center[0],
-                local_center[1],
-                HEAT_SET_INSERT_HOLE_DEPTH + HEAT_SET_INSERT_BLIND_FLOOR / 4.0,
-            ),
-        )
-        if intersection_volume(handset_base, floor_probe) < 0.5:
-            raise ValueError(f"handset base insert hole is not blind: {local_center}")
 
 
 def place_sloped_panel(panel: trimesh.Trimesh) -> trimesh.Trimesh:
@@ -1451,7 +1432,9 @@ def validate_panel_attachment(shell: trimesh.Trimesh, panel: trimesh.Trimesh) ->
 def validate_bottom_cover_attachment(
     shell: trimesh.Trimesh, cover: trimesh.Trimesh
 ) -> None:
-    expected_bounds = np.array([[0.0, WEDGE_Y0], [WEDGE_X1, WEDGE_Y1]], dtype=float)
+    expected_bounds = np.array(
+        [[WEDGE_X0, WEDGE_Y0], [WEDGE_X1, WEDGE_Y1]], dtype=float
+    )
     if not np.allclose(cover.bounds[:, :2], expected_bounds, atol=0.003):
         raise ValueError(f"bottom cover footprint drifted: {cover.bounds[:, :2]}")
 
@@ -1500,16 +1483,111 @@ def validate_bottom_cover_attachment(
             raise ValueError(f"bottom cover insert hole is not blind: {center}")
 
 
+def place_handset_mount(handset_mount: trimesh.Trimesh) -> trimesh.Trimesh:
+    placed = handset_mount.copy()
+    placed.apply_translation(HANDSET_MOUNT_ORIGIN)
+    return placed
+
+
+def validate_handset_mount_attachment(
+    shell: trimesh.Trimesh, handset_mount: trimesh.Trimesh
+) -> None:
+    roof_rise = HANDSET_HANGER_SLOT_ROOF_TOP - HANDSET_HANGER_SLOT_MAIN_TOP
+    roof_run = HANDSET_HANGER_SLOT_HEAD_HALF_WIDTH - HANDSET_HANGER_SLOT_ROOF_HALF_WIDTH
+    if roof_run > roof_rise + 1e-9:
+        raise ValueError(
+            "handset hanger slot roof exceeds a support-free 45 degree slope"
+        )
+    if HANDSET_HANGER_SLOT_MAIN_TOP - HANDSET_HANGER_RAIL_HEIGHT < 0.3:
+        raise ValueError("handset hanger lacks vertical insertion clearance")
+    if HANDSET_HANGER_HEAD_HALF_WIDTH <= HANDSET_HANGER_SLOT_NECK_HALF_WIDTH:
+        raise ValueError("handset hanger head cannot retain the side slot")
+
+    placed = place_handset_mount(handset_mount)
+    collision = macro.boolean_meshes([shell, placed], "intersection")
+    if not collision.is_empty and collision.volume > 0.03:
+        raise ValueError(
+            f"handset side mount collides with chassis: {collision.volume}"
+        )
+
+    local_head_x0 = HANDSET_HANGER_HEAD_X0 - HANDSET_MOUNT_ORIGIN[0]
+    local_head_x1 = HANDSET_HANGER_HEAD_X1 - HANDSET_MOUNT_ORIGIN[0]
+    local_neck_x0 = HANDSET_HANGER_NECK_X0 - HANDSET_MOUNT_ORIGIN[0]
+    local_neck_x1 = HANDSET_HANGER_NECK_X1 - HANDSET_MOUNT_ORIGIN[0]
+    for local_y in HANDSET_HANGER_LOCAL_Y_CENTERS:
+        world_y = HANDSET_MOUNT_ORIGIN[1] + local_y
+        head_probe = box(
+            (
+                local_head_x0 + 0.05,
+                local_y - HANDSET_HANGER_HEAD_HALF_WIDTH + 0.05,
+                0.1,
+            ),
+            (
+                local_head_x1 - 0.05,
+                local_y + HANDSET_HANGER_HEAD_HALF_WIDTH - 0.05,
+                HANDSET_HANGER_RAIL_HEIGHT - 0.1,
+            ),
+        )
+        neck_probe = box(
+            (
+                local_neck_x0 + 0.05,
+                local_y - HANDSET_HANGER_NECK_HALF_WIDTH + 0.05,
+                0.1,
+            ),
+            (
+                local_neck_x1 - 0.05,
+                local_y + HANDSET_HANGER_NECK_HALF_WIDTH - 0.05,
+                HANDSET_HANGER_RAIL_HEIGHT - 0.1,
+            ),
+        )
+        if intersection_volume(handset_mount, head_probe) > 0.01:
+            raise ValueError(f"handset downward slot blocks rail head: {local_y}")
+        if intersection_volume(handset_mount, neck_probe) > 0.01:
+            raise ValueError(f"handset downward slot blocks rail neck: {local_y}")
+
+        world_head_probe = head_probe.copy()
+        world_head_probe.apply_translation(HANDSET_MOUNT_ORIGIN)
+        world_neck_probe = neck_probe.copy()
+        world_neck_probe.apply_translation(HANDSET_MOUNT_ORIGIN)
+        if (
+            intersection_volume(shell, world_head_probe)
+            < world_head_probe.volume - 0.05
+        ):
+            raise ValueError(f"chassis upward rail head is incomplete: {world_y}")
+        if (
+            intersection_volume(shell, world_neck_probe)
+            < world_neck_probe.volume - 0.05
+        ):
+            raise ValueError(f"chassis upward rail neck is incomplete: {world_y}")
+
+        cap_probe = box(
+            (
+                HANDSET_HANGER_SLOT_HEAD_X0 - HANDSET_MOUNT_ORIGIN[0] + 0.2,
+                local_y - 0.2,
+                HANDSET_HANGER_SLOT_ROOF_TOP + 0.1,
+            ),
+            (
+                HANDSET_HANGER_SLOT_HEAD_X1 - HANDSET_MOUNT_ORIGIN[0] - 0.2,
+                local_y + 0.2,
+                HANDSET_HANGER_HEIGHT - 0.1,
+            ),
+        )
+        if intersection_volume(handset_mount, cap_probe) < cap_probe.volume - 0.02:
+            raise ValueError(
+                f"handset downward slot lacks a closed upper stop: {local_y}"
+            )
+
+
 def validate_models(
     shell: trimesh.Trimesh,
     panel: trimesh.Trimesh,
     cover: trimesh.Trimesh,
-    handset_base: trimesh.Trimesh,
+    handset_mount: trimesh.Trimesh,
 ) -> ValidationReport:
     macro.assert_closed_manifold(shell, "integrated workstation shell")
     macro.assert_closed_manifold(panel, "integrated workstation sloped panel")
     macro.assert_closed_manifold(cover, "integrated workstation bottom cover")
-    macro.assert_closed_manifold(handset_base, "workstation handset base")
+    macro.assert_closed_manifold(handset_mount, "workstation handset side mount")
     validate_switch_geometry(panel)
     validate_screen_header_access(panel)
     validate_screen_insert_holes(panel)
@@ -1517,9 +1595,8 @@ def validate_models(
     validate_controller_connector_opening(shell)
     validate_controller_cradle(cover)
     validate_panel_attachment(shell, panel)
-    validate_handset_fit(shell, handset_base)
-    validate_handset_screw_holes(shell, handset_base)
     validate_bottom_cover_attachment(shell, cover)
+    validate_handset_mount_attachment(shell, handset_mount)
 
     normal = DECK_TRANSFORM[:3, :3] @ np.array([0.0, 0.0, 1.0])
     plane_angle = float(np.rad2deg(np.arccos(np.dot(normal, [0.0, 0.0, 1.0]))))
@@ -1536,14 +1613,12 @@ def validate_models(
         shell_extents=tuple(float(value) for value in shell.extents),
         panel_extents=tuple(float(value) for value in panel.extents),
         cover_extents=tuple(float(value) for value in cover.extents),
+        handset_mount_extents=tuple(float(value) for value in handset_mount.extents),
         key_count=KEY_COLUMNS * KEY_ROWS,
         key_layout=(KEY_COLUMNS, KEY_ROWS),
         key_pitch=KEY_PITCH,
         key_plane_degrees=plane_angle,
         wire_clip_count=len(WIRE_CLIP_CENTERS),
-        handset_pocket=(HANDSET_POCKET_WIDTH, HANDSET_POCKET_LENGTH),
-        handset_clearance_per_side=HANDSET_CLEARANCE,
-        handset_screw_count=len(HANDSET_SCREW_LOCAL_CENTERS),
         controller_bay=(CONTROLLER_CLEAR_WIDTH, CONTROLLER_CLEAR_LENGTH),
         controller_support_levels=(
             CONTROLLER_RP2040_RAISE,
@@ -1553,10 +1628,11 @@ def validate_models(
         screen_plane_degrees=plane_angle,
         panel_screw_count=len(PANEL_SCREW_CENTERS),
         bottom_cover_screw_count=len(COVER_SCREW_CENTERS),
+        handset_hanger_count=len(HANDSET_HANGER_LOCAL_Y_CENTERS),
         shell_watertight=bool(shell.is_watertight),
         panel_watertight=bool(panel.is_watertight),
         cover_watertight=bool(cover.is_watertight),
-        handset_base_watertight=bool(handset_base.is_watertight),
+        handset_mount_watertight=bool(handset_mount.is_watertight),
     )
 
 
@@ -1564,34 +1640,34 @@ def fit_check_mesh(
     shell: trimesh.Trimesh,
     panel: trimesh.Trimesh,
     cover: trimesh.Trimesh,
-    handset_base: trimesh.Trimesh,
+    handset_mount: trimesh.Trimesh,
 ) -> trimesh.Trimesh:
     parts = [shell.copy(), place_sloped_panel(panel)]
     placed_cover = cover.copy()
     placed_cover.apply_translation([0.0, 0.0, -COVER_THICKNESS])
     parts.append(placed_cover)
-    parts.append(place_handset_base(handset_base))
+    parts.append(place_handset_mount(handset_mount))
     return trimesh.util.concatenate(parts)
 
 
 def exploded_fit_mesh(
     shell: trimesh.Trimesh,
     panel: trimesh.Trimesh,
-    handset_base: trimesh.Trimesh,
+    handset_mount: trimesh.Trimesh,
 ) -> trimesh.Trimesh:
     lifted_panel = place_sloped_panel(panel)
     panel_normal = DECK_TRANSFORM[:3, :3] @ np.array([0.0, 0.0, 1.0])
     lifted_panel.apply_translation(panel_normal * 24.0)
-    return trimesh.util.concatenate(
-        [shell.copy(), lifted_panel, place_handset_base(handset_base)]
-    )
+    separated_handset = place_handset_mount(handset_mount)
+    separated_handset.apply_translation([-18.0, 0.0, 0.0])
+    return trimesh.util.concatenate([shell.copy(), lifted_panel, separated_handset])
 
 
 def render_previews(
     shell: trimesh.Trimesh,
     panel: trimesh.Trimesh,
     cover: trimesh.Trimesh,
-    handset_base: trimesh.Trimesh,
+    handset_mount: trimesh.Trimesh,
     preview_root: Path,
 ) -> None:
     handset.VIEW_ROTATIONS["front-isometric"] = FRONT_ISOMETRIC_ROTATION
@@ -1612,17 +1688,17 @@ def render_previews(
     handset.render_preview(cover, preview_root / "cover-isometric.png", "isometric")
     handset.render_preview(cover, preview_root / "cover-top.png", "top")
     handset.render_preview(
-        handset_base,
-        preview_root / "handset-base-bottom.png",
-        "bottom",
+        handset_mount,
+        preview_root / "handset-mount-isometric.png",
+        "isometric",
     )
     handset.render_preview(
-        fit_check_mesh(shell, panel, cover, handset_base),
+        fit_check_mesh(shell, panel, cover, handset_mount),
         preview_root / "fit-check-front-isometric.png",
         "front-isometric",
     )
     handset.render_preview(
-        exploded_fit_mesh(shell, panel, handset_base),
+        exploded_fit_mesh(shell, panel, handset_mount),
         preview_root / "exploded-front-isometric.png",
         "front-isometric",
     )
@@ -1644,29 +1720,29 @@ def main(argv: list[str] | None = None) -> int:
     shell = generate_shell()
     panel = generate_sloped_panel()
     cover = generate_cover()
-    handset_base = generate_handset_base()
-    report = validate_models(shell, panel, cover, handset_base)
+    handset_mount = generate_handset_mount()
+    report = validate_models(shell, panel, cover, handset_mount)
 
     shell_target = arguments.output_root / SHELL_FILENAME
     panel_target = arguments.output_root / PANEL_FILENAME
     cover_target = arguments.output_root / COVER_FILENAME
-    handset_base_target = arguments.output_root / HANDSET_BASE_FILENAME
+    handset_mount_target = arguments.output_root / HANDSET_MOUNT_FILENAME
     export(shell, shell_target)
     export(panel, panel_target)
     export(cover, cover_target)
-    export(handset_base, handset_base_target)
-    render_previews(shell, panel, cover, handset_base, arguments.preview_root)
+    export(handset_mount, handset_mount_target)
+    render_previews(shell, panel, cover, handset_mount, arguments.preview_root)
 
     payload = asdict(report)
     payload["shell_path"] = str(shell_target)
     payload["panel_path"] = str(panel_target)
     payload["cover_path"] = str(cover_target)
-    payload["handset_base_path"] = str(handset_base_target)
+    payload["handset_mount_path"] = str(handset_mount_target)
     payload["shell_sha256"] = hashlib.sha256(shell_target.read_bytes()).hexdigest()
     payload["panel_sha256"] = hashlib.sha256(panel_target.read_bytes()).hexdigest()
     payload["cover_sha256"] = hashlib.sha256(cover_target.read_bytes()).hexdigest()
-    payload["handset_base_sha256"] = hashlib.sha256(
-        handset_base_target.read_bytes()
+    payload["handset_mount_sha256"] = hashlib.sha256(
+        handset_mount_target.read_bytes()
     ).hexdigest()
     payload["preview_root"] = str(arguments.preview_root)
     print(json.dumps(payload, sort_keys=True))

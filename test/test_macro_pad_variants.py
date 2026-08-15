@@ -5,11 +5,11 @@ import numpy as np
 import pytest
 import trimesh
 
-from scripts import macro_pad_variants as variants
+from scripts.modeling import macro_pad_variants as variants
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "models/3d-print/3x3keypad"
+SOURCE = ROOT / "models/3d-print/pico_macro_pad_3x3"
 
 
 def test_layout_contracts() -> None:
@@ -23,9 +23,9 @@ def test_layout_contracts() -> None:
 @pytest.mark.parametrize(
     ("filename", "faces", "extents"),
     [
-        ("pico_macro_pad_top.stl.stl", 3398, (65.15, 65.15, 9.998)),
+        ("pico_macro_pad_top.stl", 3398, (65.15, 65.15, 9.998)),
         (
-            "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl",
+            "pico_macro_pad_bottom_fitted_to_usb_c.stl",
             3838,
             (65.148, 65.15, 15.006),
         ),
@@ -49,7 +49,7 @@ def test_source_hash_contract() -> None:
 
 
 def test_load_source_rejects_changed_canonical_mesh(tmp_path: Path) -> None:
-    filename = "pico_macro_pad_top.stl.stl"
+    filename = "pico_macro_pad_top.stl"
     changed = tmp_path / filename
     changed.write_bytes((SOURCE / filename).read_bytes() + b"changed")
 
@@ -59,7 +59,7 @@ def test_load_source_rejects_changed_canonical_mesh(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("name", ["3x4", "4x3", "4x4", "5x4"])
 def test_generate_top_preserves_pitch_holes_and_topology(name: str) -> None:
-    source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
+    source = variants.load_source(SOURCE / "pico_macro_pad_top.stl")
     layout = variants.LAYOUTS[name]
     mesh = variants.generate_top(source, layout)
 
@@ -97,9 +97,9 @@ def test_generate_top_preserves_pitch_holes_and_topology(name: str) -> None:
 
 
 def test_validator_rejects_a_shifted_switch_opening() -> None:
-    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
+    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl")
     bottom_source = variants.load_source(
-        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl"
     )
     layout = variants.LAYOUTS["3x4"]
     top = variants.generate_top(top_source, layout)
@@ -121,9 +121,7 @@ def test_axis_pitch_rejects_a_single_coordinate_level() -> None:
 
 @pytest.mark.parametrize("name", ["3x4", "4x3", "4x4", "5x4"])
 def test_generate_bottom_preserves_protected_features(name: str) -> None:
-    source = variants.load_source(
-        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
-    )
+    source = variants.load_source(SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl")
     layout = variants.LAYOUTS[name]
     mesh = variants.generate_bottom(source, layout)
 
@@ -153,9 +151,7 @@ def test_generate_bottom_preserves_protected_features(name: str) -> None:
 
 @pytest.mark.parametrize("name", ["3x4", "4x3", "4x4", "5x4"])
 def test_bottom_internal_core_is_never_scaled(name: str) -> None:
-    source = variants.load_source(
-        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
-    )
+    source = variants.load_source(SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl")
     _source_shell, source_core = variants.split_bottom(source)
     parts = variants.expand_bottom_parts(source, variants.LAYOUTS[name])
     assert parts.core.extents == pytest.approx(source_core.extents, abs=1e-6)
@@ -164,9 +160,7 @@ def test_bottom_internal_core_is_never_scaled(name: str) -> None:
 
 @pytest.mark.parametrize("name", ["3x4", "4x3", "4x4", "5x4"])
 def test_bottom_growth_corridors_are_empty(name: str) -> None:
-    source = variants.load_source(
-        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
-    )
+    source = variants.load_source(SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl")
     layout = variants.LAYOUTS[name]
     mesh = variants.generate_bottom(source, layout)
     corridors = variants.growth_corridor_boxes(mesh, source, layout)
@@ -178,9 +172,9 @@ def test_bottom_growth_corridors_are_empty(name: str) -> None:
 
 
 def test_validator_rejects_a_bottom_floor_hole() -> None:
-    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
+    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl")
     bottom_source = variants.load_source(
-        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl"
     )
     layout = variants.LAYOUTS["5x4"]
     top = variants.generate_top(top_source, layout)
@@ -214,9 +208,9 @@ def test_validator_rejects_a_bottom_floor_hole() -> None:
 def test_validator_rejects_added_bottom_ribs(
     lower: tuple[float, ...], upper: tuple[float, ...], message: str
 ) -> None:
-    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
+    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl")
     bottom_source = variants.load_source(
-        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl"
     )
     layout = variants.LAYOUTS["5x4"]
     top = variants.generate_top(top_source, layout)
@@ -232,9 +226,9 @@ def test_validator_rejects_added_bottom_ribs(
 def test_validator_rejects_the_same_generator_regression(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
+    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl")
     bottom_source = variants.load_source(
-        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl"
     )
     layout = variants.LAYOUTS["5x4"]
     top = variants.generate_top(top_source, layout)
@@ -250,9 +244,9 @@ def test_validator_rejects_the_same_generator_regression(
 
 
 def test_validator_rejects_a_small_controller_bump() -> None:
-    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
+    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl")
     bottom_source = variants.load_source(
-        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl"
     )
     layout = variants.LAYOUTS["5x4"]
     top = variants.generate_top(top_source, layout)
@@ -266,9 +260,9 @@ def test_validator_rejects_a_small_controller_bump() -> None:
 
 @pytest.mark.parametrize("name", ["3x4", "4x3", "4x4", "5x4"])
 def test_protected_geometry_matches_source(name: str) -> None:
-    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
+    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl")
     bottom_source = variants.load_source(
-        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl"
     )
     layout = variants.LAYOUTS[name]
     top = variants.generate_top(top_source, layout)
@@ -294,9 +288,9 @@ def test_protected_geometry_matches_source(name: str) -> None:
 
 
 def test_validate_pair_reports_the_complete_contract() -> None:
-    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
+    top_source = variants.load_source(SOURCE / "pico_macro_pad_top.stl")
     bottom_source = variants.load_source(
-        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl"
     )
     layout = variants.LAYOUTS["4x4"]
     report = variants.validate_pair(
@@ -331,9 +325,9 @@ def test_cli_writes_exact_artifact_names(tmp_path: Path) -> None:
     )
     assert result == 0
     source_bottom = variants.load_source(
-        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+        SOURCE / "pico_macro_pad_bottom_fitted_to_usb_c.stl"
     )
-    source_top = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
+    source_top = variants.load_source(SOURCE / "pico_macro_pad_top.stl")
     for name in variants.LAYOUTS:
         directory = tmp_path / "models" / name
         top_path = directory / f"pico_macro_pad_{name}_top.stl"
@@ -358,7 +352,7 @@ def test_cli_writes_exact_artifact_names(tmp_path: Path) -> None:
 
 
 def test_binary_stl_export_is_deterministic(tmp_path: Path) -> None:
-    source = variants.load_source(SOURCE / "pico_macro_pad_top.stl.stl")
+    source = variants.load_source(SOURCE / "pico_macro_pad_top.stl")
     mesh = variants.generate_top(source, variants.LAYOUTS["3x4"])
     first = tmp_path / "first.stl"
     second = tmp_path / "second.stl"

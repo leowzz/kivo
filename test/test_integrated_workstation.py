@@ -7,54 +7,50 @@ import numpy as np
 import pytest
 import trimesh
 
-from scripts import integrated_workstation as workstation
-from scripts import macro_pad_variants as macro
+from scripts.modeling import integrated_workstation as workstation
+from scripts.modeling import macro_pad_variants as macro
+
+GeneratedModels = tuple[
+    trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
+]
 
 
 @pytest.fixture(scope="module")
-def generated_models() -> tuple[
-    trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
-]:
+def generated_models() -> GeneratedModels:
     return (
         workstation.generate_shell(),
         workstation.generate_sloped_panel(),
         workstation.generate_cover(),
-        workstation.generate_handset_base(),
+        workstation.generate_handset_mount(),
     )
 
 
 def test_generated_models_validate(
-    generated_models: tuple[
-        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
-    ],
+    generated_models: GeneratedModels,
 ) -> None:
-    shell, panel, cover, handset_base = generated_models
-    report = workstation.validate_models(shell, panel, cover, handset_base)
+    shell, panel, cover, handset_mount = generated_models
+    report = workstation.validate_models(shell, panel, cover, handset_mount)
 
     assert report.key_count == 18
     assert report.key_layout == (6, 3)
     assert report.key_pitch == 19.05
     assert report.key_plane_degrees == pytest.approx(30.0)
     assert report.wire_clip_count == 6
-    assert report.handset_pocket == (65.0, 80.0)
-    assert report.handset_clearance_per_side == 0.6
-    assert report.handset_screw_count == 4
     assert report.controller_bay == pytest.approx((28.64, 63.89))
     assert report.controller_support_levels == (3.0, 6.5)
     assert report.screen_board == (64.9, 35.03)
     assert report.screen_plane_degrees == pytest.approx(30.0)
     assert report.panel_screw_count == 6
-    assert report.bottom_cover_screw_count == 6
+    assert report.bottom_cover_screw_count == 4
+    assert report.handset_hanger_count == 2
     assert report.shell_watertight
     assert report.panel_watertight
     assert report.cover_watertight
-    assert report.handset_base_watertight
+    assert report.handset_mount_watertight
 
 
 def test_switch_apertures_preserve_canonical_stepped_geometry(
-    generated_models: tuple[
-        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
-    ],
+    generated_models: GeneratedModels,
 ) -> None:
     _, panel, _, _ = generated_models
 
@@ -88,9 +84,7 @@ def test_controller_bay_accepts_both_reference_boards() -> None:
 
 
 def test_controller_uses_two_level_snap_cradle_without_tie_slots(
-    generated_models: tuple[
-        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
-    ],
+    generated_models: GeneratedModels,
 ) -> None:
     _, _, cover, _ = generated_models
 
@@ -101,9 +95,7 @@ def test_controller_uses_two_level_snap_cradle_without_tie_slots(
 
 
 def test_type_c_opening_and_controller_are_at_the_rear(
-    generated_models: tuple[
-        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
-    ],
+    generated_models: GeneratedModels,
 ) -> None:
     shell, _, _, _ = generated_models
 
@@ -116,9 +108,7 @@ def test_type_c_opening_and_controller_are_at_the_rear(
 
 
 def test_screen_header_slot_is_on_left_and_covers_all_eight_pins(
-    generated_models: tuple[
-        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
-    ],
+    generated_models: GeneratedModels,
 ) -> None:
     _, panel, _, _ = generated_models
 
@@ -133,9 +123,7 @@ def test_screen_header_slot_is_on_left_and_covers_all_eight_pins(
 
 
 def test_screen_has_four_backside_heat_set_insert_through_holes(
-    generated_models: tuple[
-        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
-    ],
+    generated_models: GeneratedModels,
 ) -> None:
     _, panel, _, _ = generated_models
 
@@ -149,9 +137,7 @@ def test_screen_has_four_backside_heat_set_insert_through_holes(
 
 
 def test_panel_has_six_support_free_recessed_fly_wire_clips(
-    generated_models: tuple[
-        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
-    ],
+    generated_models: GeneratedModels,
 ) -> None:
     _, panel, _, _ = generated_models
 
@@ -165,28 +151,10 @@ def test_panel_has_six_support_free_recessed_fly_wire_clips(
     workstation.validate_wire_clips(panel)
 
 
-def test_handset_base_has_four_aligned_bottom_up_screw_pairs(
-    generated_models: tuple[
-        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
-    ],
-) -> None:
-    shell, _, _, handset_base = generated_models
-
-    workstation.validate_handset_screw_holes(shell, handset_base)
-    assert workstation.HANDSET_SCREW_LOCAL_CENTERS.shape == (4, 2)
-    assert np.allclose(
-        workstation.handset_screw_world_centers()
-        - workstation.HANDSET_SCREW_LOCAL_CENTERS,
-        workstation.handset_base_origin(),
-    )
-
-
 def test_user_measured_heat_set_insert_holes_are_hidden_and_blind(
-    generated_models: tuple[
-        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
-    ],
+    generated_models: GeneratedModels,
 ) -> None:
-    shell, _, cover, handset_base = generated_models
+    shell, _, cover, _ = generated_models
 
     assert workstation.HEAT_SET_INSERT_NARROW_DIAMETER == 3.9
     assert workstation.HEAT_SET_INSERT_WIDE_DIAMETER == 4.9
@@ -197,30 +165,49 @@ def test_user_measured_heat_set_insert_holes_are_hidden_and_blind(
     assert workstation.M3_SCREW_THREAD_DIAMETER == 2.9
     assert workstation.M3_SCREW_HEAD_DIAMETER == 5.3
     assert workstation.M3_SCREW_HEAD_CLEARANCE_DIAMETER == 5.6
-    workstation.validate_handset_screw_holes(shell, handset_base)
     workstation.validate_bottom_cover_attachment(shell, cover)
 
 
-def test_bottom_cover_supports_the_handset_tray_footprint(
-    generated_models: tuple[
-        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
-    ],
+def test_bottom_cover_matches_controller_chassis_footprint(
+    generated_models: GeneratedModels,
 ) -> None:
     shell, _, cover, _ = generated_models
 
-    assert cover.bounds[0, 0] == pytest.approx(0.0, abs=0.003)
+    assert shell.bounds[0, 0] == pytest.approx(
+        workstation.HANDSET_HANGER_HEAD_X0, abs=0.003
+    )
+    assert cover.bounds[0, 0] == pytest.approx(workstation.WEDGE_X0, abs=0.003)
     assert cover.bounds[1, 0] == pytest.approx(workstation.WEDGE_X1, abs=0.003)
-    assert cover.bounds[0, 1] == pytest.approx(workstation.TRAY_BOTTOM_Y, abs=0.003)
+    assert cover.bounds[0, 1] == pytest.approx(workstation.WEDGE_Y0, abs=0.003)
     assert cover.bounds[1, 1] == pytest.approx(workstation.WEDGE_Y1, abs=0.003)
-    assert workstation.HANDSET_COVER_SCREW_CENTERS.shape == (2, 2)
-    assert workstation.COVER_SCREW_CENTERS.shape == (6, 2)
+    assert workstation.COVER_SCREW_CENTERS.shape == (4, 2)
+    assert not hasattr(workstation, "HANDSET_POCKET_WIDTH")
     workstation.validate_bottom_cover_attachment(shell, cover)
 
 
+def test_handset_base_side_hangs_on_two_support_free_vertical_t_rails(
+    generated_models: GeneratedModels,
+) -> None:
+    shell, _, _, handset_mount = generated_models
+
+    assert workstation.HANDSET_HANGER_LOCAL_Y_CENTERS.shape == (2,)
+    assert workstation.HANDSET_HANGER_CLEARANCE == 0.3
+    assert workstation.HANDSET_HANGER_RAIL_HEIGHT == 13.6
+    assert workstation.HANDSET_HANGER_SLOT_MAIN_TOP == 14.0
+    assert (
+        workstation.HANDSET_HANGER_HEAD_HALF_WIDTH
+        > workstation.HANDSET_HANGER_SLOT_NECK_HALF_WIDTH
+    )
+    assert not hasattr(workstation, "HANDSET_MOUNT_HOLE_DIAMETER")
+    assert shell.bounds[0, 0] == pytest.approx(
+        workstation.HANDSET_HANGER_HEAD_X0, abs=0.003
+    )
+    assert handset_mount.extents == pytest.approx((70.3, 78.8, 33.4), abs=0.003)
+    workstation.validate_handset_mount_attachment(shell, handset_mount)
+
+
 def test_sloped_panel_is_flat_printable_and_has_six_aligned_screws(
-    generated_models: tuple[
-        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
-    ],
+    generated_models: GeneratedModels,
 ) -> None:
     shell, panel, _, _ = generated_models
 
@@ -230,9 +217,7 @@ def test_sloped_panel_is_flat_printable_and_has_six_aligned_screws(
 
 
 def test_shell_has_no_long_unsupported_rear_panel_bridge(
-    generated_models: tuple[
-        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
-    ],
+    generated_models: GeneratedModels,
 ) -> None:
     shell, panel, _, _ = generated_models
 
@@ -240,9 +225,7 @@ def test_shell_has_no_long_unsupported_rear_panel_bridge(
 
 
 def test_rear_panel_screws_and_rails_do_not_protrude_behind_chassis(
-    generated_models: tuple[
-        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
-    ],
+    generated_models: GeneratedModels,
 ) -> None:
     shell, panel, _, _ = generated_models
 
@@ -256,18 +239,16 @@ def test_rear_panel_screws_and_rails_do_not_protrude_behind_chassis(
 
 def test_exported_stls_reload_as_closed_manifolds(
     tmp_path: Path,
-    generated_models: tuple[
-        trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh, trimesh.Trimesh
-    ],
+    generated_models: GeneratedModels,
 ) -> None:
-    shell, panel, cover, handset_base = generated_models
+    shell, panel, cover, handset_mount = generated_models
     targets = {
         "shell": (shell, tmp_path / workstation.SHELL_FILENAME),
         "panel": (panel, tmp_path / workstation.PANEL_FILENAME),
         "cover": (cover, tmp_path / workstation.COVER_FILENAME),
-        "handset-base": (
-            handset_base,
-            tmp_path / workstation.HANDSET_BASE_FILENAME,
+        "handset_mount": (
+            handset_mount,
+            tmp_path / workstation.HANDSET_MOUNT_FILENAME,
         ),
     }
 

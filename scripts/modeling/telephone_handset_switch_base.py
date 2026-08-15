@@ -21,7 +21,7 @@ import numpy as np
 import trimesh
 
 if __package__:
-    from scripts import macro_pad_variants as macro
+    from scripts.modeling import macro_pad_variants as macro
 else:
     import macro_pad_variants as macro
 

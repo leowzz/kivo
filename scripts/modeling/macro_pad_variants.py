@@ -36,10 +36,10 @@ BOOLEAN_TOLERANCE = 5e-5
 PROTECTED_VOLUME_TOLERANCE = 0.02
 BASE_SKIN_VOLUME_TOLERANCE = 0.08
 SOURCE_HASHES = {
-    "pico_macro_pad_top.stl.stl": (
+    "pico_macro_pad_top.stl": (
         "ce0f7b64d06b3fc2864d29452e87fb264f70567c0f5924eab380d0748f4e9155"
     ),
-    "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl": (
+    "pico_macro_pad_bottom_fitted_to_usb_c.stl": (
         "36e063dffbc6a135aeb53f34dc49747135066a4b0cf0335f9cbdc06887e7cfbb"
     ),
 }
@@ -132,7 +132,7 @@ LAYOUTS = {
     )
 }
 
-DEFAULT_SOURCE = Path("models/3d-print/3x3keypad")
+DEFAULT_SOURCE = Path("models/3d-print/pico_macro_pad_3x3")
 DEFAULT_OUTPUT = Path("models/3d-print")
 DEFAULT_PREVIEWS = Path("/tmp/kivo-macro-pad-previews")
 VIEW_ROTATIONS = {
@@ -978,9 +978,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--only", choices=("top", "bottom"))
     arguments = parser.parse_args(argv)
 
-    top_source = load_source(arguments.source_root / "pico_macro_pad_top.stl.stl")
+    top_source = load_source(arguments.source_root / "pico_macro_pad_top.stl")
     bottom_source = load_source(
-        arguments.source_root / "pico_macro_pad_bottom_fitted_to_usb_c.stl.stl"
+        arguments.source_root / "pico_macro_pad_bottom_fitted_to_usb_c.stl"
     )
     selected = arguments.layout or list(LAYOUTS)
     for name in selected:
