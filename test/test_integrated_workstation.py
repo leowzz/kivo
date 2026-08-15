@@ -48,9 +48,9 @@ def test_generated_models_validate(
     assert report.toggle_hole_count == 3
     assert report.toggle_plane_degrees == pytest.approx(0.0)
     assert report.panel_screw_count == 6
-    assert report.bottom_cover_screw_count == 4
-    assert report.foot_pad_recess_count == 4
-    assert report.handset_hanger_count == 2
+    assert report.bottom_cover_screw_count == 6
+    assert report.handset_mount_insert_count == 2
+    assert report.handset_side_hole_count == 2
     assert report.shell_watertight
     assert report.panel_watertight
     assert report.cover_watertight
@@ -234,36 +234,52 @@ def test_bottom_cover_matches_controller_chassis_footprint(
 ) -> None:
     shell, _, cover, _ = generated_models
 
-    assert shell.bounds[0, 0] == pytest.approx(
-        workstation.HANDSET_HANGER_HEAD_X0, abs=0.003
-    )
+    assert shell.bounds[0, 0] == pytest.approx(workstation.WEDGE_X0, abs=0.003)
     assert cover.bounds[0, 0] == pytest.approx(workstation.WEDGE_X0, abs=0.003)
     assert cover.bounds[1, 0] == pytest.approx(workstation.WEDGE_X1, abs=0.003)
     assert cover.bounds[0, 1] == pytest.approx(workstation.WEDGE_Y0, abs=0.003)
     assert cover.bounds[1, 1] == pytest.approx(workstation.WEDGE_Y1, abs=0.003)
-    assert workstation.COVER_SCREW_CENTERS.shape == (4, 2)
+    assert workstation.COVER_SCREW_CENTERS.shape == (6, 2)
+    assert np.array_equal(
+        workstation.COVER_SCREW_CENTERS,
+        workstation.SHARED_ATTACHMENT_BOTTOM_CENTERS,
+    )
+    assert np.array_equal(
+        np.unique(workstation.COVER_SCREW_CENTERS[:, 1]),
+        np.array([13.0, 62.0, 99.0]),
+    )
     assert not hasattr(workstation, "HANDSET_POCKET_WIDTH")
     workstation.validate_bottom_cover_attachment(shell, cover)
 
 
-def test_handset_base_side_hangs_on_two_support_free_vertical_t_rails(
+def test_handset_base_sits_flat_on_two_same_height_screw_holes(
     generated_models: GeneratedModels,
 ) -> None:
-    shell, _, _, handset_mount = generated_models
+    shell, _, cover, handset_mount = generated_models
 
-    assert workstation.HANDSET_HANGER_LOCAL_Y_CENTERS.shape == (2,)
-    assert workstation.HANDSET_HANGER_CLEARANCE == 0.3
-    assert workstation.HANDSET_HANGER_RAIL_HEIGHT == 13.6
-    assert workstation.HANDSET_HANGER_SLOT_MAIN_TOP == 14.0
-    assert (
-        workstation.HANDSET_HANGER_HEAD_HALF_WIDTH
-        > workstation.HANDSET_HANGER_SLOT_NECK_HALF_WIDTH
+    assert workstation.HANDSET_MOUNT_INSERT_LOCAL_CENTERS.shape == (2, 2)
+    assert workstation.HANDSET_MOUNT_INSERT_SURFACE_X == workstation.handset.OUTER_WIDTH
+    assert np.allclose(
+        workstation.HANDSET_SIDE_HOLE_CENTERS,
+        np.array([[34.6, 4.6], [77.4, 4.6]]),
     )
-    assert not hasattr(workstation, "HANDSET_MOUNT_HOLE_DIAMETER")
-    assert shell.bounds[0, 0] == pytest.approx(
-        workstation.HANDSET_HANGER_HEAD_X0, abs=0.003
+    assert np.ptp(workstation.HANDSET_SIDE_HOLE_CENTERS[:, 1]) == pytest.approx(0.0)
+    assert workstation.HANDSET_SIDE_HOLE_DIAMETER == 3.4
+    assert workstation.HANDSET_MOUNT_INSERT_BLIND_FLOOR == pytest.approx(1.2)
+    assert workstation.HANDSET_MOUNT_ORIGIN[2] == pytest.approx(
+        -workstation.COVER_THICKNESS
     )
-    assert handset_mount.extents == pytest.approx((70.3, 78.8, 33.4), abs=0.003)
+    placed_mount = workstation.place_handset_mount(handset_mount)
+    placed_cover = cover.copy()
+    placed_cover.apply_translation([0.0, 0.0, -workstation.COVER_THICKNESS])
+    assert placed_mount.bounds[0, 2] == pytest.approx(
+        placed_cover.bounds[0, 2], abs=0.003
+    )
+    assert placed_mount.bounds[1, 0] == pytest.approx(workstation.WEDGE_X0, abs=0.003)
+    assert not hasattr(workstation, "HANDSET_SIDE_ARC_RADIUS")
+    assert not hasattr(workstation, "HANDSET_MOUNT_BOSS_LOCAL_X0")
+    assert shell.bounds[0, 0] == pytest.approx(workstation.WEDGE_X0, abs=0.003)
+    assert handset_mount.extents == pytest.approx((63.8, 78.8, 33.4), abs=0.003)
     workstation.validate_handset_mount_attachment(shell, handset_mount)
 
 
@@ -275,6 +291,29 @@ def test_sloped_panel_is_flat_printable_and_has_six_aligned_screws(
     workstation.validate_panel_attachment(shell, panel)
     assert panel.bounds[0, 2] == pytest.approx(0.0, abs=0.003)
     assert workstation.PANEL_SCREW_CENTERS.shape == (6, 2)
+
+
+def test_panel_bosses_continue_to_bottom_cover_as_six_support_free_pillars(
+    generated_models: GeneratedModels,
+) -> None:
+    shell, _, _, _ = generated_models
+
+    assert (
+        workstation.PANEL_SCREW_CENTERS.shape
+        == workstation.SHARED_ATTACHMENT_BOTTOM_CENTERS.shape
+        == (6, 2)
+    )
+    assert workstation.SHARED_ATTACHMENT_BASE_HEIGHT == pytest.approx(
+        workstation.PANEL_INSERT_BOSS_DEPTH
+    )
+    for panel_center, bottom_center in zip(
+        workstation.PANEL_SCREW_CENTERS,
+        workstation.SHARED_ATTACHMENT_BOTTOM_CENTERS,
+        strict=True,
+    ):
+        pillar = workstation.build_shared_attachment_pillar(panel_center, bottom_center)
+        assert pillar.bounds[0, 2] == pytest.approx(0.0, abs=0.003)
+    workstation.validate_shared_attachment_pillars(shell)
 
 
 def test_shell_has_no_long_unsupported_rear_panel_bridge(

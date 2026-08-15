@@ -9,16 +9,18 @@ All dimensions are millimeters.
 ## Printed Parts
 
 - `kivo_integrated_workstation_shell.stl`: open-top `138 x 104` chassis,
-  30-degree panel support lip, and six panel attachment holes.
+  30-degree panel support lip, and six continuous panel-to-bottom attachment
+  pillars.
 - `kivo_integrated_workstation_sloped_panel.stl`: removable `132 x 117` key and
   display panel with a raised horizontal three-switch pod and six recessed
   fly-wire clips. It has no underside protrusions and prints flat.
 - `kivo_integrated_workstation_bottom_cover.stl`: removable `138 x 104` bottom
-  cover with a two-level snap-fit controller cradle and ventilation slots.
+  cover with six countersunk attachment holes, a two-level snap-fit controller
+  cradle, and ventilation slots.
 - `telephone_handset_switch_base_workstation_mount.stl`: independent handset
-  base with two downward-opening T-slots. They slide over two upward T-rails on
-  the chassis left wall without screws, a shared tray, or a bottom-cover
-  extension.
+  base with two blind M3 heat-set insert pockets cut directly into its existing
+  right wall. They align with two round holes at the same height in the chassis
+  left wall, keeping the handset base horizontal.
 
 The generator is `scripts/modeling/integrated_workstation.py`. Run it from the
 repository root with:
@@ -36,17 +38,17 @@ uv run --script scripts/modeling/integrated_workstation.py
 | M3 countersunk screw | `2.9` thread, `5.3` measured head diameter |
 | Printed countersink | `3.4` through hole, `5.6` diameter, `90 degrees` |
 | Bottom cover | `138 x 104`, matching the controller chassis footprint |
-| Bottom cover attachment | Four countersunk M3 screws |
-| Handset side attachment | Two vertical T-slot hangers, no hardware |
-| T-rail height | `13.6` |
-| T-slot straight depth | `14.0` plus a support-free tapered roof |
-| T-slot clearance | `0.3` around each rail surface |
+| Bottom cover attachment | Six countersunk M3 screws into the shared pillars |
+| Handset chassis holes | Two `3.4` round clearances at `y=34.6/77.4`, `z=4.6` |
+| Handset base inserts | Two `4.0 x 5.4` blind bores with `5.1 x 0.6` lead-ins |
+| Handset base installed bottom | `z=-2.4`, aligned with the bottom-cover underside |
 | Key switches | `14.8` lower relief, `14.0` upper lip |
 | Key layout | `6 x 3`, `19.05` pitch |
 | Key plane | `30 degrees` above horizontal |
 | Fly-wire retention | Six clips, one per three-key group |
 | Wire clip pocket | `16.0 x 3.0 x 2.2`, with a `1.5` snap-in mouth |
 | Sloped panel attachment | Six `3.4` clearances into hidden chassis inserts |
+| Shared attachment pillars | Six support-free columns with independent blind insert pockets at both ends |
 | Display PCB | `64.90 x 35.03`, four backside-loaded heat-set insert holes |
 | Display attachment | Four `4.0` through bores with `5.1 x 0.6` backside lead-ins |
 | Display header | 8 pins on PCB left half, first pin at `x=11.38`, `2.54` pitch |
@@ -88,22 +90,30 @@ boundary keeps `0.3` clearance around the combined body envelope. The complete
 body envelopes have been checked against the rear wall, right panel rail, and
 attachment bosses.
 
+The six sloped-panel insert bosses continue to the chassis bottom as continuous
+pillars. Each pillar has one blind insert pocket at the sloped end and a second
+blind pocket at the bottom end, so the panel and cover can be removed
+independently while reusing the same printed structure. The bottom locations
+retain the original front and rear pairs and add one middle pair.
+
 ## Hardware And Assembly
 
-- 14 M3 heat-set brass inserts with the measured `3.9` body, `4.9` knurled
+- 18 M3 heat-set brass inserts with the measured `3.9` body, `4.9` knurled
   rings, and `4.9` length: 6 for the sloped-panel attachment, 4 for the display,
-  and 4 for the bottom cover. Chassis receiving parts use a `4.0 x 5.4` blind
-  bore with a shallow `5.1` lead-in; the four display bores pass through the
-  panel and open from its back side.
+  6 for the bottom cover, and 2 for the handset base. Receiving parts use a
+  `4.0 x 5.4` blind bore with a shallow `5.1` lead-in; the four display bores
+  pass through the panel and open from its back side.
 - The user-supplied screws measure `2.9` across the thread and `5.3` across
   the head. Exterior attachment holes use a `3.4` clearance bore and a
   `5.6`, 90-degree countersink so the screw heads can sit flush.
-- 4 M3 x 8 screws for the bottom cover. They pass through the outside cover
+- 6 M3 x 8 screws for the bottom cover. They pass through the outside cover
   and enter inserts installed from the hidden underside of the chassis.
 - 6 M3 x 10 screws for the removable sloped panel. They pass through the
   panel face into inserts installed in the chassis support bosses. The insert
   openings are covered completely by the assembled panel.
 - 4 M3 x 10 screws for the display PCB.
+- 2 M3 screws and 2 washers for the handset base. The washers sit against the
+  chassis interior so both screw loads are spread over the side wall.
 - 3 panel-mount toggle switches with `12 mm` threaded bushings and
   `15 x 29 x 27 mm` bodies. Install them from the panel underside through the
   shared rectangular cavity. Their mounting axes are vertical after assembly.
@@ -111,10 +121,10 @@ attachment bosses.
   dedicated mechanical mounting holes. The controller cradle therefore uses
   two screw-free stepped support levels with flexible side catches.
 
-1. Align the handset base's two downward-opening slots with the chassis's two
-   upward rails. Insert the rails from the slot bottoms and slide the parts
-   vertically until both bottoms align. Lift the handset base along the same
-   path to remove it; no fasteners are used.
+1. Heat two inserts directly into the handset base's right wall. Hold the base
+   horizontal with its bottom aligned to the installed bottom cover, then pass
+   two M3 screws and washers through the round chassis holes into the inserts.
+   Tighten both screws and keep both washers on the chassis interior.
 2. Place the controller USB end toward the wide rear connector opening and
    press the board into its matching snap level. The narrower RP2040 uses the
    inner lower level; the larger ESP32-S3 uses the outer upper level. Press the
@@ -127,17 +137,19 @@ attachment bosses.
 4. Heat six inserts into the chassis panel bosses from the sloped mating face.
    Place the completed panel on the support lip and drive six M3 x 10 screws
    through its face into the hidden inserts.
-5. After testing the keypad and display, heat four inserts into the chassis
-   bottom bosses and fasten the bottom cover from outside.
+5. After testing the keypad and display, heat six inserts into the bottom ends
+   of the shared chassis pillars and fasten the bottom cover from outside.
    Future key or display changes require reprinting only the panel.
 
 ## Printing
 
-- Print the shell upright with its bottom rim on the build plate.
-- Print the handset base upright in its modeled orientation. Both T-slot
-  housings begin on the build plate, and each closed slot roof converges at less
-  than 45 degrees. The chassis rails also rise directly from the build plate, so
-  the complete side-hanger interface prints without support.
+- Print the shell upright with its bottom rim on the build plate. All six shared
+  attachment pillars rise continuously from the build plate; their outer walls
+  stay within 45 degrees, so the sloped insert bosses do not need support.
+- Print the handset base upright in its modeled orientation. It has no external
+  attachment protrusions. The two horizontal blind insert bores may print
+  slightly flat at the top; clear them gently with a `4.0 mm` drill before
+  heat-setting the inserts if needed.
 - Print the sloped panel separately with its large flat underside on the build
   plate. The switch steps and 2 mm screen bezel face upward and need no support.
   The raised toggle pod has one uninterrupted underside cavity. With both
@@ -154,11 +166,13 @@ attachment bosses.
   pocket.
 - Start with a 0.4 nozzle, 0.2 layer height, 4 perimeters, and 20 percent
   infill.
-- The main shell and cover remain `138 mm` wide. The side-hanger rail extends
-  the shell another `5.8 mm` to the left, for `143.8 mm` overall.
+- The main shell and cover both remain `138 mm` wide; there is no separate
+  hanger rail protruding from the shell. The two horizontal `3.4 mm` round holes
+  normally bridge without support; clear them with a `3.4 mm` drill if their top
+  surfaces print slightly flat.
 - The chassis has no broad sloped roof, so it does not need support beneath the
-  key deck. The removable panel rests on two side rails, a front lip, and six
-  insert bosses. Its rear center remains open, avoiding a long unsupported
+  key deck. The removable panel rests on two side rails, a front lip, and the
+  six shared pillars. Its rear center remains open, avoiding a long unsupported
   cross bridge at the top of the chassis.
 - The rear pair of panel screws is moved 3 mm toward the front and the side
   rails stop at local `y=117`, keeping every panel support at or in front of
@@ -170,5 +184,6 @@ attachment bosses.
 The generator rejects any result that is not a single positive, watertight,
 consistently wound two-manifold mesh. It measures both levels of all 18 switch
 apertures directly on the flat-print panel and verifies the six panel screw
-paths, four bottom-cover screw paths, two handset T-slot interfaces, and assembly
-clearance.
+paths, six bottom-cover screw paths, six continuous support-free pillars, two
+blind handset insert bores, two same-height chassis holes, bottom-cover height
+compensation, inside washer clearance, and assembly clearance.

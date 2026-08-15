@@ -220,57 +220,46 @@ WIRE_CLIP_CENTERS = np.array(
 # six clips by moving only that one into the clear strip below the display.
 WIRE_CLIP_CENTERS[-1, 0] = WIRE_CLIP_RELOCATED_REAR_RIGHT_X
 
-
-SHELL_SCREW_CENTERS = np.array(
-    [[77.0, 13.0], [205.0, 13.0], [77.0, 99.0], [205.0, 99.0]]
-)
-COVER_SCREW_CENTERS = SHELL_SCREW_CENTERS.copy()
-SHELL_BOSS_RADIUS = 5.0
-SHELL_BOSS_HEIGHT = 12.0
-
-# Two upward T-rails on the chassis slide into downward-opening slots added to
-# the handset cradle. All rail and housing geometry starts on the print bed.
-HANDSET_HANGER_LOCAL_Y_CENTERS = np.array([18.0, 60.8])
-HANDSET_BASE_RIGHT_X = 64.5
-HANDSET_MOUNT_ORIGIN = np.array(
+# The six panel insert bosses continue down to these six bottom-cover insert
+# bosses as one-to-one support-free pillars. The front and rear pairs preserve
+# the original cover hole locations; the middle pair reuses the middle panel
+# bosses without crowding the controller bay or foot-pad recesses.
+SHARED_ATTACHMENT_BOTTOM_CENTERS = np.array(
     [
-        HANDSET_BASE_RIGHT_X - handset.OUTER_WIDTH,
-        (WEDGE_Y0 + WEDGE_Y1 - handset.OUTER_LENGTH) / 2.0,
-        0.0,
+        [77.0, 13.0],
+        [205.0, 13.0],
+        [77.0, 62.0],
+        [205.0, 62.0],
+        [77.0, 99.0],
+        [205.0, 99.0],
     ]
 )
-HANDSET_HANGER_CLEARANCE = 0.3
-HANDSET_HANGER_OUTER_X0 = 64.2
-HANDSET_HANGER_OUTER_X1 = 71.0
-HANDSET_HANGER_OUTER_HALF_WIDTH = 7.5
-HANDSET_HANGER_HEIGHT = 20.2
-HANDSET_HANGER_SLOT_MAIN_TOP = 14.0
-HANDSET_HANGER_SLOT_ROOF_TOP = 19.8
-HANDSET_HANGER_SLOT_ROOF_HALF_WIDTH = 0.05
-HANDSET_HANGER_ENTRY_HEIGHT = 2.0
-HANDSET_HANGER_ENTRY_EXTRA_CLEARANCE = 0.6
-HANDSET_HANGER_HEAD_X0 = 66.2
-HANDSET_HANGER_HEAD_X1 = 69.4
-HANDSET_HANGER_HEAD_HALF_WIDTH = 5.5
-HANDSET_HANGER_NECK_X0 = 69.2
-HANDSET_HANGER_NECK_X1 = WEDGE_X0 + 0.2
-HANDSET_HANGER_NECK_HALF_WIDTH = 3.5
-HANDSET_HANGER_RAIL_HEIGHT = 13.6
-HANDSET_HANGER_SLOT_HEAD_X0 = HANDSET_HANGER_HEAD_X0 - HANDSET_HANGER_CLEARANCE
-HANDSET_HANGER_SLOT_HEAD_X1 = HANDSET_HANGER_HEAD_X1 + HANDSET_HANGER_CLEARANCE
-HANDSET_HANGER_SLOT_HEAD_HALF_WIDTH = (
-    HANDSET_HANGER_HEAD_HALF_WIDTH + HANDSET_HANGER_CLEARANCE
+COVER_SCREW_CENTERS = SHARED_ATTACHMENT_BOTTOM_CENTERS.copy()
+SHARED_ATTACHMENT_BASE_RADIUS = 5.0
+SHARED_ATTACHMENT_BASE_HEIGHT = PANEL_INSERT_BOSS_DEPTH
+COVER_THICKNESS = 2.4
+
+# Two blind M3 heat-set insert pockets are cut directly into the handset base's
+# existing right wall. Both screw axes share one Z level, and the base is lowered
+# by the bottom-cover thickness so both printed parts rest on the same surface.
+HANDSET_MOUNT_INSERT_LOCAL_CENTERS = np.array([[18.0, 7.0], [60.8, 7.0]])
+HANDSET_MOUNT_INSERT_SURFACE_X = handset.OUTER_WIDTH
+HANDSET_MOUNT_INSERT_BLIND_FLOOR = 1.2
+HANDSET_MOUNT_ORIGIN = np.array(
+    [
+        WEDGE_X0 - handset.OUTER_WIDTH,
+        (WEDGE_Y0 + WEDGE_Y1 - handset.OUTER_LENGTH) / 2.0,
+        -COVER_THICKNESS,
+    ]
 )
-HANDSET_HANGER_SLOT_NECK_X0 = HANDSET_HANGER_NECK_X0 - HANDSET_HANGER_CLEARANCE
-HANDSET_HANGER_SLOT_NECK_X1 = WEDGE_X0 + 1.0
-HANDSET_HANGER_SLOT_NECK_HALF_WIDTH = (
-    HANDSET_HANGER_NECK_HALF_WIDTH + HANDSET_HANGER_CLEARANCE
+HANDSET_SIDE_HOLE_CENTERS = (
+    HANDSET_MOUNT_ORIGIN[1:] + HANDSET_MOUNT_INSERT_LOCAL_CENTERS
 )
+HANDSET_SIDE_HOLE_DIAMETER = 3.4
 
 COVER_LENGTH = WEDGE_Y1 - WEDGE_Y0
 COVER_WIDTH = WEDGE_X1 - WEDGE_X0
 COVER_CENTER = ((WEDGE_X0 + WEDGE_X1) / 2.0, (WEDGE_Y0 + WEDGE_Y1) / 2.0)
-COVER_THICKNESS = 2.4
 COVER_HOLE_DIAMETER = 3.4
 FOOT_PAD_RECESS_DIAMETER = 15.0
 FOOT_PAD_RECESS_DEPTH = 1.5
@@ -358,7 +347,8 @@ class ValidationReport:
     panel_screw_count: int
     bottom_cover_screw_count: int
     foot_pad_recess_count: int
-    handset_hanger_count: int
+    handset_mount_insert_count: int
+    handset_side_hole_count: int
     shell_watertight: bool
     panel_watertight: bool
     cover_watertight: bool
@@ -836,6 +826,36 @@ def panel_opening_cutter() -> trimesh.Trimesh:
     return cutter
 
 
+def build_shared_attachment_pillar(
+    panel_center: Iterable[float], bottom_center: Iterable[float]
+) -> trimesh.Trimesh:
+    panel_center_xy = tuple(panel_center)
+    bottom_center_xy = tuple(bottom_center)
+    if len(panel_center_xy) != 2 or len(bottom_center_xy) != 2:
+        raise ValueError("attachment pillar centers must contain x and y")
+
+    panel_boss = cylinder(
+        PANEL_INSERT_BOSS_RADIUS,
+        PANEL_INSERT_BOSS_DEPTH,
+        (
+            panel_center_xy[0],
+            panel_center_xy[1],
+            -PANEL_INSERT_BOSS_DEPTH / 2.0,
+        ),
+    )
+    panel_boss.apply_transform(DECK_TRANSFORM)
+    bottom_boss = cylinder(
+        SHARED_ATTACHMENT_BASE_RADIUS,
+        SHARED_ATTACHMENT_BASE_HEIGHT,
+        (
+            bottom_center_xy[0],
+            bottom_center_xy[1],
+            SHARED_ATTACHMENT_BASE_HEIGHT / 2.0,
+        ),
+    )
+    return hull(np.vstack((bottom_boss.vertices, panel_boss.vertices)))
+
+
 def build_panel_support_parts() -> list[trimesh.Trimesh]:
     parts = [
         box(
@@ -848,16 +868,16 @@ def build_panel_support_parts() -> list[trimesh.Trimesh]:
         ),
         box((82.0, 0.0, -PANEL_LIP_DEPTH), (200.0, 9.0, 0.0)),
     ]
-    parts.extend(
-        cylinder(
-            PANEL_INSERT_BOSS_RADIUS,
-            PANEL_INSERT_BOSS_DEPTH,
-            (center[0], center[1], -PANEL_INSERT_BOSS_DEPTH / 2.0),
-        )
-        for center in PANEL_SCREW_CENTERS
-    )
     for part in parts:
         part.apply_transform(DECK_TRANSFORM)
+    parts.extend(
+        build_shared_attachment_pillar(panel_center, bottom_center)
+        for panel_center, bottom_center in zip(
+            PANEL_SCREW_CENTERS,
+            SHARED_ATTACHMENT_BOTTOM_CENTERS,
+            strict=True,
+        )
+    )
     return parts
 
 
@@ -872,155 +892,57 @@ def panel_insert_cutters() -> list[trimesh.Trimesh]:
     return cutters
 
 
-def build_shell_bosses() -> list[trimesh.Trimesh]:
+def shared_attachment_pillar_cutters(
+    panel_center: Iterable[float], bottom_center: Iterable[float]
+) -> list[trimesh.Trimesh]:
+    panel_cutters = heat_set_insert_cutters(panel_center, 0.0, -1)
+    for cutter in panel_cutters:
+        cutter.apply_transform(DECK_TRANSFORM)
+    return [
+        *panel_cutters,
+        *heat_set_insert_cutters(bottom_center, 0.0, 1),
+    ]
+
+
+def handset_mount_insert_cutters(
+    local_center: Iterable[float],
+) -> list[trimesh.Trimesh]:
+    surface_x = HANDSET_MOUNT_INSERT_SURFACE_X
+    local_y, local_z = tuple(local_center)
+
+    def cutter(diameter: float, depth: float) -> trimesh.Trimesh:
+        inner_x = surface_x - depth
+        outer_x = surface_x + HEAT_SET_INSERT_CUTTER_OVERSHOOT
+        return cylinder(
+            diameter / 2.0,
+            outer_x - inner_x,
+            (
+                (inner_x + outer_x) / 2.0,
+                local_y,
+                local_z,
+            ),
+            axis=0,
+        )
+
+    return [
+        cutter(HEAT_SET_INSERT_HOLE_DIAMETER, HEAT_SET_INSERT_HOLE_DEPTH),
+        cutter(HEAT_SET_INSERT_LEAD_DIAMETER, HEAT_SET_INSERT_LEAD_DEPTH),
+    ]
+
+
+def handset_side_hole_cutters() -> list[trimesh.Trimesh]:
+    radius = HANDSET_SIDE_HOLE_DIAMETER / 2.0
+    cutter_length = WEDGE_WALL + 2.0
+    center_x = WEDGE_X0 + WEDGE_WALL / 2.0
+
     return [
         cylinder(
-            SHELL_BOSS_RADIUS,
-            SHELL_BOSS_HEIGHT,
-            (center[0], center[1], SHELL_BOSS_HEIGHT / 2.0),
+            radius,
+            cutter_length,
+            (center_x, center_y, center_z),
+            axis=0,
         )
-        for center in SHELL_SCREW_CENTERS
-    ]
-
-
-def build_handset_hanger_rails() -> list[trimesh.Trimesh]:
-    parts: list[trimesh.Trimesh] = []
-    for local_y in HANDSET_HANGER_LOCAL_Y_CENTERS:
-        world_y = HANDSET_MOUNT_ORIGIN[1] + local_y
-        parts.extend(
-            [
-                box(
-                    (
-                        HANDSET_HANGER_HEAD_X0,
-                        world_y - HANDSET_HANGER_HEAD_HALF_WIDTH,
-                        0.0,
-                    ),
-                    (
-                        HANDSET_HANGER_HEAD_X1,
-                        world_y + HANDSET_HANGER_HEAD_HALF_WIDTH,
-                        HANDSET_HANGER_RAIL_HEIGHT,
-                    ),
-                ),
-                box(
-                    (
-                        HANDSET_HANGER_NECK_X0,
-                        world_y - HANDSET_HANGER_NECK_HALF_WIDTH,
-                        0.0,
-                    ),
-                    (
-                        HANDSET_HANGER_NECK_X1,
-                        world_y + HANDSET_HANGER_NECK_HALF_WIDTH,
-                        HANDSET_HANGER_RAIL_HEIGHT,
-                    ),
-                ),
-            ]
-        )
-    return parts
-
-
-def handset_hanger_housings() -> list[trimesh.Trimesh]:
-    x0 = HANDSET_HANGER_OUTER_X0 - HANDSET_MOUNT_ORIGIN[0]
-    x1 = HANDSET_HANGER_OUTER_X1 - HANDSET_MOUNT_ORIGIN[0]
-    return [
-        box(
-            (x0, center_y - HANDSET_HANGER_OUTER_HALF_WIDTH, 0.0),
-            (
-                x1,
-                center_y + HANDSET_HANGER_OUTER_HALF_WIDTH,
-                HANDSET_HANGER_HEIGHT,
-            ),
-        )
-        for center_y in HANDSET_HANGER_LOCAL_Y_CENTERS
-    ]
-
-
-def tapered_slot_cutter(
-    x0: float,
-    x1: float,
-    center_y: float,
-    lower_half_width: float,
-    upper_half_width: float,
-    z0: float,
-    z1: float,
-    lower_x_extra: float = 0.0,
-) -> trimesh.Trimesh:
-    return hull(
-        [
-            [x, y, z]
-            for z, x_extra, half_width in (
-                (z0, lower_x_extra, lower_half_width),
-                (z1, 0.0, upper_half_width),
-            )
-            for x in (x0 - x_extra, x1 + x_extra)
-            for y in (center_y - half_width, center_y + half_width)
-        ]
-    )
-
-
-def handset_hanger_slot_cutters(center_y: float) -> list[trimesh.Trimesh]:
-    origin_x = HANDSET_MOUNT_ORIGIN[0]
-    head_x0 = HANDSET_HANGER_SLOT_HEAD_X0 - origin_x
-    head_x1 = HANDSET_HANGER_SLOT_HEAD_X1 - origin_x
-    neck_x0 = HANDSET_HANGER_SLOT_NECK_X0 - origin_x
-    neck_x1 = HANDSET_HANGER_SLOT_NECK_X1 - origin_x
-    entry_extra = HANDSET_HANGER_ENTRY_EXTRA_CLEARANCE
-    roof_z0 = HANDSET_HANGER_SLOT_MAIN_TOP - 0.02
-
-    return [
-        box(
-            (head_x0, center_y - HANDSET_HANGER_SLOT_HEAD_HALF_WIDTH, -1.0),
-            (
-                head_x1,
-                center_y + HANDSET_HANGER_SLOT_HEAD_HALF_WIDTH,
-                HANDSET_HANGER_SLOT_MAIN_TOP,
-            ),
-        ),
-        box(
-            (neck_x0, center_y - HANDSET_HANGER_SLOT_NECK_HALF_WIDTH, -1.0),
-            (
-                neck_x1,
-                center_y + HANDSET_HANGER_SLOT_NECK_HALF_WIDTH,
-                HANDSET_HANGER_SLOT_MAIN_TOP,
-            ),
-        ),
-        tapered_slot_cutter(
-            head_x0,
-            head_x1,
-            center_y,
-            HANDSET_HANGER_SLOT_HEAD_HALF_WIDTH + entry_extra,
-            HANDSET_HANGER_SLOT_HEAD_HALF_WIDTH,
-            -0.5,
-            HANDSET_HANGER_ENTRY_HEIGHT,
-            lower_x_extra=entry_extra,
-        ),
-        tapered_slot_cutter(
-            neck_x0,
-            neck_x1,
-            center_y,
-            HANDSET_HANGER_SLOT_NECK_HALF_WIDTH + entry_extra,
-            HANDSET_HANGER_SLOT_NECK_HALF_WIDTH,
-            -0.5,
-            HANDSET_HANGER_ENTRY_HEIGHT,
-            lower_x_extra=entry_extra,
-        ),
-        tapered_slot_cutter(
-            head_x0,
-            head_x1,
-            center_y,
-            HANDSET_HANGER_SLOT_HEAD_HALF_WIDTH,
-            HANDSET_HANGER_SLOT_ROOF_HALF_WIDTH,
-            roof_z0,
-            HANDSET_HANGER_SLOT_ROOF_TOP,
-        ),
-        tapered_slot_cutter(
-            neck_x0,
-            neck_x1,
-            center_y,
-            HANDSET_HANGER_SLOT_NECK_HALF_WIDTH,
-            HANDSET_HANGER_SLOT_ROOF_HALF_WIDTH,
-            roof_z0,
-            HANDSET_HANGER_SLOT_ROOF_TOP,
-        ),
+        for center_y, center_z in HANDSET_SIDE_HOLE_CENTERS
     ]
 
 
@@ -1047,6 +969,7 @@ def shell_cutters() -> list[trimesh.Trimesh]:
         for center in COVER_SCREW_CENTERS
         for cutter in heat_set_insert_cutters(center, 0.0, 1)
     )
+    cutters.extend(handset_side_hole_cutters())
     return cutters
 
 
@@ -1056,8 +979,6 @@ def generate_shell() -> trimesh.Trimesh:
         [
             open_wedge,
             *build_panel_support_parts(),
-            *build_shell_bosses(),
-            *build_handset_hanger_rails(),
         ]
     )
     result = subtract(combined, shell_cutters())
@@ -1068,13 +989,12 @@ def generate_shell() -> trimesh.Trimesh:
 
 def generate_handset_mount() -> trimesh.Trimesh:
     base = handset.generate_base()
-    joined = union([base, *handset_hanger_housings()])
     cutters = [
         cutter
-        for center_y in HANDSET_HANGER_LOCAL_Y_CENTERS
-        for cutter in handset_hanger_slot_cutters(center_y)
+        for local_center in HANDSET_MOUNT_INSERT_LOCAL_CENTERS
+        for cutter in handset_mount_insert_cutters(local_center)
     ]
-    result = subtract(joined, cutters)
+    result = subtract(base, cutters)
     result.merge_vertices()
     result.remove_unreferenced_vertices()
     return result
@@ -1235,8 +1155,7 @@ def cover_cutters() -> list[trimesh.Trimesh]:
             (
                 center[0],
                 center[1],
-                (FOOT_PAD_RECESS_DEPTH - FOOT_PAD_RECESS_CUTTER_OVERSHOOT)
-                / 2.0,
+                (FOOT_PAD_RECESS_DEPTH - FOOT_PAD_RECESS_CUTTER_OVERSHOOT) / 2.0,
             ),
         )
         for center in FOOT_PAD_RECESS_CENTERS
@@ -1629,9 +1548,24 @@ def validate_controller_cradle_module(module: trimesh.Trimesh) -> None:
             )
 
 
+def mesh_volume(mesh: trimesh.Trimesh) -> float:
+    if mesh.is_empty:
+        return 0.0
+    triangles = mesh.triangles
+    signed_volume = (
+        np.einsum(
+            "ij,ij->i",
+            triangles[:, 0],
+            np.cross(triangles[:, 1], triangles[:, 2]),
+        ).sum()
+        / 6.0
+    )
+    return abs(float(signed_volume))
+
+
 def intersection_volume(mesh: trimesh.Trimesh, probe: trimesh.Trimesh) -> float:
     intersection = macro.boolean_meshes([mesh, probe], "intersection")
-    return 0.0 if intersection.is_empty else float(intersection.volume)
+    return mesh_volume(intersection)
 
 
 def validate_countersink_opening(
@@ -1661,6 +1595,37 @@ def place_sloped_panel(panel: trimesh.Trimesh) -> trimesh.Trimesh:
     placed.apply_translation([PANEL_X0, PANEL_Y0, 0.0])
     placed.apply_transform(DECK_TRANSFORM)
     return placed
+
+
+def validate_shared_attachment_pillars(shell: trimesh.Trimesh) -> None:
+    if PANEL_SCREW_CENTERS.shape != SHARED_ATTACHMENT_BOTTOM_CENTERS.shape:
+        raise ValueError("panel and bottom attachment centers are not one-to-one")
+    if not np.array_equal(COVER_SCREW_CENTERS, SHARED_ATTACHMENT_BOTTOM_CENTERS):
+        raise ValueError("bottom cover does not reuse the shared pillar centers")
+
+    for panel_center, bottom_center in zip(
+        PANEL_SCREW_CENTERS,
+        SHARED_ATTACHMENT_BOTTOM_CENTERS,
+        strict=True,
+    ):
+        pillar = build_shared_attachment_pillar(panel_center, bottom_center)
+        unsupported_faces = (
+            pillar.face_normals[:, 2] < -np.cos(np.deg2rad(45.0)) - 1e-9
+        ) & (pillar.triangles_center[:, 2] > 0.01)
+        if np.any(unsupported_faces):
+            raise ValueError(
+                f"shared attachment pillar exceeds a support-free 45 degree slope: "
+                f"{panel_center}"
+            )
+
+        expected = subtract(
+            pillar,
+            shared_attachment_pillar_cutters(panel_center, bottom_center),
+        )
+        if intersection_volume(shell, expected) < expected.volume - 0.05:
+            raise ValueError(
+                f"shared attachment pillar is not continuous: {panel_center}"
+            )
 
 
 def validate_panel_attachment(shell: trimesh.Trimesh, panel: trimesh.Trimesh) -> None:
@@ -1842,91 +1807,110 @@ def place_handset_mount(handset_mount: trimesh.Trimesh) -> trimesh.Trimesh:
 
 
 def validate_handset_mount_attachment(
-    shell: trimesh.Trimesh, handset_mount: trimesh.Trimesh
+    shell: trimesh.Trimesh,
+    handset_mount: trimesh.Trimesh,
 ) -> None:
-    roof_rise = HANDSET_HANGER_SLOT_ROOF_TOP - HANDSET_HANGER_SLOT_MAIN_TOP
-    roof_run = HANDSET_HANGER_SLOT_HEAD_HALF_WIDTH - HANDSET_HANGER_SLOT_ROOF_HALF_WIDTH
-    if roof_run > roof_rise + 1e-9:
+    if HANDSET_MOUNT_INSERT_LOCAL_CENTERS.shape != (2, 2):
+        raise ValueError("handset mount must have exactly two insert centers")
+    if HANDSET_SIDE_HOLE_CENTERS.shape != (2, 2):
+        raise ValueError("chassis must have exactly two handset screw holes")
+    if not np.allclose(
+        HANDSET_SIDE_HOLE_CENTERS,
+        HANDSET_MOUNT_ORIGIN[1:] + HANDSET_MOUNT_INSERT_LOCAL_CENTERS,
+        atol=1e-9,
+    ):
+        raise ValueError("handset insert bores do not align with chassis holes")
+    if not np.allclose(
+        HANDSET_SIDE_HOLE_CENTERS[:, 1],
+        HANDSET_SIDE_HOLE_CENTERS[0, 1],
+        atol=1e-9,
+    ):
+        raise ValueError("handset screw holes are not at the same height")
+    if not np.isclose(HANDSET_MOUNT_ORIGIN[2], -COVER_THICKNESS, atol=1e-9):
+        raise ValueError("handset mount does not account for bottom-cover thickness")
+
+    if not np.isclose(shell.bounds[0, 0], WEDGE_X0, atol=0.003):
+        raise ValueError("chassis still includes a handset hanger protrusion")
+    placed_mount = place_handset_mount(handset_mount)
+    if not np.isclose(placed_mount.bounds[1, 0], WEDGE_X0, atol=0.003):
+        raise ValueError("handset mount wall does not sit flush against chassis")
+    if not np.isclose(placed_mount.bounds[0, 2], -COVER_THICKNESS, atol=0.003):
+        raise ValueError("handset mount bottom does not align with installed cover")
+    shell_mount_collision = macro.boolean_meshes([shell, placed_mount], "intersection")
+    shell_mount_collision_volume = mesh_volume(shell_mount_collision)
+    if shell_mount_collision_volume > 0.03:
         raise ValueError(
-            "handset hanger slot roof exceeds a support-free 45 degree slope"
-        )
-    if HANDSET_HANGER_SLOT_MAIN_TOP - HANDSET_HANGER_RAIL_HEIGHT < 0.3:
-        raise ValueError("handset hanger lacks vertical insertion clearance")
-    if HANDSET_HANGER_HEAD_HALF_WIDTH <= HANDSET_HANGER_SLOT_NECK_HALF_WIDTH:
-        raise ValueError("handset hanger head cannot retain the side slot")
-
-    placed = place_handset_mount(handset_mount)
-    collision = macro.boolean_meshes([shell, placed], "intersection")
-    if not collision.is_empty and collision.volume > 0.03:
-        raise ValueError(
-            f"handset side mount collides with chassis: {collision.volume}"
+            f"handset side mount collides with chassis: {shell_mount_collision_volume}"
         )
 
-    local_head_x0 = HANDSET_HANGER_HEAD_X0 - HANDSET_MOUNT_ORIGIN[0]
-    local_head_x1 = HANDSET_HANGER_HEAD_X1 - HANDSET_MOUNT_ORIGIN[0]
-    local_neck_x0 = HANDSET_HANGER_NECK_X0 - HANDSET_MOUNT_ORIGIN[0]
-    local_neck_x1 = HANDSET_HANGER_NECK_X1 - HANDSET_MOUNT_ORIGIN[0]
-    for local_y in HANDSET_HANGER_LOCAL_Y_CENTERS:
-        world_y = HANDSET_MOUNT_ORIGIN[1] + local_y
-        head_probe = box(
+    surface_x = HANDSET_MOUNT_INSERT_SURFACE_X
+    floor_length = HANDSET_MOUNT_INSERT_BLIND_FLOOR
+    for local_y, local_z in HANDSET_MOUNT_INSERT_LOCAL_CENTERS:
+        body_probe = cylinder(
+            HEAT_SET_INSERT_HOLE_DIAMETER / 2.0 - 0.05,
+            HEAT_SET_INSERT_HOLE_DEPTH - 0.2,
             (
-                local_head_x0 + 0.05,
-                local_y - HANDSET_HANGER_HEAD_HALF_WIDTH + 0.05,
-                0.1,
+                surface_x - HEAT_SET_INSERT_HOLE_DEPTH / 2.0,
+                local_y,
+                local_z,
             ),
-            (
-                local_head_x1 - 0.05,
-                local_y + HANDSET_HANGER_HEAD_HALF_WIDTH - 0.05,
-                HANDSET_HANGER_RAIL_HEIGHT - 0.1,
-            ),
+            axis=0,
         )
-        neck_probe = box(
-            (
-                local_neck_x0 + 0.05,
-                local_y - HANDSET_HANGER_NECK_HALF_WIDTH + 0.05,
-                0.1,
-            ),
-            (
-                local_neck_x1 - 0.05,
-                local_y + HANDSET_HANGER_NECK_HALF_WIDTH - 0.05,
-                HANDSET_HANGER_RAIL_HEIGHT - 0.1,
-            ),
-        )
-        if intersection_volume(handset_mount, head_probe) > 0.01:
-            raise ValueError(f"handset downward slot blocks rail head: {local_y}")
-        if intersection_volume(handset_mount, neck_probe) > 0.01:
-            raise ValueError(f"handset downward slot blocks rail neck: {local_y}")
+        if intersection_volume(handset_mount, body_probe) > 0.01:
+            raise ValueError(f"handset mount insert hole is blocked: {local_y}")
 
-        world_head_probe = head_probe.copy()
-        world_head_probe.apply_translation(HANDSET_MOUNT_ORIGIN)
-        world_neck_probe = neck_probe.copy()
-        world_neck_probe.apply_translation(HANDSET_MOUNT_ORIGIN)
-        if (
-            intersection_volume(shell, world_head_probe)
-            < world_head_probe.volume - 0.05
-        ):
-            raise ValueError(f"chassis upward rail head is incomplete: {world_y}")
-        if (
-            intersection_volume(shell, world_neck_probe)
-            < world_neck_probe.volume - 0.05
-        ):
-            raise ValueError(f"chassis upward rail neck is incomplete: {world_y}")
-
-        cap_probe = box(
+        lead_probe = cylinder(
+            HEAT_SET_INSERT_LEAD_DIAMETER / 2.0 - 0.05,
+            HEAT_SET_INSERT_LEAD_DEPTH - 0.1,
             (
-                HANDSET_HANGER_SLOT_HEAD_X0 - HANDSET_MOUNT_ORIGIN[0] + 0.2,
-                local_y - 0.2,
-                HANDSET_HANGER_SLOT_ROOF_TOP + 0.1,
+                surface_x - HEAT_SET_INSERT_LEAD_DEPTH / 2.0,
+                local_y,
+                local_z,
             ),
-            (
-                HANDSET_HANGER_SLOT_HEAD_X1 - HANDSET_MOUNT_ORIGIN[0] - 0.2,
-                local_y + 0.2,
-                HANDSET_HANGER_HEIGHT - 0.1,
-            ),
+            axis=0,
         )
-        if intersection_volume(handset_mount, cap_probe) < cap_probe.volume - 0.02:
+        if intersection_volume(handset_mount, lead_probe) > 0.01:
+            raise ValueError(f"handset mount insert lead-in is blocked: {local_y}")
+
+        floor_probe = cylinder(
+            1.0,
+            floor_length - 0.4,
+            (
+                surface_x - HEAT_SET_INSERT_HOLE_DEPTH - floor_length / 2.0,
+                local_y,
+                local_z,
+            ),
+            axis=0,
+        )
+        if intersection_volume(handset_mount, floor_probe) < floor_probe.volume - 0.02:
+            raise ValueError(f"handset mount insert hole is not blind: {local_y}")
+
+    hole_radius = HANDSET_SIDE_HOLE_DIAMETER / 2.0
+    wall_probe_length = WEDGE_WALL - 0.1
+    wall_probe_x = WEDGE_X0 + WEDGE_WALL / 2.0
+    for center_y, center_z in HANDSET_SIDE_HOLE_CENTERS:
+        if center_z - hole_radius <= 0.0 or center_y - hole_radius <= WEDGE_Y0:
+            raise ValueError("handset screw hole runs outside the chassis wall")
+        if center_z + hole_radius >= wedge_top(center_y):
+            raise ValueError("handset screw hole reaches the sloped wall edge")
+        hole_probe = cylinder(
+            hole_radius - 0.05,
+            wall_probe_length,
+            (wall_probe_x, center_y, center_z),
+            axis=0,
+        )
+        if intersection_volume(shell, hole_probe) > 0.01:
+            raise ValueError(f"handset side hole is blocked: {(center_y, center_z)}")
+
+        washer_probe = cylinder(
+            3.5,
+            0.4,
+            (WEDGE_X0 + WEDGE_WALL + 0.2, center_y, center_z),
+            axis=0,
+        )
+        if intersection_volume(shell, washer_probe) > 0.01:
             raise ValueError(
-                f"handset downward slot lacks a closed upper stop: {local_y}"
+                f"handset side hole lacks inside washer clearance: {(center_y, center_z)}"
             )
 
 
@@ -1947,6 +1931,7 @@ def validate_models(
     validate_wire_clips(panel)
     validate_controller_connector_opening(shell)
     validate_controller_cradle(cover)
+    validate_shared_attachment_pillars(shell)
     validate_panel_attachment(shell, panel)
     validate_bottom_cover_attachment(shell, cover)
     validate_handset_mount_attachment(shell, handset_mount)
@@ -1984,7 +1969,8 @@ def validate_models(
         panel_screw_count=len(PANEL_SCREW_CENTERS),
         bottom_cover_screw_count=len(COVER_SCREW_CENTERS),
         foot_pad_recess_count=len(FOOT_PAD_RECESS_CENTERS),
-        handset_hanger_count=len(HANDSET_HANGER_LOCAL_Y_CENTERS),
+        handset_mount_insert_count=len(HANDSET_MOUNT_INSERT_LOCAL_CENTERS),
+        handset_side_hole_count=2,
         shell_watertight=bool(shell.is_watertight),
         panel_watertight=bool(panel.is_watertight),
         cover_watertight=bool(cover.is_watertight),
@@ -2094,7 +2080,13 @@ def main(argv: list[str] | None = None) -> int:
     export(cover, cover_target)
     export(controller_cradle_module, controller_cradle_module_target)
     export(handset_mount, handset_mount_target)
-    render_previews(shell, panel, cover, handset_mount, arguments.preview_root)
+    render_previews(
+        shell,
+        panel,
+        cover,
+        handset_mount,
+        arguments.preview_root,
+    )
     handset.render_preview(
         controller_cradle_module,
         arguments.preview_root / "controller-cradle-test-module-isometric.png",
