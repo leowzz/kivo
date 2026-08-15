@@ -2816,7 +2816,7 @@ mod tests {
         let mut unsafe_pin = device_profile();
         unsafe_pin.hardware_profiles[2].inputs = vec![InputSource::Direct {
             id: "direct".into(),
-            keys: BTreeMap::from([("A".into(), 23)]),
+            keys: BTreeMap::from([("A".into(), 24)]),
         }];
         assert_eq!(unsafe_pin.validate().unwrap_err().code, "unsupported_gpio");
     }

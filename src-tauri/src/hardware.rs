@@ -44,8 +44,8 @@ const YD_ESP32_S3_SAFE_PINS: &[u8] = &[
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 21, 38, 39, 40, 41, 42, 47,
 ];
 const YD_RP2040_SAFE_PINS: &[u8] = &[
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 26, 27, 28,
-    29,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 26, 27,
+    28, 29,
 ];
 
 pub const CONTROLLER_FAMILIES: &[ControllerFamily] = &[
@@ -442,7 +442,7 @@ mod tests {
         );
         assert_eq!(
             board_by_id("yd-rp2040").unwrap().safe_pins,
-            (0_u8..=22).chain(26..=29).collect::<Vec<_>>().as_slice()
+            (0_u8..=23).chain(26..=29).collect::<Vec<_>>().as_slice()
         );
     }
 

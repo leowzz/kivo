@@ -1046,11 +1046,11 @@ mod tests {
     }
 
     #[test]
-    fn direct_input_accepts_new_rp2040_safe_gpio() {
+    fn direct_input_accepts_rp2040_gpio_23() {
         let profile = yaml_profile(
             "yd-rp2040",
             None,
-            "    inputs:\n      - type: direct\n        id: direct\n        keys:\n          UP: 26",
+            "    inputs:\n      - type: direct\n        id: direct\n        keys:\n          UP: 23",
         );
 
         assert!(profile.validate().is_ok());
@@ -1075,8 +1075,8 @@ mod tests {
     }
 
     #[test]
-    fn rp2040_gpio_23_through_25_remain_unsupported() {
-        for gpio in 23..=25 {
+    fn rp2040_gpio_24_and_25_remain_unsupported() {
+        for gpio in 24..=25 {
             let inputs = format!(
                 "    inputs:\n      - type: direct\n        id: direct\n        keys:\n          UP: {gpio}"
             );
@@ -1107,7 +1107,7 @@ mod tests {
 
     #[test]
     fn ssd1306_rejects_unsafe_pins() {
-        let profile = yaml_profile("yd-rp2040", Some((23, 5)), "    inputs: []");
+        let profile = yaml_profile("yd-rp2040", Some((24, 5)), "    inputs: []");
 
         assert_eq!(profile.validate().unwrap_err().code, "unsupported_gpio");
     }

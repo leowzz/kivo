@@ -29,6 +29,7 @@ test("preview exposes an editable RP2040 SSD1306 configuration", async () => {
     .find(({ id }) => id === "phone-rp-workbench");
 
   expect(rp2040?.supportsOled).toBe(true);
+  expect(rp2040?.safePins).toContain(23);
   expect(hardware?.ssd1306).toEqual({ sda: 18, scl: 19 });
 });
 

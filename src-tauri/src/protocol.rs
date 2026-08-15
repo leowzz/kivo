@@ -1619,7 +1619,7 @@ mod tests {
         );
 
         let mut unsafe_pin = hello;
-        unsafe_pin.pins = vec![23];
+        unsafe_pin.pins = vec![24];
         assert_eq!(
             validate_hello(board, &unsafe_pin).unwrap_err().code,
             "capability_mismatch"

@@ -839,7 +839,8 @@ void test_board_profiles_enforce_exact_safe_pins() {
   TEST_ASSERT_FALSE(kYdEsp32S3.supports(48));
   TEST_ASSERT_TRUE(kYdRp2040.supports(0));
   TEST_ASSERT_TRUE(kYdRp2040.supports(22));
-  for (std::uint8_t pin = 23; pin <= 25; ++pin) {
+  TEST_ASSERT_TRUE(kYdRp2040.supports(23));
+  for (std::uint8_t pin = 24; pin <= 25; ++pin) {
     TEST_ASSERT_FALSE(kYdRp2040.supports(pin));
   }
   for (std::uint8_t pin = 26; pin <= 29; ++pin) {
@@ -848,11 +849,11 @@ void test_board_profiles_enforce_exact_safe_pins() {
 
   TopologyBuilder rp2040(kYdRp2040);
   TEST_ASSERT_TRUE(rp2040.begin(1, 30));
-  TEST_ASSERT_TRUE(rp2040.addDirect(1, 0, {0, 22, 26, 27, 28, 29}));
+  TEST_ASSERT_TRUE(rp2040.addDirect(1, 0, {0, 22, 23, 26, 27, 28, 29}));
 
   TopologyBuilder reserved(kYdRp2040);
   TEST_ASSERT_TRUE(reserved.begin(1, 30));
-  TEST_ASSERT_FALSE(reserved.addDirect(1, 0, {23}));
+  TEST_ASSERT_FALSE(reserved.addDirect(1, 0, {24}));
 }
 
 void test_board_profiles_report_oled_capability() {
@@ -901,22 +902,22 @@ void test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins() {
 
 void test_formats_protocol_v10_hello_with_board_and_build() {
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 10 rp2040 yd-rp2040 0.1.0+gabc1234 - 27 "
-      "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 26 "
+      "HELLO 10 rp2040 yd-rp2040 0.1.0+gabc1234 - 28 "
+      "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 26 "
       "27 28 29\n",
       formatHello(kYdRp2040, "0.1.0+gabc1234").c_str());
 }
 
 void test_formats_protocol_v10_hello_with_product_identity() {
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 10 rp2040 yd-rp2040 0.1.0+gabc1234 key-k1-r01 27 "
-      "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 26 "
+      "HELLO 10 rp2040 yd-rp2040 0.1.0+gabc1234 key-k1-r01 28 "
+      "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 26 "
       "27 28 29\n",
       formatHello(kYdRp2040, "0.1.0+gabc1234", "key-k1-r01")
           .c_str());
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 10 rp2040 yd-rp2040 build - 27 "
-      "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 26 "
+      "HELLO 10 rp2040 yd-rp2040 build - 28 "
+      "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 26 "
       "27 28 29\n",
       formatHello(kYdRp2040, "build", "-").c_str());
 }
@@ -1009,7 +1010,7 @@ void test_oled_configuration_requires_supported_distinct_safe_pins() {
   TopologyBuilder rp2040(kYdRp2040);
   TEST_ASSERT_TRUE(rp2040.begin(1, 30));
   TEST_ASSERT_FALSE(rp2040.addOled(1, 4, 4));
-  TEST_ASSERT_FALSE(rp2040.addOled(1, 4, 23));
+  TEST_ASSERT_FALSE(rp2040.addOled(1, 4, 24));
   TEST_ASSERT_TRUE(rp2040.addOled(1, 28, 29));
   const auto topology = rp2040.commit(1);
   TEST_ASSERT_TRUE(topology.has_value());
@@ -1210,14 +1211,16 @@ void test_learning_reports_contact_and_restores_runtime_topology() {
   TEST_ASSERT_EQUAL_UINT32(7, controller.topology().revision);
 }
 
-void test_rp2040_learning_accepts_gpio29_and_rejects_gpio23() {
+void test_rp2040_learning_accepts_gpio23_and_gpio29() {
   GpioTriggerController esp32(kYdEsp32S3, 0);
   TEST_ASSERT_FALSE(esp32.beginLearning(4, {29}, 0));
 
   GpioTriggerController rp2040(kYdRp2040, 0);
   TEST_ASSERT_TRUE(rp2040.beginLearning(4, {29}, 0));
   TEST_ASSERT_TRUE(rp2040.endLearning(4, 1));
-  TEST_ASSERT_FALSE(rp2040.beginLearning(5, {23}, 1));
+  TEST_ASSERT_TRUE(rp2040.beginLearning(5, {23}, 1));
+  TEST_ASSERT_TRUE(rp2040.endLearning(5, 2));
+  TEST_ASSERT_FALSE(rp2040.beginLearning(6, {24}, 2));
 }
 
 void test_learning_rejects_active_oled_pins() {
@@ -1843,7 +1846,7 @@ int main(int, char **) {
   RUN_TEST(test_rejects_malformed_runtime_commands);
   RUN_TEST(test_debounced_input_edges_do_not_create_action_state);
   RUN_TEST(test_learning_reports_contact_and_restores_runtime_topology);
-  RUN_TEST(test_rp2040_learning_accepts_gpio29_and_rejects_gpio23);
+  RUN_TEST(test_rp2040_learning_accepts_gpio23_and_gpio29);
   RUN_TEST(test_learning_rejects_active_oled_pins);
   RUN_TEST(test_display_status_frames_have_two_sixteen_character_status_lines);
   RUN_TEST(test_standalone_debug_display_does_not_depend_on_usb_state);

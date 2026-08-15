@@ -39,7 +39,7 @@ const boardProfiles: BoardProfileSummary[] = [
     displayName: "YD-RP2040",
     runtimeUsb: "2e8a:000a",
     bootloaderUsb: "2e8a:0003",
-    safePins: Array.from({ length: 23 }, (_, pin) => pin),
+    safePins: Array.from({ length: 24 }, (_, pin) => pin),
     supportsOled: true,
   },
 ];
@@ -382,7 +382,7 @@ test("offers learning only for online identity-valid runtime Devices on the exac
   expect(screen.getByLabelText("消抖")).toBeEnabled();
 });
 
-test("exposes GPIO0 through GPIO22 and GPIO26 through GPIO29 for yd-rp2040", async () => {
+test("exposes GPIO0 through GPIO23 and GPIO26 through GPIO29 for yd-rp2040", async () => {
   const user = userEvent.setup();
   const rpProfile: HardwareProfile = {
     id: "rp",
@@ -399,13 +399,13 @@ test("exposes GPIO0 through GPIO22 and GPIO26 through GPIO29 for yd-rp2040", asy
 
   expect(screen.getAllByRole("checkbox", { name: /^GPIO/ }).map((input) => Number(input.getAttribute("value"))))
     .toEqual([
-      ...Array.from({ length: 23 }, (_, pin) => pin),
+      ...Array.from({ length: 24 }, (_, pin) => pin),
       26,
       27,
       28,
       29,
     ]);
-  for (let pin = 23; pin <= 25; pin += 1) {
+  for (let pin = 24; pin <= 25; pin += 1) {
     expect(screen.queryByRole("checkbox", { name: `GPIO ${pin}` })).toBeNull();
   }
 });
@@ -732,7 +732,7 @@ test("rejects unsupported, unsafe, same-pin, conflicting, and duplicate pin owne
   expect(hardwareProfilesAreValid([
     { ...withOled({ sda: 1, scl: 2 }), board_profile_id: "esp-board" },
   ], boardProfiles)).toBe(false);
-  expect(hardwareProfilesAreValid([withOled({ sda: 23, scl: 22 })], boardProfiles)).toBe(false);
+  expect(hardwareProfilesAreValid([withOled({ sda: 24, scl: 22 })], boardProfiles)).toBe(false);
   expect(hardwareProfilesAreValid([withOled({ sda: 18, scl: 18 })], boardProfiles)).toBe(false);
   expect(hardwareProfilesAreValid([
     withOled({ sda: 18, scl: 19 }, [{ type: "direct", id: "direct", keys: { ONE: 18 } }]),
@@ -759,7 +759,7 @@ test("rejects unsupported, unsafe, same-pin, conflicting, and duplicate pin owne
     withOled({
       sda: 18,
       scl: 19,
-      control_panel: { ...controlPanel, back: 23 },
+      control_panel: { ...controlPanel, back: 24 },
     }),
   ], boardProfiles)).toBe(false);
   expect(hardwareProfilesAreValid([{

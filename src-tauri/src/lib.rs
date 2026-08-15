@@ -2202,7 +2202,7 @@ mod tests {
         assert_eq!(rp2040["bootloaderUsb"], "2e8a:0003");
         assert_eq!(
             rp2040["safePins"],
-            serde_json::to_value((0_u8..=22).chain(26..=29).collect::<Vec<_>>()).unwrap()
+            serde_json::to_value((0_u8..=23).chain(26..=29).collect::<Vec<_>>()).unwrap()
         );
     }
 

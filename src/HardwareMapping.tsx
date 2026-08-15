@@ -55,7 +55,7 @@ function uniqueName(base: string, existing: Set<string>) {
 function boardSafePins(board: BoardProfileSummary | undefined) {
   if (!board) return [];
   return board.id === "yd-rp2040"
-    ? board.safePins.filter((pin) => pin >= 0 && (pin <= 22 || (pin >= 26 && pin <= 29)))
+    ? board.safePins.filter((pin) => pin >= 0 && (pin <= 23 || (pin >= 26 && pin <= 29)))
     : board.safePins;
 }
 
