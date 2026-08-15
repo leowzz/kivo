@@ -6,8 +6,11 @@
 
 namespace {
 constexpr std::size_t kDisplayColumns = 21;
-constexpr std::array<const char *, 4> kMenuEntries = {
-    "LIVE VIEW", "SYSTEM STATUS", "INPUT TEST", "DEVICE INFO"};
+constexpr std::uint8_t kMinimumBrightnessPercent = 5;
+constexpr std::uint8_t kBrightnessStepPercent = 5;
+constexpr std::size_t kBrightnessBarColumns = 16;
+constexpr std::array<const char *, 5> kMenuEntries = {
+    "LIVE VIEW", "SYSTEM STATUS", "INPUT TEST", "BRIGHTNESS", "DEVICE INFO"};
 constexpr std::array<std::int8_t, 16> kEncoderTransitions = {
     0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
 
@@ -18,6 +21,14 @@ std::string fitLine(std::string value) {
 
 std::string menuLine(bool selected, const char *label) {
   return fitLine(std::string(selected ? "> " : "  ") + label);
+}
+
+std::string brightnessBar(std::uint8_t percent) {
+  const auto filled = std::max<std::size_t>(
+      1, (static_cast<std::size_t>(percent) * kBrightnessBarColumns + 50) /
+             100);
+  return "[" + std::string(filled, '#') +
+         std::string(kBrightnessBarColumns - filled, '.') + "]";
 }
 }  // namespace
 
@@ -88,6 +99,9 @@ OledControlPanelUpdate OledControlPanel::select() {
     case 2:
       view_ = View::InputTest;
       break;
+    case 3:
+      view_ = View::Brightness;
+      break;
     default:
       view_ = View::DeviceInfo;
       break;
@@ -115,7 +129,22 @@ OledControlPanelUpdate OledControlPanel::update(
     view_ = View::Menu;
     return OledControlPanelUpdate::Render;
   }
-  if (view_ != View::Menu || step == 0) return OledControlPanelUpdate::None;
+  if (step == 0) return OledControlPanelUpdate::None;
+  if (view_ == View::Brightness) {
+    const auto next = std::clamp(
+        static_cast<int>(brightnessPercent_) +
+            step * static_cast<int>(kBrightnessStepPercent),
+        static_cast<int>(kMinimumBrightnessPercent), 100);
+    if (next == brightnessPercent_) return OledControlPanelUpdate::None;
+    brightnessPercent_ = static_cast<std::uint8_t>(next);
+    return OledControlPanelUpdate::BrightnessChanged;
+  }
+  if (view_ == View::Closed) {
+    // Rotation is also a useful menu entry gesture when the panel is idle.
+    view_ = View::Menu;
+  } else if (view_ != View::Menu) {
+    return OledControlPanelUpdate::None;
+  }
 
   const auto entryCount = static_cast<int>(kMenuEntries.size());
   selected_ = static_cast<std::uint8_t>(
@@ -130,7 +159,7 @@ DisplayFrame OledControlPanel::frame(const DisplayFrame &status) const {
       return status;
     case View::Menu: {
       result.lines[0] = "KIVO MENU";
-      const std::size_t start = selected_ == 3 ? 1 : 0;
+      const std::size_t start = selected_ < 3 ? 0 : selected_ - 2;
       for (std::size_t row = 0; row < 3; ++row) {
         const std::size_t entry = start + row;
         result.lines[row + 1] =
@@ -151,6 +180,12 @@ DisplayFrame OledControlPanel::frame(const DisplayFrame &status) const {
       result.lines[2] = status.lines[2].empty() ? "NO KEY EVENT"
                                                : fitLine(status.lines[2]);
       result.lines[3] = "BACK: MENU";
+      break;
+    case View::Brightness:
+      result.lines[0] = "DISPLAY BRIGHTNESS";
+      result.lines[1] = "LEVEL: " + std::to_string(brightnessPercent_) + "%";
+      result.lines[2] = brightnessBar(brightnessPercent_);
+      result.lines[3] = "OK/BACK: MENU";
       break;
     case View::DeviceInfo:
       result.lines[0] = "DEVICE INFO";

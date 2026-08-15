@@ -232,6 +232,7 @@ void activateTopology(const RuntimeTopology &topology, std::uint32_t nowMs) {
         displayController.displayFailed(displayFailureFrame()));
     return;
   }
+  platform::setDisplayBrightness(oledControlPanel.brightnessPercent());
   displayController.clearLocalOverride();
   applyDisplayUpdate(displayController.displayReconfigured());
 }
@@ -260,6 +261,7 @@ void initializeStandaloneDisplay(std::uint32_t nowMs) {
         displayController.displayFailed(displayFailureFrame()));
     return;
   }
+  platform::setDisplayBrightness(oledControlPanel.brightnessPercent());
   applyDisplayUpdate(displayController.displayReconfigured());
 }
 
@@ -511,6 +513,10 @@ void scanOledControlPanel(std::uint32_t nowMs) {
       break;
     case OledControlPanelUpdate::Dismiss:
       applyDisplayUpdate(displayController.clearInteractive());
+      break;
+    case OledControlPanelUpdate::BrightnessChanged:
+      platform::setDisplayBrightness(oledControlPanel.brightnessPercent());
+      showControlPanel();
       break;
     case OledControlPanelUpdate::None:
       break;

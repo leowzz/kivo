@@ -23,6 +23,7 @@ bool sendKeyboardChord(std::uint8_t modifiers, const KeyboardKeycodes &keys);
 bool sendHotkey(std::uint8_t modifiers, std::uint8_t keycode);
 bool sendConsumerControl(std::uint16_t usage);
 bool configureDisplay(const std::optional<OledConfig> &config);
+void setDisplayBrightness(std::uint8_t percent);
 bool renderLocalDisplay(const DisplayFrame &frame);
 bool renderRemoteDisplay(const RemoteDisplayCommit &scene, bool fullRedraw);
 void resetRemoteDisplay();

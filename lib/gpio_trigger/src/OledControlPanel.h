@@ -12,7 +12,7 @@ struct OledControlPanelSample {
   bool backPressed = false;
 };
 
-enum class OledControlPanelUpdate { None, Render, Dismiss };
+enum class OledControlPanelUpdate { None, Render, Dismiss, BrightnessChanged };
 
 class OledControlPanel {
  public:
@@ -21,6 +21,7 @@ class OledControlPanel {
                                 std::uint32_t nowMs,
                                 std::uint16_t debounceMs);
   bool active() const { return view_ != View::Closed; }
+  std::uint8_t brightnessPercent() const { return brightnessPercent_; }
   DisplayFrame frame(const DisplayFrame &status) const;
 
  private:
@@ -33,7 +34,7 @@ class OledControlPanel {
                 std::uint16_t debounceMs);
   };
 
-  enum class View { Closed, Menu, Status, InputTest, DeviceInfo };
+  enum class View { Closed, Menu, Status, InputTest, Brightness, DeviceInfo };
 
   int encoderStep(const OledControlPanelSample &sample);
   OledControlPanelUpdate select();
@@ -46,4 +47,5 @@ class OledControlPanel {
   bool encoderInitialized_ = false;
   std::uint8_t encoderState_ = 0;
   std::int8_t encoderAccumulator_ = 0;
+  std::uint8_t brightnessPercent_ = 100;
 };

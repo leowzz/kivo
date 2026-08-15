@@ -485,6 +485,117 @@ void test_oled_control_panel_navigates_status_and_back_to_live_view() {
   TEST_ASSERT_FALSE(panel.active());
 }
 
+OledControlPanelUpdate rotateOledEncoder(OledControlPanel &panel,
+                                         OledControlPanelSample &sample,
+                                         std::uint32_t &nowMs,
+                                         bool clockwise);
+
+void test_oled_control_panel_opens_on_encoder_rotation_when_closed() {
+  OledControlPanel panel;
+  OledControlPanelSample sample;
+  std::uint32_t nowMs = 0;
+
+  panel.update(sample, nowMs, 10);
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
+                    rotateOledEncoder(panel, sample, nowMs, true));
+  TEST_ASSERT_TRUE(panel.active());
+  TEST_ASSERT_EQUAL_STRING("  LIVE VIEW", panel.frame(DisplayFrame{}).lines[1].c_str());
+  TEST_ASSERT_EQUAL_STRING("> SYSTEM STATUS", panel.frame(DisplayFrame{}).lines[2].c_str());
+}
+
+OledControlPanelUpdate rotateOledEncoder(OledControlPanel &panel,
+                                         OledControlPanelSample &sample,
+                                         std::uint32_t &nowMs,
+                                         bool clockwise) {
+  if (clockwise) {
+    sample.encoderAHigh = false;
+    panel.update(sample, ++nowMs, 10);
+    sample.encoderBHigh = false;
+    panel.update(sample, ++nowMs, 10);
+    sample.encoderAHigh = true;
+    panel.update(sample, ++nowMs, 10);
+    sample.encoderBHigh = true;
+  } else {
+    sample.encoderBHigh = false;
+    panel.update(sample, ++nowMs, 10);
+    sample.encoderAHigh = false;
+    panel.update(sample, ++nowMs, 10);
+    sample.encoderBHigh = true;
+    panel.update(sample, ++nowMs, 10);
+    sample.encoderAHigh = true;
+  }
+  return panel.update(sample, ++nowMs, 10);
+}
+
+void test_oled_control_panel_adjusts_brightness_with_the_encoder() {
+  OledControlPanel panel;
+  OledControlPanelSample sample;
+  const DisplayFrame status{};
+  std::uint32_t nowMs = 0;
+
+  panel.update(sample, nowMs, 10);
+  sample.encoderPressed = true;
+  panel.update(sample, ++nowMs, 10);
+  nowMs += 10;
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
+                    panel.update(sample, nowMs, 10));
+  sample.encoderPressed = false;
+  panel.update(sample, ++nowMs, 10);
+  nowMs += 10;
+  panel.update(sample, nowMs, 10);
+
+  for (int step = 0; step < 3; ++step) {
+    TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
+                      rotateOledEncoder(panel, sample, nowMs, true));
+  }
+  TEST_ASSERT_EQUAL_STRING("> BRIGHTNESS",
+                           panel.frame(status).lines[3].c_str());
+
+  sample.confirmPressed = true;
+  panel.update(sample, ++nowMs, 10);
+  nowMs += 10;
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
+                    panel.update(sample, nowMs, 10));
+  TEST_ASSERT_EQUAL_UINT8(100, panel.brightnessPercent());
+  TEST_ASSERT_EQUAL_STRING("DISPLAY BRIGHTNESS",
+                           panel.frame(status).lines[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("LEVEL: 100%",
+                           panel.frame(status).lines[1].c_str());
+  TEST_ASSERT_EQUAL_STRING("[################]",
+                           panel.frame(status).lines[2].c_str());
+
+  sample.confirmPressed = false;
+  panel.update(sample, ++nowMs, 10);
+  nowMs += 10;
+  panel.update(sample, nowMs, 10);
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::BrightnessChanged,
+                    rotateOledEncoder(panel, sample, nowMs, false));
+  TEST_ASSERT_EQUAL_UINT8(95, panel.brightnessPercent());
+  TEST_ASSERT_EQUAL_STRING("LEVEL: 95%",
+                           panel.frame(status).lines[1].c_str());
+  TEST_ASSERT_EQUAL_STRING("[###############.]",
+                           panel.frame(status).lines[2].c_str());
+
+  for (int step = 0; step < 18; ++step) {
+    TEST_ASSERT_EQUAL(OledControlPanelUpdate::BrightnessChanged,
+                      rotateOledEncoder(panel, sample, nowMs, false));
+  }
+  TEST_ASSERT_EQUAL_UINT8(5, panel.brightnessPercent());
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::None,
+                    rotateOledEncoder(panel, sample, nowMs, false));
+
+  sample.backPressed = true;
+  panel.update(sample, ++nowMs, 10);
+  nowMs += 10;
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
+                    panel.update(sample, nowMs, 10));
+  TEST_ASSERT_EQUAL_STRING("KIVO MENU", panel.frame(status).lines[0].c_str());
+
+  panel.reset();
+  TEST_ASSERT_EQUAL_UINT8(5, panel.brightnessPercent());
+  TEST_ASSERT_FALSE(panel.active());
+}
+
 void commitFullScene(RemoteDisplay &display, std::uint32_t revision) {
   TEST_ASSERT_EQUAL(DisplayResult::Accepted,
                     display.begin(revision, 0, DisplayMode::Full));
@@ -1919,6 +2030,8 @@ int main(int, char **) {
   RUN_TEST(test_interactive_panel_restores_the_latest_remote_scene);
   RUN_TEST(test_interactive_panel_returns_to_offline_status_without_remote_content);
   RUN_TEST(test_oled_control_panel_navigates_status_and_back_to_live_view);
+  RUN_TEST(test_oled_control_panel_opens_on_encoder_rotation_when_closed);
+  RUN_TEST(test_oled_control_panel_adjusts_brightness_with_the_encoder);
   RUN_TEST(test_display_transaction_commits_atomically);
   RUN_TEST(test_display_revision_rules_request_resync_without_mutation);
   RUN_TEST(test_new_begin_discards_uncommitted_transaction);

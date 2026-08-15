@@ -80,6 +80,8 @@ bool configureDisplay(const std::optional<OledConfig> &config) {
   return !config.has_value();
 }
 
+void setDisplayBrightness(std::uint8_t) {}
+
 bool renderLocalDisplay(const DisplayFrame &) { return true; }
 
 bool renderRemoteDisplay(const RemoteDisplayCommit &, bool) { return true; }

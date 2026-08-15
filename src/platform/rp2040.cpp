@@ -3,6 +3,7 @@
 #include <U8g2lib.h>
 #include <Wire.h>
 
+#include <algorithm>
 #include <array>
 #include <memory>
 #include <new>
@@ -24,7 +25,7 @@ Adafruit_USBD_HID keyboard(kKeyboardDescriptor, sizeof(kKeyboardDescriptor),
                            HID_ITF_PROTOCOL_NONE, 2, false);
 constexpr std::size_t kHidReadyPollLimit = 100;
 constexpr std::uint8_t kOledI2cAddress = 0x3C;
-constexpr std::uint32_t kOledI2cClockHz = 100000;
+constexpr std::uint32_t kOledI2cClockHz = 400000;
 constexpr std::uint8_t kDisplayWidth = 128;
 constexpr std::uint8_t kDisplayWidthTiles = 16;
 constexpr std::uint8_t kSsd1306HeightTiles = 4;
@@ -121,6 +122,7 @@ bool supportsRemoteScene(const RemoteDisplayCommit &scene) {
   }
   return true;
 }
+
 }  // namespace
 
 namespace platform {
@@ -252,13 +254,20 @@ bool configureDisplay(const std::optional<OledConfig> &config) {
   return true;
 }
 
+void setDisplayBrightness(std::uint8_t percent) {
+  if (!display || !displayHealthy) return;
+  const auto clamped = std::min<std::uint16_t>(percent, 100);
+  const auto contrast = static_cast<std::uint8_t>(
+      (clamped * 255U + 50U) / 100U);
+  display->setContrast(contrast);
+}
+
 bool renderLocalDisplay(const DisplayFrame &frame) {
   if (!display || !displayHealthy) return !displayRequested;
   if (displayBufferSource == DisplayBufferSource::Local &&
       lastDisplayFrame.has_value() && *lastDisplayFrame == frame) {
     return true;
   }
-  dirtyTiles.clear();
   display->setFont(u8g2_font_6x13_tf);
   display->clearBuffer();
   if (displayDriver == OledDriver::Sh1106) {
@@ -281,7 +290,10 @@ bool renderLocalDisplay(const DisplayFrame &frame) {
                        frame.lines[2].c_str());
     }
   }
+  // Local frames are infrequent and must be visible immediately for the
+  // offline control panel. Keep tile-level updates for remote scenes below.
   display->sendBuffer();
+  dirtyTiles.clear();
   lastDisplayFrame = frame;
   displayBufferSource = DisplayBufferSource::Local;
   return true;
