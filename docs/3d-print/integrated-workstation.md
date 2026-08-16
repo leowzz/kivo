@@ -72,9 +72,9 @@ uv run --script scripts/modeling/integrated_workstation.py
 | RP2040 reference | `22.86 x 53.34` |
 | ESP32-S3 retained inner board | `27.94 x 57.15` |
 | RP2040 support level | PCB underside `3.0` above the cover inner face |
-| RP2040 locating slot | `23.0` clear width, `2.4` walls rising `2.5` above support, full-length top lips capturing both board edges |
+| RP2040 locating slot | `23.0` clear width, `2.4` walls rising `2.5` above support, `1.0` full-length top lips capturing both board edges |
 | RP2040 top clip | `12.0` wide with `1.0` PCB overlap |
-| ESP32-S3 support level | PCB underside `6.5` above the cover inner face |
+| ESP32-S3 support level | PCB underside `6.5` above the cover inner face, ledges ending flush with the RP2040 board edges |
 | ESP32-S3 retaining lips | `12.0` long mid-board lips with `0.8` inward PCB capture |
 | ESP32-S3 retained length | `55.15` from the front stop to the USB-end relief |
 | Controller USB windows | Upper ESP32 pair joined into one `28.5 x 7.0` opening; lower centered RP2040, `9.0 x 7.0` |
@@ -201,10 +201,12 @@ unused rectangular area is closed by the rear wall.
   print too tight.
 - Print the bottom cover flat with the controller rails facing upward.
 - The RP2040 slot uses continuous `2.4 mm` walls and one `12 mm` top clip.
-  Full-length top lips over the support ledges turn the slot into a slide-in
-  channel that captures both board edges, so the board cannot lift out. The
-  ESP32-S3 bay adds a pair of `12 mm` mid-board retaining lips with `0.8 mm`
-  inward capture. Their outside edges are flush with the bay and print without
+  `1.0 mm` full-length top lips over the support ledges turn the slot into a
+  slide-in channel that captures both board edges, so the board cannot lift
+  out. The ESP32-S3 support ledges end flush with the RP2040 board edges, so
+  the visible top strip between the two bays stays `1.0 mm`. The ESP32-S3 bay
+  adds a pair of `12 mm` mid-board retaining lips with `0.8 mm` inward
+  capture. Their outside edges are flush with the bay and print without
   support; slide controllers in from the rear until the USB edge meets the
   rear wall.
 - Start with a 0.4 nozzle, 0.2 layer height, 4 perimeters, and 20 percent

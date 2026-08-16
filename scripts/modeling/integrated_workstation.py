@@ -307,6 +307,10 @@ RP2040_SLOT_STOP_THICKNESS = 2.0
 RP2040_TOP_CLIP_WIDTH = 12.0
 RP2040_TOP_CLIP_OVERLAP = 1.0
 RP2040_TOP_CLIP_CLEARANCE = 0.2
+# Full-length top lips over the RP2040 support ledges are 1.0 mm wide, and the
+# ESP32-S3 support ledges end flush with the RP2040 board edge, so the visible
+# top strip between the two controller bays is exactly RP2040_TOP_LIP_WIDTH.
+RP2040_TOP_LIP_WIDTH = 1.0
 ESP32_S3_BOARD_WIDTH = 27.94
 ESP32_S3_INNER_BOARD_LENGTH = 57.15
 ESP32_S3_BOARD_LENGTH = ESP32_S3_INNER_BOARD_LENGTH
@@ -1310,10 +1314,10 @@ def build_rp2040_slot() -> list[trimesh.Trimesh]:
         [
             box(
                 (slot_x0, rail_y0, clip_bottom_z),
-                (board_x0 + CONTROLLER_SUPPORT_RAIL_WIDTH, rail_y1, wall_top_z),
+                (board_x0 + RP2040_TOP_LIP_WIDTH, rail_y1, wall_top_z),
             ),
             box(
-                (board_x1 - CONTROLLER_SUPPORT_RAIL_WIDTH, rail_y0, clip_bottom_z),
+                (board_x1 - RP2040_TOP_LIP_WIDTH, rail_y0, clip_bottom_z),
                 (slot_x1, rail_y1, wall_top_z),
             ),
         ]
@@ -1383,6 +1387,11 @@ def build_controller_support_level(
     board_x0, board_y0, board_x1, board_y1 = controller_board_bounds(width, length)
     support_z = COVER_THICKNESS + support_raise
     overlap_z = COVER_THICKNESS - 0.02
+    # The ESP32-S3 support ledges end flush with the RP2040 board edges, so the
+    # visible top strip between the two controller bays is exactly
+    # RP2040_TOP_LIP_WIDTH wide.
+    rp2040_board_x0 = CONTROLLER_CENTER_X - RP2040_BOARD_WIDTH / 2.0
+    rp2040_board_x1 = CONTROLLER_CENTER_X + RP2040_BOARD_WIDTH / 2.0
     mounts: list[trimesh.Trimesh] = [
         box(
             (
@@ -1391,14 +1400,14 @@ def build_controller_support_level(
                 overlap_z,
             ),
             (
-                board_x0 + CONTROLLER_SUPPORT_RAIL_WIDTH,
+                rp2040_board_x0,
                 board_y1 - CONTROLLER_USB_END_RELIEF,
                 support_z,
             ),
         ),
         box(
             (
-                board_x1 - CONTROLLER_SUPPORT_RAIL_WIDTH,
+                rp2040_board_x1,
                 board_y0 - CONTROLLER_END_CLEARANCE,
                 overlap_z,
             ),
@@ -1884,8 +1893,8 @@ def validate_controller_cradle(cover: trimesh.Trimesh) -> None:
         COVER_THICKNESS + CONTROLLER_RP2040_RAISE + RP2040_SLOT_WALL_HEIGHT
     )
     for edge_x0, edge_x1 in (
-        (rp2040_board_x0, rp2040_board_x0 + CONTROLLER_SUPPORT_RAIL_WIDTH),
-        (rp2040_board_x1 - CONTROLLER_SUPPORT_RAIL_WIDTH, rp2040_board_x1),
+        (rp2040_board_x0, rp2040_board_x0 + RP2040_TOP_LIP_WIDTH),
+        (rp2040_board_x1 - RP2040_TOP_LIP_WIDTH, rp2040_board_x1),
     ):
         capture_probe = box(
             (
