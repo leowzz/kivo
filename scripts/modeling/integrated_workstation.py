@@ -304,7 +304,7 @@ RP2040_SLOT_CLEAR_WIDTH = 23.0
 RP2040_SLOT_WALL_THICKNESS = 2.4
 RP2040_SLOT_WALL_HEIGHT = 2.5
 RP2040_SLOT_STOP_THICKNESS = 2.0
-RP2040_TOP_CLIP_WIDTH = 10.0
+RP2040_TOP_CLIP_WIDTH = 12.0
 RP2040_TOP_CLIP_OVERLAP = 1.0
 RP2040_TOP_CLIP_CLEARANCE = 0.2
 ESP32_S3_BOARD_WIDTH = 27.94
@@ -331,12 +331,69 @@ CONTROLLER_RETAINER_LENGTH = 12.0
 CONTROLLER_RETAINER_OVERLAP = 0.8
 CONTROLLER_RETAINER_CLEARANCE = 0.2
 CONTROLLER_RETAINER_LIP_THICKNESS = 0.8
+# The rear wall is now solid around small, chamfered connector windows. Keep
+# the original envelope for the standalone cradle module, but cut only the
+# three board-specific Type-C windows through the assembled chassis.
 CONTROLLER_USB_OPENING_X0 = 123.0
 CONTROLLER_USB_OPENING_X1 = 160.0
 CONTROLLER_USB_OPENING_Y0 = WEDGE_Y1 - WEDGE_WALL - 2.0
 CONTROLLER_USB_OPENING_Y1 = WEDGE_Y1 + 1.0
-CONTROLLER_USB_OPENING_Z0 = 2.0
-CONTROLLER_USB_OPENING_Z1 = 11.5
+CONTROLLER_USB_OPENING_Z_SHIFT = 1.0
+CONTROLLER_USB_OPENING_Z0 = 2.0 + CONTROLLER_USB_OPENING_Z_SHIFT
+CONTROLLER_USB_OPENING_Z1 = 11.5 + CONTROLLER_USB_OPENING_Z_SHIFT
+CONTROLLER_USB_PORT_WIDTH = 9.0
+CONTROLLER_USB_PORT_HEIGHT = 7.0
+CONTROLLER_USB_PORT_TOP_POINT = 1.0
+CONTROLLER_USB_PORT_Z0 = CONTROLLER_USB_OPENING_Z1 - CONTROLLER_USB_PORT_HEIGHT
+CONTROLLER_USB_PORT_Z1 = CONTROLLER_USB_OPENING_Z1
+CONTROLLER_ESP32_USB_PORT_OFFSET_X = 9.75
+CONTROLLER_USB_PORT_CENTERS_X = np.array(
+    [
+        CONTROLLER_CENTER_X - CONTROLLER_ESP32_USB_PORT_OFFSET_X,
+        CONTROLLER_CENTER_X,
+        CONTROLLER_CENTER_X + CONTROLLER_ESP32_USB_PORT_OFFSET_X,
+    ]
+)
+CONTROLLER_ESP32_USB_PORT_Z0 = CONTROLLER_USB_PORT_Z0
+CONTROLLER_ESP32_USB_PORT_Z1 = CONTROLLER_USB_PORT_Z1
+CONTROLLER_ESP32_USB_OPENING_X0 = (
+    CONTROLLER_USB_PORT_CENTERS_X[0] - CONTROLLER_USB_PORT_WIDTH / 2.0
+)
+CONTROLLER_ESP32_USB_OPENING_X1 = (
+    CONTROLLER_USB_PORT_CENTERS_X[2] + CONTROLLER_USB_PORT_WIDTH / 2.0
+)
+CONTROLLER_ESP32_USB_BRIDGE_Z0 = CONTROLLER_ESP32_USB_PORT_Z0
+CONTROLLER_ESP32_USB_BRIDGE_Z1 = (
+    CONTROLLER_ESP32_USB_PORT_Z1 - CONTROLLER_USB_PORT_TOP_POINT
+)
+CONTROLLER_RP2040_USB_PORT_Z0 = (
+    CONTROLLER_ESP32_USB_PORT_Z0
+    - (CONTROLLER_ESP32_S3_RAISE - CONTROLLER_RP2040_RAISE)
+)
+CONTROLLER_RP2040_USB_PORT_Z1 = (
+    CONTROLLER_RP2040_USB_PORT_Z0 + CONTROLLER_USB_PORT_HEIGHT
+)
+CONTROLLER_USB_PORT_CENTERS = np.array(
+    [
+        [CONTROLLER_USB_PORT_CENTERS_X[0], (CONTROLLER_ESP32_USB_PORT_Z0 + CONTROLLER_ESP32_USB_PORT_Z1) / 2.0],
+        [CONTROLLER_USB_PORT_CENTERS_X[2], (CONTROLLER_ESP32_USB_PORT_Z0 + CONTROLLER_ESP32_USB_PORT_Z1) / 2.0],
+        [CONTROLLER_CENTER_X, (CONTROLLER_RP2040_USB_PORT_Z0 + CONTROLLER_RP2040_USB_PORT_Z1) / 2.0],
+    ]
+)
+# A low rear ramp lets a board slide in from the connector side and wedges over
+# its side edge once seated. The catch bases share the ESP32-S3 bay's outer
+# boundary, so the RP2040 and ESP32-S3 retainers remain flush with one another.
+CONTROLLER_DIAGONAL_CATCH_LENGTH = 8.0
+CONTROLLER_DIAGONAL_CATCH_OVERLAP = 0.8
+CONTROLLER_DIAGONAL_CATCH_CLEARANCE = 0.2
+CONTROLLER_DIAGONAL_CATCH_RISE = 1.2
+CONTROLLER_CRADLE_MODULE_MAX_Z = (
+    COVER_THICKNESS
+    + CONTROLLER_ESP32_S3_RAISE
+    + CONTROLLER_PCB_THICKNESS
+    + CONTROLLER_RETAINER_CLEARANCE
+    + CONTROLLER_DIAGONAL_CATCH_RISE
+)
 CONTROLLER_CRADLE_MODULE_MARGIN = 3.0
 CONTROLLER_CRADLE_MODULE_X0 = CONTROLLER_USB_OPENING_X0
 CONTROLLER_CRADLE_MODULE_X1 = CONTROLLER_USB_OPENING_X1
@@ -1066,23 +1123,56 @@ def handset_mount_cable_hole_cutter() -> trimesh.Trimesh:
     )
 
 
-def shell_cutters() -> list[trimesh.Trimesh]:
+def controller_usb_port_cutter(center_x: float, center_z: float) -> trimesh.Trimesh:
+    """Cut one small pentagonal Type-C clearance window through the rear wall."""
+    x0 = center_x - CONTROLLER_USB_PORT_WIDTH / 2.0
+    x1 = center_x + CONTROLLER_USB_PORT_WIDTH / 2.0
+    z0 = center_z - CONTROLLER_USB_PORT_HEIGHT / 2.0
+    z1 = center_z + CONTROLLER_USB_PORT_HEIGHT / 2.0
+    cross_section = [
+        (x0, z0),
+        (x1, z0),
+        (x1, z1 - CONTROLLER_USB_PORT_TOP_POINT),
+        (center_x, z1),
+        (x0, z1 - CONTROLLER_USB_PORT_TOP_POINT),
+    ]
+    return hull(
+        [
+            [x, y, z]
+            for y in (CONTROLLER_USB_OPENING_Y0, CONTROLLER_USB_OPENING_Y1)
+            for x, z in cross_section
+        ]
+    )
+
+
+def controller_usb_port_cutters() -> list[trimesh.Trimesh]:
     cutters = [
-        # The rear opening accepts the RP2040 single USB-C connector or the
-        # ESP32-S3 board's two adjacent USB-C connectors.
+        controller_usb_port_cutter(center_x, center_z)
+        for center_x, center_z in CONTROLLER_USB_PORT_CENTERS
+    ]
+    # The two upper ESP32-S3 connectors share one continuous opening. Removing
+    # this center bridge avoids two narrow walls around the adjacent plugs.
+    cutters.append(
         box(
             (
-                CONTROLLER_USB_OPENING_X0,
+                CONTROLLER_ESP32_USB_OPENING_X0,
                 CONTROLLER_USB_OPENING_Y0,
-                CONTROLLER_USB_OPENING_Z0,
+                CONTROLLER_ESP32_USB_BRIDGE_Z0,
             ),
             (
-                CONTROLLER_USB_OPENING_X1,
+                CONTROLLER_ESP32_USB_OPENING_X1,
                 CONTROLLER_USB_OPENING_Y1,
-                CONTROLLER_USB_OPENING_Z1,
+                CONTROLLER_ESP32_USB_BRIDGE_Z1,
             ),
         )
-    ]
+    )
+    return cutters
+
+
+def shell_cutters() -> list[trimesh.Trimesh]:
+    # The wall stays solid except for the three board-specific Type-C windows:
+    # two outer ports on the ESP32-S3 and one centered port on the RP2040.
+    cutters = controller_usb_port_cutters()
     cutters.extend(panel_insert_cutters())
     cutters.extend(
         cutter
@@ -1145,7 +1235,7 @@ def build_rp2040_slot() -> list[trimesh.Trimesh]:
     parts = [
         box(
             (
-                slot_x0 - RP2040_SLOT_WALL_THICKNESS,
+                min(CONTROLLER_X0, slot_x0 - RP2040_SLOT_WALL_THICKNESS),
                 rail_y0,
                 overlap_z,
             ),
@@ -1154,7 +1244,7 @@ def build_rp2040_slot() -> list[trimesh.Trimesh]:
         box(
             (slot_x1, rail_y0, overlap_z),
             (
-                slot_x1 + RP2040_SLOT_WALL_THICKNESS,
+                max(CONTROLLER_X1, slot_x1 + RP2040_SLOT_WALL_THICKNESS),
                 rail_y1,
                 wall_top_z,
             ),
@@ -1214,23 +1304,37 @@ def build_controller_retaining_lips(
     retainer_center_y = board_y0 + length * 0.55
     retainer_y0 = retainer_center_y - CONTROLLER_RETAINER_LENGTH / 2.0
     retainer_y1 = retainer_center_y + CONTROLLER_RETAINER_LENGTH / 2.0
-    stem_z0 = COVER_THICKNESS - 0.02
     lip_z0 = board_top_z + CONTROLLER_RETAINER_CLEARANCE
     lip_z1 = lip_z0 + CONTROLLER_RETAINER_LIP_THICKNESS
 
     parts: list[trimesh.Trimesh] = []
     for side, board_edge in ((-1, board_x0), (1, board_x1)):
-        stem_inner_x = board_edge + side * CONTROLLER_SIDE_CLEARANCE
-        stem_outer_x = stem_inner_x + side * CONTROLLER_RETAINER_STEM_THICKNESS
+        stem_outer_x = CONTROLLER_X0 if side < 0 else CONTROLLER_X1
+        lower_stem_inner_x = board_edge
+        upper_stem_inner_x = stem_outer_x - side * CONTROLLER_RETAINER_STEM_THICKNESS
         parts.append(
             box(
                 (
-                    min(stem_inner_x, stem_outer_x) - 0.05,
+                    min(lower_stem_inner_x, stem_outer_x),
                     retainer_y0,
-                    stem_z0,
+                    COVER_THICKNESS - 0.02,
                 ),
                 (
-                    max(stem_inner_x, stem_outer_x) + 0.05,
+                    max(lower_stem_inner_x, stem_outer_x),
+                    retainer_y1,
+                    board_top_z,
+                ),
+            )
+        )
+        parts.append(
+            box(
+                (
+                    min(upper_stem_inner_x, stem_outer_x),
+                    retainer_y0,
+                    board_top_z - 0.02,
+                ),
+                (
+                    max(upper_stem_inner_x, stem_outer_x),
                     retainer_y1,
                     lip_z1,
                 ),
@@ -1238,13 +1342,51 @@ def build_controller_retaining_lips(
         )
 
         lip_tip_x = board_edge - side * CONTROLLER_RETAINER_OVERLAP
-        lip_base_x = stem_inner_x - side * 0.05
+        lip_base_x = board_edge + side * 0.05
         parts.append(
             box(
                 (min(lip_tip_x, lip_base_x), retainer_y0, lip_z0),
                 (max(lip_tip_x, lip_base_x), retainer_y1, lip_z1),
             )
         )
+    return parts
+
+
+def build_controller_diagonal_catches(
+    width: float, length: float, support_raise: float
+) -> list[trimesh.Trimesh]:
+    """Add rear fingers whose outside edges stay flush with the controller bay."""
+    board_x0, board_y0, board_x1, board_y1 = controller_board_bounds(width, length)
+    support_z = COVER_THICKNESS + support_raise
+    board_top_z = support_z + CONTROLLER_PCB_THICKNESS
+    catch_z0 = board_top_z + CONTROLLER_DIAGONAL_CATCH_CLEARANCE
+    catch_z1 = catch_z0 + CONTROLLER_DIAGONAL_CATCH_RISE
+    catch_y0 = board_y1 - CONTROLLER_DIAGONAL_CATCH_LENGTH
+    catch_y1 = board_y1 - CONTROLLER_END_CLEARANCE
+
+    parts: list[trimesh.Trimesh] = []
+    for side, board_edge in ((-1, board_x0), (1, board_x1)):
+        bay_outer_x = CONTROLLER_X0 if side < 0 else CONTROLLER_X1
+        lip_inner_x = board_edge - side * CONTROLLER_DIAGONAL_CATCH_OVERLAP
+        stem_x0 = min(bay_outer_x, board_edge)
+        stem_x1 = max(bay_outer_x, board_edge)
+        parts.append(
+            box(
+                (stem_x0, catch_y0, support_z - 0.02),
+                (stem_x1, catch_y1, catch_z0),
+            )
+        )
+
+        ramp_points = [
+            [x, catch_y0, catch_z0]
+            for x in (bay_outer_x, board_edge)
+        ] + [
+            [x, catch_y1, catch_z0]
+            for x in (bay_outer_x, board_edge)
+        ] + [
+            [x, catch_y0, catch_z1] for x in (bay_outer_x, lip_inner_x)
+        ]
+        parts.append(hull(ramp_points))
     return parts
 
 
@@ -1299,7 +1441,17 @@ def build_controller_support_level(
 def build_controller_mounts() -> list[trimesh.Trimesh]:
     return [
         *build_rp2040_slot(),
+        *build_controller_diagonal_catches(
+            RP2040_BOARD_WIDTH,
+            RP2040_BOARD_LENGTH,
+            CONTROLLER_RP2040_RAISE,
+        ),
         *build_controller_support_level(
+            ESP32_S3_BOARD_WIDTH,
+            ESP32_S3_BOARD_LENGTH,
+            CONTROLLER_ESP32_S3_RAISE,
+        ),
+        *build_controller_diagonal_catches(
             ESP32_S3_BOARD_WIDTH,
             ESP32_S3_BOARD_LENGTH,
             CONTROLLER_ESP32_S3_RAISE,
@@ -1622,20 +1774,87 @@ def validate_wire_clips(panel: trimesh.Trimesh) -> None:
 
 
 def validate_controller_connector_opening(shell: trimesh.Trimesh) -> None:
-    rear_probe = box(
+    rear_inner_y = WEDGE_Y1 - WEDGE_WALL + 0.1
+    rear_outer_y = WEDGE_Y1 - 0.1
+    for center_x, center_z in CONTROLLER_USB_PORT_CENTERS:
+        port_z0 = center_z - CONTROLLER_USB_PORT_HEIGHT / 2.0
+        port_z1 = center_z + CONTROLLER_USB_PORT_HEIGHT / 2.0
+        port_probe = box(
+            (
+                center_x - CONTROLLER_USB_PORT_WIDTH / 2.0 + 0.4,
+                rear_inner_y,
+                port_z0 + 0.5,
+            ),
+            (
+                center_x + CONTROLLER_USB_PORT_WIDTH / 2.0 - 0.4,
+                rear_outer_y,
+                port_z1 - CONTROLLER_USB_PORT_TOP_POINT - 0.2,
+            ),
+        )
+        if intersection_volume(shell, port_probe) > 0.01:
+            raise ValueError(f"rear Type-C opening is blocked: {center_x}")
+
+    # The old 37 mm opening is now solid everywhere beside the small connector
+    # windows. The two upper ESP32 windows intentionally share one opening.
+    rows = (
         (
-            CONTROLLER_USB_OPENING_X0 + 1.0,
-            WEDGE_Y1 - WEDGE_WALL + 0.1,
-            CONTROLLER_USB_OPENING_Z0 + 0.5,
+            CONTROLLER_USB_PORT_CENTERS_X[[0, 2]],
+            CONTROLLER_ESP32_USB_PORT_Z0,
+            CONTROLLER_ESP32_USB_PORT_Z1,
         ),
         (
-            CONTROLLER_USB_OPENING_X1 - 1.0,
-            WEDGE_Y1 - 0.1,
-            CONTROLLER_USB_OPENING_Z1 - 0.5,
+            np.array([CONTROLLER_CENTER_X]),
+            CONTROLLER_RP2040_USB_PORT_Z0,
+            CONTROLLER_RP2040_USB_PORT_Z1,
         ),
     )
-    if intersection_volume(shell, rear_probe) > 0.01:
-        raise ValueError("rear Type-C opening is blocked")
+    for row_centers, row_z0, row_z1 in rows:
+        closure_z0 = row_z0 + 0.2
+        closure_z1 = row_z1 - 0.2
+        if np.isclose(row_z0, CONTROLLER_ESP32_USB_PORT_Z0):
+            closure_z0 = max(closure_z0, CONTROLLER_RP2040_USB_PORT_Z1 + 0.3)
+        else:
+            closure_z1 = min(closure_z1, CONTROLLER_ESP32_USB_PORT_Z0 - 0.3)
+        row_bounds = [
+            (
+                center_x - CONTROLLER_USB_PORT_WIDTH / 2.0,
+                center_x + CONTROLLER_USB_PORT_WIDTH / 2.0,
+            )
+            for center_x in row_centers
+        ]
+        closure_ranges = [
+            (CONTROLLER_USB_OPENING_X0 + 0.5, row_bounds[0][0] - 0.3),
+            (row_bounds[-1][1] + 0.3, CONTROLLER_USB_OPENING_X1 - 0.5),
+        ]
+        if not np.isclose(row_z0, CONTROLLER_ESP32_USB_PORT_Z0):
+            closure_ranges.insert(
+                1,
+                (row_bounds[0][1] + 0.3, row_bounds[-1][0] - 0.3),
+            )
+        for x0, x1 in closure_ranges:
+            if x1 <= x0:
+                continue
+            closure_probe = box(
+                (x0, rear_inner_y, closure_z0),
+                (x1, rear_outer_y, closure_z1),
+            )
+            if intersection_volume(shell, closure_probe) < closure_probe.volume - 0.05:
+                raise ValueError(f"rear Type-C surround is still open: {(x0, x1)}")
+
+    bridge_probe = box(
+        (
+            CONTROLLER_ESP32_USB_OPENING_X0 + 0.3,
+            rear_inner_y,
+            CONTROLLER_ESP32_USB_BRIDGE_Z0 + 0.2,
+        ),
+        (
+            CONTROLLER_ESP32_USB_OPENING_X1 - 0.3,
+            rear_outer_y,
+            CONTROLLER_ESP32_USB_BRIDGE_Z1 - 0.2,
+        ),
+    )
+    if intersection_volume(shell, bridge_probe) > 0.01:
+        raise ValueError("upper ESP32 Type-C openings are still separated")
 
     front_probe = box(
         (
@@ -1657,6 +1876,11 @@ def validate_controller_connector_opening(shell: trimesh.Trimesh) -> None:
         raise ValueError("controller USB edge is not flush with the rear inner wall")
     if CONTROLLER_USB_OPENING_Y0 > CONTROLLER_Y1:
         raise ValueError("rear Type-C opening does not reach the controller USB edge")
+    if not np.isclose(
+        CONTROLLER_USB_OPENING_Z0,
+        2.0 + CONTROLLER_USB_OPENING_Z_SHIFT,
+    ):
+        raise ValueError("rear Type-C opening was not raised by the requested amount")
 
 
 def validate_controller_cradle(cover: trimesh.Trimesh) -> None:
@@ -1671,7 +1895,7 @@ def validate_controller_cradle(cover: trimesh.Trimesh) -> None:
         raise ValueError(f"RP2040 slot width drifted: {rp2040_slot_clearance}")
     if RP2040_SLOT_WALL_HEIGHT < CONTROLLER_PCB_THICKNESS + 0.8:
         raise ValueError("RP2040 slot walls are too low")
-    if RP2040_TOP_CLIP_WIDTH < 10.0 or RP2040_TOP_CLIP_OVERLAP < 1.0:
+    if RP2040_TOP_CLIP_WIDTH < 12.0 or RP2040_TOP_CLIP_OVERLAP < 1.0:
         raise ValueError("RP2040 top clip is too small")
     if CONTROLLER_RETAINER_STEM_THICKNESS < 1.8:
         raise ValueError("ESP32-S3 retainer stems are too thin")
@@ -1682,6 +1906,43 @@ def validate_controller_cradle(cover: trimesh.Trimesh) -> None:
     esp32_retained_length = ESP32_S3_BOARD_LENGTH - CONTROLLER_USB_END_RELIEF
     if not np.isclose(esp32_retained_length, 55.15):
         raise ValueError(f"ESP32-S3 retained length drifted: {esp32_retained_length}")
+
+    for mount in build_controller_mounts():
+        if mount.bounds[0, 0] < CONTROLLER_X0 - 0.003:
+            raise ValueError("controller mount protrudes past the left bay edge")
+        if mount.bounds[1, 0] > CONTROLLER_X1 + 0.003:
+            raise ValueError("controller mount protrudes past the right bay edge")
+
+    for label, width, length, support_raise in (
+        (
+            "RP2040",
+            RP2040_BOARD_WIDTH,
+            RP2040_BOARD_LENGTH,
+            CONTROLLER_RP2040_RAISE,
+        ),
+        (
+            "ESP32-S3",
+            ESP32_S3_BOARD_WIDTH,
+            ESP32_S3_BOARD_LENGTH,
+            CONTROLLER_ESP32_S3_RAISE,
+        ),
+    ):
+        catches = build_controller_diagonal_catches(width, length, support_raise)
+        if len(catches) != 4:
+            raise ValueError(f"{label} rear diagonal catches are incomplete")
+        catch_top = max(float(catch.bounds[1, 2]) for catch in catches)
+        board_top = COVER_THICKNESS + support_raise + CONTROLLER_PCB_THICKNESS
+        if catch_top <= board_top + CONTROLLER_DIAGONAL_CATCH_CLEARANCE:
+            raise ValueError(f"{label} rear diagonal catches do not overlap the board")
+        if CONTROLLER_DIAGONAL_CATCH_RISE > CONTROLLER_DIAGONAL_CATCH_LENGTH:
+            raise ValueError(f"{label} rear diagonal catch needs print support")
+        for catch in catches:
+            if catch.bounds[0, 0] < CONTROLLER_X0 - 0.003:
+                raise ValueError(f"{label} rear catch protrudes past the left bay edge")
+            if catch.bounds[1, 0] > CONTROLLER_X1 + 0.003:
+                raise ValueError(f"{label} rear catch protrudes past the right bay edge")
+            if intersection_volume(cover, catch) < catch.volume - 0.02:
+                raise ValueError(f"{label} rear diagonal catch is missing")
 
     for label, width, length, support_raise in (
         (
@@ -1750,7 +2011,7 @@ def validate_controller_cradle_module(module: trimesh.Trimesh) -> None:
             [
                 CONTROLLER_CRADLE_MODULE_X1 - CONTROLLER_CRADLE_MODULE_X0,
                 CONTROLLER_CRADLE_MODULE_Y1 - CONTROLLER_CRADLE_MODULE_Y0,
-                CONTROLLER_USB_OPENING_Z1,
+                CONTROLLER_CRADLE_MODULE_MAX_Z,
             ],
         ]
     )

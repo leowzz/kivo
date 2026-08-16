@@ -151,7 +151,7 @@ def test_controller_uses_23_mm_rp2040_slot_and_esp_retaining_lips(
     )
     assert workstation.RP2040_SLOT_WALL_THICKNESS == 2.4
     assert workstation.RP2040_SLOT_WALL_HEIGHT == 2.5
-    assert workstation.RP2040_TOP_CLIP_WIDTH == 10.0
+    assert workstation.RP2040_TOP_CLIP_WIDTH == 12.0
     assert workstation.RP2040_TOP_CLIP_OVERLAP == 1.0
     assert workstation.RP2040_TOP_CLIP_CLEARANCE == 0.2
     assert workstation.CONTROLLER_RETAINER_STEM_THICKNESS == 1.8
@@ -161,7 +161,72 @@ def test_controller_uses_23_mm_rp2040_slot_and_esp_retaining_lips(
     assert workstation.CONTROLLER_RETAINER_LIP_THICKNESS == 0.8
     assert not hasattr(workstation, "CONTROLLER_SNAP_STEM_THICKNESS")
     assert not hasattr(workstation, "CONTROLLER_TIE_SLOT_CENTER_OFFSETS")
+    mounts = workstation.build_controller_mounts()
+    assert min(mount.bounds[0, 0] for mount in mounts) >= (
+        workstation.CONTROLLER_X0 - 0.003
+    )
+    assert max(mount.bounds[1, 0] for mount in mounts) <= (
+        workstation.CONTROLLER_X1 + 0.003
+    )
     workstation.validate_controller_cradle(cover)
+
+
+def test_controller_rear_has_raised_small_port_windows_and_diagonal_catches(
+    generated_models: GeneratedModels,
+) -> None:
+    shell, _, cover, _ = generated_models
+
+    assert workstation.CONTROLLER_USB_OPENING_Z_SHIFT == pytest.approx(1.0)
+    assert workstation.CONTROLLER_USB_OPENING_Z0 == pytest.approx(3.0)
+    assert workstation.CONTROLLER_USB_OPENING_Z1 == pytest.approx(12.5)
+    assert workstation.CONTROLLER_USB_PORT_WIDTH == pytest.approx(9.0)
+    assert workstation.CONTROLLER_USB_PORT_HEIGHT == pytest.approx(7.0)
+    assert workstation.CONTROLLER_ESP32_USB_OPENING_X0 == pytest.approx(127.25)
+    assert workstation.CONTROLLER_ESP32_USB_OPENING_X1 == pytest.approx(155.75)
+    assert workstation.CONTROLLER_ESP32_USB_BRIDGE_Z0 == pytest.approx(5.5)
+    assert workstation.CONTROLLER_ESP32_USB_BRIDGE_Z1 == pytest.approx(11.5)
+    assert workstation.CONTROLLER_USB_PORT_CENTERS_X == pytest.approx(
+        (131.75, 141.5, 151.25)
+    )
+    assert np.allclose(
+        workstation.CONTROLLER_USB_PORT_CENTERS,
+        np.array(
+            (
+                (131.75, 9.0),
+                (151.25, 9.0),
+                (141.5, 5.5),
+            )
+        ),
+    )
+    assert workstation.CONTROLLER_DIAGONAL_CATCH_LENGTH == pytest.approx(8.0)
+    assert workstation.CONTROLLER_DIAGONAL_CATCH_RISE == pytest.approx(1.2)
+    assert workstation.CONTROLLER_CRADLE_MODULE_MAX_Z == pytest.approx(11.9)
+    workstation.validate_controller_connector_opening(shell)
+    workstation.validate_controller_cradle(cover)
+
+    for width, length, support_raise in (
+        (
+            workstation.RP2040_BOARD_WIDTH,
+            workstation.RP2040_BOARD_LENGTH,
+            workstation.CONTROLLER_RP2040_RAISE,
+        ),
+        (
+            workstation.ESP32_S3_BOARD_WIDTH,
+            workstation.ESP32_S3_BOARD_LENGTH,
+            workstation.CONTROLLER_ESP32_S3_RAISE,
+        ),
+    ):
+        catches = workstation.build_controller_diagonal_catches(
+            width, length, support_raise
+        )
+        assert len(catches) == 4
+        assert max(catch.bounds[1, 2] for catch in catches) <= 11.9 + 0.003
+        assert min(catch.bounds[0, 0] for catch in catches) >= (
+            workstation.CONTROLLER_X0 - 0.003
+        )
+        assert max(catch.bounds[1, 0] for catch in catches) <= (
+            workstation.CONTROLLER_X1 + 0.003
+        )
 
 
 def test_standalone_controller_cradle_module_reuses_cover_mount_geometry(
@@ -171,7 +236,7 @@ def test_standalone_controller_cradle_module_reuses_cover_mount_geometry(
 
     assert controller_cradle_module.bounds[0] == pytest.approx((0.0, 0.0, 0.0))
     assert controller_cradle_module.extents == pytest.approx(
-        (37.0, 63.65, 11.5), abs=0.003
+        (37.0, 63.65, 11.9), abs=0.003
     )
     placed = workstation.place_controller_cradle_module(controller_cradle_module)
     for mount in workstation.build_controller_mounts():

@@ -73,11 +73,11 @@ uv run --script scripts/modeling/integrated_workstation.py
 | ESP32-S3 retained inner board | `27.94 x 57.15` |
 | RP2040 support level | PCB underside `3.0` above the cover inner face |
 | RP2040 locating slot | `23.0` clear width, `2.4` walls rising `2.5` above support |
-| RP2040 top clip | `10.0` wide with `1.0` PCB overlap |
+| RP2040 top clip | `12.0` wide with `1.0` PCB overlap |
 | ESP32-S3 support level | PCB underside `6.5` above the cover inner face |
-| ESP32-S3 retaining lips | `12.0` long, `1.8` stem, `0.8` PCB overlap |
+| ESP32-S3 diagonal rear catches | `8.0` long bay-flush ramps with `0.8` inward PCB capture |
 | ESP32-S3 retained length | `55.15` from the front stop to the USB-end relief |
-| Controller USB opening | Rear wall, `37.0 x 9.5` |
+| Controller USB windows | Upper ESP32 pair joined into one `28.5 x 7.0` opening; lower centered RP2040, `9.0 x 7.0` |
 | Controller USB edge | Flush with the rear wall inner face |
 
 The display PCB sits on the removable panel in a rounded locating bezel with
@@ -116,6 +116,12 @@ blind pocket at the bottom end, so the panel and cover can be removed
 independently while reusing the same printed structure. The unused screen-side
 rear pillar and both of its attachment holes are omitted.
 
+The rear controller wall is solid around the Type-C clearance openings. The two
+upper ESP32-S3 connector windows are joined into one continuous `28.5 mm` wide
+opening, while the lower centered RP2040 window remains `9.0 x 7.0 mm`. The
+ESP32 window band is raised by `1.0 mm` from the earlier opening, while the large
+unused rectangular area is closed by the rear wall.
+
 ## Hardware And Assembly
 
 - 16 M3 heat-set brass inserts with the measured `3.9` body, `4.9` knurled
@@ -140,20 +146,20 @@ rear pillar and both of its attachment holes are omitted.
   shared rectangular cavity. Their mounting axes are vertical after assembly.
 - The RP2040 and ESP32-S3 reference boards have GPIO solder holes but no
   dedicated mechanical mounting holes. The RP2040 uses a `23.0 mm` U-shaped
-  locating slot with one wide top clip; the ESP32-S3 uses the outer support
-  level with fixed horizontal retaining lips.
+  locating slot with one `12.0 mm` top clip; both board variants use diagonal
+  rear catches whose outside edges stay flush with the shared controller bay.
 
 1. Heat two inserts directly into the handset base's right wall. Hold the base
    horizontal with its bottom aligned to the installed bottom cover, then pass
    two M3 screws and washers through the round chassis holes into the inserts.
    Feed the handset cable through the aligned `12 mm` center passage, tighten
    both screws, and keep both washers on the chassis interior.
-2. Place the controller USB end toward the wide rear connector opening and
+2. Place the controller USB end toward the matching rear connector windows and
    slide the board lengthwise into its slot until it reaches the front stop. The
    PCB's USB edge then sits directly against the rear wall inner face so its
    Type-C connector reaches the outside of the chassis without a recessed gap. The
-   RP2040 runs inside the `23.0 mm` lower U-slot and under its single top clip;
-   the larger ESP32-S3 uses the outer upper level and horizontal side lips.
+   RP2040 runs inside the `23.0 mm` lower U-slot and under its `12.0 mm` top clip;
+   the larger ESP32-S3 uses the outer upper level and diagonal rear catches.
    Slide either board back out from the rear; the retainers are fixed and should
    not be bent.
 3. Heat four inserts into the display holes from the panel's flat back side
@@ -193,9 +199,11 @@ rear pillar and both of its attachment holes are omitted.
   add support inside them. Use elephant-foot compensation if the `1.5` mouths
   print too tight.
 - Print the bottom cover flat with the controller rails facing upward.
-- The RP2040 slot uses continuous `2.4 mm` walls and one `10 mm` top clip. The
-  ESP32-S3 retainers use `1.8 mm` fixed stems and `12 mm` horizontal lips.
-  Their short overhangs print without support; slide controllers in from the rear.
+- The RP2040 slot uses continuous `2.4 mm` walls and one `12 mm` top clip. The
+  two board variants also use four short diagonal rear catches with a `1.2 mm`
+  rise and `0.8 mm` inward capture. Their outside edges are flush with the bay,
+  and the ramps print without support; slide controllers in from the rear until
+  the USB edge meets the rear wall.
 - Start with a 0.4 nozzle, 0.2 layer height, 4 perimeters, and 20 percent
   infill.
 - The main shell and cover both remain `138 mm` wide; there is no separate
