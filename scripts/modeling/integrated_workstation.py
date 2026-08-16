@@ -382,19 +382,12 @@ CONTROLLER_USB_PORT_CENTERS = np.array(
         [CONTROLLER_CENTER_X, (CONTROLLER_RP2040_USB_PORT_Z0 + CONTROLLER_RP2040_USB_PORT_Z1) / 2.0],
     ]
 )
-# A low rear ramp lets a board slide in from the connector side and wedges over
-# its side edge once seated. The catch bases share the ESP32-S3 bay's outer
-# boundary, so the RP2040 and ESP32-S3 retainers remain flush with one another.
-CONTROLLER_DIAGONAL_CATCH_LENGTH = 8.0
-CONTROLLER_DIAGONAL_CATCH_OVERLAP = 0.8
-CONTROLLER_DIAGONAL_CATCH_CLEARANCE = 0.2
-CONTROLLER_DIAGONAL_CATCH_RISE = 1.2
 CONTROLLER_CRADLE_MODULE_MAX_Z = (
     COVER_THICKNESS
     + CONTROLLER_ESP32_S3_RAISE
     + CONTROLLER_PCB_THICKNESS
     + CONTROLLER_RETAINER_CLEARANCE
-    + CONTROLLER_DIAGONAL_CATCH_RISE
+    + CONTROLLER_RETAINER_LIP_THICKNESS
 )
 CONTROLLER_CRADLE_MODULE_MARGIN = 3.0
 CONTROLLER_CRADLE_MODULE_X0 = CONTROLLER_USB_OPENING_X0
@@ -1310,6 +1303,21 @@ def build_rp2040_slot() -> list[trimesh.Trimesh]:
             ),
         ]
     )
+
+    # Full-length top lips close the channel over the support ledges, so both
+    # PCB edges are captured against lifting along the whole slot.
+    parts.extend(
+        [
+            box(
+                (slot_x0, rail_y0, clip_bottom_z),
+                (board_x0 + CONTROLLER_SUPPORT_RAIL_WIDTH, rail_y1, wall_top_z),
+            ),
+            box(
+                (board_x1 - CONTROLLER_SUPPORT_RAIL_WIDTH, rail_y0, clip_bottom_z),
+                (slot_x1, rail_y1, wall_top_z),
+            ),
+        ]
+    )
     return parts
 
 
@@ -1369,44 +1377,6 @@ def build_controller_retaining_lips(
     return parts
 
 
-def build_controller_diagonal_catches(
-    width: float, length: float, support_raise: float
-) -> list[trimesh.Trimesh]:
-    """Add rear fingers whose outside edges stay flush with the controller bay."""
-    board_x0, board_y0, board_x1, board_y1 = controller_board_bounds(width, length)
-    support_z = COVER_THICKNESS + support_raise
-    board_top_z = support_z + CONTROLLER_PCB_THICKNESS
-    catch_z0 = board_top_z + CONTROLLER_DIAGONAL_CATCH_CLEARANCE
-    catch_z1 = catch_z0 + CONTROLLER_DIAGONAL_CATCH_RISE
-    catch_y0 = board_y1 - CONTROLLER_DIAGONAL_CATCH_LENGTH
-    catch_y1 = board_y1 - CONTROLLER_END_CLEARANCE
-
-    parts: list[trimesh.Trimesh] = []
-    for side, board_edge in ((-1, board_x0), (1, board_x1)):
-        bay_outer_x = CONTROLLER_X0 if side < 0 else CONTROLLER_X1
-        lip_inner_x = board_edge - side * CONTROLLER_DIAGONAL_CATCH_OVERLAP
-        stem_x0 = min(bay_outer_x, board_edge)
-        stem_x1 = max(bay_outer_x, board_edge)
-        parts.append(
-            box(
-                (stem_x0, catch_y0, support_z - 0.02),
-                (stem_x1, catch_y1, catch_z0),
-            )
-        )
-
-        ramp_points = [
-            [x, catch_y0, catch_z0]
-            for x in (bay_outer_x, board_edge)
-        ] + [
-            [x, catch_y1, catch_z0]
-            for x in (bay_outer_x, board_edge)
-        ] + [
-            [x, catch_y0, catch_z1] for x in (bay_outer_x, lip_inner_x)
-        ]
-        parts.append(hull(ramp_points))
-    return parts
-
-
 def build_controller_support_level(
     width: float, length: float, support_raise: float
 ) -> list[trimesh.Trimesh]:
@@ -1458,17 +1428,7 @@ def build_controller_support_level(
 def build_controller_mounts() -> list[trimesh.Trimesh]:
     return [
         *build_rp2040_slot(),
-        *build_controller_diagonal_catches(
-            RP2040_BOARD_WIDTH,
-            RP2040_BOARD_LENGTH,
-            CONTROLLER_RP2040_RAISE,
-        ),
         *build_controller_support_level(
-            ESP32_S3_BOARD_WIDTH,
-            ESP32_S3_BOARD_LENGTH,
-            CONTROLLER_ESP32_S3_RAISE,
-        ),
-        *build_controller_diagonal_catches(
             ESP32_S3_BOARD_WIDTH,
             ESP32_S3_BOARD_LENGTH,
             CONTROLLER_ESP32_S3_RAISE,
@@ -1914,6 +1874,33 @@ def validate_controller_cradle(cover: trimesh.Trimesh) -> None:
         raise ValueError("RP2040 slot walls are too low")
     if RP2040_TOP_CLIP_WIDTH < 12.0 or RP2040_TOP_CLIP_OVERLAP < 1.0:
         raise ValueError("RP2040 top clip is too small")
+    rp2040_board_x0, rp2040_board_y0, rp2040_board_x1, rp2040_board_y1 = (
+        controller_board_bounds(RP2040_BOARD_WIDTH, RP2040_BOARD_LENGTH)
+    )
+    rp2040_board_top = (
+        COVER_THICKNESS + CONTROLLER_RP2040_RAISE + CONTROLLER_PCB_THICKNESS
+    )
+    rp2040_wall_top = (
+        COVER_THICKNESS + CONTROLLER_RP2040_RAISE + RP2040_SLOT_WALL_HEIGHT
+    )
+    for edge_x0, edge_x1 in (
+        (rp2040_board_x0, rp2040_board_x0 + CONTROLLER_SUPPORT_RAIL_WIDTH),
+        (rp2040_board_x1 - CONTROLLER_SUPPORT_RAIL_WIDTH, rp2040_board_x1),
+    ):
+        capture_probe = box(
+            (
+                edge_x0 + 0.1,
+                rp2040_board_y0 + 1.0,
+                rp2040_board_top + RP2040_TOP_CLIP_CLEARANCE + 0.05,
+            ),
+            (
+                edge_x1 - 0.1,
+                rp2040_board_y1 - CONTROLLER_USB_END_RELIEF - 1.0,
+                rp2040_wall_top - 0.05,
+            ),
+        )
+        if intersection_volume(cover, capture_probe) < capture_probe.volume - 0.02:
+            raise ValueError("RP2040 slot does not capture the board edge")
     if CONTROLLER_RETAINER_STEM_THICKNESS < 1.8:
         raise ValueError("ESP32-S3 retainer stems are too thin")
     if CONTROLLER_RETAINER_LENGTH < 12.0:
@@ -1929,37 +1916,6 @@ def validate_controller_cradle(cover: trimesh.Trimesh) -> None:
             raise ValueError("controller mount protrudes past the left bay edge")
         if mount.bounds[1, 0] > CONTROLLER_X1 + 0.003:
             raise ValueError("controller mount protrudes past the right bay edge")
-
-    for label, width, length, support_raise in (
-        (
-            "RP2040",
-            RP2040_BOARD_WIDTH,
-            RP2040_BOARD_LENGTH,
-            CONTROLLER_RP2040_RAISE,
-        ),
-        (
-            "ESP32-S3",
-            ESP32_S3_BOARD_WIDTH,
-            ESP32_S3_BOARD_LENGTH,
-            CONTROLLER_ESP32_S3_RAISE,
-        ),
-    ):
-        catches = build_controller_diagonal_catches(width, length, support_raise)
-        if len(catches) != 4:
-            raise ValueError(f"{label} rear diagonal catches are incomplete")
-        catch_top = max(float(catch.bounds[1, 2]) for catch in catches)
-        board_top = COVER_THICKNESS + support_raise + CONTROLLER_PCB_THICKNESS
-        if catch_top <= board_top + CONTROLLER_DIAGONAL_CATCH_CLEARANCE:
-            raise ValueError(f"{label} rear diagonal catches do not overlap the board")
-        if CONTROLLER_DIAGONAL_CATCH_RISE > CONTROLLER_DIAGONAL_CATCH_LENGTH:
-            raise ValueError(f"{label} rear diagonal catch needs print support")
-        for catch in catches:
-            if catch.bounds[0, 0] < CONTROLLER_X0 - 0.003:
-                raise ValueError(f"{label} rear catch protrudes past the left bay edge")
-            if catch.bounds[1, 0] > CONTROLLER_X1 + 0.003:
-                raise ValueError(f"{label} rear catch protrudes past the right bay edge")
-            if intersection_volume(cover, catch) < catch.volume - 0.02:
-                raise ValueError(f"{label} rear diagonal catch is missing")
 
     for label, width, length, support_raise in (
         (

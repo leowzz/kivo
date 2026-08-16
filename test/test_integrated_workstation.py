@@ -161,6 +161,7 @@ def test_controller_uses_23_mm_rp2040_slot_and_esp_retaining_lips(
     assert workstation.CONTROLLER_RETAINER_LIP_THICKNESS == 0.8
     assert not hasattr(workstation, "CONTROLLER_SNAP_STEM_THICKNESS")
     assert not hasattr(workstation, "CONTROLLER_TIE_SLOT_CENTER_OFFSETS")
+    assert not hasattr(workstation, "CONTROLLER_DIAGONAL_CATCH_LENGTH")
     mounts = workstation.build_controller_mounts()
     assert min(mount.bounds[0, 0] for mount in mounts) >= (
         workstation.CONTROLLER_X0 - 0.003
@@ -171,7 +172,7 @@ def test_controller_uses_23_mm_rp2040_slot_and_esp_retaining_lips(
     workstation.validate_controller_cradle(cover)
 
 
-def test_controller_rear_has_raised_small_port_windows_and_diagonal_catches(
+def test_controller_rear_has_raised_small_port_windows(
     generated_models: GeneratedModels,
 ) -> None:
     shell, _, cover, _ = generated_models
@@ -198,35 +199,9 @@ def test_controller_rear_has_raised_small_port_windows_and_diagonal_catches(
             )
         ),
     )
-    assert workstation.CONTROLLER_DIAGONAL_CATCH_LENGTH == pytest.approx(8.0)
-    assert workstation.CONTROLLER_DIAGONAL_CATCH_RISE == pytest.approx(1.2)
-    assert workstation.CONTROLLER_CRADLE_MODULE_MAX_Z == pytest.approx(11.9)
+    assert workstation.CONTROLLER_CRADLE_MODULE_MAX_Z == pytest.approx(11.5)
     workstation.validate_controller_connector_opening(shell)
     workstation.validate_controller_cradle(cover)
-
-    for width, length, support_raise in (
-        (
-            workstation.RP2040_BOARD_WIDTH,
-            workstation.RP2040_BOARD_LENGTH,
-            workstation.CONTROLLER_RP2040_RAISE,
-        ),
-        (
-            workstation.ESP32_S3_BOARD_WIDTH,
-            workstation.ESP32_S3_BOARD_LENGTH,
-            workstation.CONTROLLER_ESP32_S3_RAISE,
-        ),
-    ):
-        catches = workstation.build_controller_diagonal_catches(
-            width, length, support_raise
-        )
-        assert len(catches) == 4
-        assert max(catch.bounds[1, 2] for catch in catches) <= 11.9 + 0.003
-        assert min(catch.bounds[0, 0] for catch in catches) >= (
-            workstation.CONTROLLER_X0 - 0.003
-        )
-        assert max(catch.bounds[1, 0] for catch in catches) <= (
-            workstation.CONTROLLER_X1 + 0.003
-        )
 
 
 def test_standalone_controller_cradle_module_reuses_cover_mount_geometry(
@@ -236,7 +211,7 @@ def test_standalone_controller_cradle_module_reuses_cover_mount_geometry(
 
     assert controller_cradle_module.bounds[0] == pytest.approx((0.0, 0.0, 0.0))
     assert controller_cradle_module.extents == pytest.approx(
-        (37.0, 63.65, 11.9), abs=0.003
+        (37.0, 63.65, 11.5), abs=0.003
     )
     placed = workstation.place_controller_cradle_module(controller_cradle_module)
     for mount in workstation.build_controller_mounts():
