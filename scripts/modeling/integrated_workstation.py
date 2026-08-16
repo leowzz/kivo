@@ -363,8 +363,10 @@ CONTROLLER_ESP32_USB_OPENING_X1 = (
     CONTROLLER_USB_PORT_CENTERS_X[2] + CONTROLLER_USB_PORT_WIDTH / 2.0
 )
 CONTROLLER_ESP32_USB_BRIDGE_Z0 = CONTROLLER_ESP32_USB_PORT_Z0
+# The shared ESP32-S3 opening's flat top edge sits 2 mm above the shoulders of
+# the old pointed window tops.
 CONTROLLER_ESP32_USB_BRIDGE_Z1 = (
-    CONTROLLER_ESP32_USB_PORT_Z1 - CONTROLLER_USB_PORT_TOP_POINT
+    CONTROLLER_ESP32_USB_PORT_Z1 - CONTROLLER_USB_PORT_TOP_POINT + 2.0
 )
 CONTROLLER_RP2040_USB_PORT_Z0 = (
     CONTROLLER_ESP32_USB_PORT_Z0
@@ -1123,19 +1125,30 @@ def handset_mount_cable_hole_cutter() -> trimesh.Trimesh:
     )
 
 
-def controller_usb_port_cutter(center_x: float, center_z: float) -> trimesh.Trimesh:
-    """Cut one small pentagonal Type-C clearance window through the rear wall."""
+def controller_usb_port_cutter(
+    center_x: float, center_z: float, flat_top: bool = False
+) -> trimesh.Trimesh:
+    """Cut one small Type-C clearance window through the rear wall."""
     x0 = center_x - CONTROLLER_USB_PORT_WIDTH / 2.0
     x1 = center_x + CONTROLLER_USB_PORT_WIDTH / 2.0
     z0 = center_z - CONTROLLER_USB_PORT_HEIGHT / 2.0
     z1 = center_z + CONTROLLER_USB_PORT_HEIGHT / 2.0
-    cross_section = [
-        (x0, z0),
-        (x1, z0),
-        (x1, z1 - CONTROLLER_USB_PORT_TOP_POINT),
-        (center_x, z1),
-        (x0, z1 - CONTROLLER_USB_PORT_TOP_POINT),
-    ]
+    if flat_top:
+        z1 = CONTROLLER_ESP32_USB_BRIDGE_Z1
+        cross_section = [
+            (x0, z0),
+            (x1, z0),
+            (x1, z1),
+            (x0, z1),
+        ]
+    else:
+        cross_section = [
+            (x0, z0),
+            (x1, z0),
+            (x1, z1 - CONTROLLER_USB_PORT_TOP_POINT),
+            (center_x, z1),
+            (x0, z1 - CONTROLLER_USB_PORT_TOP_POINT),
+        ]
     return hull(
         [
             [x, y, z]
@@ -1146,10 +1159,14 @@ def controller_usb_port_cutter(center_x: float, center_z: float) -> trimesh.Trim
 
 
 def controller_usb_port_cutters() -> list[trimesh.Trimesh]:
+    # The two upper ESP32-S3 windows keep a flat top edge so the shared opening
+    # reads as one clean rectangle; the lower RP2040 window keeps the pointed
+    # Type-C relief since it sits below the shared opening.
     cutters = [
-        controller_usb_port_cutter(center_x, center_z)
-        for center_x, center_z in CONTROLLER_USB_PORT_CENTERS
+        controller_usb_port_cutter(center_x, center_z, flat_top=True)
+        for center_x, center_z in CONTROLLER_USB_PORT_CENTERS[:2]
     ]
+    cutters.append(controller_usb_port_cutter(*CONTROLLER_USB_PORT_CENTERS[2]))
     # The two upper ESP32-S3 connectors share one continuous opening. Removing
     # this center bridge avoids two narrow walls around the adjacent plugs.
     cutters.append(

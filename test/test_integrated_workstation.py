@@ -184,7 +184,7 @@ def test_controller_rear_has_raised_small_port_windows_and_diagonal_catches(
     assert workstation.CONTROLLER_ESP32_USB_OPENING_X0 == pytest.approx(127.25)
     assert workstation.CONTROLLER_ESP32_USB_OPENING_X1 == pytest.approx(155.75)
     assert workstation.CONTROLLER_ESP32_USB_BRIDGE_Z0 == pytest.approx(5.5)
-    assert workstation.CONTROLLER_ESP32_USB_BRIDGE_Z1 == pytest.approx(11.5)
+    assert workstation.CONTROLLER_ESP32_USB_BRIDGE_Z1 == pytest.approx(13.5)
     assert workstation.CONTROLLER_USB_PORT_CENTERS_X == pytest.approx(
         (131.75, 141.5, 151.25)
     )
