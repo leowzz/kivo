@@ -33,6 +33,9 @@ product-studio = []
 [[bin]]
 name = "kivo-product"
 path = "src/bin/kivo-product.rs"
+# Only build/bundle this CLI when the product-studio feature is enabled; otherwise
+# tauri tries to lipo+bundle it into the app on macOS universal builds and fails.
+required-features = ["product-studio"]
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [
