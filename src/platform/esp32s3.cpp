@@ -76,6 +76,10 @@ bool sendConsumerControl(std::uint16_t usage) {
   return pressed && released;
 }
 
+std::uint8_t loadDisplayBrightness() { return 100; }
+
+void saveDisplayBrightness(std::uint8_t) {}
+
 bool configureDisplay(const std::optional<OledConfig> &config) {
   return !config.has_value();
 }

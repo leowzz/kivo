@@ -17,6 +17,7 @@ enum class OledControlPanelUpdate { None, Render, Dismiss, BrightnessChanged };
 class OledControlPanel {
  public:
   void reset();
+  void setBrightnessPercent(std::uint8_t percent);
   OledControlPanelUpdate update(const OledControlPanelSample &sample,
                                 std::uint32_t nowMs,
                                 std::uint16_t debounceMs);

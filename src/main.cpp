@@ -516,6 +516,7 @@ void scanOledControlPanel(std::uint32_t nowMs) {
       break;
     case OledControlPanelUpdate::BrightnessChanged:
       platform::setDisplayBrightness(oledControlPanel.brightnessPercent());
+      platform::saveDisplayBrightness(oledControlPanel.brightnessPercent());
       showControlPanel();
       break;
     case OledControlPanelUpdate::None:
@@ -577,6 +578,7 @@ void setup() {
   helloLine = formatHello(platform::boardProfile(), KIVO_FIRMWARE_BUILD_ID,
                           kKivoProductVersionId);
   platform::begin();
+  oledControlPanel.setBrightnessPercent(platform::loadDisplayBrightness());
   const auto productTopology =
       makeEmbeddedProductTopology(platform::boardProfile());
   if (productTopology.has_value()) {

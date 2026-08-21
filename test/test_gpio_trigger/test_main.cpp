@@ -633,6 +633,19 @@ void test_oled_control_panel_adjusts_brightness_with_the_encoder() {
   TEST_ASSERT_FALSE(panel.active());
 }
 
+void test_oled_control_panel_clamps_loaded_brightness() {
+  OledControlPanel panel;
+
+  panel.setBrightnessPercent(55);
+  TEST_ASSERT_EQUAL_UINT8(55, panel.brightnessPercent());
+  panel.setBrightnessPercent(0);
+  TEST_ASSERT_EQUAL_UINT8(5, panel.brightnessPercent());
+  panel.setBrightnessPercent(255);
+  TEST_ASSERT_EQUAL_UINT8(100, panel.brightnessPercent());
+  panel.reset();
+  TEST_ASSERT_EQUAL_UINT8(100, panel.brightnessPercent());
+}
+
 void commitFullScene(RemoteDisplay &display, std::uint32_t revision) {
   TEST_ASSERT_EQUAL(DisplayResult::Accepted,
                     display.begin(revision, 0, DisplayMode::Full));
@@ -2070,6 +2083,7 @@ int main(int, char **) {
   RUN_TEST(test_oled_control_panel_opens_on_encoder_rotation_when_closed);
   RUN_TEST(test_oled_control_panel_ignores_push_noise_during_encoder_rotation);
   RUN_TEST(test_oled_control_panel_adjusts_brightness_with_the_encoder);
+  RUN_TEST(test_oled_control_panel_clamps_loaded_brightness);
   RUN_TEST(test_display_transaction_commits_atomically);
   RUN_TEST(test_display_revision_rules_request_resync_without_mutation);
   RUN_TEST(test_new_begin_discards_uncommitted_transaction);

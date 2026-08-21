@@ -59,6 +59,11 @@ void OledControlPanel::reset() {
   lastEncoderActivityMs_ = 0;
 }
 
+void OledControlPanel::setBrightnessPercent(std::uint8_t percent) {
+  brightnessPercent_ = std::clamp(percent, kMinimumBrightnessPercent,
+                                  static_cast<std::uint8_t>(100));
+}
+
 int OledControlPanel::encoderStep(const OledControlPanelSample &sample,
                                   std::uint32_t nowMs) {
   const auto current = static_cast<std::uint8_t>(

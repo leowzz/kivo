@@ -1,5 +1,6 @@
 #include <Adafruit_TinyUSB.h>
 #include <Arduino.h>
+#include <EEPROM.h>
 #include <U8g2lib.h>
 #include <Wire.h>
 
@@ -36,6 +37,18 @@ constexpr std::uint16_t kDisplayRotationDegrees = 0;
 constexpr std::array<std::uint8_t, 2> kSsd1306StatusBaselines = {10, 29};
 constexpr std::uint8_t kSsd1306InputBaseline = 20;
 constexpr std::array<std::uint8_t, 4> kSh1106LocalBaselines = {12, 28, 44, 60};
+constexpr std::uint8_t kDisplayBrightnessMagic = 0x4B;
+constexpr std::uint8_t kMinimumDisplayBrightnessPercent = 5;
+constexpr std::uint8_t kMaximumDisplayBrightnessPercent = 100;
+struct PersistedDisplaySettings {
+  std::uint8_t magic;
+  std::uint8_t brightnessPercent;
+  std::uint8_t checksum;
+  std::uint8_t reserved;
+};
+static_assert(sizeof(PersistedDisplaySettings) == 4);
+constexpr std::size_t kDisplaySettingsEepromSize =
+    sizeof(PersistedDisplaySettings);
 std::unique_ptr<U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C> ssd1306I2c0Display;
 std::unique_ptr<U8G2_SSD1306_128X32_UNIVISION_F_2ND_HW_I2C> ssd1306I2c1Display;
 std::unique_ptr<U8G2_SSD1306_128X32_UNIVISION_F_SW_I2C> ssd1306SoftwareDisplay;
@@ -53,6 +66,19 @@ bool displayRequested = false;
 bool displayHealthy = false;
 DirtyTiles dirtyTiles(kDisplayWidthTiles, kSh1106HeightTiles);
 RefreshMode refreshMode = RefreshMode::Full;
+
+std::uint8_t displaySettingsChecksum(
+    const PersistedDisplaySettings &settings) {
+  return static_cast<std::uint8_t>(settings.magic ^ settings.brightnessPercent ^
+                                   0xA5U);
+}
+
+bool validDisplaySettings(const PersistedDisplaySettings &settings) {
+  return settings.magic == kDisplayBrightnessMagic &&
+         settings.brightnessPercent >= kMinimumDisplayBrightnessPercent &&
+         settings.brightnessPercent <= kMaximumDisplayBrightnessPercent &&
+         settings.checksum == displaySettingsChecksum(settings);
+}
 
 void stopDisplay() {
   dirtyTiles.clear();
@@ -129,6 +155,7 @@ namespace platform {
 const BoardProfile &boardProfile() { return kYdRp2040; }
 
 void begin() {
+  EEPROM.begin(kDisplaySettingsEepromSize);
   TinyUSBDevice.setID(0x2e8a, 0x102e);
   TinyUSBDevice.setManufacturerDescriptor("YD");
   TinyUSBDevice.setProductDescriptor("Kivo Keyboard RP2040");
@@ -180,6 +207,28 @@ bool sendConsumerControl(std::uint16_t usage) {
                                    sizeof(reportUsage));
       },
       []() { delay(1); });
+}
+
+std::uint8_t loadDisplayBrightness() {
+  PersistedDisplaySettings settings{};
+  EEPROM.get(0, settings);
+  return validDisplaySettings(settings) ? settings.brightnessPercent
+                                        : kMaximumDisplayBrightnessPercent;
+}
+
+void saveDisplayBrightness(std::uint8_t percent) {
+  const auto clamped = std::min<std::uint16_t>(
+      std::max<std::uint16_t>(percent, kMinimumDisplayBrightnessPercent),
+      kMaximumDisplayBrightnessPercent);
+  PersistedDisplaySettings settings{
+      kDisplayBrightnessMagic,
+      static_cast<std::uint8_t>(clamped),
+      0,
+      0,
+  };
+  settings.checksum = displaySettingsChecksum(settings);
+  EEPROM.put(0, settings);
+  EEPROM.commit();
 }
 
 bool configureDisplay(const std::optional<OledConfig> &config) {
