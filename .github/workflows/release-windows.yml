@@ -54,10 +54,12 @@ jobs:
           - name: Windows x64
             platform: windows-latest
             args: --bundles nsis
+            studio_bundle_dir: src-tauri/target/release/bundle/nsis
             rust_targets: ""
           - name: macOS universal
             platform: macos-latest
             args: --target universal-apple-darwin --bundles dmg
+            studio_bundle_dir: src-tauri/target/universal-apple-darwin/release/bundle/dmg
             rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
     runs-on: ${{ matrix.platform }}
 
@@ -102,10 +104,26 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Kivo ${{ github.ref_name }}"
-          releaseBody: "macOS universal DMG, Windows x64 installer, and ESP32-S3 and RP2040 firmware."
+          releaseBody: "Kivo and Kivo Product Studio desktop installers, plus ESP32-S3 and RP2040 firmware."
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Build Product Studio installer
+        run: >-
+          npm run tauri build -- --features product-studio
+          --config src-tauri/tauri.studio.conf.json ${{ matrix.args }}
+
+      - name: Upload Product Studio installer
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STUDIO_BUNDLE_DIR: ${{ matrix.studio_bundle_dir }}
+        run: |
+          set -euo pipefail
+          files=("$STUDIO_BUNDLE_DIR"/*)
+          test -e "${files[0]}"
+          gh release upload "${GITHUB_REF_NAME}" "${files[@]}" --clobber --repo "${GITHUB_REPOSITORY}"
 
   firmware-publish:
     name: Publish release firmware

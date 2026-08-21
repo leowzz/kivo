@@ -7,10 +7,10 @@ __pycache__/
 .superpowers/
 node_modules/
 dist/
+dist-studio/
 /output/
 src-tauri/target/
 config.yaml
 hardware/
 .idea
 .superpowers
-

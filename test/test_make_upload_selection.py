@@ -7,6 +7,22 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_helper_build_includes_product_studio_bundle() -> None:
+    result = subprocess.run(
+        ["make", "-n", "helper-build"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count("npm run tauri build") == 2
+    assert result.stdout.index("npm run tauri build\n") < result.stdout.index(
+        "npm run tauri build -- --features product-studio --config src-tauri/tauri.studio.conf.json"
+    )
+
+
 def run_make(
     tmp_path: Path,
     target: str,

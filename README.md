@@ -213,7 +213,7 @@ make test
 make helper-build
 ```
 
-`make test` 会运行发布脚本测试、Python 上传/选择测试、PlatformIO native 测试、Rust 测试与 Clippy、前端测试和生产构建。`make helper-build` 在 macOS 构建应用包，在 Windows 构建 NSIS 安装程序。Windows CI 也会在每次 pull request 中运行平台测试并实际生成 NSIS 安装程序。
+`make test` 会运行发布脚本测试、Python 上传/选择测试、PlatformIO native 测试、Rust 测试与 Clippy、前端测试和生产构建。`make helper-build` 会连续构建 Kivo 和 Kivo Product Studio 两套包：macOS 生成应用包，Windows 生成对应的 NSIS 安装程序。Windows CI 也会在每次 pull request 中验证两套 NSIS 安装程序。
 
 ## 项目结构
 

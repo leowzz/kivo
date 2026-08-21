@@ -119,8 +119,9 @@
 - Backup：轻量导出与合并恢复、离线 Device 恢复、型号不匹配、旧全量备份导入兼容。
 - Studio UI：顶层 Tab 切换与状态保持、完整开发调试工作区、新建或复制、布局和引脚编辑、
   校验阻止保存或构建、dirty 状态、构建成功、构建失败和 busy 日志。
-- Packaging：普通 `npm run build` 和 `make helper-build` 不包含 Studio 前端、Studio
-  commands 或 `products/`。
+- Packaging：普通 `npm run build` 仍只构建普通入口；`make helper-build` 和发布流水线
+  会分别生成 Kivo 与 Kivo Product Studio 的桌面包。Studio 的 `products/` 数据仍不进入
+  普通 Kivo 安装包。
 - Makefile：验证 `make -n studio` 和 `make -n build-product` 的命令与参数。
 - 最终运行 `direnv exec . make test`、目标 Product 的实际固件构建和
   `git diff --check`。

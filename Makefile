@@ -1,4 +1,4 @@
-.PHONY: all dev build build-esp32s3 build-rp2040 build-product download-mode upload upload-esp32s3 upload-rp2040 monitor monitor-esp32s3 monitor-rp2040 require-build-id require-product validate-env-build-id require-serial test client helper studio helper-kill helper-build release
+.PHONY: all dev build build-esp32s3 build-rp2040 build-product download-mode upload upload-esp32s3 upload-rp2040 monitor monitor-esp32s3 monitor-rp2040 require-build-id require-product validate-env-build-id require-serial test client helper studio helper-kill helper-build helper-build-app helper-build-studio release
 
 ENV_FILE ?= .env
 ifeq ($(origin BUILD_ID),undefined)
@@ -119,8 +119,13 @@ studio: helper-kill
 helper-kill:
 	@$(UV_CMD) run python scripts/kill_helper.py
 
-helper-build:
+helper-build: helper-build-studio
+
+helper-build-app:
 	npm run tauri build
+
+helper-build-studio: helper-build-app
+	npm run tauri build -- --features product-studio --config src-tauri/tauri.studio.conf.json
 
 # Bump patch in .env and create annotated git tag. Override version: make release V=v1.2.3
 release:

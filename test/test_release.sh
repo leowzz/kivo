@@ -16,6 +16,7 @@ ESP32S3_MERGE_SCRIPT="$ROOT/scripts/merge_esp32s3_firmware.py"
 RELEASE_WORKFLOW="$ROOT/.github/workflows/release-windows.yml"
 WINDOWS_WORKFLOW="$ROOT/.github/workflows/windows-ci.yml"
 README="$ROOT/README.md"
+STUDIO_CONFIG="$ROOT/src-tauri/tauri.studio.conf.json"
 
 grep -Fq 'post:scripts/merge_esp32s3_firmware.py' "$PLATFORMIO_CONFIG"
 test -f "$ESP32S3_MERGE_SCRIPT"
@@ -33,6 +34,14 @@ grep -Fq 'firmware-publish:' "$RELEASE_WORKFLOW"
 grep -Fq 'needs: [release, firmware-build]' "$RELEASE_WORKFLOW"
 grep -Fq 'gh release upload "${GITHUB_REF_NAME}" release-firmware/* --clobber' "$RELEASE_WORKFLOW"
 grep -Fq 'ESP32-S3 and RP2040 firmware' "$RELEASE_WORKFLOW"
+grep -Fq 'Build Product Studio installer' "$RELEASE_WORKFLOW"
+grep -Fq 'Upload Product Studio installer' "$RELEASE_WORKFLOW"
+grep -Fq 'studio_bundle_dir:' "$RELEASE_WORKFLOW"
+grep -Fq 'Build Windows Product Studio NSIS installer' "$WINDOWS_WORKFLOW"
+grep -Fq 'helper-build-studio:' "$MAKEFILE"
+grep -Fq 'product-studio' "$MAKEFILE"
+grep -Fq '"active": true' "$STUDIO_CONFIG"
+grep -Fq 'Kivo Product Studio' "$STUDIO_CONFIG"
 grep -Fq 'python scripts/repo_version.py check "${GITHUB_REF_NAME}"' \
   "$RELEASE_WORKFLOW"
 ! grep -Fq 'config.version = tag.slice(1)' "$RELEASE_WORKFLOW"
@@ -174,9 +183,9 @@ grep -Fq -- '--firmware .pio/build/rp2040/firmware.uf2' <<<"$rp2040_upload_body"
 grep -Fq 'runtime_serial=' <<<"$rp2040_upload_body"
 test "$(grep -n -- 'scripts/upload_rp2040.py' <<<"$rp2040_upload_body" | cut -d: -f1)" -lt "$(grep -n 'verify_runtime_firmware.py' <<<"$rp2040_upload_body" | cut -d: -f1)"
 
-grep -Eq '^upload:[[:space:]]*$' "$MAKEFILE"
+grep -Eq '^upload:[[:space:]]+upload-rp2040[[:space:]]*$' "$MAKEFILE"
 upload_body="$(target_body upload)"
-grep -Fq 'exit 2' <<<"$upload_body"
+test -z "$upload_body"
 ! grep -Fq 'SERIAL=' <<<"$upload_body"
 ! grep -Eq '(upload-esp32s3|upload-rp2040|enter_download_mode|picotool)' <<<"$upload_body"
 
@@ -188,7 +197,7 @@ expected_test_commands=(
   '$(UV_CMD) run pytest test/test_firmware_target_selector.py test/test_make_upload_selection.py'
   '$(UV_CMD) run pio test -e native'
   'cargo test --manifest-path src-tauri/Cargo.toml'
-  'cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings'
+  'cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings'
   'npm test'
   'npm run build'
 )
