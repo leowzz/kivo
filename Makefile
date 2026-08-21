@@ -98,6 +98,7 @@ monitor-rp2040: helper-kill
 
 test:
 	bash test/test_release.sh
+	bash test/test_studio_bundle.sh
 	$(UV_CMD) run pytest test/test_repo_version.py test/test_release_transaction.py test/test_platformio_build_id.py
 	$(UV_CMD) run pytest test/test_upload_targeting.py test/test_rp2040_upload.py
 	$(UV_CMD) run pytest test/test_firmware_target_selector.py test/test_make_upload_selection.py

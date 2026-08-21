@@ -69,6 +69,7 @@ grep -Fq 'version=vX.Y.Z' "$README"
 grep -Fq 'test/test_repo_version.py' "$MAKEFILE"
 grep -Fq 'test/test_release_transaction.py' "$MAKEFILE"
 grep -Fq 'test/test_platformio_build_id.py' "$MAKEFILE"
+grep -Fq 'test/test_studio_bundle.sh' "$MAKEFILE"
 grep -Fq '## 刷入固件' "$README"
 grep -Fq 'kivo-vX.Y.Z-esp32s3.bin' "$README"
 grep -Fq 'kivo-vX.Y.Z-rp2040.uf2' "$README"
@@ -197,6 +198,7 @@ test -z "$upload_body"
 test_body="$(target_body test)"
 expected_test_commands=(
   'bash test/test_release.sh'
+  'bash test/test_studio_bundle.sh'
   '$(UV_CMD) run pytest test/test_repo_version.py test/test_release_transaction.py test/test_platformio_build_id.py'
   '$(UV_CMD) run pytest test/test_upload_targeting.py test/test_rp2040_upload.py'
   '$(UV_CMD) run pytest test/test_firmware_target_selector.py test/test_make_upload_selection.py'
