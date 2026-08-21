@@ -42,7 +42,7 @@ build-rp2040: require-build-id
 	$(RP2040_BUILD)
 
 build-product: require-build-id require-product
-	KIVO_REPOSITORY_ROOT="$$(pwd -P)" KIVO_FIRMWARE_BUILD_ID="$(BUILD_ID)" cargo run --manifest-path src-tauri/Cargo.toml --features product-studio --bin kivo-product -- build "$(PRODUCT)"
+	KIVO_REPOSITORY_ROOT="$$(pwd -P)" KIVO_FIRMWARE_BUILD_ID="$(BUILD_ID)" cargo run --manifest-path src-tauri/Cargo.toml --features product-studio,product-cli --bin kivo-product -- build "$(PRODUCT)"
 
 download-mode: require-serial
 	$(UV_CMD) run python scripts/enter_download_mode.py --serial "$(SERIAL)"
