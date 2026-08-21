@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
@@ -7,9 +8,36 @@ import StudioApp, { HardwareEditor, LayoutEditor } from "./StudioApp";
 import type { ProductDefinition, StudioBoard, StudioSnapshot } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+test("prompts for a Kivo repository when the packaged Studio has none", async () => {
+  const snapshot: StudioSnapshot = {
+    repoRoot: "/repo",
+    boards: [board],
+    products: [],
+  };
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "studio_get_snapshot") {
+      throw { code: "studio_repository_not_configured" };
+    }
+    if (command === "studio_select_repository") return snapshot;
+    throw new Error(`Unexpected command: ${command}`);
+  });
+  vi.mocked(open).mockResolvedValue("/repo");
+  const user = userEvent.setup();
+
+  render(<StudioApp />);
+
+  await user.click(await screen.findByRole("button", { name: "选择 Kivo 仓库" }));
+  expect(open).toHaveBeenCalledWith({ directory: true, multiple: false });
+  expect(invoke).toHaveBeenCalledWith("studio_select_repository", {
+    repositoryRoot: "/repo",
+  });
+  expect(await screen.findByText("/repo")).toBeInTheDocument();
 });
 
 const board: StudioBoard = {

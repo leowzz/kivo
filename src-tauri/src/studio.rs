@@ -2,14 +2,15 @@ use crate::{
     hardware::BOARD_PROFILES,
     product::{NormalizedProductDefinition, ProductDefinition},
     product_build::{ProductBuildOutput, build_product_cancellable, product_path},
+    storage::atomic_write,
     workspace::AppError,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     env, fs,
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -18,10 +19,16 @@ use std::{
 use tauri::Manager;
 
 pub(super) struct StudioState {
-    repo_root: PathBuf,
+    repo_root: RwLock<Option<PathBuf>>,
+    settings_path: PathBuf,
     build_active: Arc<AtomicBool>,
     build_cancelled: Arc<AtomicBool>,
     closing: Arc<AtomicBool>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct StudioSettings {
+    repository_root: PathBuf,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -65,6 +72,42 @@ struct BuildGuard(Arc<AtomicBool>);
 impl Drop for BuildGuard {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
+    }
+}
+
+fn validate_repository_root(path: &Path) -> Result<PathBuf, AppError> {
+    let canonical = path.canonicalize().map_err(|error| {
+        AppError::new("invalid_studio_repository").with_detail(error.to_string())
+    })?;
+    if !canonical.join("src-tauri/Cargo.toml").is_file()
+        || !canonical.join("platformio.ini").is_file()
+    {
+        return Err(AppError::new("invalid_studio_repository"));
+    }
+    Ok(canonical)
+}
+
+fn saved_repository_root(settings_path: &Path) -> Option<PathBuf> {
+    let settings = fs::read(settings_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<StudioSettings>(&bytes).ok())?;
+    validate_repository_root(&settings.repository_root).ok()
+}
+
+fn configured_repository_root(settings_path: &Path) -> Option<PathBuf> {
+    env::var_os("KIVO_REPOSITORY_ROOT")
+        .map(PathBuf::from)
+        .and_then(|path| validate_repository_root(&path).ok())
+        .or_else(|| saved_repository_root(settings_path))
+}
+
+impl StudioState {
+    fn repository_root(&self) -> Result<PathBuf, AppError> {
+        self.repo_root
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+            .ok_or_else(|| AppError::new("studio_repository_not_configured"))
     }
 }
 
@@ -117,9 +160,9 @@ fn list_products(repo_root: &Path) -> Result<Vec<StudioProductSummary>, AppError
     Ok(products)
 }
 
-fn snapshot(state: &StudioState) -> Result<StudioSnapshot, AppError> {
+fn snapshot(repo_root: &Path) -> Result<StudioSnapshot, AppError> {
     Ok(StudioSnapshot {
-        products: list_products(&state.repo_root)?,
+        products: list_products(repo_root)?,
         boards: BOARD_PROFILES
             .iter()
             .map(|board| StudioBoardSummary {
@@ -133,7 +176,7 @@ fn snapshot(state: &StudioState) -> Result<StudioSnapshot, AppError> {
                 supports_oled: board.supports_oled,
             })
             .collect(),
-        repo_root: state.repo_root.clone(),
+        repo_root: repo_root.to_path_buf(),
     })
 }
 
@@ -141,7 +184,8 @@ fn snapshot(state: &StudioState) -> Result<StudioSnapshot, AppError> {
 pub(super) fn studio_get_snapshot(
     state: tauri::State<'_, StudioState>,
 ) -> Result<StudioSnapshot, AppError> {
-    snapshot(&state)
+    let repo_root = state.repository_root()?;
+    snapshot(&repo_root)
 }
 
 #[tauri::command]
@@ -149,8 +193,8 @@ pub(super) fn studio_load_product(
     state: tauri::State<'_, StudioState>,
     product_version_id: String,
 ) -> Result<ProductDefinition, AppError> {
-    let definition =
-        ProductDefinition::load(&product_path(&state.repo_root, &product_version_id)?)?;
+    let repo_root = state.repository_root()?;
+    let definition = ProductDefinition::load(&product_path(&repo_root, &product_version_id)?)?;
     (definition.product.product_version_id == product_version_id)
         .then_some(definition)
         .ok_or_else(|| AppError::new("product_directory_id_mismatch"))
@@ -169,8 +213,9 @@ pub(super) fn studio_save_product(
     definition: ProductDefinition,
     create: bool,
 ) -> Result<StudioSnapshot, AppError> {
-    save_product(&state.repo_root, &definition, create)?;
-    snapshot(&state)
+    let repo_root = state.repository_root()?;
+    save_product(&repo_root, &definition, create)?;
+    snapshot(&repo_root)
 }
 
 fn save_product(
@@ -201,8 +246,9 @@ pub(super) fn studio_copy_product(
     source_product_version_id: String,
     definition: ProductDefinition,
 ) -> Result<StudioSnapshot, AppError> {
-    copy_product(&state.repo_root, &source_product_version_id, &definition)?;
-    snapshot(&state)
+    let repo_root = state.repository_root()?;
+    copy_product(&repo_root, &source_product_version_id, &definition)?;
+    snapshot(&repo_root)
 }
 
 fn copy_product(
@@ -222,8 +268,9 @@ pub(super) fn studio_delete_product(
     state: tauri::State<'_, StudioState>,
     product_version_id: String,
 ) -> Result<StudioSnapshot, AppError> {
-    delete_product(&state.repo_root, &product_version_id)?;
-    snapshot(&state)
+    let repo_root = state.repository_root()?;
+    delete_product(&repo_root, &product_version_id)?;
+    snapshot(&repo_root)
 }
 
 fn delete_product(repo_root: &Path, product_version_id: &str) -> Result<(), AppError> {
@@ -251,7 +298,7 @@ pub(super) async fn studio_build_product(
     }
     let _guard = BuildGuard(Arc::clone(&state.build_active));
     state.build_cancelled.store(false, Ordering::Release);
-    let repo_root = state.repo_root.clone();
+    let repo_root = state.repository_root()?;
     let cancelled = Arc::clone(&state.build_cancelled);
     let build_id = env::var("KIVO_FIRMWARE_BUILD_ID").unwrap_or_else(|_| "dev".into());
     tauri::async_runtime::spawn_blocking(move || {
@@ -272,21 +319,49 @@ pub(super) async fn studio_build_product(
     .map_err(|error| AppError::new("product_build_task_failed").with_detail(error.to_string()))?
 }
 
-pub(super) fn repository_root() -> PathBuf {
-    env::var_os("KIVO_REPOSITORY_ROOT")
-        .map(PathBuf::from)
-        .and_then(|path| path.canonicalize().ok())
-        .filter(|path| path.join("src-tauri/Cargo.toml").is_file())
-        .expect("KIVO_REPOSITORY_ROOT must point to the Kivo repository")
+#[tauri::command]
+pub(super) fn studio_select_repository(
+    state: tauri::State<'_, StudioState>,
+    repository_root: String,
+) -> Result<StudioSnapshot, AppError> {
+    let repo_root = validate_repository_root(Path::new(&repository_root))?;
+    let settings = serde_json::to_vec_pretty(&StudioSettings {
+        repository_root: repo_root.clone(),
+    })
+    .map_err(|error| AppError::new("save_studio_settings_failed").with_detail(error.to_string()))?;
+    let settings_directory = state
+        .settings_path
+        .parent()
+        .ok_or_else(|| AppError::new("save_studio_settings_failed"))?;
+    fs::create_dir_all(settings_directory).map_err(|error| {
+        AppError::new("save_studio_settings_failed").with_detail(error.to_string())
+    })?;
+    atomic_write(&state.settings_path, &settings)
+        .map_err(|error| AppError::new("save_studio_settings_failed").with_detail(error))?;
+    *state
+        .repo_root
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(repo_root.clone());
+    snapshot(&repo_root)
 }
 
-pub(super) fn setup(app: &mut tauri::App, repo_root: PathBuf) {
+pub(super) fn setup(app: &mut tauri::App) -> Result<Option<PathBuf>, AppError> {
+    let settings_path = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| {
+            AppError::new("resolve_studio_settings_directory_failed").with_detail(error.to_string())
+        })?
+        .join("studio-settings.json");
+    let repo_root = configured_repository_root(&settings_path);
     app.manage(StudioState {
-        repo_root,
+        repo_root: RwLock::new(repo_root.clone()),
+        settings_path,
         build_active: Arc::new(AtomicBool::new(false)),
         build_cancelled: Arc::new(AtomicBool::new(false)),
         closing: Arc::new(AtomicBool::new(false)),
     });
+    Ok(repo_root)
 }
 
 pub(super) fn cancel_active_build_for_shutdown(app: &tauri::AppHandle) -> bool {
@@ -324,6 +399,51 @@ fn begin_cancelled_shutdown(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn repository_fixture() -> tempfile::TempDir {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join("src-tauri")).unwrap();
+        fs::write(directory.path().join("src-tauri/Cargo.toml"), "[package]").unwrap();
+        fs::write(directory.path().join("platformio.ini"), "[platformio]").unwrap();
+        directory
+    }
+
+    #[test]
+    fn repository_validation_requires_kivo_build_files() {
+        let invalid = tempfile::tempdir().unwrap();
+        assert_eq!(
+            validate_repository_root(invalid.path()).unwrap_err().code,
+            "invalid_studio_repository"
+        );
+
+        let valid = repository_fixture();
+        assert_eq!(
+            validate_repository_root(valid.path()).unwrap(),
+            valid.path().canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn saved_repository_is_loaded_only_while_it_remains_valid() {
+        let repository = repository_fixture();
+        let settings_directory = tempfile::tempdir().unwrap();
+        let settings_path = settings_directory.path().join("studio-settings.json");
+        fs::write(
+            &settings_path,
+            serde_json::to_vec(&StudioSettings {
+                repository_root: repository.path().to_path_buf(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            saved_repository_root(&settings_path).unwrap(),
+            repository.path().canonicalize().unwrap()
+        );
+        fs::remove_file(repository.path().join("platformio.ini")).unwrap();
+        assert!(saved_repository_root(&settings_path).is_none());
+    }
 
     fn yaml(id: &str, revision: u16, name: &str) -> String {
         format!(

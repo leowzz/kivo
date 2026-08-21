@@ -1152,16 +1152,13 @@ fn get_startup_failure(state: tauri::State<'_, StartupState>) -> Option<StartupF
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    #[cfg(feature = "product-studio")]
-    let studio_repo_root = studio::repository_root();
-
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .setup(move |app| {
-            #[cfg(feature = "product-studio")]
-            studio::setup(app, studio_repo_root.clone());
+        .setup(|app| {
             app.manage(StartupState::default());
             let result: SetupResult = (|| {
+                #[cfg(feature = "product-studio")]
+                let studio_repo_root = studio::setup(app)?;
                 #[cfg(feature = "product-studio")]
                 let config_directory = app.path().config_dir()?.join(MAIN_APP_IDENTIFIER);
                 #[cfg(not(feature = "product-studio"))]
@@ -1182,7 +1179,14 @@ pub fn run() {
                     serde_json::json!({"version": env!("CARGO_PKG_VERSION")}),
                 ));
                 #[cfg(feature = "product-studio")]
-                let bundled_profiles = studio_repo_root.join("models/prod");
+                let bundled_profiles = studio_repo_root.map_or_else(
+                    || {
+                        app.path()
+                            .resource_dir()
+                            .map(|directory| directory.join("models"))
+                    },
+                    |repo_root| Ok(repo_root.join("models/prod")),
+                )?;
                 #[cfg(not(feature = "product-studio"))]
                 let bundled_profiles = app.path().resource_dir()?.join("models");
                 let workspace = match Workspace::load(&config_directory, &bundled_profiles) {
@@ -1385,6 +1389,7 @@ pub fn run() {
         preview_backup,
         export_backup,
         restore_backup,
+        studio::studio_select_repository,
         studio::studio_get_snapshot,
         studio::studio_load_product,
         studio::studio_validate_product,

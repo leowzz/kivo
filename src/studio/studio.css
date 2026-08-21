@@ -123,6 +123,12 @@
 .studio-empty, .studio-loading { height: 100%; display: grid; place-content: center; justify-items: center; gap: 10px; color: var(--gray-9); }
 .studio-empty { grid-row: 2 / -1; }
 .studio-loading { display: flex; align-items: center; }
+.studio-repository-setup { height: 100%; display: grid; place-content: center; justify-items: center; gap: 10px; padding: 24px; color: var(--gray-10); text-align: center; }
+.studio-repository-setup > svg { color: var(--green-9); }
+.studio-repository-setup strong { color: var(--gray-12); font-size: var(--text-17); }
+.studio-repository-setup p { margin: 0 0 6px; font-size: var(--text-12); }
+.studio-repository-setup button { height: 34px; display: inline-flex; align-items: center; gap: 7px; padding: 0 12px; border: 1px solid var(--green-9); border-radius: var(--radius-6); background: var(--green-9); color: white; font-size: var(--text-12); font-weight: var(--weight-semibold); }
+.studio-repository-setup > span { max-width: 520px; color: var(--red-text); font-size: var(--text-11); }
 .modal-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(26, 33, 30, .32); }
 .studio-modal { width: min(560px, calc(100vw - 32px)); border: 1px solid var(--border-default); border-radius: var(--radius-8); background: white; box-shadow: var(--shadow-3); }
 .studio-modal > header { height: 48px; display: flex; align-items: center; justify-content: space-between; padding: 0 14px 0 18px; border-bottom: 1px solid var(--border-subtle); font-size: var(--text-14); }

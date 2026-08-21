@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   Box,
   Braces,
@@ -8,6 +9,7 @@ import {
   CirclePlus,
   CircuitBoard,
   Copy,
+  FolderOpen,
   Hammer,
   KeyRound,
   LayoutGrid,
@@ -49,6 +51,12 @@ function errorText(error: unknown) {
     return value.detail ? `${value.code}: ${value.detail}` : value.code;
   }
   return String(error);
+}
+
+function errorCode(error: unknown) {
+  return typeof error === "object" && error && "code" in error
+    ? String((error as StudioError).code)
+    : null;
 }
 
 function clone<T>(value: T): T {
@@ -336,6 +344,8 @@ export default function StudioApp() {
   const [modal, setModal] = useState<CreateMode | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [fatal, setFatal] = useState<string | null>(null);
+  const [repositoryRequired, setRepositoryRequired] = useState(false);
+  const [selectingRepository, setSelectingRepository] = useState(false);
 
   const dirty = definition ? JSON.stringify(definition) !== saved : false;
   const conflictingProduct = definition && selectedId !== definition.product.product_version_id
@@ -353,12 +363,37 @@ export default function StudioApp() {
   const refresh = useCallback(async () => {
     const next = await invoke<StudioSnapshot>("studio_get_snapshot");
     setSnapshot(next);
+    setRepositoryRequired(false);
     return next;
   }, []);
 
   useEffect(() => {
-    refresh().catch((error) => setFatal(errorText(error)));
+    refresh().catch((error) => {
+      if (errorCode(error) === "studio_repository_not_configured") {
+        setRepositoryRequired(true);
+        return;
+      }
+      setFatal(errorText(error));
+    });
   }, [refresh]);
+
+  const selectRepository = async () => {
+    setSelectingRepository(true);
+    try {
+      const path = await open({ directory: true, multiple: false });
+      if (typeof path !== "string") return;
+      const next = await invoke<StudioSnapshot>("studio_select_repository", {
+        repositoryRoot: path,
+      });
+      setSnapshot(next);
+      setRepositoryRequired(false);
+      setFatal(null);
+    } catch (error) {
+      setFatal(errorText(error));
+    } finally {
+      setSelectingRepository(false);
+    }
+  };
 
   const selectProduct = useCallback(async (id: string) => {
     if (dirty && !window.confirm("放弃未保存的修改？")) return;
@@ -530,6 +565,22 @@ export default function StudioApp() {
   };
 
   if (!snapshot) {
+    if (repositoryRequired) {
+      return (
+        <div className="studio-repository-setup">
+          <FolderOpen size={28} />
+          <strong>选择 Kivo 仓库</strong>
+          <p>请选择包含产品定义和固件源码的 Kivo 仓库。</p>
+          <button type="button" onClick={selectRepository} disabled={selectingRepository}>
+            {selectingRepository
+              ? <LoaderCircle className="spin" size={16} />
+              : <FolderOpen size={16} />}
+            选择 Kivo 仓库
+          </button>
+          {fatal ? <span role="alert">{fatal}</span> : null}
+        </div>
+      );
+    }
     return <div className="studio-loading"><LoaderCircle className="spin" /> {fatal ?? "Loading"}</div>;
   }
 
