@@ -449,6 +449,46 @@ test("keeps the client surface focused on devices and editable actions", async (
   );
 });
 
+test("exposes configuration backup and restore in the entry app", async () => {
+  const user = userEvent.setup();
+  vi.setSystemTime(new Date(2026, 7, 21, 12, 11, 0));
+  vi.mocked(save).mockResolvedValue("/tmp/kivo-backup.yaml");
+  vi.mocked(open).mockResolvedValue("/tmp/kivo-backup.yaml");
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "preview_backup") {
+      return {
+        kind: "product_devices",
+        profileCount: 0,
+        buttonCount: 0,
+        hardwareBindingCount: 0,
+        actionCount: 2,
+        deviceCount: 1,
+        assignmentCount: 0,
+        metricRowCount: 0,
+        activityCount: 0,
+      };
+    }
+    return structuredClone(currentSnapshot);
+  });
+
+  render(<App client />);
+  await screen.findByRole("heading", { name: "我的键盘" });
+
+  await user.click(screen.getByRole("button", { name: "备份配置文件" }));
+  expect(save).toHaveBeenCalledWith(expect.objectContaining({
+    defaultPath: "kivo-backup-20260821-1211.yaml",
+  }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("export_backup", {
+    path: "/tmp/kivo-backup.yaml",
+  }));
+
+  await user.click(screen.getByRole("button", { name: "恢复配置文件" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("preview_backup", {
+    path: "/tmp/kivo-backup.yaml",
+  }));
+  expect(await screen.findByRole("dialog", { name: "恢复设备行为备份" })).toBeInTheDocument();
+});
+
 test("fills default trigger settings when a stale profile omits them", async () => {
   const staleProfile = structuredClone(currentSnapshot.deviceProfiles[0]) as Omit<DeviceProfile, "trigger_settings"> & {
     trigger_settings?: DeviceProfile["trigger_settings"];

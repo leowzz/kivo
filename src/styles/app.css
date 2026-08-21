@@ -16,7 +16,7 @@
 /* ===== 顶栏 48px ===== */
 .topbar { display: grid; grid-template-columns: 180px minmax(280px, 1fr) auto auto; align-items: center; border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); }
 .topbar.is-embedded { grid-template-columns: minmax(280px, 1fr) auto auto; }
-.topbar.is-client { grid-template-columns: 180px minmax(240px, 1fr) auto; }
+.topbar.is-client { grid-template-columns: 180px minmax(240px, 1fr) auto auto; }
 .brand { height: 48px; display: flex; align-items: center; gap: 9px; padding: 0 var(--space-16); }
 .brand img { width: 26px; height: 26px; border-radius: var(--radius-6); }
 .brand h1 { margin: 0; font-size: var(--text-17); font-weight: var(--weight-bold); letter-spacing: 0; }
@@ -40,6 +40,10 @@
 .topbar-nav button { min-height: 32px; display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: var(--radius-6); padding: 5px 9px; color: var(--gray-10); background: transparent; font-size: var(--text-12); }
 .topbar-nav button:hover { background: var(--gray-3); }
 .topbar-nav button.is-active { color: var(--green-11); background: var(--green-3); font-weight: var(--weight-semibold); }
+
+.client-transfer-actions { display: flex; align-items: center; gap: 4px; padding: 0 var(--space-8); }
+.client-transfer-actions button { min-height: 32px; display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: var(--radius-6); padding: 5px 9px; color: var(--gray-10); background: transparent; font-size: var(--text-12); }
+.client-transfer-actions button:hover { background: var(--gray-3); }
 
 .save-state { min-width: 130px; display: flex; align-items: center; justify-content: flex-end; padding-right: var(--space-16); color: var(--gray-9); font-size: var(--text-12); }
 .save-state.is-saving::before { content: ""; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--gray-8); animation: pulse-dot 1.2s ease-in-out infinite; }
@@ -136,6 +140,7 @@
   .device-summary { justify-self: end; gap: 5px; padding: 0 var(--space-12); font-size: var(--text-11); }
   .device-summary span { min-width: auto; }
   .topbar-nav { grid-column: 1 / -1; justify-content: flex-start; padding: 4px var(--space-12); border-top: 1px solid var(--border-subtle); }
+  .client-transfer-actions { grid-column: 1 / -1; justify-content: flex-start; padding: 4px var(--space-12); border-top: 1px solid var(--border-subtle); }
   .save-state { grid-column: 1 / -1; min-height: 0; padding: 0 var(--space-12) 6px; }
   .product-workspace { display: block; }
   .sidebar { display: grid; grid-template-columns: 1fr; border-right: 0; border-bottom: 1px solid var(--border-subtle); }

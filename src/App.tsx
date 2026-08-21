@@ -80,6 +80,11 @@ function errorMessage(error: unknown) {
   return String(error);
 }
 
+function defaultBackupFilename(now = new Date()) {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `kivo-backup-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}.yaml`;
+}
+
 function isValidDraft(
   profile: DeviceProfile | undefined,
   boardProfiles: AppSnapshot["boardProfiles"],
@@ -1000,6 +1005,15 @@ export default function App({
     setConfirmation({ kind: "restore", path, preview });
   });
 
+  const exportBackup = () => run(t(language, "error.export"), async () => {
+    await autosave.flush();
+    const path = await saveFile({
+      defaultPath: defaultBackupFilename(),
+      filters: [{ name: "Kivo", extensions: ["yaml"] }],
+    });
+    if (path) await invoke("export_backup", { path });
+  });
+
   const exportProfile = useCallback((profile: DeviceProfile) => run(t(language, "error.export"), async () => {
     await autosave.flush();
     const path = await saveFile({
@@ -1085,6 +1099,16 @@ export default function App({
           <b aria-hidden="true">{" · "}</b>
           <span className="summary-offline"><i />{summary.offline} {t(language, "device.offline")}</span>
         </div>
+        {client && (
+          <div className="client-transfer-actions" aria-label={t(language, "nav.data")}>
+            <button type="button" title={t(language, "nav.backupConfig")} onClick={() => void exportBackup()}>
+              <DatabaseBackup size={16} />{t(language, "nav.backupConfig")}
+            </button>
+            <button type="button" title={t(language, "nav.restoreConfig")} onClick={() => void chooseRestore()}>
+              <ArchiveRestore size={16} />{t(language, "nav.restoreConfig")}
+            </button>
+          </div>
+        )}
         {!client && <nav className="topbar-nav" aria-label={t(language, "nav.primary")}>
           <button
             className={view === "devices" ? "is-active" : ""}
@@ -1168,11 +1192,7 @@ export default function App({
                   <h3>{t(language, "data.groupTransfer")}</h3>
                   <div className="data-menu">
                     <button type="button" onClick={() => void chooseImport()}><FileInput size={16} />{t(language, "nav.import")}</button>
-                    <button type="button" onClick={() => void run(t(language, "error.export"), async () => {
-                      await autosave.flush();
-                      const path = await saveFile({ defaultPath: "kivo-backup.yaml", filters: [{ name: "Kivo", extensions: ["yaml"] }] });
-                      if (path) await invoke("export_backup", { path });
-                    })}><DatabaseBackup size={16} />{t(language, "nav.backup")}</button>
+                    <button type="button" onClick={() => void exportBackup()}><DatabaseBackup size={16} />{t(language, "nav.backup")}</button>
                     <button type="button" onClick={() => void chooseRestore()}><ArchiveRestore size={16} />{t(language, "nav.restore")}</button>
                   </div>
                 </section>
@@ -1272,7 +1292,7 @@ export default function App({
         />
       )}
 
-      {!client && confirmation && (
+      {confirmation && (
         <ConfirmDialog
           title={confirmation.kind === "restore"
             ? t(language, confirmation.preview.kind === "product_devices"
