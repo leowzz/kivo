@@ -6,7 +6,8 @@ use crate::{
     product::ProductDefinition,
     profile::{
         ButtonAction, CreateDeviceProfileRequest, DeviceProfile, HardwareProfile, InputSource,
-        PROFILE_SCHEMA_VERSION, TriggerActions, TriggerSettings, blank_device_profile,
+        PROFILE_SCHEMA_VERSION, SnapshotMetadata, TriggerActions, TriggerSettings,
+        blank_device_profile,
     },
     storage::atomic_write,
 };
@@ -101,6 +102,8 @@ pub struct DeviceRecord {
 #[serde(deny_unknown_fields)]
 pub struct ProductDeviceConfig {
     pub product_version_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_metadata: Option<SnapshotMetadata>,
     #[serde(default)]
     pub trigger_settings: TriggerSettings,
     #[serde(default)]
@@ -204,6 +207,8 @@ pub enum BackupKind {
 pub struct UserBackupDevice {
     pub device_id: DeviceId,
     pub product_version_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_metadata: Option<SnapshotMetadata>,
     #[serde(default)]
     pub trigger_settings: TriggerSettings,
     #[serde(default)]
@@ -576,6 +581,7 @@ impl Workspace {
         let id = next_profile_id(&self.profiles, &name, &fallback);
         profile.profile.id = id.clone();
         profile.profile.name = name;
+        profile.snapshot_metadata = Some(SnapshotMetadata::new());
         profile.validate()?;
 
         let path = self.profile_directory().join(format!("{id}.yaml"));
@@ -717,6 +723,7 @@ impl Workspace {
                 .expect("device was enrolled")
                 .product_config = Some(ProductDeviceConfig {
                 product_version_id: definition.product.product_version_id.clone(),
+                snapshot_metadata: Some(SnapshotMetadata::new()),
                 trigger_settings: TriggerSettings::default(),
                 actions: BTreeMap::new(),
             });
@@ -730,10 +737,17 @@ impl Workspace {
         &mut self,
         id: &DeviceId,
         definition: &ProductDefinition,
-        config: ProductDeviceConfig,
+        mut config: ProductDeviceConfig,
     ) -> Result<(), AppError> {
         if config.product_version_id != definition.product.product_version_id {
             return Err(AppError::new("product_version_id_mismatch"));
+        }
+        if config.snapshot_metadata.is_none() {
+            config.snapshot_metadata = self
+                .device(id)?
+                .product_config
+                .as_ref()
+                .and_then(|current| current.snapshot_metadata.clone());
         }
         definition
             .as_runtime_profile(config.trigger_settings.clone(), config.actions.clone())
@@ -747,11 +761,15 @@ impl Workspace {
         target_id: &DeviceId,
         definition: &ProductDefinition,
     ) -> Result<(), AppError> {
-        let config = self
-            .device(source_id)?
+        let source = self.device(source_id)?.clone();
+        let mut config = source
             .product_config
             .clone()
             .ok_or_else(|| AppError::new("source_product_config_missing"))?;
+        config.snapshot_metadata = Some(SnapshotMetadata::from_device(
+            source.device_id.as_str(),
+            source.name,
+        ));
         self.save_product_device_config(target_id, definition, config)
     }
 
@@ -1005,6 +1023,7 @@ impl Workspace {
                     .map(|config| UserBackupDevice {
                         device_id: device.device_id.clone(),
                         product_version_id: config.product_version_id.clone(),
+                        snapshot_metadata: config.snapshot_metadata.clone(),
                         trigger_settings: config.trigger_settings.clone(),
                         actions: config.actions.clone(),
                     })
@@ -1058,6 +1077,7 @@ impl Workspace {
         for backup_device in backup.devices {
             let config = ProductDeviceConfig {
                 product_version_id: backup_device.product_version_id,
+                snapshot_metadata: backup_device.snapshot_metadata,
                 trigger_settings: backup_device.trigger_settings,
                 actions: backup_device.actions,
             };
@@ -1852,6 +1872,7 @@ fn migrate_schema_v1_model(legacy: LegacyModelConfig) -> Result<DeviceProfile, A
     let profile = DeviceProfile {
         schema_version: PROFILE_SCHEMA_VERSION,
         profile: legacy.model,
+        snapshot_metadata: None,
         trigger_settings: TriggerSettings::default(),
         hardware_profiles: vec![HardwareProfile {
             id: board.id.into(),
@@ -1967,6 +1988,7 @@ fn migrate_schema_v2_profile(legacy: SchemaV2DeviceProfile) -> DeviceProfile {
     DeviceProfile {
         schema_version: PROFILE_SCHEMA_VERSION,
         profile: legacy.profile,
+        snapshot_metadata: None,
         trigger_settings: TriggerSettings::default(),
         hardware_profiles: legacy.hardware_profiles,
         actions: legacy
@@ -2105,6 +2127,7 @@ mod tests {
         DeviceProfile {
             schema_version: PROFILE_SCHEMA_VERSION,
             profile: layout(),
+            snapshot_metadata: None,
             trigger_settings: TriggerSettings::default(),
             hardware_profiles: vec![
                 hardware("esp-primary", crate::hardware::YD_ESP32_S3_BOARD_ID),
@@ -3876,37 +3899,113 @@ actions: {}
     }
 
     #[test]
-    fn bundled_product_profile_is_valid_v3_yaml() {
+    fn bundled_product_profiles_are_valid_v3_yaml() {
         let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../models/prod");
         let profiles = load_bundled_profiles(&directory).unwrap();
-        assert_eq!(profiles.len(), 1);
-        let profile = &profiles[0];
-        assert_eq!(profile.profile.id, "key9");
-        assert_eq!(profile.hardware_profiles.len(), 1);
-        let hardware = &profile.hardware_profiles[0];
-        assert_eq!(hardware.id, "hardware");
+        assert_eq!(profiles.len(), 4);
         assert_eq!(
-            hardware.board_profile_id,
-            crate::hardware::YD_RP2040_BOARD_ID
+            profiles
+                .iter()
+                .map(|profile| profile.profile.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "creator-workspace",
+                "daily-shortcuts",
+                "key9",
+                "phone-numeric-terminal",
+            ]
         );
         assert_eq!(
-            hardware.inputs,
-            vec![InputSource::Direct {
-                id: "direct-1".into(),
-                keys: BTreeMap::from([
-                    ("K1".into(), 1),
-                    ("K2".into(), 2),
-                    ("K3".into(), 3),
-                    ("K4".into(), 4),
-                    ("K5".into(), 5),
-                    ("K6".into(), 6),
-                    ("K7".into(), 7),
-                    ("K8".into(), 8),
-                    ("K9".into(), 9),
-                ]),
-            }]
+            profiles
+                .iter()
+                .map(|profile| profile.profile.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "Creator Workspace",
+                "Daily Shortcuts",
+                "key9",
+                "Phone Numeric Terminal",
+            ]
         );
-        assert!(profile.actions.is_empty());
+
+        for profile in &profiles {
+            profile.validate().unwrap();
+            assert_eq!(profile.schema_version, PROFILE_SCHEMA_VERSION);
+            assert_eq!(profile.profile.groups.len(), 3);
+            assert_eq!(
+                profile
+                    .profile
+                    .groups
+                    .iter()
+                    .flat_map(|group| group.buttons.iter())
+                    .map(|button| button.id.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["K1", "K2", "K3", "K4", "K5", "K6", "K7", "K8", "K9"]
+            );
+            assert_eq!(profile.hardware_profiles.len(), 2);
+            assert_eq!(
+                profile
+                    .hardware_profiles
+                    .iter()
+                    .map(|hardware| hardware.id.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["hardware", "esp-hardware"]
+            );
+            assert_eq!(
+                profile
+                    .hardware_profiles
+                    .iter()
+                    .map(|hardware| hardware.board_profile_id.as_str())
+                    .collect::<Vec<_>>(),
+                vec![
+                    crate::hardware::YD_RP2040_BOARD_ID,
+                    crate::hardware::YD_ESP32_S3_BOARD_ID,
+                ]
+            );
+            for hardware in &profile.hardware_profiles {
+                assert_eq!(
+                    hardware.inputs,
+                    vec![InputSource::Direct {
+                        id: "direct-1".into(),
+                        keys: BTreeMap::from([
+                            ("K1".into(), 1),
+                            ("K2".into(), 2),
+                            ("K3".into(), 3),
+                            ("K4".into(), 4),
+                            ("K5".into(), 5),
+                            ("K6".into(), 6),
+                            ("K7".into(), 7),
+                            ("K8".into(), 8),
+                            ("K9".into(), 9),
+                        ]),
+                    }]
+                );
+            }
+        }
+
+        assert!(
+            profiles
+                .iter()
+                .find(|profile| profile.profile.id == "key9")
+                .unwrap()
+                .actions
+                .is_empty()
+        );
+        for id in [
+            "creator-workspace",
+            "daily-shortcuts",
+            "phone-numeric-terminal",
+        ] {
+            assert!(
+                !profiles
+                    .iter()
+                    .find(|profile| profile.profile.id == id)
+                    .unwrap()
+                    .actions
+                    .is_empty(),
+                "starter profile {id} must include an example action"
+            );
+        }
     }
 
     #[test]
@@ -3939,6 +4038,7 @@ actions: {}
                 &definition,
                 ProductDeviceConfig {
                     product_version_id: "key-rp-k3-r01".into(),
+                    snapshot_metadata: None,
                     trigger_settings: TriggerSettings {
                         long_press_ms: 725,
                         double_press_ms: 260,
@@ -4010,6 +4110,7 @@ actions: {}
                 devices: vec![UserBackupDevice {
                     device_id: device.clone(),
                     product_version_id: "key-rp-k3-r01".into(),
+                    snapshot_metadata: None,
                     trigger_settings: TriggerSettings::default(),
                     actions: BTreeMap::from([(
                         "UNKNOWN".into(),
@@ -4073,6 +4174,7 @@ actions: {}
         }
         let first_config = ProductDeviceConfig {
             product_version_id: "key-rp-k3-r01".into(),
+            snapshot_metadata: None,
             trigger_settings: TriggerSettings::default(),
             actions: BTreeMap::from([(
                 "A".into(),
@@ -4096,9 +4198,21 @@ actions: {}
         workspace
             .copy_product_device_config(&first, &second, &definition)
             .unwrap();
+        let copied = workspace
+            .device(&second)
+            .unwrap()
+            .product_config
+            .as_ref()
+            .unwrap();
+        assert_eq!(copied.product_version_id, first_config.product_version_id);
+        assert_eq!(copied.trigger_settings, first_config.trigger_settings);
+        assert_eq!(copied.actions, first_config.actions);
+        let metadata = copied.snapshot_metadata.as_ref().unwrap();
+        assert_eq!(metadata.source_device_id.as_deref(), Some(first.as_str()));
         assert_eq!(
-            workspace.device(&second).unwrap().product_config.as_ref(),
-            Some(&first_config)
+            metadata.source_device_name.as_deref(),
+            Some("YD-RP2040 · 123456")
         );
+        assert!(metadata.created_at > 0);
     }
 }

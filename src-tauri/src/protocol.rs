@@ -985,6 +985,18 @@ impl ActionSequence {
                 Some(ButtonAction::Paste { .. })
             )
     }
+
+    pub fn awaiting_step(&self) -> Option<ActionStep> {
+        let step = self.awaiting?;
+        Some(ActionStep {
+            run_id: self.run_id,
+            button: self.button.clone(),
+            trigger: self.trigger,
+            step,
+            total: u16::try_from(self.actions.len()).ok()?,
+            action: self.actions.get(self.next)?.clone(),
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1155,6 +1167,7 @@ mod tests {
                     ],
                 }],
             },
+            snapshot_metadata: None,
             trigger_settings: TriggerSettings::default(),
             hardware_profiles: vec![HardwareProfile {
                 id: "esp-primary".into(),

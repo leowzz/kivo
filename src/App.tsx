@@ -8,7 +8,10 @@ import {
   FileInput,
   Keyboard,
   Plus,
+  Redo2,
+  Settings2,
   Trash2,
+  Undo2,
   Upload,
   X,
 } from "lucide-react";
@@ -16,12 +19,23 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import brandIcon from "../src-tauri/icons/128x128.png";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { CreateDeviceProfileForm } from "./CreateDeviceProfileForm";
-import { DeviceManagement } from "./DeviceManagement";
-import { DeviceSetupWizard } from "./DeviceSetupWizard";
+import {
+  DeviceManagement,
+  type DeviceExecutionFeedback,
+} from "./DeviceManagement";
+import {
+  DeviceSetupWizard,
+  type DeviceSetupVerification,
+} from "./DeviceSetupWizard";
 import { hardwareProfilesAreValid } from "./HardwareMapping";
 import { deviceSummary } from "./deviceStatus";
 import { reconcileSetupSession, setupPresence } from "./deviceSetupSession";
 import { t } from "./i18n";
+import {
+  projectImportedProfiles,
+  summarizeProfiles,
+  type ProfileContentSummary,
+} from "./profileSummary";
 import { DEFAULT_DOUBLE_PRESS_MS, DEFAULT_LONG_PRESS_MS } from "./types";
 import type {
   AppSnapshot,
@@ -36,18 +50,25 @@ import type {
   Language,
   LearningTarget,
   PhysicalInput,
+  ProductDeviceConfig,
   RuntimeAssignment,
   RuntimeEvent,
   StartupFailure,
   TriggerActions,
 } from "./types";
 import { SerializedSaveQueue, useAutosave } from "./useAutosave";
+import {
+  useProductConfigHistory,
+  useProfileHistory,
+  type ProductConfigHistoryEntry,
+} from "./useProfileHistory";
 
 type View = "devices" | "data";
 type Confirmation =
   | { kind: "import"; path: string; preview: ImportPreview }
   | { kind: "restore"; path: string; preview: BackupPreview }
-  | { kind: "delete"; profile: DeviceProfile };
+  | { kind: "delete"; profile: DeviceProfile }
+  | { kind: "forget"; device: AppSnapshot["devices"][number] };
 
 type RegistryState = Pick<
   AppSnapshot,
@@ -70,6 +91,10 @@ type PersistedProfileSave = {
   serialized: string;
   snapshot: AppSnapshot;
 };
+type HistoryTarget =
+  | { kind: "product"; deviceId: string }
+  | { kind: "profile"; profileId: string }
+  | null;
 
 const PREVIEW_MODE = import.meta.env.DEV && new URLSearchParams(window.location.search).has("preview");
 const REGISTRY_REFRESH_MS = 1_500;
@@ -83,6 +108,26 @@ function errorMessage(error: unknown) {
 function defaultBackupFilename(now = new Date()) {
   const pad = (value: number) => String(value).padStart(2, "0");
   return `kivo-backup-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}.yaml`;
+}
+
+function productConfigHistoryEntries(
+  devices: readonly AppSnapshot["devices"][number][],
+): ProductConfigHistoryEntry[] {
+  return devices.flatMap((device) => device.productConfig
+    ? [{ deviceId: device.deviceId, config: device.productConfig }]
+    : []);
+}
+
+function formatSnapshotDate(language: Language, timestamp: number | undefined) {
+  if (!timestamp) return null;
+  try {
+    return new Intl.DateTimeFormat(language, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(timestamp));
+  } catch {
+    return null;
+  }
 }
 
 function isValidDraft(
@@ -246,14 +291,21 @@ export default function App({
   const [pendingSharedDraftProfileIds, setPendingSharedDraftProfileIds] = useState<Set<string>>(() => new Set());
   const [tentativeLearningCounts, setTentativeLearningCounts] = useState<Map<string, number>>(() => new Map());
   const [pressedButtonIds, setPressedButtonIds] = useState<Set<string>>(() => new Set());
+  const [executionFeedbackByDevice, setExecutionFeedbackByDevice] = useState<
+    Record<string, DeviceExecutionFeedback>
+  >({});
   const [loaded, setLoaded] = useState(false);
   const [startupFailure, setStartupFailure] = useState<StartupFailure | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [setupOpen, setSetupOpen] = useState(false);
   const [setupTargetId, setSetupTargetId] = useState<string | null>(null);
+  const [setupVerification, setSetupVerification] =
+    useState<DeviceSetupVerification>({ status: "waiting" });
   const [profileCreatorOpen, setProfileCreatorOpen] = useState(false);
   const [profileCreatorSourceId, setProfileCreatorSourceId] = useState<string | null>(null);
+  const profileHistory = useProfileHistory([], { maxSnapshots: 50 });
+  const productConfigHistory = useProductConfigHistory([], { maxSnapshots: 50 });
   const pressedOwnersRef = useRef<Map<string, PressedOwner>>(new Map());
   const mountedRef = useRef(true);
   const registryEpochRef = useRef(0);
@@ -272,6 +324,13 @@ export default function App({
   const autosaveTargetRef = useRef<ProfileAutosaveTarget>({ profiles: [] });
   const persistedProfileSavesRef = useRef<Map<string, PersistedProfileSave>>(new Map());
   const setupSeenRef = useRef<Set<string>>(new Set());
+  const setupOpenRef = useRef(false);
+  const setupTargetIdRef = useRef<string | null>(null);
+  const setupVerificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const setupVerificationButtonRef = useRef<{
+    buttonId: string;
+    buttonLabel: string;
+  } | null>(null);
 
   const { deviceProfiles, editorProfile, boardProfiles, devices, candidates } = registry;
   const profileById = useCallback((profileId: string | null) => {
@@ -311,16 +370,49 @@ export default function App({
 
   const openSetup = useCallback((targetId: string | null = null) => {
     if (targetId) setupSeenRef.current.add(targetId);
+    if (setupVerificationTimerRef.current) {
+      clearTimeout(setupVerificationTimerRef.current);
+      setupVerificationTimerRef.current = null;
+    }
+    setSetupVerification({ status: "waiting" });
+    setupVerificationButtonRef.current = null;
     setSetupTargetId(targetId);
     setSetupOpen(true);
   }, []);
 
-  const replaceRegistrySnapshot = useCallback((snapshot: AppSnapshot) => {
+  const beginSetupVerification = useCallback(() => {
+    if (setupVerificationTimerRef.current) {
+      clearTimeout(setupVerificationTimerRef.current);
+    }
+    setSetupVerification({ status: "waiting" });
+    setupVerificationButtonRef.current = null;
+    setupVerificationTimerRef.current = setTimeout(() => {
+      setupVerificationTimerRef.current = null;
+      if (mountedRef.current) setSetupVerification({ status: "timeout" });
+    }, 15_000);
+  }, []);
+
+  const closeSetup = useCallback(() => {
+    if (setupVerificationTimerRef.current) {
+      clearTimeout(setupVerificationTimerRef.current);
+      setupVerificationTimerRef.current = null;
+    }
+    setSetupOpen(false);
+  }, []);
+
+  const replaceRegistrySnapshot = useCallback((snapshot: AppSnapshot, preserveProductDrafts = false) => {
     registryEpochRef.current += 1;
+    const visibleDevices = preserveProductDrafts
+      ? snapshot.devices.map((device) => {
+          const draft = productConfigHistory.get(device.deviceId);
+          return draft ? { ...device, productConfig: draft } : device;
+        })
+      : snapshot.devices;
+    productConfigHistory.sync(productConfigHistoryEntries(visibleDevices));
     setRegistry((current) => ({
       ...current,
       boardProfiles: snapshot.boardProfiles,
-      devices: snapshot.devices,
+      devices: visibleDevices,
       candidates: snapshot.candidates,
     }));
     const currentDevices = new Map(snapshot.devices.map((device) => [device.deviceId, device]));
@@ -335,11 +427,21 @@ export default function App({
     }
     pressedOwnersRef.current = nextOwners;
     setPressedButtonIds(pressedButtons(nextOwners));
-  }, []);
+  }, [productConfigHistory.get, productConfigHistory.sync]);
 
-  const applySnapshot = useCallback((snapshot: AppSnapshot, preserveDrafts = false) => {
+  const applySnapshot = useCallback((
+    snapshot: AppSnapshot,
+    preserveDrafts = false,
+    preserveHistory = preserveDrafts,
+  ) => {
     registryEpochRef.current += 1;
     const serverProfiles = snapshot.deviceProfiles.map(normalizeDeviceProfile);
+    const visibleDevices = preserveHistory
+      ? snapshot.devices.map((device) => {
+          const draft = productConfigHistory.get(device.deviceId);
+          return draft ? { ...device, productConfig: draft } : device;
+        })
+      : snapshot.devices;
     const snapshotProfileIds = new Set(serverProfiles.map((profile) => profile.profile.id));
     if (preserveDrafts) {
       for (const profileId of profileDraftsRef.current.keys()) {
@@ -362,15 +464,28 @@ export default function App({
       setCapturedDraftProfileIds(new Set());
       setPendingSharedDraftProfileIds(new Set());
     }
-    setRegistry({
-      deviceProfiles: serverProfiles.map((profile) =>
+    const visibleProfiles = serverProfiles.map((profile) =>
         preserveDrafts ? profileDraftsRef.current.get(profile.profile.id) ?? profile : profile
-      ),
+      );
+    if (preserveHistory) {
+      profileHistory.sync(visibleProfiles);
+      productConfigHistory.sync(productConfigHistoryEntries(visibleDevices));
+    } else {
+      profileHistory.reset(visibleProfiles);
+      productConfigHistory.reset(productConfigHistoryEntries(snapshot.devices));
+    }
+    setRegistry({
+      deviceProfiles: visibleProfiles,
       editorProfile: snapshot.editorProfile,
       boardProfiles: snapshot.boardProfiles,
-      devices: snapshot.devices,
+      devices: visibleDevices,
       candidates: snapshot.candidates,
     });
+    setSelectedManagedDeviceId((current) =>
+      current && visibleDevices.some((device) => device.deviceId === current)
+        ? current
+        : visibleDevices[0]?.deviceId ?? null,
+    );
     setSavedDeviceProfiles(Object.fromEntries(serverProfiles.map((profile) =>
       [profile.profile.id, JSON.stringify(profile)]
     )));
@@ -378,7 +493,7 @@ export default function App({
     setHomeMetrics(snapshot.homeMetrics);
     pressedOwnersRef.current = new Map();
     setPressedButtonIds(new Set());
-  }, []);
+  }, [productConfigHistory.get, productConfigHistory.reset, productConfigHistory.sync, profileHistory.reset, profileHistory.sync]);
 
   const refreshRegistry = useCallback(function refreshRegistryTask(
     queueIfBusy = false,
@@ -511,6 +626,12 @@ export default function App({
     }
   }, [language, replaceRegistrySnapshot]);
 
+  const requestForgetManagedDevice = useCallback((deviceId: string) => {
+    const device = devices.find((item) => item.deviceId === deviceId);
+    if (!device || device.connection !== "offline") return;
+    setConfirmation({ kind: "forget", device });
+  }, [devices]);
+
   const copyManagedProductConfig = useCallback(async (
     sourceDeviceId: string,
     targetDeviceId: string,
@@ -520,12 +641,14 @@ export default function App({
         sourceDeviceId,
         targetDeviceId,
       }));
+      const copiedConfig = snapshot.devices.find((device) => device.deviceId === targetDeviceId)?.productConfig;
+      if (copiedConfig) productConfigHistory.record(targetDeviceId, copiedConfig);
       if (mountedRef.current) applySnapshot(snapshot, true);
     } catch (operationError) {
       setError(`${t(language, "error.save")}: ${errorMessage(operationError)}`);
       throw operationError;
     }
-  }, [applySnapshot, language, queue]);
+  }, [applySnapshot, language, productConfigHistory.record, queue]);
 
   const refreshManagedDeviceMetrics = useCallback(async (deviceId: string | null) => {
     selectedManagedDeviceIdRef.current = deviceId;
@@ -577,8 +700,11 @@ export default function App({
   ), [deviceProfiles, savedDeviceProfiles]);
   const autosaveProfiles = useMemo(() => dirtyProfiles.filter((profile) => {
     const profileId = profile.profile.id;
+    const isCurrentlyShared = devices.filter(
+      (device) => device.runtimeAssignment?.device_profile_id === profileId,
+    ).length > 1;
     return !capturedDraftProfileIds.has(profileId) &&
-      !pendingSharedDraftProfileIds.has(profileId) &&
+      (!pendingSharedDraftProfileIds.has(profileId) || !isCurrentlyShared) &&
       !tentativeLearningCounts.has(profileId) &&
       !devices.some((device) => device.learning?.deviceProfileId === profileId) &&
       isValidDraft(profile, boardProfiles);
@@ -645,6 +771,108 @@ export default function App({
     [applySnapshot, autosave, homeMetrics, language, registry],
   );
 
+  const prepareSetupProfile = useCallback(async (
+    deviceId: string,
+    deviceName: string,
+    sourceProfileId: string | null,
+    preferredHardwareProfileId: string | null,
+  ): Promise<RuntimeAssignment> => {
+    const targetDevice = registry.devices.find((device) => device.deviceId === deviceId);
+    if (!targetDevice) throw new Error("unknown_device");
+
+    const compatibleSources = registry.deviceProfiles.filter((profile) =>
+      profile.hardware_profiles.some(
+        (hardware) => hardware.board_profile_id === targetDevice.boardProfileId,
+      ),
+    );
+    const requestedSource = sourceProfileId
+      ? compatibleSources.find((profile) => profile.profile.id === sourceProfileId)
+      : null;
+    if (sourceProfileId && !requestedSource) throw new Error("hardware_resolution_required");
+
+    // A blank onboarding choice still needs a physical layout to verify. Reuse a
+    // compatible layout, clear its actions, and keep the source profile untouched.
+    const source = requestedSource ?? compatibleSources.find(
+      (profile) => profile.profile.groups.some((group) => group.buttons.length > 0),
+    ) ?? null;
+    const createdSnapshot = await createDeviceProfile(
+      source
+        ? {
+            kind: "clone",
+            name: t(language, "setup.dedicatedProfileName", { name: deviceName }),
+            source_profile_id: source.profile.id,
+          }
+        : {
+            kind: "blank",
+            name: t(language, "setup.dedicatedProfileName", { name: deviceName }),
+            board_profile_id: targetDevice.boardProfileId,
+          },
+    );
+    const created = createdSnapshot.deviceProfiles.find(
+      (profile) => profile.profile.id === createdSnapshot.editorProfile,
+    );
+    if (!created) throw new Error("unknown_profile");
+
+    const compatibleHardware = created.hardware_profiles.filter(
+      (hardware) => hardware.board_profile_id === targetDevice.boardProfileId,
+    );
+    const hardware =
+      compatibleHardware.find(
+        (candidate) => candidate.id === preferredHardwareProfileId,
+      ) ??
+      compatibleHardware[0];
+    if (!hardware) throw new Error("hardware_resolution_required");
+
+    const firstButton = created.profile.groups.flatMap((group) => group.buttons)[0];
+    const hasActions = Object.values(created.actions).some((triggers) =>
+      Object.values(triggers).some((actions) => actions.length > 0),
+    );
+    const prepared: DeviceProfile = {
+      ...created,
+      actions: requestedSource
+        ? created.actions
+        : firstButton
+          ? {
+              [firstButton.id]: {
+                ...emptyTriggerActions(),
+                press: [{ type: "paste", text: t(language, "setup.sampleText") }],
+              },
+            }
+          : {},
+    };
+    if (!hasActions && requestedSource && firstButton) {
+      prepared.actions = {
+        ...prepared.actions,
+        [firstButton.id]: {
+          ...emptyTriggerActions(),
+          press: [{ type: "paste", text: t(language, "setup.sampleText") }],
+        },
+      };
+    }
+
+    if (JSON.stringify(prepared) !== JSON.stringify(created)) {
+      if (PREVIEW_MODE) {
+        profileDraftsRef.current.set(prepared.profile.id, prepared);
+        applySnapshot({
+          ...createdSnapshot,
+          deviceProfiles: createdSnapshot.deviceProfiles.map((profile) =>
+            profile.profile.id === prepared.profile.id ? prepared : profile
+          ),
+        }, true);
+      } else {
+        const savedSnapshot = await invoke<AppSnapshot>("save_device_profile", {
+          profile: prepared,
+        });
+        if (mountedRef.current) applySnapshot(savedSnapshot, true);
+      }
+    }
+
+    return {
+      device_profile_id: prepared.profile.id,
+      hardware_profile_id: hardware.id,
+    };
+  }, [applySnapshot, createDeviceProfile, language, registry.deviceProfiles, registry.devices]);
+
   const profileRef = useRef(editorProfileConfig);
   const profilesRef = useRef(deviceProfiles);
   const devicesRef = useRef(devices);
@@ -657,6 +885,8 @@ export default function App({
   hardwareEditorTargetRef.current = hardwareEditorTarget;
   selectedRef.current = selectedButtonId;
   viewRef.current = view;
+  setupOpenRef.current = setupOpen;
+  setupTargetIdRef.current = setupTargetId;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -707,6 +937,10 @@ export default function App({
                 selectedRef.current,
                 payload.input,
               );
+              // A runtime-event refresh can be in flight. Reject its older
+              // snapshot so it cannot overwrite this unsaved learning step.
+              registryEpochRef.current += 1;
+              profileHistory.record(learned);
               profileDraftsRef.current.set(learned.profile.id, learned);
               setCapturedDraftProfileIds((current) => new Set(current).add(learned.profile.id));
               setRegistry((current) => ({
@@ -747,8 +981,94 @@ export default function App({
                 else nextOwners.delete(payload.deviceId);
                 pressedOwnersRef.current = nextOwners;
                 setPressedButtonIds(pressedButtons(nextOwners));
+                if (payload.pressed) {
+                  setExecutionFeedbackByDevice((current) => {
+                    if (!current[payload.deviceId]) return current;
+                    const next = { ...current };
+                    delete next[payload.deviceId];
+                    return next;
+                  });
+                }
+                if (
+                  payload.pressed &&
+                  setupOpenRef.current &&
+                  setupTargetIdRef.current === payload.deviceId
+                ) {
+                  const label = eventProfile.profile.groups
+                    .flatMap((group) => group.buttons)
+                    .find((button) => button.id === buttonId)?.label ?? buttonId;
+                  setupVerificationButtonRef.current = {
+                    buttonId,
+                    buttonLabel: label,
+                  };
+                  const actions = eventProfile.actions[buttonId];
+                  const actionCount = actions
+                    ? actions.press.length + actions.release.length +
+                      actions.long_press.length + actions.double_press.length
+                    : 0;
+                  if (actionCount === 0 && setupVerificationTimerRef.current) {
+                    clearTimeout(setupVerificationTimerRef.current);
+                    setupVerificationTimerRef.current = null;
+                  }
+                  setSetupVerification({
+                    status: actionCount > 0 ? "waiting" : "success",
+                    buttonId,
+                    buttonLabel: label,
+                  });
+                }
               }
             }
+          }
+          if (
+            payload.code === "action_step_completed" &&
+            setupOpenRef.current &&
+            setupTargetIdRef.current === payload.deviceId &&
+            setupVerificationButtonRef.current &&
+            (!payload.params.button ||
+              payload.params.button === setupVerificationButtonRef.current.buttonId)
+          ) {
+            if (setupVerificationTimerRef.current) {
+              clearTimeout(setupVerificationTimerRef.current);
+              setupVerificationTimerRef.current = null;
+            }
+            setSetupVerification({
+              status: "success",
+              ...setupVerificationButtonRef.current,
+            });
+          }
+          if (payload.code === "action_step_completed") {
+            setExecutionFeedbackByDevice((current) => ({
+              ...current,
+              [payload.deviceId]: {
+                buttonId: payload.params.button ?? null,
+                status: "success",
+                detail: null,
+              },
+            }));
+          }
+          if (payload.level === "error" && payload.params.button) {
+            setExecutionFeedbackByDevice((current) => ({
+              ...current,
+              [payload.deviceId]: {
+                buttonId: payload.params.button,
+                status: "error",
+                detail: payload.detail ?? payload.code,
+              },
+            }));
+          }
+          if (
+            payload.level === "error" &&
+            setupOpenRef.current &&
+            setupTargetIdRef.current === payload.deviceId
+          ) {
+            if (setupVerificationTimerRef.current) {
+              clearTimeout(setupVerificationTimerRef.current);
+              setupVerificationTimerRef.current = null;
+            }
+            setSetupVerification({
+              status: "error",
+              detail: payload.detail ?? payload.code,
+            });
           }
           void refreshRegistry(true);
         });
@@ -774,9 +1094,10 @@ export default function App({
       refreshPendingRef.current = false;
       refreshFullSnapshotPendingRef.current = false;
       if (refreshTimer) clearInterval(refreshTimer);
+      if (setupVerificationTimerRef.current) clearTimeout(setupVerificationTimerRef.current);
       unlisten?.();
     };
-  }, [applySnapshot, refreshManagedDeviceMetrics, refreshRegistry]);
+  }, [applySnapshot, profileHistory.record, refreshManagedDeviceMetrics, refreshRegistry]);
 
   const updateProfile = useCallback((profileId: string, update: (profile: DeviceProfile) => DeviceProfile) => {
     if (!editorLearningActive || profileId !== editorProfileConfig?.profile.id) {
@@ -787,19 +1108,19 @@ export default function App({
         return next;
       });
     }
-    setRegistry((current) => {
-      const currentProfile = current.deviceProfiles.find((profile) => profile.profile.id === profileId);
-      if (!currentProfile) return current;
-      const updatedProfile = update(currentProfile);
-      profileDraftsRef.current.set(profileId, updatedProfile);
-      return {
-        ...current,
-        deviceProfiles: current.deviceProfiles.map((profile) =>
-          profile.profile.id === profileId ? updatedProfile : profile
-        ),
-      };
-    });
-  }, [editorLearningActive, editorProfileConfig?.profile.id]);
+    const currentProfile = profileById(profileId);
+    if (!currentProfile) return;
+    const updatedProfile = update(currentProfile);
+    registryEpochRef.current += 1;
+    profileHistory.record(updatedProfile);
+    profileDraftsRef.current.set(profileId, updatedProfile);
+    setRegistry((current) => ({
+      ...current,
+      deviceProfiles: current.deviceProfiles.map((profile) =>
+        profile.profile.id === profileId ? updatedProfile : profile
+      ),
+    }));
+  }, [editorLearningActive, editorProfileConfig?.profile.id, profileById, profileHistory.record]);
 
   const setSharedDraftPending = useCallback((profileId: string, pending: boolean) => {
     setPendingSharedDraftProfileIds((current) => {
@@ -818,6 +1139,34 @@ export default function App({
     setSharedDraftPending(profile.profile.id, sharedDeviceCount > 1);
   }, [devices, setSharedDraftPending, updateProfile]);
 
+  const saveProductConfig = useCallback((
+    deviceId: string,
+    config: ProductDeviceConfig,
+    recordHistory = true,
+  ) => {
+    const existingMetadata = devices.find((device) => device.deviceId === deviceId)?.productConfig?.snapshot_metadata;
+    const nextConfig = config.snapshot_metadata === undefined
+      ? { ...config, snapshot_metadata: existingMetadata }
+      : config;
+    if (recordHistory) productConfigHistory.record(deviceId, nextConfig);
+    setRegistry((current) => ({
+      ...current,
+      devices: current.devices.map((device) =>
+        device.deviceId === deviceId
+          ? { ...device, productConfig: nextConfig }
+          : device,
+      ),
+    }));
+    void queue.enqueue(() => invoke<AppSnapshot>("save_product_device_config", {
+      deviceId,
+      config: nextConfig,
+    })).then((snapshot) => {
+      if (mountedRef.current) replaceRegistrySnapshot(snapshot, true);
+    }).catch((operationError) => {
+      if (mountedRef.current) setError(`${t(language, "error.save")}: ${errorMessage(operationError)}`);
+    });
+  }, [devices, language, productConfigHistory.record, queue, replaceRegistrySnapshot]);
+
   const changeManagedActions = useCallback((profile: DeviceProfile) => {
     const productDevice = devices.find(
       (device) => device.deviceId === selectedManagedDeviceId && device.productVersionId,
@@ -825,34 +1174,26 @@ export default function App({
     if (productDevice?.productVersionId) {
       const config = {
         product_version_id: productDevice.productVersionId,
+        snapshot_metadata: productDevice.productConfig?.snapshot_metadata,
         trigger_settings: profile.trigger_settings,
         actions: profile.actions,
       };
-      setRegistry((current) => ({
-        ...current,
-        devices: current.devices.map((device) =>
-          device.deviceId === productDevice.deviceId
-            ? { ...device, productConfig: config }
-            : device,
-        ),
-      }));
-      void queue.enqueue(() => invoke<AppSnapshot>("save_product_device_config", {
-        deviceId: productDevice.deviceId,
-        config,
-      })).then((snapshot) => {
-        if (mountedRef.current) applySnapshot(snapshot, true);
-      }).catch((operationError) => {
-        if (mountedRef.current) setError(`${t(language, "error.save")}: ${errorMessage(operationError)}`);
-      });
+      saveProductConfig(productDevice.deviceId, config);
       return;
     }
     updateProfile(profile.profile.id, () => profile);
-  }, [applySnapshot, devices, language, queue, selectedManagedDeviceId, updateProfile]);
+  }, [devices, saveProductConfig, selectedManagedDeviceId, updateProfile]);
 
   const saveManagedSharedProfile = useCallback(async (profile: DeviceProfile) => {
-    await autosave.flush();
-    await saveEditorProfile(profile);
-  }, [autosave.flush, saveEditorProfile]);
+    try {
+      await autosave.flush();
+      await saveEditorProfile(profile);
+    } catch (operationError) {
+      if (mountedRef.current) {
+        setError(`${t(language, "error.save")}: ${errorMessage(operationError)}`);
+      }
+    }
+  }, [autosave.flush, language, saveEditorProfile]);
 
   const duplicateManagedProfileForDevice = useCallback(async ({ deviceId, sourceProfile: profile, name }: { deviceId: string; sourceProfile: DeviceProfile; name: string }) => {
     await autosave.flush();
@@ -902,11 +1243,36 @@ export default function App({
     assignment: RuntimeAssignment,
   ) => {
     await autosave.flush();
-    const completed = await invoke<AppSnapshot>("complete_device_setup", {
-      deviceId,
-      name,
-      assignment,
-    });
+    const completed = PREVIEW_MODE
+      ? {
+          deviceProfiles: deviceProfiles.some((profile) => profile.profile.id === assignment.device_profile_id)
+            ? deviceProfiles
+            : [
+                ...deviceProfiles,
+                ...(profileDraftsRef.current.get(assignment.device_profile_id)
+                  ? [profileDraftsRef.current.get(assignment.device_profile_id)!]
+                  : []),
+              ],
+          editorProfile: registry.editorProfile,
+          boardProfiles,
+          devices: devices.map((device) => device.deviceId === deviceId
+            ? {
+                ...device,
+                name,
+                assignment: "valid" as const,
+                runtime: "configuring" as const,
+                runtimeAssignment: assignment,
+              }
+            : device),
+          candidates,
+          language,
+          homeMetrics,
+        }
+      : await invoke<AppSnapshot>("complete_device_setup", {
+          deviceId,
+          name,
+          assignment,
+        });
     if (!mountedRef.current) return;
     applySnapshot(completed, true);
     if (completed.editorProfile !== assignment.device_profile_id) {
@@ -928,7 +1294,7 @@ export default function App({
       deviceProfileId: assignment.device_profile_id,
       hardwareProfileId: assignment.hardware_profile_id,
     });
-    setSetupOpen(false);
+    beginSetupVerification();
     setView("devices");
   };
 
@@ -1033,14 +1399,28 @@ export default function App({
     if (!current) return;
     setConfirmation(null);
     void run(
-      t(language, current.kind === "restore" ? "error.restore" : current.kind === "delete" ? "error.delete" : "error.import"),
+      t(language,
+        current.kind === "restore"
+          ? "error.restore"
+          : current.kind === "delete"
+            ? "error.delete"
+            : current.kind === "forget"
+              ? "error.forget"
+              : "error.import",
+      ),
       async () => {
         const snapshot = current.kind === "import"
           ? await invoke<AppSnapshot>("import_device_profile", { path: current.path })
           : current.kind === "restore"
             ? await invoke<AppSnapshot>("restore_backup", { path: current.path })
-            : await invoke<AppSnapshot>("delete_device_profile", { id: current.profile.profile.id });
-        applySnapshot(snapshot);
+            : current.kind === "delete"
+              ? await invoke<AppSnapshot>("delete_device_profile", { id: current.profile.profile.id })
+              : await invoke<AppSnapshot>("forget_device", { deviceId: current.device.deviceId });
+        applySnapshot(
+          snapshot,
+          current.kind === "forget",
+          current.kind === "import" || current.kind === "delete" || current.kind === "forget",
+        );
       },
     );
   };
@@ -1053,6 +1433,93 @@ export default function App({
     ),
     [pressedButtonIds, selectedManagedDeviceId],
   );
+  const historyProfileId = devices.find(
+    (device) => device.deviceId === selectedManagedDeviceId,
+  )?.runtimeAssignment?.device_profile_id ?? editorProfile;
+  const selectedHistoryDevice = devices.find(
+    (device) => device.deviceId === selectedManagedDeviceId,
+  );
+  const historyTarget: HistoryTarget = selectedHistoryDevice?.productVersionId
+    ? { kind: "product", deviceId: selectedHistoryDevice.deviceId }
+    : historyProfileId
+      ? { kind: "profile", profileId: historyProfileId }
+      : null;
+  const selectedSummaryDevice = devices.find(
+    (device) => device.deviceId === selectedManagedDeviceId,
+  ) ?? devices.find((device) => device.connection === "online") ?? null;
+  const selectedSummaryNeedsAttention = selectedSummaryDevice && (
+    selectedSummaryDevice.connection === "offline" ||
+    selectedSummaryDevice.assignment !== "valid" ||
+    selectedSummaryDevice.runtime === "runtime_error"
+  );
+  const canUndoProfile = Boolean(
+    historyTarget?.kind === "profile" && profileHistory.canUndo(historyTarget.profileId),
+  );
+  const canRedoProfile = Boolean(
+    historyTarget?.kind === "profile" && profileHistory.canRedo(historyTarget.profileId),
+  );
+  const canUndoProduct = Boolean(
+    historyTarget?.kind === "product" && productConfigHistory.canUndo(historyTarget.deviceId),
+  );
+  const canRedoProduct = Boolean(
+    historyTarget?.kind === "product" && productConfigHistory.canRedo(historyTarget.deviceId),
+  );
+  const canUndoHistory = canUndoProfile || canUndoProduct;
+  const canRedoHistory = canRedoProfile || canRedoProduct;
+
+  const applyHistoryProfile = (profile: DeviceProfile | undefined) => {
+    if (!profile) return;
+    const profileId = profile.profile.id;
+    profileDraftsRef.current.set(profileId, profile);
+    setCapturedDraftProfileIds((current) => {
+      if (!current.has(profileId)) return current;
+      const next = new Set(current);
+      next.delete(profileId);
+      return next;
+    });
+    setSharedDraftPending(
+      profileId,
+      devices.filter(
+        (device) => device.runtimeAssignment?.device_profile_id === profileId,
+      ).length > 1,
+    );
+    setRegistry((current) => ({
+      ...current,
+      deviceProfiles: current.deviceProfiles.map((currentProfile) =>
+        currentProfile.profile.id === profileId ? profile : currentProfile
+      ),
+    }));
+  };
+  const currentProfileSummary = summarizeProfiles(deviceProfiles);
+  let changedProfileSummary: ProfileContentSummary | null = null;
+  if (confirmation?.kind === "import") {
+    changedProfileSummary = projectImportedProfiles(
+      deviceProfiles,
+      confirmation.preview,
+    );
+  } else if (
+    confirmation?.kind === "restore" &&
+    confirmation.preview.kind !== "product_devices"
+  ) {
+    changedProfileSummary = {
+      profileCount: confirmation.preview.profileCount,
+      buttonCount: confirmation.preview.buttonCount,
+      hardwareBindingCount: confirmation.preview.hardwareBindingCount,
+      actionCount: confirmation.preview.actionCount,
+    };
+  }
+  const profileChangeSummary = changedProfileSummary
+    ? t(language, "dialog.profileChangeSummary", {
+        currentProfiles: currentProfileSummary.profileCount,
+        nextProfiles: changedProfileSummary.profileCount,
+        currentButtons: currentProfileSummary.buttonCount,
+        nextButtons: changedProfileSummary.buttonCount,
+        currentBindings: currentProfileSummary.hardwareBindingCount,
+        nextBindings: changedProfileSummary.hardwareBindingCount,
+        currentActions: currentProfileSummary.actionCount,
+        nextActions: changedProfileSummary.actionCount,
+      })
+    : null;
 
   if (startupFailure) {
     const incompatible = startupFailure.code === "unsupported_profile_schema" ||
@@ -1093,11 +1560,22 @@ export default function App({
       <header className={`topbar${embedded ? " is-embedded" : ""}${client ? " is-client" : ""}`}>
         {!embedded ? <div className="brand"><img src={brandIcon} alt="" /><h1>Kivo</h1></div> : null}
         <div className="device-summary" aria-label={t(language, "device.summary")}>
-          <span className="summary-ready"><i />{summary.ready} {t(language, "device.ready")}</span>
-          <b aria-hidden="true">{" · "}</b>
-          <span className="summary-attention"><i />{attentionCount} {t(language, "device.attention")}</span>
-          <b aria-hidden="true">{" · "}</b>
-          <span className="summary-offline"><i />{summary.offline} {t(language, "device.offline")}</span>
+          <span className="summary-current-device">
+            <Keyboard size={15} aria-hidden="true" />
+            {selectedSummaryDevice?.name ?? t(language, "nav.devices")}
+          </span>
+          {selectedSummaryNeedsAttention ? (
+            <span className="summary-attention">
+              <i />
+              {selectedSummaryDevice.connection === "offline"
+                ? t(language, "device.offline")
+                : t(language, "device.attention")}
+            </span>
+          ) : attentionCount > 0 ? (
+            <span className="summary-attention">
+              <i />{attentionCount} {t(language, "device.attention")}
+            </span>
+          ) : null}
         </div>
         {client && (
           <div className="client-transfer-actions" aria-label={t(language, "nav.data")}>
@@ -1122,11 +1600,50 @@ export default function App({
             className={view === "data" ? "is-active" : ""}
             type="button"
             aria-pressed={view === "data"}
+            title={t(language, "nav.data")}
             onClick={() => void navigate("data")}
           >
-            <DatabaseBackup size={16} />{t(language, "nav.data")}
+            <Settings2 size={16} />{t(language, "nav.settings")}
           </button>
         </nav>}
+        {!client && (
+          <div className="edit-history-actions" aria-label={t(language, "common.editHistory")}>
+            <button
+              className="icon-button"
+              type="button"
+              disabled={!canUndoHistory}
+              aria-label={t(language, "common.undo")}
+              title={t(language, "common.undo")}
+              onClick={() => {
+                if (historyTarget?.kind === "product") {
+                  const config = productConfigHistory.undo(historyTarget.deviceId);
+                  if (config) saveProductConfig(historyTarget.deviceId, config, false);
+                } else if (historyTarget?.kind === "profile") {
+                  applyHistoryProfile(profileHistory.undo(historyTarget.profileId));
+                }
+              }}
+            >
+              <Undo2 size={16} />
+            </button>
+            <button
+              className="icon-button"
+              type="button"
+              disabled={!canRedoHistory}
+              aria-label={t(language, "common.redo")}
+              title={t(language, "common.redo")}
+              onClick={() => {
+                if (historyTarget?.kind === "product") {
+                  const config = productConfigHistory.redo(historyTarget.deviceId);
+                  if (config) saveProductConfig(historyTarget.deviceId, config, false);
+                } else if (historyTarget?.kind === "profile") {
+                  applyHistoryProfile(profileHistory.redo(historyTarget.profileId));
+                }
+              }}
+            >
+              <Redo2 size={16} />
+            </button>
+          </div>
+        )}
         <div className={`save-state is-${autosave.status}`} aria-live="polite">
           {autosave.status === "saving" && t(language, "save.saving")}
           {autosave.status === "saved" && t(language, "save.saved")}
@@ -1171,6 +1688,16 @@ export default function App({
                             {profile.profile.id === editorProfile && <span className="profile-badge">{t(language, "data.editorBadge")}</span>}
                           </div>
                           <p>{t(language, "data.usedBy", { count: usage })}</p>
+                          {formatSnapshotDate(language, profile.snapshot_metadata?.created_at) && (
+                            <p>{t(language, "data.createdAt", {
+                              time: formatSnapshotDate(language, profile.snapshot_metadata?.created_at) ?? "",
+                            })}</p>
+                          )}
+                          {profile.snapshot_metadata?.source_device_name && (
+                            <p>{t(language, "data.sourceDevice", {
+                              name: profile.snapshot_metadata.source_device_name,
+                            })}</p>
+                          )}
                           <code>{profile.profile.id}</code>
                         </div>
                         <div className="profile-row-actions">
@@ -1210,8 +1737,10 @@ export default function App({
               onRename={renameManagedDevice}
               onSaveRuntimeAssignment={saveManagedRuntimeAssignment}
               onCopyProductConfig={copyManagedProductConfig}
+              onForgetDevice={requestForgetManagedDevice}
               onMetricsChange={handleManagedMetricsChange}
               onOpenSetup={openSetup}
+              onCreateFromTemplate={openProfileCreator}
               onRetryCandidate={retrySetupCandidate}
               selectedDeviceId={selectedManagedDeviceId}
               onSelectedDeviceChange={setSelectedManagedDeviceId}
@@ -1225,6 +1754,11 @@ export default function App({
               selectedButtonId={selectedButtonId}
               onSelectedButtonChange={setSelectedButtonId}
               pressedButtonIds={workspacePressedButtonIds}
+              executionFeedback={
+                selectedManagedDeviceId
+                  ? executionFeedbackByDevice[selectedManagedDeviceId] ?? null
+                  : null
+              }
             />
           )}
         </section>
@@ -1287,8 +1821,11 @@ export default function App({
           onTargetChange={setSetupTargetId}
           onRetryCandidate={retrySetupCandidate}
           onCreateProfile={createDeviceProfile}
+          onPrepareProfile={prepareSetupProfile}
           onComplete={completeDeviceSetup}
-          onClose={() => setSetupOpen(false)}
+          verification={setupVerification}
+          onVerificationRetry={() => beginSetupVerification()}
+          onClose={closeSetup}
         />
       )}
 
@@ -1300,40 +1837,47 @@ export default function App({
               : "dialog.restoreTitle")
             : confirmation.kind === "delete"
               ? t(language, "dialog.deleteTitle")
-              : t(language, confirmation.preview.replacesExisting ? "dialog.replaceTitle" : "dialog.importTitle")}
+              : confirmation.kind === "forget"
+                ? t(language, "devices.forget")
+                : t(language, confirmation.preview.replacesExisting ? "dialog.replaceTitle" : "dialog.importTitle")}
           body={confirmation.kind === "restore"
             ? t(language, confirmation.preview.kind === "product_devices"
               ? "dialog.restoreProductBody"
               : "dialog.restoreBody")
             : confirmation.kind === "delete"
               ? t(language, "dialog.deleteBody", { name: confirmation.profile.profile.name })
-              : t(language, confirmation.preview.replacesExisting ? "dialog.replaceBody" : "dialog.importBody")}
+              : confirmation.kind === "forget"
+                ? t(language, "devices.forgetBody", { name: confirmation.device.name })
+                : t(language, confirmation.preview.replacesExisting ? "dialog.replaceBody" : "dialog.importBody")}
           summary={confirmation.kind === "restore"
             ? confirmation.preview.kind === "product_devices"
               ? t(language, "dialog.productBackupSummary", {
                 actions: confirmation.preview.actionCount,
                 devices: confirmation.preview.deviceCount,
               })
-              : t(language, "dialog.backupSummary", {
-                models: confirmation.preview.profileCount,
-                buttons: confirmation.preview.buttonCount,
-                bindings: confirmation.preview.hardwareBindingCount,
-                actions: confirmation.preview.actionCount,
-                devices: confirmation.preview.deviceCount,
-                assignments: confirmation.preview.assignmentCount,
-                metricRows: confirmation.preview.metricRowCount,
-                activity: confirmation.preview.activityCount,
-              })
+              : (
+                <>
+                  <p>{profileChangeSummary}</p>
+                  <p>{t(language, "dialog.backupSummary", {
+                    models: confirmation.preview.profileCount,
+                    buttons: confirmation.preview.buttonCount,
+                    bindings: confirmation.preview.hardwareBindingCount,
+                    actions: confirmation.preview.actionCount,
+                    devices: confirmation.preview.deviceCount,
+                    assignments: confirmation.preview.assignmentCount,
+                    metricRows: confirmation.preview.metricRowCount,
+                    activity: confirmation.preview.activityCount,
+                  })}</p>
+                </>
+              )
             : confirmation.kind === "import"
-              ? t(language, "dialog.modelSummary", {
-                buttons: confirmation.preview.buttonCount,
-                bindings: confirmation.preview.hardwareBindingCount,
-                actions: confirmation.preview.actionCount,
-              })
-              : confirmation.profile.profile.name}
+              ? profileChangeSummary ?? ""
+              : confirmation.kind === "delete"
+                ? confirmation.profile.profile.name
+                : confirmation.device.name}
           confirmLabel={t(language, "common.confirm")}
           cancelLabel={t(language, "common.cancel")}
-          danger={confirmation.kind === "delete" ||
+          danger={confirmation.kind === "delete" || confirmation.kind === "forget" ||
             (confirmation.kind === "restore" && confirmation.preview.kind !== "product_devices") ||
             (confirmation.kind === "import" && confirmation.preview.replacesExisting)}
           onCancel={() => setConfirmation(null)}

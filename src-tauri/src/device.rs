@@ -64,6 +64,8 @@ pub struct RuntimeActivity {
     metric_press: Option<MetricPress>,
     #[serde(skip)]
     feature_disabled_log: Option<FeatureDisabledLog>,
+    #[serde(skip)]
+    action_result_log: Option<ActionResultLog>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -80,6 +82,15 @@ struct FeatureDisabledLog {
     occurred_at_ms: Option<u64>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ActionResultLog {
+    attribution: MetricAttribution,
+    button_id: String,
+    action_kind: String,
+    succeeded: bool,
+    occurred_at_ms: Option<u64>,
+}
+
 impl RuntimeActivity {
     pub(crate) fn new(code: impl Into<String>) -> Self {
         Self {
@@ -92,6 +103,7 @@ impl RuntimeActivity {
             context: None,
             metric_press: None,
             feature_disabled_log: None,
+            action_result_log: None,
         }
     }
 
@@ -398,6 +410,7 @@ impl DeviceSession {
         let mut output = SessionOutput::default();
         if let Some(mut sequence) = self.active.take() {
             let run_id = sequence.run_id();
+            let pending_step = sequence.awaiting_step();
             let detail = if code == "action_step_failed" && sequence.is_awaiting_paste() {
                 Some("clipboard_write_failed".into())
             } else {
@@ -405,9 +418,16 @@ impl DeviceSession {
             };
             sequence.abort();
             output.lines.push(format!("SKIP {run_id}\n"));
-            let mut activity = RuntimeActivity::new(code);
+            let mut activity = pending_step
+                .as_ref()
+                .map(|step| action_activity(code, step))
+                .unwrap_or_else(|| RuntimeActivity::new(code));
             activity.detail = detail;
             activity.context = self.active_context.clone();
+            if let Some(step) = pending_step.as_ref() {
+                activity =
+                    with_action_result_log(activity, self.active_snapshot.as_deref(), step, false);
+            }
             output.activities.push(activity);
             self.pending_paste = None;
             self.active_snapshot = None;
@@ -1240,10 +1260,14 @@ impl DeviceSession {
                 return;
             }
         };
-        output.activities.push(
-            action_activity("action_step_completed", &completed)
-                .with_context(self.active_context.clone()),
-        );
+        let activity = action_activity("action_step_completed", &completed)
+            .with_context(self.active_context.clone());
+        output.activities.push(with_action_result_log(
+            activity,
+            self.active_snapshot.as_deref(),
+            &completed,
+            true,
+        ));
         if sequence.is_complete() {
             self.active = None;
             self.active_snapshot = None;
@@ -1426,13 +1450,15 @@ impl DeviceSession {
         } else {
             error
         };
-        output.activities.push(
-            RuntimeActivity::new("action_step_failed")
-                .with_param("button", &step.button)
-                .with_param("step", step.step.to_string())
-                .with_detail(detail)
-                .with_context(self.active_context.clone()),
-        );
+        let activity = action_activity("action_step_failed", step)
+            .with_detail(detail)
+            .with_context(self.active_context.clone());
+        output.activities.push(with_action_result_log(
+            activity,
+            self.active_snapshot.as_deref(),
+            step,
+            false,
+        ));
         self.active = None;
         self.active_snapshot = None;
         self.active_context = None;
@@ -1551,6 +1577,29 @@ fn action_activity(code: &str, step: &crate::protocol::ActionStep) -> RuntimeAct
     activity
 }
 
+fn with_action_result_log(
+    mut activity: RuntimeActivity,
+    snapshot: Option<&RuntimeProfileSnapshot>,
+    step: &crate::protocol::ActionStep,
+    succeeded: bool,
+) -> RuntimeActivity {
+    if let (Some(snapshot), Some(action_kind)) =
+        (snapshot, activity.params.get("actionKind").cloned())
+    {
+        activity.action_result_log = Some(ActionResultLog {
+            attribution: snapshot.metric_attribution.clone(),
+            button_id: step.button.clone(),
+            action_kind,
+            succeeded,
+            occurred_at_ms: activity
+                .context
+                .as_ref()
+                .map(|context| context.timestamp_ms),
+        });
+    }
+    activity
+}
+
 fn trigger_name(trigger: ActionTrigger) -> &'static str {
     match trigger {
         ActionTrigger::Press => "press",
@@ -1627,6 +1676,16 @@ fn persist_metrics(
         metrics.record_feature_disabled(
             &log.attribution,
             &log.button_id,
+            log.occurred_at_ms.unwrap_or(snapshot_at_ms),
+        )?;
+        &log.attribution
+    } else if let Some(log) = activity.action_result_log.as_ref() {
+        metrics.record_action_result(
+            &log.attribution,
+            &log.button_id,
+            &log.action_kind,
+            log.succeeded,
+            activity.detail.as_deref(),
             log.occurred_at_ms.unwrap_or(snapshot_at_ms),
         )?;
         &log.attribution
@@ -2957,6 +3016,7 @@ mod tests {
                         }],
                     }],
                 },
+                snapshot_metadata: None,
                 trigger_settings: TriggerSettings::default(),
                 hardware_profiles: vec![HardwareProfile {
                     id: "esp-primary".into(),
@@ -3504,6 +3564,75 @@ mod tests {
         assert_eq!(update.logs[0].message, "A pressed");
         assert_eq!(output.activities[0].params["button"], "A");
         assert_eq!(release.activities[0].params["button"], "A");
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn persists_completed_and_failed_action_steps_as_device_activity() {
+        let timestamp = 1_720_086_400_000;
+        let path = std::env::temp_dir().join(format!(
+            "kivo-action-result-metrics-{}-{}.sqlite3",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = MetricsStore::open(&path).unwrap();
+        let mut completed_session = DeviceSession::new(runtime_model());
+        completed_session.ready = true;
+        completed_session.on_message(
+            DeviceMessage::State {
+                event_id: 1,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            &mut |_| Ok(()),
+        );
+        let completed = completed_session
+            .on_message(DeviceMessage::Done { run_id: 1, step: 1 }, &mut |_| Ok(()));
+        let completed_activity = completed
+            .activities
+            .iter()
+            .find(|activity| activity.code == "action_step_completed")
+            .unwrap();
+
+        persist_metrics(&store, completed_activity, timestamp).unwrap();
+
+        let mut failed_session = DeviceSession::new(runtime_model());
+        failed_session.ready = true;
+        failed_session.on_message(
+            DeviceMessage::State {
+                event_id: 2,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            &mut |_| Ok(()),
+        );
+        let failed = failed_session
+            .fail_active_deferred("action_ack_timeout", Some("device_timeout".into()));
+        let failed_activity = failed
+            .activities
+            .iter()
+            .find(|activity| activity.code == "action_ack_timeout")
+            .unwrap();
+
+        persist_metrics(&store, failed_activity, timestamp + 1).unwrap();
+
+        let snapshot = store
+            .device_snapshot(
+                &DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ABCDEF123456").unwrap(),
+                timestamp + 1,
+            )
+            .unwrap();
+        assert_eq!(snapshot.logs.len(), 2);
+        assert_eq!(snapshot.logs[0].kind, "action_failed");
+        assert_eq!(snapshot.logs[0].action_kind.as_deref(), Some("paste"));
+        assert_eq!(snapshot.logs[0].detail.as_deref(), Some("device_timeout"));
+        assert_eq!(snapshot.logs[1].kind, "action_success");
+        assert_eq!(snapshot.logs[1].button_id.as_deref(), Some("A"));
+        assert_eq!(snapshot.logs[1].action_kind.as_deref(), Some("paste"));
         drop(store);
         std::fs::remove_file(path).unwrap();
     }

@@ -9,6 +9,7 @@ import type {
   BoardProfileSummary,
   DeviceStatus,
   HardwareProfile,
+  LearningTarget,
   ModelLayout,
 } from "./types";
 
@@ -380,6 +381,147 @@ test("offers learning only for online identity-valid runtime Devices on the exac
     .toEqual(["离线编辑", "Eligible runtime"]);
   expect(screen.getByRole("button", { name: "开始学习" })).toBeDisabled();
   expect(screen.getByLabelText("消抖")).toBeEnabled();
+});
+
+test("shows a locked learning session with target, mapped progress, navigation, and finish callback", async () => {
+  const user = userEvent.setup();
+  const onEndLearning = vi.fn();
+  const onFinishLearning = vi.fn();
+  const onSelectButton = vi.fn();
+  const target: LearningTarget = {
+    deviceId: "device-front",
+    deviceProfileId: "desk-phone",
+    hardwareProfileId: "front-desk",
+    editingRevision: 4,
+    firmwareRevision: 2,
+    pins: [1, 2, 6, 12, 13],
+  };
+  const partiallyMapped = structuredClone(hardwareProfiles);
+  partiallyMapped[0].inputs = [{ type: "direct", id: "direct", keys: { ONE: 6 } }];
+  render(
+    <HardwareMapping
+      language="zh-CN"
+      layout={layout}
+      hardwareProfiles={partiallyMapped}
+      boardProfiles={boardProfiles}
+      devices={[device({ learning: target })]}
+      learning={target}
+      initialHardwareProfileId="front-desk"
+      initialDeviceId="device-front"
+      selectedButtonId={"TWO"}
+      onSelectButton={onSelectButton}
+      onChange={vi.fn()}
+      onSelectionChange={vi.fn()}
+      onBeginLearning={vi.fn()}
+      onEndLearning={onEndLearning}
+      onFinishLearning={onFinishLearning}
+    />,
+  );
+
+  expect(screen.getAllByText("正在学习").length).toBeGreaterThanOrEqual(1);
+  expect(screen.getByText("当前目标")).toBeInTheDocument();
+  expect(within(screen.getByText("当前目标").parentElement as HTMLElement).getByText("2")).toBeInTheDocument();
+  expect(screen.getByText("已映射 1 / 2")).toBeInTheDocument();
+  expect(screen.getAllByText("尚未映射").length).toBeGreaterThanOrEqual(1);
+  expect(screen.getByRole("combobox", { name: "硬件配置" })).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "硬件配置" })).toHaveValue("front-desk");
+  expect(screen.getByLabelText("板型")).toBeDisabled();
+  expect(screen.getByLabelText("在线设备")).toBeDisabled();
+  expect(screen.getByLabelText("在线设备")).toHaveValue("device-front");
+  expect(screen.getByRole("button", { name: "上一个按键" })).toBeEnabled();
+
+  await user.click(screen.getByRole("button", { name: "完成学习并进入测试" }));
+  expect(onEndLearning).toHaveBeenCalledWith("device-front");
+  expect(onFinishLearning).toHaveBeenCalledWith("device-front");
+  expect(screen.getByRole("button", { name: "正在结束学习..." })).toBeDisabled();
+});
+
+test("shows mapped and conflict status for bindings already present in the selected hardware profile", () => {
+  const conflicting = structuredClone(hardwareProfiles);
+  conflicting[0].inputs = [
+    { type: "direct", id: "direct-a", keys: { ONE: 6 } },
+    { type: "direct", id: "direct-b", keys: { ONE: 6, TWO: 12 } },
+  ];
+  const target: LearningTarget = {
+    deviceId: "device-front",
+    deviceProfileId: "desk-phone",
+    hardwareProfileId: "front-desk",
+    editingRevision: 5,
+    firmwareRevision: 2,
+    pins: [1, 2, 6, 12, 13],
+  };
+  render(
+    <HardwareMapping
+      language="zh-CN"
+      layout={layout}
+      hardwareProfiles={conflicting}
+      boardProfiles={boardProfiles}
+      devices={[device({ learning: target })]}
+      learning={target}
+      initialHardwareProfileId="front-desk"
+      initialDeviceId="device-front"
+      selectedButtonId="TWO"
+      onSelectButton={vi.fn()}
+      onChange={vi.fn()}
+      onSelectionChange={vi.fn()}
+      onBeginLearning={vi.fn()}
+      onEndLearning={vi.fn()}
+    />,
+  );
+
+  expect(screen.getAllByText("存在冲突映射").length).toBeGreaterThanOrEqual(1);
+  expect(screen.getAllByText("GPIO 6").length).toBeGreaterThanOrEqual(2);
+  expect(screen.getAllByText("已映射：GPIO 12").length).toBeGreaterThanOrEqual(1);
+  expect(screen.getByText("已映射 2 / 2")).toBeInTheDocument();
+});
+
+test("undoes the last learned binding and returns to that key", async () => {
+  const user = userEvent.setup();
+  const onChange = vi.fn();
+  const onSelectButton = vi.fn();
+  const target: LearningTarget = {
+    deviceId: "device-front",
+    deviceProfileId: "desk-phone",
+    hardwareProfileId: "front-desk",
+    editingRevision: 6,
+    firmwareRevision: 2,
+    pins: [1, 2, 6, 12, 13],
+  };
+  const initial = structuredClone(hardwareProfiles);
+  initial[0].inputs = [{ type: "direct", id: "direct", keys: { ONE: 6 } }];
+  const learned = structuredClone(initial);
+  learned[0].inputs[0] = {
+    type: "direct",
+    id: "direct",
+    keys: { ONE: 6, TWO: 13 },
+  };
+  const props = {
+    language: "zh-CN" as const,
+    layout,
+    boardProfiles,
+    devices: [device({ learning: target })],
+    learning: target,
+    initialHardwareProfileId: "front-desk",
+    initialDeviceId: "device-front",
+    selectedButtonId: "TWO",
+    onSelectButton,
+    onChange,
+    onSelectionChange: vi.fn(),
+    onBeginLearning: vi.fn(),
+    onEndLearning: vi.fn(),
+  };
+  const { rerender } = render(
+    <HardwareMapping {...props} hardwareProfiles={initial} />,
+  );
+
+  rerender(<HardwareMapping {...props} hardwareProfiles={learned} />);
+  const undo = await screen.findByRole("button", { name: "撤销" });
+  expect(undo).toBeEnabled();
+  await user.click(undo);
+
+  expect(onChange).toHaveBeenLastCalledWith(initial);
+  expect(onSelectButton).toHaveBeenLastCalledWith("TWO");
+  expect(undo).toBeDisabled();
 });
 
 test("exposes GPIO0 through GPIO23 and GPIO26 through GPIO29 for yd-rp2040", async () => {

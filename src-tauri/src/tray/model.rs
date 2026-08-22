@@ -339,6 +339,7 @@ mod tests {
                     },
                 ],
             },
+            snapshot_metadata: None,
             trigger_settings: TriggerSettings::default(),
             hardware_profiles: vec![HardwareProfile {
                 id: "hardware".into(),

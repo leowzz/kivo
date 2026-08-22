@@ -475,6 +475,7 @@ fn profile(
 ) -> DeviceProfile {
     DeviceProfile {
         schema_version: PROFILE_SCHEMA_VERSION,
+        snapshot_metadata: None,
         profile: ModelLayout {
             id: id.into(),
             name: id.into(),

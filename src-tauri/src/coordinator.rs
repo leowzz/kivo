@@ -2395,6 +2395,7 @@ mod tests {
         DeviceProfile {
             schema_version: PROFILE_SCHEMA_VERSION,
             profile: crate::profile::test_model_layout(),
+            snapshot_metadata: None,
             trigger_settings: TriggerSettings::default(),
             hardware_profiles: vec![HardwareProfile {
                 id: "esp".into(),

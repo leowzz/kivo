@@ -9,7 +9,10 @@ use crate::{
     workspace::AppError,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[cfg(test)]
 use crate::model::{ButtonDefinition, ButtonGroup};
@@ -27,6 +30,39 @@ pub enum CreateDeviceProfileRequest {
         name: String,
         board_profile_id: String,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct SnapshotMetadata {
+    pub created_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_device_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_device_name: Option<String>,
+}
+
+impl SnapshotMetadata {
+    pub fn new() -> Self {
+        let created_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        Self {
+            created_at,
+            source_device_id: None,
+            source_device_name: None,
+        }
+    }
+
+    pub fn from_device(device_id: impl Into<String>, device_name: impl Into<String>) -> Self {
+        Self {
+            source_device_id: Some(device_id.into()),
+            source_device_name: Some(device_name.into()),
+            ..Self::new()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -267,6 +303,8 @@ fn default_debounce_ms() -> u16 {
 pub struct DeviceProfile {
     pub schema_version: u16,
     pub profile: ModelLayout,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_metadata: Option<SnapshotMetadata>,
     #[serde(default)]
     pub trigger_settings: TriggerSettings,
     #[serde(default)]
@@ -283,6 +321,7 @@ pub fn blank_device_profile(id: String, name: String, board_profile_id: String) 
             name,
             groups: Vec::new(),
         },
+        snapshot_metadata: Some(SnapshotMetadata::new()),
         trigger_settings: TriggerSettings::default(),
         hardware_profiles: vec![HardwareProfile {
             id: "hardware".into(),
@@ -858,6 +897,7 @@ mod tests {
         DeviceProfile {
             schema_version: PROFILE_SCHEMA_VERSION,
             profile: test_model_layout(),
+            snapshot_metadata: None,
             trigger_settings: TriggerSettings::default(),
             hardware_profiles: vec![
                 HardwareProfile {

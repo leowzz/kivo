@@ -221,6 +221,7 @@ impl ProductDefinition {
         let profile = DeviceProfile {
             schema_version: PROFILE_SCHEMA_VERSION,
             profile: self.layout.clone(),
+            snapshot_metadata: None,
             trigger_settings: TriggerSettings::default(),
             hardware_profiles: vec![self.hardware_profile.clone()],
             actions: BTreeMap::new(),
@@ -237,6 +238,7 @@ impl ProductDefinition {
         DeviceProfile {
             schema_version: PROFILE_SCHEMA_VERSION,
             profile: self.layout.clone(),
+            snapshot_metadata: None,
             trigger_settings,
             hardware_profiles: vec![self.hardware_profile.clone()],
             actions,

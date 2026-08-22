@@ -15,8 +15,15 @@ export interface ConfigurationSettingsDialogProps {
   onCancel(): void;
 }
 
-function parseInteger(value: string) {
-  return /^\d+$/.test(value.trim()) ? Number(value) : NaN;
+function parseSeconds(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(trimmed)) return NaN;
+  const seconds = Number(trimmed);
+  return Number.isFinite(seconds) ? Math.round(seconds * 1000) : NaN;
+}
+
+function formatSeconds(milliseconds: number) {
+  return Number.isFinite(milliseconds) ? String(milliseconds / 1000) : "";
 }
 
 export function ConfigurationSettingsDialog({
@@ -31,21 +38,25 @@ export function ConfigurationSettingsDialog({
   onCancel,
 }: ConfigurationSettingsDialogProps) {
   const [settings, setSettings] = useState<TriggerSettings>(profile.trigger_settings);
+  const [longPressSeconds, setLongPressSeconds] = useState(() => formatSeconds(profile.trigger_settings.long_press_ms));
+  const [doublePressSeconds, setDoublePressSeconds] = useState(() => formatSeconds(profile.trigger_settings.double_press_ms));
   const [copyName, setCopyName] = useState(profile.profile.name);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setSettings(profile.trigger_settings);
+    setLongPressSeconds(formatSeconds(profile.trigger_settings.long_press_ms));
+    setDoublePressSeconds(formatSeconds(profile.trigger_settings.double_press_ms));
     setCopyName(profile.profile.name);
     setBusy(false);
-  }, [open, profile]);
+  }, [open, profile.profile.id]);
 
   const validation = useMemo(() => {
     const long = settings.long_press_ms;
     const double = settings.double_press_ms;
-    if (!Number.isInteger(long) || !Number.isInteger(double)) return t(language, "settings.integerError");
-    if (long < 100 || long > 5000 || double < 100 || double > 1000) return t(language, "settings.rangeError");
+    if (!Number.isInteger(long) || !Number.isInteger(double)) return t(language, "settings.invalidSecondsError");
+    if (long < 100 || long > 5000 || double < 100 || double > 1000) return t(language, "settings.secondsRangeError");
     return null;
   }, [language, settings]);
 
@@ -62,12 +73,12 @@ export function ConfigurationSettingsDialog({
         <div className="device-setup-body">
           <div className="settings-fields">
             <label>
-              <span>{t(language, "settings.longPress")}</span>
-              <input aria-label={t(language, "settings.longPress")} type="number" min={100} max={5000} step={1} value={Number.isNaN(settings.long_press_ms) ? "" : settings.long_press_ms} onChange={(event) => setSettings((current) => { const next = { ...current, long_press_ms: parseInteger(event.target.value) }; onDraftChange?.(next); return next; })} />
+              <span>{t(language, "settings.longPressSeconds")}</span>
+              <input aria-label={t(language, "settings.longPressSeconds")} type="number" min={0.1} max={5} step={0.001} value={longPressSeconds} onChange={(event) => { const value = event.target.value; setLongPressSeconds(value); setSettings((current) => { const next = { ...current, long_press_ms: parseSeconds(value) }; onDraftChange?.(next); return next; }); }} />
             </label>
             <label>
-              <span>{t(language, "settings.doublePress")}</span>
-              <input aria-label={t(language, "settings.doublePress")} type="number" min={100} max={1000} step={1} value={Number.isNaN(settings.double_press_ms) ? "" : settings.double_press_ms} onChange={(event) => setSettings((current) => { const next = { ...current, double_press_ms: parseInteger(event.target.value) }; onDraftChange?.(next); return next; })} />
+              <span>{t(language, "settings.doublePressSeconds")}</span>
+              <input aria-label={t(language, "settings.doublePressSeconds")} type="number" min={0.1} max={1} step={0.001} value={doublePressSeconds} onChange={(event) => { const value = event.target.value; setDoublePressSeconds(value); setSettings((current) => { const next = { ...current, double_press_ms: parseSeconds(value) }; onDraftChange?.(next); return next; }); }} />
             </label>
           </div>
           {validation && <p className="field-error" role="alert">{validation}</p>}

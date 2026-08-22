@@ -1,0 +1,98 @@
+schema_version: 3
+profile:
+  id: daily-shortcuts
+  name: Daily Shortcuts
+  groups:
+    - id: R1
+      columns: 3
+      buttons:
+        - { id: K1, label: Paste link }
+        - { id: K2, label: Open calendar }
+        - { id: K3, label: Copy }
+    - id: R2
+      columns: 3
+      buttons:
+        - { id: K4, label: Paste }
+        - { id: K5, label: Undo }
+        - { id: K6, label: Find }
+    - id: R3
+      columns: 3
+      buttons:
+        - { id: K7, label: Select all }
+        - { id: K8, label: New tab }
+        - { id: K9, label: Close tab }
+trigger_settings:
+  long_press_ms: 500
+  double_press_ms: 300
+hardware_profiles:
+  - id: hardware
+    name: YD-RP2040 3x3 direct
+    board_profile_id: yd-rp2040
+    debounce_ms: 30
+    inputs:
+      - type: direct
+        id: direct-1
+        keys:
+          K1: 1
+          K2: 2
+          K3: 3
+          K4: 4
+          K5: 5
+          K6: 6
+          K7: 7
+          K8: 8
+          K9: 9
+  - id: esp-hardware
+    name: YD-ESP32-S3 3x3 direct
+    board_profile_id: yd-esp32-s3
+    debounce_ms: 30
+    inputs:
+      - type: direct
+        id: direct-1
+        keys:
+          K1: 1
+          K2: 2
+          K3: 3
+          K4: 4
+          K5: 5
+          K6: 6
+          K7: 7
+          K8: 8
+          K9: 9
+actions:
+  K1:
+    press:
+      - type: paste
+        text: https://meet.google.com
+  K2:
+    press:
+      - type: open
+        target: https://calendar.google.com
+  K3:
+    press:
+      - type: hotkey
+        keys: [primary, c]
+  K4:
+    press:
+      - type: hotkey
+        keys: [primary, v]
+  K5:
+    press:
+      - type: hotkey
+        keys: [primary, z]
+  K6:
+    press:
+      - type: hotkey
+        keys: [primary, f]
+  K7:
+    press:
+      - type: hotkey
+        keys: [primary, a]
+  K8:
+    press:
+      - type: hotkey
+        keys: [primary, t]
+  K9:
+    press:
+      - type: hotkey
+        keys: [primary, w]

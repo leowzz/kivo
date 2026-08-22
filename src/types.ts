@@ -104,6 +104,7 @@ export interface HardwareProfile {
 export interface DeviceProfile {
   schema_version: 3;
   profile: ModelLayout;
+  snapshot_metadata?: SnapshotMetadata | null;
   trigger_settings: TriggerSettings;
   hardware_profiles: HardwareProfile[];
   actions: Record<string, TriggerActions>;
@@ -124,8 +125,15 @@ export interface DeviceRecord {
 
 export interface ProductDeviceConfig {
   product_version_id: string;
+  snapshot_metadata?: SnapshotMetadata | null;
   trigger_settings: TriggerSettings;
   actions: Record<string, TriggerActions>;
+}
+
+export interface SnapshotMetadata {
+  created_at: number;
+  source_device_id?: string | null;
+  source_device_name?: string | null;
 }
 
 export interface SettingsDocument {
@@ -283,6 +291,8 @@ export interface ActivityLog {
   deviceProfileId: string;
   hardwareProfileId: string;
   buttonId: string | null;
+  actionKind?: string | null;
+  detail?: string | null;
 }
 
 export interface HomeMetricsSnapshot {

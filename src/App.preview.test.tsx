@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -33,28 +33,53 @@ test("preview exposes an editable RP2040 SSD1306 configuration", async () => {
   expect(hardware?.ssd1306).toEqual({ sda: 18, scl: 19 });
 });
 
-test("creates a blank profile locally in preview mode", async () => {
+test("does not offer profile creation for an unidentifiable candidate", async () => {
   const user = userEvent.setup();
   const { default: App } = await import("./App");
   render(<App />);
 
   const setup = await screen.findByRole("dialog", { name: "添加键盘" });
-  await user.click(within(setup).getByRole("button", { name: "先新建配置" }));
-  await user.click(within(setup).getByRole("radio", { name: "空白配置" }));
-  await user.type(
-    within(setup).getByRole("textbox", { name: "配置名称" }),
-    "验收空白配置",
-  );
-  await user.click(within(setup).getByRole("button", { name: "创建配置" }));
-
-  await waitFor(() =>
-    expect(within(setup).getByText("设备身份无效")).toBeInTheDocument(),
-  );
-  expect(within(setup).queryByRole("alert")).toBeNull();
+  expect(within(setup).getByText("无法识别这台设备")).toBeInTheDocument();
+  expect(within(setup).queryByRole("button", { name: "重新检测" })).toBeNull();
+  expect(within(setup).queryByRole("button", { name: "先新建配置" })).toBeNull();
   expect(invoke).not.toHaveBeenCalled();
 
   await user.click(within(setup).getByRole("button", { name: "关闭" }));
-  await user.click(screen.getByRole("button", { name: "数据与备份" }));
-  expect(screen.getByText("验收空白配置")).toBeInTheDocument();
-  expect(screen.queryByLabelText("当前编辑配置")).not.toBeInTheDocument();
+});
+
+test("completes first-time device setup locally in preview mode", async () => {
+  const user = userEvent.setup();
+  const { previewSnapshot } = await import("./preview");
+  const original = structuredClone(previewSnapshot);
+  previewSnapshot.devices = [
+    ...previewSnapshot.devices,
+    {
+      ...structuredClone(previewSnapshot.devices[0]),
+      deviceId: "preview-unassigned",
+      name: "预览设备",
+      hardwareSerial: "PREVIEW-001",
+      assignment: "unassigned",
+      runtime: "inactive",
+      runtimeAssignment: null,
+    },
+  ];
+
+  try {
+    const { default: App } = await import("./App");
+    render(<App />);
+
+    const setup = await screen.findByRole("dialog", { name: "添加键盘" });
+    await user.click(within(setup).getByRole("button", { name: "稍后处理" }));
+    await user.click(screen.getByRole("button", { name: /预览设备/ }));
+    await user.click(screen.getByRole("button", { name: "继续设置" }));
+    const deviceSetup = await screen.findByRole("dialog", { name: "添加键盘" });
+    await user.click(within(deviceSetup).getByRole("button", { name: "下一步" }));
+    await user.click(within(deviceSetup).getByRole("button", { name: "下一步" }));
+
+    expect(await within(deviceSetup).findByText("按一下实体按键")).toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: "预览设备" })).toBeInTheDocument();
+  } finally {
+    Object.assign(previewSnapshot, original);
+  }
 });
