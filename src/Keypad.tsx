@@ -169,7 +169,7 @@ export function Keypad({
           style={{
             flexGrow: rows / columns,
             gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-            gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
+            gridTemplateRows: `repeat(${rows}, minmax(72px, 1fr))`,
           }}
         >
           {group.buttons.map((button, buttonIndex) => {
@@ -184,6 +184,12 @@ export function Keypad({
             const isSelected = selectedButtonId === button.id;
             const isPressed = pressedButtonIds.has(button.id);
             const isFailed = failedButtonIds.has(button.id);
+            const labelLength = Array.from(button.label).length;
+            const labelSizeClass = labelLength > 18
+              ? "is-long"
+              : labelLength > 10
+                ? "is-medium"
+                : "";
             const summaryId = `${summaryPrefix}-action-summary-${groupIndex}-${buttonIndex}`;
             return (
               <button
@@ -198,6 +204,7 @@ export function Keypad({
                   count > 0 ? "has-action-count" : "",
                 ].filter(Boolean).join(" ")}
                 type="button"
+                title={button.label}
                 aria-label={`${button.label}，${actionSummary}${isFailed ? `，${failureLabel}` : ""}`}
                 aria-describedby={summaryId}
                 aria-current={isSelected ? "true" : undefined}
@@ -209,10 +216,12 @@ export function Keypad({
                 onKeyDown={(event) => handleKeyDown(event, button.id)}
                 onClick={() => onSelect(button.id)}
               >
-                <span className="key-button-label">{button.label}</span>
+                <span className={`key-button-label ${labelSizeClass}`.trim()}>{button.label}</span>
                 <span className="key-action-summary" id={summaryId}>{actionSummary}</span>
                 {isFailed ? <CircleAlert className="key-error-indicator" size={14} aria-hidden="true" /> : null}
-                <small aria-hidden="true">{count > 99 ? "99+" : count > 0 ? count : ""}</small>
+                <span className="key-button-count" aria-hidden="true">
+                  {count > 0 ? actionSummary : ""}
+                </span>
               </button>
             );
           })}

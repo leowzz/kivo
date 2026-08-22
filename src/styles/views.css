@@ -81,29 +81,35 @@
 /* ===== 键盘区 ===== */
 .keypad-stage { min-width: 0; min-height: 0; flex: 1; display: grid; place-items: safe center; overflow: auto; overscroll-behavior: contain; padding: var(--space-32); }
 .keypad { width: min(100%, 560px); min-width: 0; min-height: 0; height: min(100%, 685px); display: flex; flex-direction: column; gap: 18px; }
-.key-group { min-width: 0; min-height: 0; flex-basis: 0; display: grid; gap: 9px; }
+.key-group { min-width: 0; min-height: min-content; flex-basis: 0; display: grid; gap: 9px; }
 .key-button {
-  position: relative; min-width: 0; min-height: 44px; display: grid; place-items: center;
-  border: 1px solid var(--border-strong); border-radius: var(--radius-8); padding: 8px;
+  position: relative; min-width: 0; min-height: 72px; display: grid;
+  grid-template-rows: 18px minmax(38px, 1fr); row-gap: 2px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-8); padding: 6px 8px 8px;
   color: var(--gray-12); background: var(--bg-surface);
   box-shadow: 0 1px 0 var(--gray-5), 0 2px 4px rgba(26, 33, 30, .06);
-  font-size: var(--text-14); font-weight: var(--weight-semibold); overflow: hidden;
+  font-size: 16px; font-weight: var(--weight-bold); line-height: 1.25; overflow: hidden;
   transition: box-shadow .12s ease, transform .12s ease, border-color .12s ease, background .12s ease;
 }
-.key-button-label { width: 100%; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.key-button-label {
+  grid-row: 2; width: 100%; min-width: 0; max-width: 100%; max-height: 2.4em;
+  align-self: center; overflow: hidden; text-align: center; line-height: 1.2;
+  overflow-wrap: anywhere; white-space: normal;
+}
+.key-button-label.is-medium { font-size: 15px; }
+.key-button-label.is-long { font-size: 13px; }
 .key-button.has-action-count,
-.key-button.is-failed { align-items: end; padding-top: 20px; padding-bottom: 5px; }
+.key-button.is-failed { padding: 6px 8px 8px; }
 .key-button.has-action-count .key-button-label,
-.key-button.is-failed .key-button-label { max-width: calc(100% - 28px); transform: translateY(6px); }
-.key-button.has-action-count.is-failed .key-button-label { max-width: calc(100% - 52px); }
+.key-button.is-failed .key-button-label { max-width: 100%; transform: none; }
 .key-button:hover { border-color: var(--green-6); background: var(--green-1); box-shadow: 0 1px 0 var(--gray-5), 0 4px 10px rgba(26, 33, 30, .08); transform: translateY(-1px); }
 .key-button.is-selected { border-color: var(--green-8); background: var(--green-2); box-shadow: 0 0 0 2px var(--green-3), 0 1px 0 var(--green-7); }
 .key-button.is-pressed { color: #fff; background: var(--green-9); transform: translateY(1px); box-shadow: 0 1px 0 var(--green-11); transition: transform .12s cubic-bezier(.34, 1.56, .64, 1), background .12s ease; }
 .key-button:focus-visible { position: relative; z-index: 1; outline: 2px solid var(--green-8); outline-offset: 2px; }
 .key-action-summary { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
-.key-button small { position: absolute; top: 5px; right: 5px; width: 24px; min-width: 24px; height: 18px; display: grid; place-items: center; overflow: hidden; border-radius: 9px; color: #fff; background: var(--green-9); font-size: 10px; line-height: 18px; font-variant-numeric: tabular-nums; }
-.key-button small:empty { visibility: hidden; }
-.key-button.is-pressed small { color: var(--green-9); background: #fff; }
+.key-button-count { grid-row: 1; justify-self: end; min-width: 24px; max-width: 100%; height: 18px; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--green-7); border-radius: 9px; padding: 0 6px; color: var(--green-11); background: var(--green-2); font-size: 10px; font-weight: var(--weight-semibold); line-height: 16px; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.key-button-count:empty { visibility: hidden; }
+.key-button.is-pressed .key-button-count { border-color: #fff; color: var(--green-9); background: #fff; }
 
 /* ===== 动作面板 ===== */
 .action-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-left: 1px solid var(--border-subtle); background: var(--bg-surface); }

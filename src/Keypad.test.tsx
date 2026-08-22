@@ -32,9 +32,9 @@ test("sizes keypad groups by their row and column counts", () => {
   );
   const groups = container.querySelectorAll<HTMLElement>(".key-group");
 
-  expect(groups[0].style.gridTemplateRows).toBe("repeat(1, minmax(0, 1fr))");
+  expect(groups[0].style.gridTemplateRows).toBe("repeat(1, minmax(72px, 1fr))");
   expect(groups[0].style.flexGrow).toBe("0.2");
-  expect(groups[1].style.gridTemplateRows).toBe("repeat(4, minmax(0, 1fr))");
+  expect(groups[1].style.gridTemplateRows).toBe("repeat(4, minmax(72px, 1fr))");
   expect(groups[1].style.flexGrow).toBe(String(4 / 3));
 });
 
@@ -63,6 +63,33 @@ test("counts actions in every trigger group", () => {
   );
 
   expect(getByRole("button", { name: "A，2 actions" })).toBeInTheDocument();
+});
+
+test("keeps the full key label available as a tooltip", () => {
+  const layout: ModelLayout = {
+    id: "label-visibility-test",
+    name: "Label visibility test",
+    groups: [{ id: "keys", columns: 2, buttons: [
+      { id: "A", label: "打开工作台" },
+      { id: "B", label: "Open calendar" },
+    ]}],
+  };
+  render(
+    <Keypad
+      layout={layout}
+      actions={{ A: { press: [{ type: "delay", duration_ms: 1 }], release: [], long_press: [], double_press: [] } }}
+      selectedButtonId={null}
+      pressedButtonIds={new Set()}
+      actionCountLabel={(count) => `${count} actions`}
+      onSelect={vi.fn()}
+    />,
+  );
+
+  const button = screen.getByRole("button", { name: "打开工作台，1 actions" });
+  expect(button).toHaveAttribute("title", "打开工作台");
+  expect(button.querySelector(".key-button-label")).toHaveTextContent("打开工作台");
+  expect(button.querySelector(".key-button-count")).toHaveTextContent("1 actions");
+  expect(screen.getByText("Open calendar", { selector: ".key-button-label" })).toHaveClass("is-medium");
 });
 
 test("separates selected, physical pressed, and action summary semantics", () => {
