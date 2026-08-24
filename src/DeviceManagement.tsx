@@ -5,6 +5,7 @@ import { ConfigurationSettingsDialog } from "./ConfigurationSettingsDialog";
 import { HardwareMapping } from "./HardwareMapping";
 import { Keypad } from "./Keypad";
 import { LayoutEditor } from "./LayoutEditor";
+import { reconcileProfileLayout } from "./profileEditing";
 import {
   candidateDisplayLabel,
   compatibleHardwareProfiles,
@@ -1488,7 +1489,7 @@ export function DeviceManagement({
                   )}
                   {editingProfile && !isProductDevice && advancedTab === "layout" && (
                     <div id="device-advanced-panel-layout" role="tabpanel" aria-labelledby="device-advanced-tab-layout">
-                      <LayoutEditor language={language} layout={editingProfile.profile} onChange={(layout) => updateEditingProfile({ ...editingProfile, profile: layout })} />
+                      <LayoutEditor language={language} layout={editingProfile.profile} onChange={(layout) => updateEditingProfile(reconcileProfileLayout(editingProfile, layout))} />
                     </div>
                   )}
                   <details className="device-technical-details">

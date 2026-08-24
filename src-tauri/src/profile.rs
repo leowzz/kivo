@@ -1026,6 +1026,22 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unknown_hardware_button_bindings() {
+        let mut profile = profile();
+        let InputSource::Direct { keys, .. } = &mut profile.hardware_profiles[0].inputs[0] else {
+            panic!("profile fixture must start with a direct input");
+        };
+        keys.insert("MISSING".into(), 8);
+
+        let error = profile.validate().unwrap_err();
+        assert_eq!(error.code, "unknown_hardware_button");
+        assert_eq!(
+            error.params.get("button").map(String::as_str),
+            Some("MISSING")
+        );
+    }
+
+    #[test]
     fn feature_switches_validate_targets_and_round_trip() {
         let mut profile = profile();
         profile.hardware_profiles[0]

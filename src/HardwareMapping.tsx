@@ -219,6 +219,19 @@ function hasInvalidFeatureSwitch(hardware: HardwareProfile, buttons: readonly { 
   ));
 }
 
+function hasUnknownHardwareButton(
+  hardware: HardwareProfile,
+  buttons: readonly { id: string }[],
+) {
+  const knownButtons = new Set(buttons.map((button) => button.id));
+  return hardware.inputs.some((source) => {
+    const buttonIds = source.type === "feature_switch"
+      ? source.buttons
+      : Object.keys(source.keys);
+    return buttonIds.some((buttonId) => !knownButtons.has(buttonId));
+  });
+}
+
 function hasInvalidOled(
   hardware: HardwareProfile,
   board: BoardProfileSummary | undefined,
@@ -254,7 +267,10 @@ export function hardwareProfilesAreValid(
       conflictingPins(profile).size === 0 &&
       !hasInvalidContactPair(profile) &&
       !hasInvalidOled(profile, board) &&
-      (!layout || !hasInvalidFeatureSwitch(profile, layout.groups.flatMap((group) => group.buttons)));
+      (!layout || (
+        !hasInvalidFeatureSwitch(profile, layout.groups.flatMap((group) => group.buttons)) &&
+        !hasUnknownHardwareButton(profile, layout.groups.flatMap((group) => group.buttons))
+      ));
   });
 }
 

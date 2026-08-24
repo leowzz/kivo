@@ -790,6 +790,17 @@ test("renders and rejects matrix endpoints missing from source pins until repair
   expect(hardwareProfilesAreValid(repaired, boardProfiles)).toBe(true);
 });
 
+test("rejects hardware bindings for buttons removed from the layout", () => {
+  const inconsistent = structuredClone(hardwareProfiles);
+  inconsistent[0].inputs[0] = {
+    type: "direct",
+    id: "direct",
+    keys: { ONE: 6, REMOVED: 12 },
+  };
+
+  expect(hardwareProfilesAreValid(inconsistent, boardProfiles, layout)).toBe(false);
+});
+
 test("edits OLED SDA and OLED SCL through separate controlled selectors", async () => {
   const user = userEvent.setup();
   const profile = {
