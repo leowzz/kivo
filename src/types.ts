@@ -312,6 +312,39 @@ export interface AppSnapshot {
   candidates: CandidateStatus[];
   language: Language;
   homeMetrics: HomeMetricsSnapshot | null;
+  usage?: UsageView | null;
+}
+
+export type UsageState =
+  | "disabled"
+  | "connecting"
+  | "ready"
+  | "stale"
+  | "auth_error"
+  | "network_error"
+  | "parse_error"
+  | "api_error";
+
+export interface UsageSnapshot {
+  state: UsageState;
+  hasData: boolean;
+  costMicros: number;
+  todayTokens: number;
+  tpm: number;
+  updatedAtMs: number | null;
+}
+
+export interface UsageSettingsSummary {
+  enabled: boolean;
+  baseUrl: string;
+  email: string;
+  intervalSeconds: number;
+  passwordRequired: boolean;
+}
+
+export interface UsageView {
+  settings: UsageSettingsSummary;
+  snapshot: UsageSnapshot;
 }
 
 export interface StartupFailure {

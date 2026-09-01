@@ -45,6 +45,19 @@ std::optional<std::uint32_t> parseNumber(std::string_view value) {
   return result;
 }
 
+std::optional<std::uint64_t> parseWideNumber(std::string_view value) {
+  if (value.empty()) return std::nullopt;
+  std::uint64_t result = 0;
+  for (const char character : value) {
+    if (character < '0' || character > '9') return std::nullopt;
+    const auto digit = static_cast<std::uint64_t>(character - '0');
+    if (result > (std::numeric_limits<std::uint64_t>::max() - digit) / 10U)
+      return std::nullopt;
+    result = result * 10U + digit;
+  }
+  return result;
+}
+
 std::optional<std::string_view> takeToken(std::string_view &line) {
   while (!line.empty() && line.front() == ' ') line.remove_prefix(1);
   if (line.empty()) return std::nullopt;
@@ -58,6 +71,11 @@ std::optional<std::string_view> takeToken(std::string_view &line) {
 std::optional<std::uint32_t> takeNumber(std::string_view &line) {
   const auto token = takeToken(line);
   return token.has_value() ? parseNumber(*token) : std::nullopt;
+}
+
+std::optional<std::uint64_t> takeWideNumber(std::string_view &line) {
+  const auto token = takeToken(line);
+  return token.has_value() ? parseWideNumber(*token) : std::nullopt;
 }
 
 bool takePins(std::string_view &line, std::size_t count,
@@ -258,6 +276,24 @@ std::optional<HelperCommand> parseHelperCommand(std::string_view line) {
                               ? HelperCommandKind::ConfigCommit
                               : HelperCommandKind::LearnEnd};
     command.revision = *revision;
+    return command;
+  }
+
+  if (*kind == "USAGE") {
+    const auto state = takeNumber(line);
+    const auto costMicros = takeWideNumber(line);
+    const auto todayTokens = takeWideNumber(line);
+    const auto tpm = takeWideNumber(line);
+    if (!state.has_value() || *state > 7 || !costMicros.has_value() ||
+        !todayTokens.has_value() || !tpm.has_value() ||
+        takeToken(line).has_value()) {
+      return std::nullopt;
+    }
+    HelperCommand command{HelperCommandKind::Usage};
+    command.usageState = static_cast<std::uint8_t>(*state);
+    command.usageCostMicros = *costMicros;
+    command.usageTodayTokens = *todayTokens;
+    command.usageTpm = *tpm;
     return command;
   }
 

@@ -20,6 +20,7 @@ mod studio;
 mod tray;
 #[allow(dead_code)]
 mod trigger;
+mod usage;
 mod workspace;
 
 use coordinator::{
@@ -46,6 +47,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{Emitter, Manager};
+use usage::{UsageService, UsageSettingsPatch, UsageSnapshot, UsageView};
 use workspace::{
     AppError, AssignmentResolution, BackupPreview, DuplicateProfileForDeviceRequest,
     EditorSettingsPatch, ImportPreview, Language, ProductDeviceConfig, RuntimeAssignment,
@@ -207,9 +209,11 @@ struct AppState {
     metrics: Option<Arc<MetricsStore>>,
     coordinator: Option<Arc<Mutex<RuntimeCoordinator>>>,
     paste: Option<Arc<PasteCoordinator>>,
+    usage: Option<Arc<UsageService>>,
     stop: Arc<AtomicBool>,
     scan_requested: Arc<AtomicBool>,
     display_thread: Mutex<Option<JoinHandle<()>>>,
+    usage_thread: Mutex<Option<JoinHandle<()>>>,
     coordinator_thread: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -223,6 +227,7 @@ struct AppSnapshot {
     candidates: Vec<CandidateStatus>,
     language: Language,
     home_metrics: Option<HomeMetricsSnapshot>,
+    usage: Option<UsageView>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -322,6 +327,7 @@ fn snapshot(state: &AppState) -> Result<AppSnapshot, AppError> {
             .as_deref()
             .and_then(|profile_id| metrics.home_snapshot(profile_id, None, now_ms()).ok())
     });
+    let usage = state.usage.as_ref().map(|usage| usage.view());
     Ok(AppSnapshot {
         device_profiles,
         editor_profile,
@@ -333,6 +339,7 @@ fn snapshot(state: &AppState) -> Result<AppSnapshot, AppError> {
         candidates,
         language,
         home_metrics,
+        usage,
     })
 }
 
@@ -451,6 +458,18 @@ fn save_settings_inner(
     settings: EditorSettingsPatch,
 ) -> Result<AppSnapshot, AppError> {
     mutate_workspace(state, move |workspace, _| workspace.save_settings(settings))
+}
+
+fn save_usage_settings_inner(
+    state: &AppState,
+    settings: UsageSettingsPatch,
+) -> Result<AppSnapshot, AppError> {
+    state
+        .usage
+        .as_ref()
+        .ok_or_else(|| state_error("usage_service_unavailable"))?
+        .save(settings)?;
+    snapshot(state)
 }
 
 fn import_profile_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, AppError> {
@@ -884,6 +903,22 @@ fn save_settings(
 }
 
 #[tauri::command]
+fn save_usage_settings(
+    state: tauri::State<'_, AppState>,
+    settings: UsageSettingsPatch,
+) -> Result<AppSnapshot, AppError> {
+    let context = serde_json::json!({
+        "enabled": settings.enabled,
+        "baseUrl": settings.base_url,
+        "email": settings.email,
+        "intervalSeconds": settings.interval_seconds,
+    });
+    runtime_log::operation(now_ms(), "usage_settings_saved", context, || {
+        save_usage_settings_inner(&state, settings)
+    })
+}
+
+#[tauri::command]
 fn rename_device(
     state: tauri::State<'_, AppState>,
     device_id: hardware::DeviceId,
@@ -1164,10 +1199,8 @@ pub fn run() {
                 #[cfg(not(feature = "product-studio"))]
                 let config_directory = app.path().app_config_dir()?;
                 let codex_home_fallback = app.path().home_dir()?.join(".codex");
-                let codex_cursor_store = app
-                    .path()
-                    .app_data_dir()?
-                    .join("display/codex-cursors-v1.json");
+                let app_data_directory = app.path().app_data_dir()?;
+                let codex_cursor_store = app_data_directory.join("display/codex-cursors-v1.json");
                 fs::create_dir_all(&config_directory)?;
                 if let Err(error) = runtime_log::install(app.handle(), &config_directory) {
                     eprintln!("failed to install runtime logger: {error}");
@@ -1246,6 +1279,13 @@ pub fn run() {
                     )));
                 let stop = Arc::new(AtomicBool::new(false));
                 let scan_requested = Arc::new(AtomicBool::new(false));
+                let (usage_snapshot_sender, usage_snapshots) =
+                    mpsc::channel::<Arc<UsageSnapshot>>();
+                let (usage, usage_thread) = UsageService::spawn(
+                    &app_data_directory,
+                    Arc::clone(&stop),
+                    usage_snapshot_sender,
+                )?;
                 let display_thread =
                     DisplayService::spawn(providers, Arc::clone(&stop), display_snapshot_sender)?;
                 let coordinator_thread = {
@@ -1304,6 +1344,12 @@ pub fn run() {
                                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                                     .update_display(snapshot);
                             }
+                            if let Some(snapshot) = usage_snapshots.try_iter().last() {
+                                coordinator
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                    .update_usage(Arc::clone(&snapshot));
+                            }
                             thread::sleep(RUNTIME_EVENT_POLL_INTERVAL);
                         }
                         coordinator
@@ -1318,9 +1364,11 @@ pub fn run() {
                     metrics,
                     coordinator: Some(coordinator),
                     paste: Some(paste),
+                    usage: Some(usage),
                     stop,
                     scan_requested,
                     display_thread: Mutex::new(Some(display_thread)),
+                    usage_thread: Mutex::new(Some(usage_thread)),
                     coordinator_thread: Mutex::new(Some(coordinator_thread)),
                 });
                 runtime_log::emit_lifecycle(runtime_log::RuntimeLogEntry::new(
@@ -1344,6 +1392,7 @@ pub fn run() {
         create_device_profile,
         duplicate_profile_for_device,
         save_settings,
+        save_usage_settings,
         rename_device,
         save_product_device_config,
         copy_product_device_config,
@@ -1372,6 +1421,7 @@ pub fn run() {
         create_device_profile,
         duplicate_profile_for_device,
         save_settings,
+        save_usage_settings,
         rename_device,
         save_product_device_config,
         copy_product_device_config,
@@ -1459,6 +1509,14 @@ pub fn run() {
                     .take()
                 {
                     let _ = display.join();
+                }
+                if let Some(usage) = state
+                    .usage_thread
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take()
+                {
+                    let _ = usage.join();
                 }
                 if let Some(coordinator) = state
                     .coordinator_thread
@@ -1888,9 +1946,11 @@ mod tests {
                 .map(Arc::new),
             coordinator: None,
             paste: None,
+            usage: None,
             stop: Arc::new(AtomicBool::new(false)),
             scan_requested: Arc::new(AtomicBool::new(false)),
             display_thread: Mutex::new(None),
+            usage_thread: Mutex::new(None),
             coordinator_thread: Mutex::new(None),
         }
     }

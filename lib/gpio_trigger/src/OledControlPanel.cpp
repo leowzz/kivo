@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <string>
 
 namespace {
@@ -9,8 +10,9 @@ constexpr std::size_t kDisplayColumns = 21;
 constexpr std::uint8_t kMinimumBrightnessPercent = 5;
 constexpr std::uint8_t kBrightnessStepPercent = 5;
 constexpr std::size_t kBrightnessBarColumns = 16;
-constexpr std::array<const char *, 5> kMenuEntries = {
-    "LIVE VIEW", "SYSTEM STATUS", "INPUT TEST", "BRIGHTNESS", "DEVICE INFO"};
+constexpr std::array<const char *, 6> kMenuEntries = {
+    "LIVE VIEW", "SUB2API", "SYSTEM STATUS", "INPUT TEST", "BRIGHTNESS",
+    "DEVICE INFO"};
 constexpr std::array<std::int8_t, 16> kEncoderTransitions = {
     0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
 
@@ -29,6 +31,63 @@ std::string brightnessBar(std::uint8_t percent) {
              100);
   return "[" + std::string(filled, '#') +
          std::string(kBrightnessBarColumns - filled, '.') + "]";
+}
+
+std::string formatCost(std::uint64_t micros) {
+  if (micros >= 99999500000ULL) return "$99999+";
+  const auto cents = (micros + 5000ULL) / 10000ULL;
+  char value[24]{};
+  std::snprintf(value, sizeof(value), "$%llu.%02llu",
+                static_cast<unsigned long long>(cents / 100ULL),
+                static_cast<unsigned long long>(cents % 100ULL));
+  return value;
+}
+
+std::string formatCompact(std::uint64_t value, bool allowBillions) {
+  char formatted[24]{};
+  if (value < 1000ULL) {
+    std::snprintf(formatted, sizeof(formatted), "%llu",
+                  static_cast<unsigned long long>(value));
+  } else if (value < 1000000ULL) {
+    std::snprintf(formatted, sizeof(formatted), "%lluK",
+                  static_cast<unsigned long long>(value / 1000ULL));
+  } else if (value < 1000000000ULL) {
+    std::snprintf(formatted, sizeof(formatted), "%lluM",
+                  static_cast<unsigned long long>(value / 1000000ULL));
+  } else if (allowBillions && value < 999900000000ULL) {
+    std::snprintf(formatted, sizeof(formatted), "%lluB",
+                  static_cast<unsigned long long>(value / 1000000000ULL));
+  } else {
+    return allowBillions ? "999B+" : "999M+";
+  }
+  return formatted;
+}
+
+std::string usageStatus(OledUsageState state) {
+  switch (state) {
+    case OledUsageState::Disabled:
+      return "NOT CONFIGURED";
+    case OledUsageState::Connecting:
+      return "CONNECTING";
+    case OledUsageState::Ready:
+      return "LIVE";
+    case OledUsageState::Stale:
+      return "STALE / LAST VALUE";
+    case OledUsageState::AuthError:
+      return "AUTH ERROR";
+    case OledUsageState::NetworkError:
+      return "NETWORK ERROR";
+    case OledUsageState::ParseError:
+      return "DATA ERROR";
+    case OledUsageState::ApiError:
+      return "API ERROR";
+  }
+  return "DATA ERROR";
+}
+
+bool hasUsage(const OledUsageSnapshot &usage) {
+  return usage.state == OledUsageState::Ready ||
+         usage.state == OledUsageState::Stale;
 }
 }  // namespace
 
@@ -106,12 +165,15 @@ OledControlPanelUpdate OledControlPanel::select() {
       view_ = View::Closed;
       return OledControlPanelUpdate::Dismiss;
     case 1:
-      view_ = View::Status;
+      view_ = View::Usage;
       break;
     case 2:
-      view_ = View::InputTest;
+      view_ = View::Status;
       break;
     case 3:
+      view_ = View::InputTest;
+      break;
+    case 4:
       view_ = View::Brightness;
       break;
     default:
@@ -198,6 +260,21 @@ DisplayFrame OledControlPanel::frame(const DisplayFrame &status) const {
       }
       break;
     }
+    case View::Usage:
+      result.lines[0] = usage_.state == OledUsageState::Stale
+                            ? "SUB2API / STALE"
+                            : "SUB2API";
+      if (hasUsage(usage_)) {
+        result.lines[1] = "COST " + formatCost(usage_.costMicros);
+        result.lines[2] =
+            "TOKENS " + formatCompact(usage_.todayTokens, true);
+        result.lines[3] = "TPM " + formatCompact(usage_.tpm, false);
+      } else {
+        result.lines[1] = usageStatus(usage_.state);
+        result.lines[2] = "COST - / TOKENS -";
+        result.lines[3] = "TPM -";
+      }
+      break;
     case View::Status:
       result.lines[0] = "SYSTEM STATUS";
       result.lines[1] = fitLine(status.lines[0]);

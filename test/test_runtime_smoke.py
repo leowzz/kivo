@@ -25,6 +25,31 @@ class FakeSerial:
         return None
 
 
+def test_cli_defaults_to_current_protocol_version() -> None:
+    args = build_parser().parse_args(
+        [
+            "--serial",
+            "SERIAL",
+            "--vid",
+            "0x2e8a",
+            "--pid",
+            "0x102e",
+            "--family",
+            "rp2040",
+            "--board",
+            "yd-rp2040",
+            "--build",
+            "test-build",
+            "--valid-pins",
+            "1",
+            "--rejected-pins",
+            "99",
+        ]
+    )
+
+    assert args.protocol_version == 12
+
+
 def test_smoke_requires_expected_protocol_responses() -> None:
     device = FakeSerial(
         [
@@ -78,10 +103,10 @@ def test_smoke_accepts_generic_protocol_v9_hello() -> None:
     )
 
 
-def test_smoke_accepts_generic_protocol_v11_hello() -> None:
+def test_smoke_accepts_generic_protocol_v12_hello() -> None:
     device = FakeSerial(
         [
-            b"HELLO 11 rp2040 yd-rp2040 test-build - 2 1 2\n",
+            b"HELLO 12 rp2040 yd-rp2040 test-build - 2 1 2\n",
             b"CONFIG_OK 1\n",
             b"LEARN_OK 2\n",
             b"LEARN_OK 2\n",
@@ -95,7 +120,7 @@ def test_smoke_accepts_generic_protocol_v11_hello() -> None:
         build="test-build",
         valid_pins=[1, 2],
         rejected_pins=[],
-        protocol_version=11,
+        protocol_version=12,
     )
 
 def test_smoke_ignores_duplicate_hello_before_command_ack() -> None:
@@ -180,7 +205,7 @@ def test_smoke_cli_requires_build_and_passes_it_to_run_arguments() -> None:
     assert args.build == "test-build"
     device = FakeSerial(
         [
-            b"HELLO 9 esp32s3 yd-esp32-s3 test-build - 2 1 2\n",
+            b"HELLO 12 esp32s3 yd-esp32-s3 test-build - 2 1 2\n",
             b"CONFIG_OK 1\n",
             b"CONFIG_ERROR 2 invalid_direct\n",
             b"LEARN_OK 3\n",

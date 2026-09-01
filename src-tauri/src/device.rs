@@ -20,8 +20,8 @@ use crate::{
         ACTION_RUN_PROTOCOL_VERSION, ActionSequence, DISPLAY_LARGE_FONT_PROTOCOL_VERSION,
         DISPLAY_PROTOCOL_VERSION, DeviceMessage, HelloCapabilities, InputState,
         OLED_PROTOCOL_VERSION, PhysicalInput, ProductDefinitionTransfer, SH1106_PROTOCOL_VERSION,
-        display_commands, format_paste_command, is_hello_line, parse_device, topology_commands,
-        validate_hello,
+        USAGE_PROTOCOL_VERSION, display_commands, format_paste_command, is_hello_line,
+        parse_device, topology_commands, usage_command, validate_hello,
     },
     trigger::{TriggerEdge, TriggerOccurrence, TriggerTracker},
 };
@@ -2222,6 +2222,13 @@ fn run_isolated_worker_inner(
                 WorkerCommand::UpdateDisplay(snapshot) => {
                     display_link.update_desired(snapshot)?;
                     (SessionOutput::default(), current_context.clone())
+                }
+                WorkerCommand::UpdateUsage(snapshot) => {
+                    let mut output = SessionOutput::default();
+                    if display_protocol >= USAGE_PROTOCOL_VERSION {
+                        output.lines.push(usage_command(&snapshot));
+                    }
+                    (output, current_context.clone())
                 }
                 WorkerCommand::Shutdown => return Ok(()),
             };

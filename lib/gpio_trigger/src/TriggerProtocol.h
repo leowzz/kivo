@@ -20,6 +20,7 @@ enum class HelperCommandKind {
   ConfigSh1106,
   ConfigOledControl,
   ConfigCommit,
+  Usage,
   DisplayBegin,
   DisplayRegion,
   DisplayClear,
@@ -50,6 +51,10 @@ struct HelperCommand {
   std::vector<std::uint8_t> keycodes;
   std::uint16_t consumerUsage = 0;
   std::uint32_t durationMs = 0;
+  std::uint8_t usageState = 0;
+  std::uint64_t usageCostMicros = 0;
+  std::uint64_t usageTodayTokens = 0;
+  std::uint64_t usageTpm = 0;
   std::uint8_t oledSda = 0;
   std::uint8_t oledScl = 0;
   bool displayFull = false;

@@ -338,6 +338,15 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
       writeLine("CONFIG_OK " + std::to_string(command->revision) + "\n");
       return;
     }
+    case HelperCommandKind::Usage:
+      oledControlPanel.setUsageSnapshot(OledUsageSnapshot{
+          static_cast<OledUsageState>(command->usageState),
+          command->usageCostMicros,
+          command->usageTodayTokens,
+          command->usageTpm,
+      });
+      if (oledControlPanel.active()) showControlPanel();
+      return;
     case HelperCommandKind::DisplayBegin:
     case HelperCommandKind::DisplayRegion:
     case HelperCommandKind::DisplayClear:

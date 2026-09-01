@@ -55,8 +55,10 @@ import type {
   RuntimeEvent,
   StartupFailure,
   TriggerActions,
+  UsageView,
 } from "./types";
 import { SerializedSaveQueue, useAutosave } from "./useAutosave";
+import { UsageSettingsPanel, type UsageSettingsPatch } from "./UsageSettingsPanel";
 import {
   useProductConfigHistory,
   useProfileHistory,
@@ -283,6 +285,7 @@ export default function App({
   const [language, setLanguage] = useState<Language>("zh-CN");
   const [view, setView] = useState<View>("devices");
   const [homeMetrics, setHomeMetrics] = useState<AppSnapshot["homeMetrics"]>(null);
+  const [usage, setUsage] = useState<UsageView | null>(null);
   const [deviceMetrics, setDeviceMetrics] = useState<{ deviceId: string; snapshot: HomeMetricsSnapshot } | null>(null);
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
   const [selectedManagedDeviceId, setSelectedManagedDeviceId] = useState<string | null>(null);
@@ -415,6 +418,7 @@ export default function App({
       devices: visibleDevices,
       candidates: snapshot.candidates,
     }));
+    setUsage(snapshot.usage ?? null);
     const currentDevices = new Map(snapshot.devices.map((device) => [device.deviceId, device]));
     const nextOwners = new Map(pressedOwnersRef.current);
     for (const [deviceId, owner] of nextOwners) {
@@ -491,6 +495,7 @@ export default function App({
     )));
     setLanguage(snapshot.language);
     setHomeMetrics(snapshot.homeMetrics);
+    setUsage(snapshot.usage ?? null);
     pressedOwnersRef.current = new Map();
     setPressedButtonIds(new Set());
   }, [productConfigHistory.get, productConfigHistory.reset, productConfigHistory.sync, profileHistory.reset, profileHistory.sync]);
@@ -1237,6 +1242,17 @@ export default function App({
     applySnapshot(snapshot, true);
   };
 
+  const saveUsageSettings = useCallback(async (settings: UsageSettingsPatch) => {
+    if (PREVIEW_MODE) return;
+    try {
+      const snapshot = await invoke<AppSnapshot>("save_usage_settings", { settings });
+      if (mountedRef.current) applySnapshot(snapshot, true);
+    } catch (operationError) {
+      setError(`${t(language, "error.save")}: ${errorMessage(operationError)}`);
+      throw operationError;
+    }
+  }, [applySnapshot, language]);
+
   const completeDeviceSetup = async (
     deviceId: string,
     name: string,
@@ -1676,6 +1692,11 @@ export default function App({
                 </button>
               </div>
               <div className="data-page-body">
+                <UsageSettingsPanel
+                  language={language}
+                  usage={usage}
+                  onSave={saveUsageSettings}
+                />
                 <section className="profile-list" aria-label={t(language, "data.profileList")}>
                   {deviceProfiles.length === 0 && <p className="empty-workspace-copy">{t(language, "model.empty")}</p>}
                   {deviceProfiles.map((profile) => {

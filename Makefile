@@ -120,6 +120,8 @@ studio: helper-kill
 helper-kill:
 	@$(UV_CMD) run python scripts/kill_helper.py
 
+kill: helper-kill
+
 helper-build: helper-build-studio
 
 helper-build-app:

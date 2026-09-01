@@ -9,6 +9,7 @@ use crate::{
     product::ProductDefinition,
     profile::{DeviceProfile, ProfileChange},
     protocol::{HelloCapabilities, InputState, PhysicalInput, validate_hello},
+    usage::UsageSnapshot,
     workspace::{
         AppError, AssignmentResolution, ProductDeviceConfig, RuntimeAssignment, SettingsDocument,
         Workspace,
@@ -19,7 +20,10 @@ use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, RwLock, mpsc},
+    time::{Duration, Instant},
 };
+
+const WORKER_RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SerialObservation {
@@ -328,6 +332,7 @@ pub enum WorkerCommand {
         captured: CapturedInput,
     },
     UpdateDisplay(Arc<DisplaySnapshot>),
+    UpdateUsage(Arc<UsageSnapshot>),
     Shutdown,
 }
 
@@ -486,7 +491,10 @@ pub struct RuntimeCoordinator {
     paste: Option<PasteHandle>,
     renderers: Arc<RendererRegistry>,
     display_snapshot: Option<Arc<DisplaySnapshot>>,
+    usage_snapshot: Option<Arc<UsageSnapshot>>,
     workers: BTreeMap<DeviceId, WorkerSlot>,
+    recovering_devices: BTreeSet<DeviceId>,
+    reconnect_not_before: BTreeMap<DeviceId, Instant>,
     devices: BTreeMap<DeviceId, DeviceStatus>,
     candidates: Vec<CandidateStatus>,
     event_sender: mpsc::Sender<WorkerEvent>,
@@ -630,7 +638,10 @@ impl RuntimeCoordinator {
             paste,
             renderers,
             display_snapshot: None,
+            usage_snapshot: None,
             workers: BTreeMap::new(),
+            recovering_devices: BTreeSet::new(),
+            reconnect_not_before: BTreeMap::new(),
             devices: BTreeMap::new(),
             candidates: Vec::new(),
             event_sender,
@@ -666,10 +677,10 @@ impl RuntimeCoordinator {
                 classified.push(ClassifiedObservation::Bootloader { board, observation });
             }
         }
-        self.reconcile(classified);
+        self.reconcile(classified, Instant::now());
     }
 
-    fn reconcile(&mut self, observations: Vec<ClassifiedObservation>) {
+    fn reconcile(&mut self, observations: Vec<ClassifiedObservation>, now: Instant) {
         self.candidates.clear();
         self.rebuild_offline_devices();
         let mut groups = BTreeMap::<DeviceId, Vec<ClassifiedObservation>>::new();
@@ -723,6 +734,8 @@ impl RuntimeCoordinator {
             let observation = &group[0];
             match observation {
                 ClassifiedObservation::Bootloader { .. } => {
+                    self.recovering_devices.remove(&device_id);
+                    self.reconnect_not_before.remove(&device_id);
                     self.stop_worker(&device_id);
                     if let Some(status) = self.devices.get_mut(&device_id) {
                         set_observed(status, observation, IdentityDimension::Valid);
@@ -790,6 +803,14 @@ impl RuntimeCoordinator {
                         }
                         continue;
                     }
+                    if self
+                        .reconnect_not_before
+                        .get(&device_id)
+                        .is_some_and(|retry_at| now < *retry_at)
+                    {
+                        continue;
+                    }
+                    self.reconnect_not_before.remove(&device_id);
                     let start = WorkerStart {
                         generation: self.generation,
                         device_id: device_id.clone(),
@@ -809,6 +830,22 @@ impl RuntimeCoordinator {
                                         .err()
                                 })
                             {
+                                worker.stop();
+                                worker.join();
+                                self.candidates.push(candidate_from_runtime(
+                                    board,
+                                    observation,
+                                    Some(device_id),
+                                    IdentityDimension::Validating,
+                                    Some(error),
+                                ));
+                                continue;
+                            }
+                            if let Some(error) = self.usage_snapshot.as_ref().and_then(|snapshot| {
+                                worker
+                                    .send(WorkerCommand::UpdateUsage(Arc::clone(snapshot)))
+                                    .err()
+                            }) {
                                 worker.stop();
                                 worker.join();
                                 self.candidates.push(candidate_from_runtime(
@@ -959,6 +996,13 @@ impl RuntimeCoordinator {
                 context,
                 activity,
             } => {
+                if matches!(
+                    activity.code.as_str(),
+                    "topology_active" | "topology_cleared"
+                ) {
+                    self.recovering_devices.remove(&device_id);
+                    self.reconnect_not_before.remove(&device_id);
+                }
                 let event = self.runtime_event(&device_id, context, activity.clone());
                 if self.workers.contains_key(&device_id)
                     && let Some(status) = self.devices.get_mut(&device_id)
@@ -988,6 +1032,10 @@ impl RuntimeCoordinator {
             } => {
                 if !self.workers.contains_key(&device_id) {
                     return None;
+                }
+                if !self.recovering_devices.insert(device_id.clone()) {
+                    self.reconnect_not_before
+                        .insert(device_id.clone(), Instant::now() + WORKER_RECONNECT_BACKOFF);
                 }
                 self.stop_worker(&device_id);
                 if let Some(status) = self.devices.get_mut(&device_id) {
@@ -1104,6 +1152,10 @@ impl RuntimeCoordinator {
             &device_id,
             self.product_definitions.get(&device_id),
         );
+        if profile.is_none() {
+            self.recovering_devices.remove(&device_id);
+            self.reconnect_not_before.remove(&device_id);
+        }
         self.rebuild_device(&device_id);
         if let Some(status) = self.devices.get_mut(&device_id) {
             status.connection = ConnectionDimension::Online;
@@ -1228,6 +1280,26 @@ impl RuntimeCoordinator {
             .filter_map(|(id, slot)| {
                 slot.worker
                     .send(WorkerCommand::UpdateDisplay(Arc::clone(&snapshot)))
+                    .err()
+                    .map(|error| (id.clone(), error))
+            })
+            .collect::<Vec<_>>();
+        for (id, error) in failures {
+            if let Some(status) = self.devices.get_mut(&id) {
+                status.runtime = RuntimeDimension::RuntimeError;
+                status.latest_error = Some(runtime_error(error));
+            }
+        }
+    }
+
+    pub fn update_usage(&mut self, snapshot: Arc<UsageSnapshot>) {
+        self.usage_snapshot = Some(Arc::clone(&snapshot));
+        let failures = self
+            .workers
+            .iter()
+            .filter_map(|(id, slot)| {
+                slot.worker
+                    .send(WorkerCommand::UpdateUsage(Arc::clone(&snapshot)))
                     .err()
                     .map(|error| (id.clone(), error))
             })
@@ -1551,6 +1623,7 @@ impl RuntimeCoordinator {
         {
             return Err("candidate_not_retryable".into());
         }
+        self.reconnect_not_before.remove(device_id);
         self.stop_worker(device_id);
         Ok(())
     }
@@ -2741,6 +2814,32 @@ mod tests {
     }
 
     #[test]
+    fn usage_snapshot_received_before_hotplug_is_replayed_to_the_new_worker() {
+        let (_directory, enumerator, launcher, mut coordinator) = harness();
+        let snapshot = Arc::new(UsageSnapshot {
+            state: crate::usage::UsageState::Ready,
+            has_data: true,
+            cost_micros: 12_345_678,
+            today_tokens: 1_234_567,
+            tpm: 98_765,
+            updated_at_ms: Some(1_788_224_400_000),
+        });
+        coordinator.update_usage(Arc::clone(&snapshot));
+        enumerator.set(
+            vec![serial("/dev/rp", 0x2e8a, 0x102e, Some("USAGE-HOTPLUG"))],
+            Vec::new(),
+        );
+
+        scan(&mut coordinator);
+
+        let id = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "USAGE-HOTPLUG").unwrap();
+        assert!(matches!(
+            launcher.commands_for(&id).first(),
+            Some(WorkerCommand::UpdateUsage(actual)) if Arc::ptr_eq(actual, &snapshot)
+        ));
+    }
+
+    #[test]
     fn restarted_worker_receives_only_the_latest_retained_display_snapshot() {
         let (_directory, enumerator, launcher, mut coordinator) = harness();
         enumerator.set(
@@ -3452,6 +3551,62 @@ mod tests {
             .unwrap();
         assert_eq!(status.connection, ConnectionDimension::Online);
         assert_eq!(status.mode, Some(DeviceMode::Bootloader));
+    }
+
+    #[test]
+    fn repeated_worker_disconnect_backs_off_until_the_retry_deadline() {
+        let (_directory, enumerator, launcher, mut coordinator) = harness();
+        enumerator.set(
+            vec![serial(
+                "/dev/esp",
+                0x303a,
+                0x4002,
+                Some("RECONNECT-BACKOFF"),
+            )],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+        let id = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "RECONNECT-BACKOFF").unwrap();
+        {
+            let mut workspace = coordinator.workspace.write().unwrap();
+            workspace
+                .set_assignment(
+                    &id,
+                    RuntimeAssignment {
+                        device_profile_id: "red-phone-v1".into(),
+                        hardware_profile_id: "esp".into(),
+                    },
+                )
+                .unwrap();
+            let revision = WorkspaceRevision::capture(&workspace);
+            drop(workspace);
+            coordinator.apply_workspace_revision(revision);
+        }
+
+        coordinator.handle_worker_event(WorkerEvent::Disconnected {
+            generation: 1,
+            device_id: id.clone(),
+            error: Some("serial_read_failed".into()),
+        });
+        scan(&mut coordinator);
+
+        assert_eq!(launcher.starts().len(), 2);
+
+        coordinator.handle_worker_event(WorkerEvent::Disconnected {
+            generation: 1,
+            device_id: id.clone(),
+            error: Some("serial_read_failed".into()),
+        });
+        scan(&mut coordinator);
+
+        assert_eq!(launcher.starts().len(), 2);
+
+        coordinator
+            .reconnect_not_before
+            .insert(id, Instant::now() - Duration::from_millis(1));
+        scan(&mut coordinator);
+
+        assert_eq!(launcher.starts().len(), 3);
     }
 
     #[test]

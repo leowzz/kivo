@@ -14,10 +14,29 @@ struct OledControlPanelSample {
 
 enum class OledControlPanelUpdate { None, Render, Dismiss, BrightnessChanged };
 
+enum class OledUsageState : std::uint8_t {
+  Disabled,
+  Connecting,
+  Ready,
+  Stale,
+  AuthError,
+  NetworkError,
+  ParseError,
+  ApiError,
+};
+
+struct OledUsageSnapshot {
+  OledUsageState state = OledUsageState::Disabled;
+  std::uint64_t costMicros = 0;
+  std::uint64_t todayTokens = 0;
+  std::uint64_t tpm = 0;
+};
+
 class OledControlPanel {
  public:
   void reset();
   void setBrightnessPercent(std::uint8_t percent);
+  void setUsageSnapshot(const OledUsageSnapshot &snapshot) { usage_ = snapshot; }
   OledControlPanelUpdate update(const OledControlPanelSample &sample,
                                 std::uint32_t nowMs,
                                 std::uint16_t debounceMs);
@@ -38,7 +57,15 @@ class OledControlPanel {
     }
   };
 
-  enum class View { Closed, Menu, Status, InputTest, Brightness, DeviceInfo };
+  enum class View {
+    Closed,
+    Menu,
+    Usage,
+    Status,
+    InputTest,
+    Brightness,
+    DeviceInfo
+  };
 
   int encoderStep(const OledControlPanelSample &sample,
                   std::uint32_t nowMs);
@@ -55,4 +82,5 @@ class OledControlPanel {
   bool encoderActivityInitialized_ = false;
   std::uint32_t lastEncoderActivityMs_ = 0;
   std::uint8_t brightnessPercent_ = 100;
+  OledUsageSnapshot usage_{};
 };

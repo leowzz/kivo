@@ -428,6 +428,11 @@ void test_interactive_panel_returns_to_offline_status_without_remote_content() {
   TEST_ASSERT_EQUAL_STRING("HELPER OFFLINE", restored.local->lines[1].c_str());
 }
 
+OledControlPanelUpdate rotateOledEncoder(OledControlPanel &panel,
+                                         OledControlPanelSample &sample,
+                                         std::uint32_t &nowMs,
+                                         bool clockwise);
+
 void test_oled_control_panel_navigates_status_and_back_to_live_view() {
   OledControlPanel panel;
   OledControlPanelSample sample;
@@ -446,49 +451,40 @@ void test_oled_control_panel_navigates_status_and_back_to_live_view() {
   sample.encoderPressed = false;
   panel.update(sample, 12, 10);
   panel.update(sample, 22, 10);
-  sample.encoderAHigh = false;
-  panel.update(sample, 23, 10);
-  sample.encoderBHigh = false;
-  panel.update(sample, 24, 10);
-  sample.encoderAHigh = true;
-  panel.update(sample, 25, 10);
-  sample.encoderBHigh = true;
-  TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
-                    panel.update(sample, 26, 10));
+  std::uint32_t nowMs = 22;
+  for (int step = 0; step < 2; ++step) {
+    TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
+                      rotateOledEncoder(panel, sample, nowMs, true));
+  }
   TEST_ASSERT_EQUAL_STRING("> SYSTEM STATUS",
-                           panel.frame(status).lines[2].c_str());
+                           panel.frame(status).lines[3].c_str());
 
   sample.confirmPressed = true;
-  panel.update(sample, 50, 10);
+  panel.update(sample, nowMs + 20, 10);
   TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
-                    panel.update(sample, 60, 10));
+                    panel.update(sample, nowMs + 30, 10));
   TEST_ASSERT_EQUAL_STRING("SYSTEM STATUS",
                            panel.frame(status).lines[0].c_str());
   TEST_ASSERT_EQUAL_STRING("12 D", panel.frame(status).lines[3].c_str());
 
   sample.confirmPressed = false;
-  panel.update(sample, 61, 10);
-  panel.update(sample, 71, 10);
+  panel.update(sample, nowMs + 31, 10);
+  panel.update(sample, nowMs + 41, 10);
   sample.backPressed = true;
-  panel.update(sample, 72, 10);
+  panel.update(sample, nowMs + 42, 10);
   TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
-                    panel.update(sample, 82, 10));
+                    panel.update(sample, nowMs + 52, 10));
   TEST_ASSERT_EQUAL_STRING("KIVO MENU", panel.frame(status).lines[0].c_str());
 
   sample.backPressed = false;
-  panel.update(sample, 83, 10);
-  panel.update(sample, 93, 10);
+  panel.update(sample, nowMs + 53, 10);
+  panel.update(sample, nowMs + 63, 10);
   sample.backPressed = true;
-  panel.update(sample, 94, 10);
+  panel.update(sample, nowMs + 64, 10);
   TEST_ASSERT_EQUAL(OledControlPanelUpdate::Dismiss,
-                    panel.update(sample, 104, 10));
+                    panel.update(sample, nowMs + 74, 10));
   TEST_ASSERT_FALSE(panel.active());
 }
-
-OledControlPanelUpdate rotateOledEncoder(OledControlPanel &panel,
-                                         OledControlPanelSample &sample,
-                                         std::uint32_t &nowMs,
-                                         bool clockwise);
 
 void test_oled_control_panel_opens_on_encoder_rotation_when_closed() {
   OledControlPanel panel;
@@ -500,7 +496,7 @@ void test_oled_control_panel_opens_on_encoder_rotation_when_closed() {
                     rotateOledEncoder(panel, sample, nowMs, true));
   TEST_ASSERT_TRUE(panel.active());
   TEST_ASSERT_EQUAL_STRING("  LIVE VIEW", panel.frame(DisplayFrame{}).lines[1].c_str());
-  TEST_ASSERT_EQUAL_STRING("> SYSTEM STATUS", panel.frame(DisplayFrame{}).lines[2].c_str());
+  TEST_ASSERT_EQUAL_STRING("> SUB2API", panel.frame(DisplayFrame{}).lines[2].c_str());
 }
 
 void test_oled_control_panel_ignores_push_noise_during_encoder_rotation() {
@@ -535,7 +531,7 @@ void test_oled_control_panel_ignores_push_noise_during_encoder_rotation() {
   TEST_ASSERT_EQUAL(OledControlPanelUpdate::None,
                     panel.update(sample, nowMs, 10));
   TEST_ASSERT_TRUE(panel.active());
-  TEST_ASSERT_EQUAL_STRING("> SYSTEM STATUS",
+  TEST_ASSERT_EQUAL_STRING("> SUB2API",
                            panel.frame(DisplayFrame{}).lines[2].c_str());
 }
 
@@ -563,6 +559,36 @@ OledControlPanelUpdate rotateOledEncoder(OledControlPanel &panel,
   return panel.update(sample, ++nowMs, 10);
 }
 
+void test_oled_control_panel_renders_cost_token_and_tpm_on_sub2api_page() {
+  const OledUsageSnapshot usage{OledUsageState::Stale, 12345678ULL,
+                                1234567ULL, 98765ULL};
+  OledControlPanel panel;
+  OledControlPanelSample sample;
+  std::uint32_t nowMs = 0;
+  panel.setUsageSnapshot(usage);
+  panel.update(sample, nowMs, 10);
+  sample.encoderPressed = true;
+  panel.update(sample, ++nowMs, 10);
+  nowMs += 10;
+  panel.update(sample, nowMs, 10);
+  sample.encoderPressed = false;
+  panel.update(sample, ++nowMs, 10);
+  nowMs += 10;
+  panel.update(sample, nowMs, 10);
+  rotateOledEncoder(panel, sample, nowMs, true);
+  nowMs += 20;
+  sample.confirmPressed = true;
+  panel.update(sample, ++nowMs, 10);
+  nowMs += 10;
+  panel.update(sample, nowMs, 10);
+
+  const auto frame = panel.frame(DisplayFrame{});
+  TEST_ASSERT_EQUAL_STRING("SUB2API / STALE", frame.lines[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("COST $12.35", frame.lines[1].c_str());
+  TEST_ASSERT_EQUAL_STRING("TOKENS 1M", frame.lines[2].c_str());
+  TEST_ASSERT_EQUAL_STRING("TPM 98K", frame.lines[3].c_str());
+}
+
 void test_oled_control_panel_adjusts_brightness_with_the_encoder() {
   OledControlPanel panel;
   OledControlPanelSample sample;
@@ -580,7 +606,7 @@ void test_oled_control_panel_adjusts_brightness_with_the_encoder() {
   nowMs += 10;
   panel.update(sample, nowMs, 10);
 
-  for (int step = 0; step < 3; ++step) {
+  for (int step = 0; step < 4; ++step) {
     TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
                       rotateOledEncoder(panel, sample, nowMs, true));
   }
@@ -1151,23 +1177,23 @@ void test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins() {
                     platform::selectRp2040OledBus(5, 6));
 }
 
-void test_formats_protocol_v11_hello_with_board_and_build() {
+void test_formats_protocol_v12_hello_with_board_and_build() {
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 11 rp2040 yd-rp2040 0.1.0+gabc1234 - 28 "
+      "HELLO 12 rp2040 yd-rp2040 0.1.0+gabc1234 - 28 "
       "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 26 "
       "27 28 29\n",
       formatHello(kYdRp2040, "0.1.0+gabc1234").c_str());
 }
 
-void test_formats_protocol_v11_hello_with_product_identity() {
+void test_formats_protocol_v12_hello_with_product_identity() {
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 11 rp2040 yd-rp2040 0.1.0+gabc1234 key-k1-r01 28 "
+      "HELLO 12 rp2040 yd-rp2040 0.1.0+gabc1234 key-k1-r01 28 "
       "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 26 "
       "27 28 29\n",
       formatHello(kYdRp2040, "0.1.0+gabc1234", "key-k1-r01")
           .c_str());
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 11 rp2040 yd-rp2040 build - 28 "
+      "HELLO 12 rp2040 yd-rp2040 build - 28 "
       "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 26 "
       "27 28 29\n",
       formatHello(kYdRp2040, "build", "-").c_str());
@@ -1257,6 +1283,19 @@ void test_parses_runtime_configuration_commands() {
   const auto commit = parseHelperCommand("CONFIG_COMMIT 3\n");
   TEST_ASSERT_TRUE(commit.has_value());
   TEST_ASSERT_EQUAL(HelperCommandKind::ConfigCommit, commit->kind);
+
+  const auto usage = parseHelperCommand(
+      "USAGE 3 18446744073709551615 1234567890123 987654321\n");
+  TEST_ASSERT_TRUE(usage.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::Usage, usage->kind);
+  TEST_ASSERT_EQUAL_UINT8(3, usage->usageState);
+  TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, usage->usageCostMicros);
+  TEST_ASSERT_EQUAL_UINT64(1234567890123ULL, usage->usageTodayTokens);
+  TEST_ASSERT_EQUAL_UINT64(987654321ULL, usage->usageTpm);
+  TEST_ASSERT_FALSE(parseHelperCommand("USAGE 8 1 2 3\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand(
+                        "USAGE 2 18446744073709551616 2 3\n")
+                        .has_value());
 }
 
 void test_oled_configuration_requires_supported_distinct_safe_pins() {
@@ -2082,6 +2121,7 @@ int main(int, char **) {
   RUN_TEST(test_oled_control_panel_navigates_status_and_back_to_live_view);
   RUN_TEST(test_oled_control_panel_opens_on_encoder_rotation_when_closed);
   RUN_TEST(test_oled_control_panel_ignores_push_noise_during_encoder_rotation);
+  RUN_TEST(test_oled_control_panel_renders_cost_token_and_tpm_on_sub2api_page);
   RUN_TEST(test_oled_control_panel_adjusts_brightness_with_the_encoder);
   RUN_TEST(test_oled_control_panel_clamps_loaded_brightness);
   RUN_TEST(test_display_transaction_commits_atomically);
@@ -2107,8 +2147,8 @@ int main(int, char **) {
   RUN_TEST(test_rp2040_standalone_debug_topology_matches_keyboard_wiring);
   RUN_TEST(test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match);
   RUN_TEST(test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins);
-  RUN_TEST(test_formats_protocol_v11_hello_with_board_and_build);
-  RUN_TEST(test_formats_protocol_v11_hello_with_product_identity);
+  RUN_TEST(test_formats_protocol_v12_hello_with_board_and_build);
+  RUN_TEST(test_formats_protocol_v12_hello_with_product_identity);
   RUN_TEST(test_rejects_empty_firmware_build_id);
   RUN_TEST(test_rejects_whitespace_in_firmware_build_id);
   RUN_TEST(test_contact_edge_reports_unordered_pair_once_after_debounce);
