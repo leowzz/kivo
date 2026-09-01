@@ -729,6 +729,25 @@ mod tests {
     fn does_not_fetch_until_sub2api_view_is_active() {
         let directory = tempfile::tempdir().unwrap();
         let stop = Arc::new(AtomicBool::new(false));
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_stop = Arc::new(AtomicBool::new(false));
+        let server_stop_signal = Arc::clone(&server_stop);
+        let server = thread::spawn(move || {
+            while !server_stop_signal.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        drop(stream);
+                        return;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => return,
+                }
+            }
+        });
         let (updates, _received) = mpsc::channel();
         let (service, thread) =
             UsageService::spawn(directory.path(), Arc::clone(&stop), updates).unwrap();
@@ -736,7 +755,7 @@ mod tests {
         service
             .save(UsageSettingsPatch {
                 enabled: true,
-                base_url: "https://127.0.0.1:9".into(),
+                base_url: format!("https://{address}"),
                 email: "test@example.com".into(),
                 password: "test-password".into(),
                 interval_seconds: 30,
@@ -757,5 +776,7 @@ mod tests {
 
         stop.store(true, Ordering::Relaxed);
         thread.join().unwrap();
+        server_stop.store(true, Ordering::Relaxed);
+        server.join().unwrap();
     }
 }
