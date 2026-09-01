@@ -1642,6 +1642,7 @@ fn activity_level(code: &str) -> EventLevel {
         | "learning_ready"
         | "learning_input"
         | "feature_switch_changed"
+        | "trigger_occurred"
         | "action_step_started"
         | "action_step_completed" => EventLevel::Info,
         "input_before_configuration"
@@ -1976,6 +1977,11 @@ mod tests {
     };
 
     static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn trigger_occurred_is_info() {
+        assert_eq!(activity_level("trigger_occurred"), EventLevel::Info);
+    }
 
     fn usb_serial_port(port_name: &str, serial_number: &str) -> SerialPortInfo {
         SerialPortInfo {
