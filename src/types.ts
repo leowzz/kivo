@@ -59,7 +59,15 @@ export interface ContactInputSource {
   keys: Record<string, [number, number]>;
 }
 
-export type InputSource = DirectInputSource | ContactInputSource;
+export interface FeatureSwitchInputSource {
+  type: "feature_switch";
+  id: string;
+  name: string;
+  gpio: number;
+  buttons: string[];
+}
+
+export type InputSource = DirectInputSource | ContactInputSource | FeatureSwitchInputSource;
 
 export interface HardwareProfile {
   id: string;
@@ -69,6 +77,26 @@ export interface HardwareProfile {
   ssd1306?: {
     sda: number;
     scl: number;
+    control_panel?: {
+      type: "ec11_confirm_back";
+      confirm: number;
+      encoder_press: number;
+      encoder_a: number;
+      encoder_b: number;
+      back: number;
+    };
+  };
+  sh1106?: {
+    sda: number;
+    scl: number;
+    control_panel?: {
+      type: "ec11_confirm_back";
+      confirm: number;
+      encoder_press: number;
+      encoder_a: number;
+      encoder_b: number;
+      back: number;
+    };
   };
   inputs: InputSource[];
 }
@@ -76,6 +104,7 @@ export interface HardwareProfile {
 export interface DeviceProfile {
   schema_version: 3;
   profile: ModelLayout;
+  snapshot_metadata?: SnapshotMetadata | null;
   trigger_settings: TriggerSettings;
   hardware_profiles: HardwareProfile[];
   actions: Record<string, TriggerActions>;
@@ -91,17 +120,31 @@ export interface DeviceRecord {
   name: string;
   board_profile_id: string;
   runtime_assignment: RuntimeAssignment | null;
+  product_config?: ProductDeviceConfig | null;
+}
+
+export interface ProductDeviceConfig {
+  product_version_id: string;
+  snapshot_metadata?: SnapshotMetadata | null;
+  trigger_settings: TriggerSettings;
+  actions: Record<string, TriggerActions>;
+}
+
+export interface SnapshotMetadata {
+  created_at: number;
+  source_device_id?: string | null;
+  source_device_name?: string | null;
 }
 
 export interface SettingsDocument {
-  schema_version: 2;
+  schema_version: 3;
   editor_profile: string | null;
   language: Language;
   devices: Record<string, DeviceRecord>;
 }
 
 export interface EditorSettingsPatch {
-  schema_version: 2;
+  schema_version: 3;
   editor_profile: string | null;
   language: Language;
 }
@@ -179,6 +222,21 @@ export interface DeviceStatus {
   controllerFamilyId: string;
   boardProfileId: string;
   firmwareBuildId: string | null;
+  productVersionId?: string | null;
+  productDefinition?: {
+    schema_version: 1;
+    product: {
+      display_name: string;
+      family_id: string;
+      variant_id: string;
+      hardware_revision: number;
+      product_version_id: string;
+      capabilities: string[];
+    };
+    layout: ModelLayout;
+    hardware_profile: HardwareProfile;
+  } | null;
+  productConfig?: ProductDeviceConfig | null;
   firmwareProtocol?: number | null;
   capabilities: number[];
   runtimeAssignment: RuntimeAssignment | null;
@@ -233,6 +291,8 @@ export interface ActivityLog {
   deviceProfileId: string;
   hardwareProfileId: string;
   buttonId: string | null;
+  actionKind?: string | null;
+  detail?: string | null;
 }
 
 export interface HomeMetricsSnapshot {
@@ -252,6 +312,39 @@ export interface AppSnapshot {
   candidates: CandidateStatus[];
   language: Language;
   homeMetrics: HomeMetricsSnapshot | null;
+  usage?: UsageView | null;
+}
+
+export type UsageState =
+  | "disabled"
+  | "connecting"
+  | "ready"
+  | "stale"
+  | "auth_error"
+  | "network_error"
+  | "parse_error"
+  | "api_error";
+
+export interface UsageSnapshot {
+  state: UsageState;
+  hasData: boolean;
+  costMicros: number;
+  todayTokens: number;
+  tpm: number;
+  updatedAtMs: number | null;
+}
+
+export interface UsageSettingsSummary {
+  enabled: boolean;
+  baseUrl: string;
+  email: string;
+  intervalSeconds: number;
+  passwordRequired: boolean;
+}
+
+export interface UsageView {
+  settings: UsageSettingsSummary;
+  snapshot: UsageSnapshot;
 }
 
 export interface StartupFailure {
@@ -269,6 +362,7 @@ export interface ImportPreview {
 }
 
 export interface BackupPreview {
+  kind?: "product_devices" | "full";
   profileCount: number;
   buttonCount: number;
   hardwareBindingCount: number;

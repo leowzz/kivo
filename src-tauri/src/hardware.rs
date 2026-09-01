@@ -18,6 +18,7 @@ pub struct UsbIdentity {
 pub struct ControllerFamily {
     pub id: &'static str,
     pub display_name: &'static str,
+    pub product_id_token: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34,31 +35,37 @@ pub struct BoardProfile {
 
 pub(crate) const ESP32S3_FAMILY_ID: &str = "esp32s3";
 pub(crate) const RP2040_FAMILY_ID: &str = "rp2040";
-pub(crate) const LUATOS_ESP32S3_AIO_BOARD_ID: &str = "luatos-esp32s3-aio";
-pub(crate) const VCCGND_YD_RP2040_BOARD_ID: &str = "vccgnd-yd-rp2040";
+pub(crate) const YD_ESP32_S3_BOARD_ID: &str = "yd-esp32-s3";
+pub(crate) const YD_RP2040_BOARD_ID: &str = "yd-rp2040";
+const LEGACY_LUATOS_ESP32S3_AIO_BOARD_ID: &str = "luatos-esp32s3-aio";
+const LEGACY_VCCGND_YD_RP2040_BOARD_ID: &str = "vccgnd-yd-rp2040";
 
-const ESP32S3_SAFE_PINS: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18];
+const YD_ESP32_S3_SAFE_PINS: &[u8] = &[
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 21, 38, 39, 40, 41, 42, 47,
+];
 const YD_RP2040_SAFE_PINS: &[u8] = &[
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 26, 27, 28,
-    29,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 26, 27,
+    28, 29,
 ];
 
 pub const CONTROLLER_FAMILIES: &[ControllerFamily] = &[
     ControllerFamily {
         id: ESP32S3_FAMILY_ID,
         display_name: "ESP32-S3",
+        product_id_token: "s3",
     },
     ControllerFamily {
         id: RP2040_FAMILY_ID,
         display_name: "RP2040",
+        product_id_token: "rp",
     },
 ];
 
 pub const BOARD_PROFILES: &[BoardProfile] = &[
     BoardProfile {
-        id: LUATOS_ESP32S3_AIO_BOARD_ID,
+        id: YD_ESP32_S3_BOARD_ID,
         family_id: ESP32S3_FAMILY_ID,
-        display_name: "LuatOS ESP32-S3 AIO",
+        display_name: "YD-ESP32-S3",
         runtime_usb: UsbIdentity {
             vid: 0x303a,
             pid: 0x4002,
@@ -66,13 +73,13 @@ pub const BOARD_PROFILES: &[BoardProfile] = &[
         },
         bootloader_usb: None,
         supports_oled: false,
-        safe_pins: ESP32S3_SAFE_PINS,
+        safe_pins: YD_ESP32_S3_SAFE_PINS,
         firmware_environment: "esp32s3",
     },
     BoardProfile {
-        id: VCCGND_YD_RP2040_BOARD_ID,
+        id: YD_RP2040_BOARD_ID,
         family_id: RP2040_FAMILY_ID,
-        display_name: "VCC-GND YD-RP2040",
+        display_name: "YD-RP2040",
         runtime_usb: UsbIdentity {
             vid: 0x2e8a,
             pid: 0x102e,
@@ -152,6 +159,7 @@ const TEST_CONTROLLER_FAMILIES: &[ControllerFamily] = &[
     ControllerFamily {
         id: TEST_ESP32C3_FAMILY_ID,
         display_name: "ESP32-C3",
+        product_id_token: "c3",
     },
 ];
 
@@ -231,7 +239,28 @@ fn board_by_bootloader_usb_in(
 }
 
 fn board_by_id_in<'a>(boards: &'a [BoardProfile], id: &str) -> Option<&'a BoardProfile> {
+    let id = canonical_board_profile_id(id);
     boards.iter().find(|board| board.id == id)
+}
+
+pub(crate) fn canonical_board_profile_id(id: &str) -> &str {
+    match id {
+        LEGACY_LUATOS_ESP32S3_AIO_BOARD_ID => YD_ESP32_S3_BOARD_ID,
+        LEGACY_VCCGND_YD_RP2040_BOARD_ID => YD_RP2040_BOARD_ID,
+        _ => id,
+    }
+}
+
+pub(crate) fn board_profile_ids_match(left: &str, right: &str) -> bool {
+    canonical_board_profile_id(left) == canonical_board_profile_id(right)
+}
+
+pub(crate) fn product_id_token_for_board(board_profile_id: &str) -> Option<&'static str> {
+    let board = board_by_id(board_profile_id)?;
+    CONTROLLER_FAMILIES
+        .iter()
+        .find(|family| family.id == board.family_id)
+        .map(|family| family.product_id_token)
 }
 
 #[cfg(test)]
@@ -243,8 +272,13 @@ fn registries_are_valid(families: &[ControllerFamily], boards: &[BoardProfile]) 
             .all(|(index, item)| is_valid_component(item) && !items[index + 1..].contains(item))
     };
     let family_ids = families.iter().map(|family| family.id).collect::<Vec<_>>();
+    let product_id_tokens = families
+        .iter()
+        .map(|family| family.product_id_token)
+        .collect::<Vec<_>>();
     let board_ids = boards.iter().map(|board| board.id).collect::<Vec<_>>();
     unique(&family_ids)
+        && unique(&product_id_tokens)
         && unique(&board_ids)
         && boards.iter().all(|board| {
             is_valid_component(board.family_id)
@@ -306,8 +340,11 @@ impl DeviceId {
         }
         let board_profile_id = remainder.get(..board_length).ok_or(DeviceIdError)?;
         let hardware_serial = remainder.get(board_length..).ok_or(DeviceIdError)?;
-        let id = Self::new(board_profile_id, hardware_serial)?;
-        (id.canonical == value).then_some(id).ok_or(DeviceIdError)
+        let source = format!("{board_length}:{board_profile_id}{hardware_serial}");
+        if source != value {
+            return Err(DeviceIdError);
+        }
+        Self::new(board_profile_id, hardware_serial)
     }
 
     pub fn as_str(&self) -> &str {
@@ -328,6 +365,7 @@ fn device_id_from_boards(
     board_profile_id: &str,
     hardware_serial: &str,
 ) -> Result<DeviceId, DeviceIdError> {
+    let board_profile_id = canonical_board_profile_id(board_profile_id);
     if !is_valid_component(board_profile_id)
         || !is_valid_component(hardware_serial)
         || board_by_id_in(boards, board_profile_id).is_none()
@@ -384,9 +422,11 @@ mod tests {
     fn registries_classify_modes_without_family_branches() {
         let esp = board_by_runtime_usb(0x303a, 0x4002).unwrap();
         assert_eq!(esp.family_id, "esp32s3");
-        assert_eq!(esp.id, "luatos-esp32s3-aio");
+        assert_eq!(esp.id, "yd-esp32-s3");
+        assert_eq!(product_id_token_for_board(esp.id), Some("s3"));
         let rp = board_by_runtime_usb(0x2e8a, 0x102e).unwrap();
         assert_eq!(rp.family_id, "rp2040");
+        assert_eq!(product_id_token_for_board(rp.id), Some("rp"));
         assert_eq!(board_by_bootloader_usb(0x2e8a, 0x0003), Some(rp));
         assert!(board_by_runtime_usb(0x2e8a, 0x0003).is_none());
     }
@@ -394,21 +434,41 @@ mod tests {
     #[test]
     fn board_profiles_expose_only_the_approved_safe_pins() {
         assert_eq!(
-            board_by_id("luatos-esp32s3-aio").unwrap().safe_pins,
-            &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18]
+            board_by_id("yd-esp32-s3").unwrap().safe_pins,
+            &[
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 21, 38, 39, 40,
+                41, 42, 47,
+            ]
         );
         assert_eq!(
-            board_by_id("vccgnd-yd-rp2040").unwrap().safe_pins,
-            (0_u8..=22).chain(26..=29).collect::<Vec<_>>().as_slice()
+            board_by_id("yd-rp2040").unwrap().safe_pins,
+            (0_u8..=23).chain(26..=29).collect::<Vec<_>>().as_slice()
         );
     }
 
     #[test]
     fn device_id_ignores_port_and_round_trips() {
-        let id = DeviceId::new("vccgnd-yd-rp2040", "E0C9125B0D9B").unwrap();
+        let id = DeviceId::new("yd-rp2040", "E0C9125B0D9B").unwrap();
         assert_eq!(DeviceId::parse(id.as_str()).unwrap(), id);
-        assert_eq!(id.board_profile_id(), "vccgnd-yd-rp2040");
+        assert_eq!(id.board_profile_id(), "yd-rp2040");
         assert_eq!(id.hardware_serial(), "E0C9125B0D9B");
+    }
+
+    #[test]
+    fn legacy_board_and_device_ids_resolve_to_canonical_yd_ids() {
+        assert_eq!(
+            board_by_id("luatos-esp32s3-aio").unwrap().id,
+            YD_ESP32_S3_BOARD_ID
+        );
+        assert_eq!(
+            board_by_id("vccgnd-yd-rp2040").unwrap().id,
+            YD_RP2040_BOARD_ID
+        );
+
+        let esp = DeviceId::parse("18:luatos-esp32s3-aioABCDEF123456").unwrap();
+        assert_eq!(esp.as_str(), "11:yd-esp32-s3ABCDEF123456");
+        let rp2040 = DeviceId::parse("16:vccgnd-yd-rp2040E0C9125B0D9B").unwrap();
+        assert_eq!(rp2040.as_str(), "9:yd-rp2040E0C9125B0D9B");
     }
 
     #[test]
@@ -446,15 +506,11 @@ mod tests {
     fn registries_validate_static_entries_and_device_id_rejects_invalid_components() {
         assert!(registries_are_valid(CONTROLLER_FAMILIES, BOARD_PROFILES));
         assert!(DeviceId::new("unknown", "serial").is_err());
-        assert!(DeviceId::new("vccgnd-yd-rp2040", " serial").is_err());
-        assert!(DeviceId::parse("018:vccgnd-yd-rp2040serial").is_err());
+        assert!(DeviceId::new("yd-rp2040", " serial").is_err());
+        assert!(DeviceId::parse("018:yd-rp2040serial").is_err());
 
         let unregistered = HardwareRegistry::new(&[], BOARD_PROFILES);
-        assert!(
-            unregistered
-                .device_id("vccgnd-yd-rp2040", "serial")
-                .is_err()
-        );
+        assert!(unregistered.device_id("yd-rp2040", "serial").is_err());
     }
 
     #[test]
@@ -518,9 +574,9 @@ mod tests {
 
     #[test]
     fn device_id_serializes_as_its_canonical_string() {
-        let id = DeviceId::new("vccgnd-yd-rp2040", "E0C9125B0D9B").unwrap();
+        let id = DeviceId::new("yd-rp2040", "E0C9125B0D9B").unwrap();
         let yaml = serde_yaml_ng::to_string(&BTreeMap::from([(id.clone(), true)])).unwrap();
-        assert_eq!(yaml.trim(), "16:vccgnd-yd-rp2040E0C9125B0D9B: true");
+        assert_eq!(yaml.trim(), "9:yd-rp2040E0C9125B0D9B: true");
         assert_eq!(
             serde_yaml_ng::from_str::<BTreeMap<DeviceId, bool>>(&yaml)
                 .unwrap()

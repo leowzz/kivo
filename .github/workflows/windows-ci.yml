@@ -76,3 +76,8 @@ jobs:
 
       - name: Build Windows NSIS installer
         run: npm run tauri build -- --bundles nsis
+
+      - name: Build Windows Product Studio NSIS installer
+        run: >-
+          npm run tauri build -- --features product-studio
+          --config src-tauri/tauri.studio.conf.json --bundles nsis

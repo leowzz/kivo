@@ -1,1 +1,3 @@
-3d-print
+# Generated mesh exports; keep source files under 3d-print visible to Git.
+3d-print/**/*.stl
+**/*.3mf

@@ -7,7 +7,7 @@ use std::{
     sync::Mutex,
 };
 
-const METRICS_SCHEMA_VERSION: i64 = 2;
+const METRICS_SCHEMA_VERSION: i64 = 3;
 const ACTIVITY_LOG_LIMIT: usize = 500;
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -56,6 +56,8 @@ pub struct ActivityLog {
     pub device_profile_id: String,
     pub hardware_profile_id: String,
     pub button_id: Option<String>,
+    pub action_kind: Option<String>,
+    pub detail: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -68,6 +70,10 @@ pub struct ActivityLogBackup {
     pub device_profile_id: String,
     pub hardware_profile_id: String,
     pub button_id: Option<String>,
+    #[serde(default)]
+    pub action_kind: Option<String>,
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -149,13 +155,17 @@ impl MetricsBackup {
                 || log.device_name.trim().is_empty()
                 || log.device_profile_id.is_empty()
                 || log.hardware_profile_id.is_empty()
-                || log.button_id.as_ref().is_some_and(|button_id| {
-                    !aggregate_keys.contains(&(
-                        log.device_profile_id.as_str(),
-                        log.device_id.as_str(),
-                        button_id.as_str(),
-                    ))
-                })
+                || (log.kind == "button"
+                    && log.button_id.as_ref().is_some_and(|button_id| {
+                        !aggregate_keys.contains(&(
+                            log.device_profile_id.as_str(),
+                            log.device_id.as_str(),
+                            button_id.as_str(),
+                        ))
+                    }))
+                || (matches!(log.kind.as_str(), "action_success" | "action_failed")
+                    && (log.button_id.as_deref().is_none_or(str::is_empty)
+                        || log.action_kind.as_deref().is_none_or(str::is_empty)))
         }) {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -276,6 +286,89 @@ impl MetricsStore {
                 attribution.device_profile_id,
                 attribution.hardware_profile_id,
                 button_id
+            ],
+        )?;
+        trim_activity_logs(&transaction)?;
+        transaction.commit()
+    }
+
+    pub fn record_feature_disabled(
+        &self,
+        attribution: &MetricAttribution,
+        button_id: &str,
+        timestamp_ms: u64,
+    ) -> Result<(), rusqlite::Error> {
+        let mut connection = self
+            .connection
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let connection = connection.as_mut().ok_or(rusqlite::Error::InvalidQuery)?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "
+            INSERT INTO activity_logs (
+                occurred_at_ms, kind, message, device_id, device_name,
+                device_profile_id, hardware_profile_id, button_id
+            ) VALUES (?1, 'feature_disabled', 'Action blocked by feature switch', ?2, ?3, ?4, ?5, ?6)
+            ",
+            params![
+                integer(timestamp_ms)?,
+                attribution.device_id.as_str(),
+                attribution.device_name,
+                attribution.device_profile_id,
+                attribution.hardware_profile_id,
+                button_id
+            ],
+        )?;
+        trim_activity_logs(&transaction)?;
+        transaction.commit()
+    }
+
+    pub fn record_action_result(
+        &self,
+        attribution: &MetricAttribution,
+        button_id: &str,
+        action_kind: &str,
+        succeeded: bool,
+        detail: Option<&str>,
+        timestamp_ms: u64,
+    ) -> Result<(), rusqlite::Error> {
+        if button_id.is_empty() || action_kind.is_empty() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let mut connection = self
+            .connection
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let connection = connection.as_mut().ok_or(rusqlite::Error::InvalidQuery)?;
+        let transaction = connection.transaction()?;
+        let kind = if succeeded {
+            "action_success"
+        } else {
+            "action_failed"
+        };
+        let message = format!(
+            "{action_kind} {}",
+            if succeeded { "succeeded" } else { "failed" },
+        );
+        transaction.execute(
+            "
+            INSERT INTO activity_logs (
+                occurred_at_ms, kind, message, device_id, device_name,
+                device_profile_id, hardware_profile_id, button_id, action_kind, detail
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            ",
+            params![
+                integer(timestamp_ms)?,
+                kind,
+                message,
+                attribution.device_id.as_str(),
+                attribution.device_name,
+                attribution.device_profile_id,
+                attribution.hardware_profile_id,
+                button_id,
+                action_kind,
+                detail,
             ],
         )?;
         trim_activity_logs(&transaction)?;
@@ -457,8 +550,8 @@ impl MetricsStore {
                 "
                 INSERT INTO activity_logs (
                     occurred_at_ms, kind, message, device_id, device_name,
-                    device_profile_id, hardware_profile_id, button_id
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                    device_profile_id, hardware_profile_id, button_id, action_kind, detail
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                 ",
                 params![
                     integer(log.occurred_at_ms)?,
@@ -468,7 +561,9 @@ impl MetricsStore {
                     log.device_name,
                     log.device_profile_id,
                     log.hardware_profile_id,
-                    log.button_id
+                    log.button_id,
+                    log.action_kind,
+                    log.detail,
                 ],
             )?;
         }
@@ -518,14 +613,34 @@ fn open_connection(path: &Path) -> Result<Connection, rusqlite::Error> {
             device_name TEXT NOT NULL,
             device_profile_id TEXT NOT NULL,
             hardware_profile_id TEXT NOT NULL,
-            button_id TEXT
+            button_id TEXT,
+            action_kind TEXT,
+            detail TEXT
         );
         CREATE INDEX IF NOT EXISTS activity_logs_profile_device
             ON activity_logs(device_profile_id, device_id, id DESC);
-        PRAGMA user_version = 2;
         ",
     )?;
+    if !table_has_column(&connection, "activity_logs", "action_kind")? {
+        connection.execute("ALTER TABLE activity_logs ADD COLUMN action_kind TEXT", [])?;
+    }
+    if !table_has_column(&connection, "activity_logs", "detail")? {
+        connection.execute("ALTER TABLE activity_logs ADD COLUMN detail TEXT", [])?;
+    }
+    connection.pragma_update(None, "user_version", METRICS_SCHEMA_VERSION)?;
     Ok(connection)
+}
+
+fn table_has_column(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+) -> Result<bool, rusqlite::Error> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(columns.iter().any(|candidate| candidate == column))
 }
 
 fn has_legacy_metrics_schema(connection: &Connection) -> Result<bool, rusqlite::Error> {
@@ -560,7 +675,7 @@ fn logs(
     let mut statement = connection.prepare(
         "
         SELECT occurred_at_ms, kind, message, device_id, device_name,
-               device_profile_id, hardware_profile_id, button_id
+               device_profile_id, hardware_profile_id, button_id, action_kind, detail
         FROM activity_logs
         WHERE (?1 IS NULL OR device_profile_id = ?1)
           AND (?2 IS NULL OR device_id = ?2)
@@ -578,7 +693,7 @@ fn all_logs(connection: &Connection) -> Result<Vec<ActivityLogBackup>, rusqlite:
     let mut statement = connection.prepare(
         "
         SELECT occurred_at_ms, kind, message, device_id, device_name,
-               device_profile_id, hardware_profile_id, button_id
+               device_profile_id, hardware_profile_id, button_id, action_kind, detail
         FROM activity_logs
         ORDER BY id DESC
         LIMIT 500
@@ -604,6 +719,8 @@ fn activity_log_backup(row: &rusqlite::Row<'_>) -> Result<ActivityLogBackup, rus
         device_profile_id: row.get(5)?,
         hardware_profile_id: row.get(6)?,
         button_id: row.get(7)?,
+        action_kind: row.get(8)?,
+        detail: row.get(9)?,
     })
 }
 
@@ -618,6 +735,8 @@ impl From<ActivityLogBackup> for ActivityLog {
             device_profile_id: value.device_profile_id,
             hardware_profile_id: value.hardware_profile_id,
             button_id: value.button_id,
+            action_kind: value.action_kind,
+            detail: value.detail,
         }
     }
 }
@@ -691,7 +810,7 @@ fn nonnegative(row: &rusqlite::Row<'_>, column: usize) -> Result<u64, rusqlite::
 
 #[cfg(test)]
 mod tests {
-    use super::{MetricAttribution, MetricsStore};
+    use super::{METRICS_SCHEMA_VERSION, MetricAttribution, MetricsStore};
     use crate::hardware::DeviceId;
     use std::{
         fs,
@@ -732,8 +851,8 @@ mod tests {
         let store = MetricsStore::open(&directory.0.join("metrics.sqlite3")).unwrap();
         let yesterday = 1_720_000_000_000;
         let today = yesterday + 86_400_000;
-        let device_a = DeviceId::new("luatos-esp32s3-aio", "AAAAAAAAAAAA").unwrap();
-        let device_b = DeviceId::new("luatos-esp32s3-aio", "BBBBBBBBBBBB").unwrap();
+        let device_a = DeviceId::new("yd-esp32-s3", "AAAAAAAAAAAA").unwrap();
+        let device_b = DeviceId::new("yd-esp32-s3", "BBBBBBBBBBBB").unwrap();
         let original_a = MetricAttribution {
             device_id: device_a.clone(),
             device_name: "Desk A".into(),
@@ -831,10 +950,140 @@ mod tests {
     }
 
     #[test]
+    fn feature_disabled_activity_is_logged_without_counting_a_press() {
+        let directory = TestDirectory::new();
+        let store = MetricsStore::open(&directory.0.join("metrics.sqlite3")).unwrap();
+        let attribution = MetricAttribution {
+            device_id: DeviceId::new("yd-esp32-s3", "AAAAAAAAAAAA").unwrap(),
+            device_name: "Desk".into(),
+            device_profile_id: "phone".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        let timestamp = 1_720_086_400_000;
+
+        store
+            .record_feature_disabled(&attribution, "ONE", timestamp)
+            .unwrap();
+
+        let snapshot = store.home_snapshot("phone", None, timestamp).unwrap();
+        assert_eq!(snapshot.total_presses, 0);
+        assert_eq!(snapshot.today_presses, 0);
+        assert_eq!(snapshot.logs.len(), 1);
+        assert_eq!(snapshot.logs[0].kind, "feature_disabled");
+        assert_eq!(snapshot.logs[0].button_id.as_deref(), Some("ONE"));
+        assert_eq!(snapshot.logs[0].message, "Action blocked by feature switch");
+        assert!(store.backup().unwrap().validate().is_ok());
+    }
+
+    #[test]
+    fn action_results_are_logged_with_structured_type_and_failure_detail() {
+        let directory = TestDirectory::new();
+        let store = MetricsStore::open(&directory.0.join("metrics.sqlite3")).unwrap();
+        let attribution = MetricAttribution {
+            device_id: DeviceId::new("yd-esp32-s3", "AAAAAAAAAAAA").unwrap(),
+            device_name: "Desk".into(),
+            device_profile_id: "phone".into(),
+            hardware_profile_id: "esp-primary".into(),
+        };
+        let timestamp = 1_720_086_400_000;
+
+        store
+            .record_action_result(&attribution, "ONE", "paste", true, None, timestamp)
+            .unwrap();
+        store
+            .record_action_result(
+                &attribution,
+                "TWO",
+                "open",
+                false,
+                Some("open_target_failed"),
+                timestamp + 1,
+            )
+            .unwrap();
+
+        let snapshot = store
+            .device_snapshot(&attribution.device_id, timestamp + 1)
+            .unwrap();
+        assert_eq!(snapshot.total_presses, 0);
+        assert_eq!(snapshot.logs.len(), 2);
+        assert_eq!(snapshot.logs[0].kind, "action_failed");
+        assert_eq!(snapshot.logs[0].button_id.as_deref(), Some("TWO"));
+        assert_eq!(snapshot.logs[0].action_kind.as_deref(), Some("open"));
+        assert_eq!(
+            snapshot.logs[0].detail.as_deref(),
+            Some("open_target_failed")
+        );
+        assert_eq!(snapshot.logs[1].kind, "action_success");
+        assert_eq!(snapshot.logs[1].action_kind.as_deref(), Some("paste"));
+        assert!(store.backup().unwrap().validate().is_ok());
+    }
+
+    #[test]
+    fn opening_a_v2_metrics_file_adds_action_columns_without_losing_logs() {
+        let directory = TestDirectory::new();
+        let path = directory.0.join("metrics.sqlite3");
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "
+                CREATE TABLE button_metrics (
+                    device_profile_id TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    button_id TEXT NOT NULL,
+                    total_presses INTEGER NOT NULL,
+                    last_pressed_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY (device_profile_id, device_id, button_id)
+                );
+                CREATE TABLE button_metric_days (
+                    device_profile_id TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    button_id TEXT NOT NULL,
+                    day TEXT NOT NULL,
+                    presses INTEGER NOT NULL,
+                    PRIMARY KEY (device_profile_id, device_id, button_id, day)
+                );
+                CREATE TABLE activity_logs (
+                    id INTEGER PRIMARY KEY,
+                    occurred_at_ms INTEGER NOT NULL,
+                    kind TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    device_name TEXT NOT NULL,
+                    device_profile_id TEXT NOT NULL,
+                    hardware_profile_id TEXT NOT NULL,
+                    button_id TEXT
+                );
+                INSERT INTO activity_logs VALUES (
+                    1, 1720086400000, 'button', 'ONE pressed',
+                    '11:yd-esp32-s3AAAAAAAAAAAA', 'Desk', 'phone', 'esp-primary', 'ONE'
+                );
+                PRAGMA user_version = 2;
+                ",
+            )
+            .unwrap();
+        drop(connection);
+
+        let store = MetricsStore::open(&path).unwrap();
+
+        let backup = store.backup().unwrap();
+        assert_eq!(backup.activity_logs.len(), 1);
+        assert_eq!(backup.activity_logs[0].message, "ONE pressed");
+        assert_eq!(backup.activity_logs[0].action_kind, None);
+        assert_eq!(backup.activity_logs[0].detail, None);
+        let connection = rusqlite::Connection::open(path).unwrap();
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            METRICS_SCHEMA_VERSION,
+        );
+    }
+
+    #[test]
     fn backup_round_trips_aggregates_and_only_the_newest_500_activities() {
         let directory = TestDirectory::new();
         let source = MetricsStore::open(&directory.0.join("source.sqlite3")).unwrap();
-        let device = DeviceId::new("luatos-esp32s3-aio", "AAAAAAAAAAAA").unwrap();
+        let device = DeviceId::new("yd-esp32-s3", "AAAAAAAAAAAA").unwrap();
         let attribution = MetricAttribution {
             device_id: device.clone(),
             device_name: "Desk".into(),
@@ -921,7 +1170,7 @@ mod tests {
         let directory = TestDirectory::new();
         let store = MetricsStore::open(&directory.0.join("metrics.sqlite3")).unwrap();
         let attribution = MetricAttribution {
-            device_id: DeviceId::new("luatos-esp32s3-aio", "AAAAAAAAAAAA").unwrap(),
+            device_id: DeviceId::new("yd-esp32-s3", "AAAAAAAAAAAA").unwrap(),
             device_name: "Desk".into(),
             device_profile_id: "phone".into(),
             hardware_profile_id: "esp-primary".into(),
@@ -951,7 +1200,7 @@ mod tests {
         let directory = TestDirectory::new();
         let store = MetricsStore::open(&directory.0.join("metrics.sqlite3")).unwrap();
         let attribution = MetricAttribution {
-            device_id: DeviceId::new("luatos-esp32s3-aio", "AAAAAAAAAAAA").unwrap(),
+            device_id: DeviceId::new("yd-esp32-s3", "AAAAAAAAAAAA").unwrap(),
             device_name: "Desk".into(),
             device_profile_id: "phone".into(),
             hardware_profile_id: "esp-primary".into(),
@@ -974,7 +1223,7 @@ mod tests {
         let directory = TestDirectory::new();
         let store = MetricsStore::open(&directory.0.join("metrics.sqlite3")).unwrap();
         let attribution = MetricAttribution {
-            device_id: DeviceId::new("luatos-esp32s3-aio", "AAAAAAAAAAAA").unwrap(),
+            device_id: DeviceId::new("yd-esp32-s3", "AAAAAAAAAAAA").unwrap(),
             device_name: "Desk".into(),
             device_profile_id: "phone".into(),
             hardware_profile_id: "esp-primary".into(),

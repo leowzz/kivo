@@ -32,7 +32,7 @@ bool sendKeyboardReport(const platform::KeyboardReport &keyboardReport) {
 }  // namespace
 
 namespace platform {
-const BoardProfile &boardProfile() { return kLuatOsEsp32S3Aio; }
+const BoardProfile &boardProfile() { return kYdEsp32S3; }
 
 void begin() {
   USB.VID(0x303A);
@@ -76,9 +76,15 @@ bool sendConsumerControl(std::uint16_t usage) {
   return pressed && released;
 }
 
+std::uint8_t loadDisplayBrightness() { return 100; }
+
+void saveDisplayBrightness(std::uint8_t) {}
+
 bool configureDisplay(const std::optional<OledConfig> &config) {
   return !config.has_value();
 }
+
+void setDisplayBrightness(std::uint8_t) {}
 
 bool renderLocalDisplay(const DisplayFrame &) { return true; }
 

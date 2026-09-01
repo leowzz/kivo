@@ -14,6 +14,7 @@
 #include "Handshake.h"
 #include "InputTopology.h"
 #include "KeyActivityIndicator.h"
+#include "OledControlPanel.h"
 #include "RemoteDisplay.h"
 #include "StandaloneDebugTopology.h"
 #include "TriggerProtocol.h"
@@ -31,7 +32,7 @@ void setUp() {}
 void tearDown() {}
 
 void test_dirty_tiles_emit_only_changed_counter_region() {
-  DirtyTiles dirty(16, 4);
+  DirtyTiles dirty(16, 8);
   dirty.markPixels({64, 0, 64, 16});
 
   std::size_t bytes = 0;
@@ -41,7 +42,7 @@ void test_dirty_tiles_emit_only_changed_counter_region() {
 }
 
 void test_dirty_tiles_respect_per_loop_budget_and_coalesce_updates() {
-  DirtyTiles dirty(16, 4);
+  DirtyTiles dirty(16, 8);
   dirty.markPixels({0, 0, 16, 8});
   dirty.markPixels({32, 0, 16, 8});
   dirty.markPixels({8, 0, 32, 8});
@@ -65,9 +66,9 @@ void test_dirty_tiles_respect_per_loop_budget_and_coalesce_updates() {
 }
 
 void test_dirty_tiles_round_outward_clip_and_stay_within_one_row() {
-  DirtyTiles dirty(16, 4);
+  DirtyTiles dirty(16, 8);
   dirty.markPixels({63, 7, 10, 3});
-  dirty.markPixels({127, 31, 8, 8});
+  dirty.markPixels({127, 63, 8, 8});
 
   const auto first = dirty.takeRun(512);
   TEST_ASSERT_TRUE(first.has_value());
@@ -86,22 +87,22 @@ void test_dirty_tiles_round_outward_clip_and_stay_within_one_row() {
   const auto third = dirty.takeRun(512);
   TEST_ASSERT_TRUE(third.has_value());
   TEST_ASSERT_EQUAL_UINT8(15, third->tx);
-  TEST_ASSERT_EQUAL_UINT8(3, third->ty);
+  TEST_ASSERT_EQUAL_UINT8(7, third->ty);
   TEST_ASSERT_EQUAL_UINT8(1, third->tw);
   TEST_ASSERT_EQUAL_UINT8(1, third->th);
   TEST_ASSERT_FALSE(dirty.takeRun(512).has_value());
 }
 
 void test_dirty_tiles_reject_sub_tile_budget_and_clear_explicitly() {
-  DirtyTiles dirty(16, 4);
-  dirty.markPixels({0, 0, 128, 32});
+  DirtyTiles dirty(16, 8);
+  dirty.markPixels({0, 0, 128, 64});
 
   TEST_ASSERT_FALSE(dirty.takeRun(7).has_value());
   TEST_ASSERT_TRUE(dirty.hasDirty());
 
   std::size_t bytes = 0;
   while (const auto run = dirty.takeRun(64)) bytes += run->dataBytes();
-  TEST_ASSERT_EQUAL_UINT32(512, bytes);
+  TEST_ASSERT_EQUAL_UINT32(1024, bytes);
   TEST_ASSERT_FALSE(dirty.hasDirty());
 
   dirty.markPixels({0, 0, 8, 8});
@@ -115,12 +116,26 @@ void test_rotated_or_unsupported_panel_requests_full_refresh() {
   TEST_ASSERT_EQUAL(RefreshMode::Tiles, selectRefreshMode(true, 0));
 }
 
+void test_usage_frame_diff_marks_only_changed_values_and_layout_transitions() {
+  DisplayFrame before{{"SUB2API", "$1.00", "10K", "2K"},
+                      DisplayFrameLayout::UsageEmphasis};
+  auto tokensChanged = before;
+  tokensChanged.lines[2] = "11K";
+
+  TEST_ASSERT_EQUAL_HEX8(0x04,
+                         changedDisplayFrameLines(before, tokensChanged));
+
+  auto rows = tokensChanged;
+  rows.layout = DisplayFrameLayout::Rows;
+  TEST_ASSERT_EQUAL_HEX8(0x0F, changedDisplayFrameLines(tokensChanged, rows));
+}
+
 GpioTriggerController directController(std::uint32_t startMs) {
-  TopologyBuilder builder(kLuatOsEsp32S3Aio);
+  TopologyBuilder builder(kYdEsp32S3);
   builder.begin(1, 30);
   builder.addDirect(1, 0, {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16,
                            17, 18});
-  GpioTriggerController controller(kLuatOsEsp32S3Aio, startMs);
+  GpioTriggerController controller(kYdEsp32S3, startMs);
   controller.configure(*builder.commit(1), startMs);
   return controller;
 }
@@ -163,17 +178,17 @@ RemoteDisplayCommit remoteScene(std::uint32_t revision, const char *first,
   RemoteDisplayCommit scene;
   scene.revision = revision;
   scene.full = full;
-  scene.regions[0] = {0, {0, 0, 128, 16}};
-  scene.regions[1] = {1, {0, 16, 128, 16}};
+  scene.regions[0] = {0, {0, 0, 128, 32}};
+  scene.regions[1] = {1, {0, 32, 128, 32}};
   scene.regionCount = 2;
   scene.operations[0] = {"", 0, 0, 0, 0, DisplayOperationKind::Clear};
-  scene.operations[1] = {first, 0, 12, 0, 0,
+  scene.operations[1] = {first, 0, 23, 0, 0,
                          DisplayOperationKind::Text};
   scene.operations[2] = {"", 0, 0, 1, 0, DisplayOperationKind::Clear};
-  scene.operations[3] = {second, 0, 28, 1, 0,
+  scene.operations[3] = {second, 0, 55, 1, 0,
                          DisplayOperationKind::Text};
   scene.operationCount = 4;
-  scene.dirtyBounds[0] = {0, 0, 128, 32};
+  scene.dirtyBounds[0] = {0, 0, 128, 64};
   scene.dirtyCount = 1;
   return scene;
 }
@@ -395,6 +410,287 @@ void test_delayed_display_reconfiguration_preserves_offline_after_disconnect() {
   TEST_ASSERT_EQUAL_UINT32(9, controller.remoteRevision());
 }
 
+void test_interactive_panel_restores_the_latest_remote_scene() {
+  DisplayController controller;
+  controller.commitRemote(remoteScene(1, "CODEX", "1 RUN"));
+
+  const auto menu = controller.showInteractive(
+      DisplayFrame{{"KIVO MENU", "> LIVE VIEW", "  SYSTEM STATUS", "  INPUT TEST"}});
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::Local, menu.kind);
+  TEST_ASSERT_EQUAL(DisplaySource::Local, controller.source());
+
+  const auto hidden =
+      controller.commitRemote(remoteScene(2, "KIVO", "NEEDS INPUT", false));
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::None, hidden.kind);
+
+  const auto restored = controller.clearInteractive();
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::Remote, restored.kind);
+  TEST_ASSERT_TRUE(restored.fullRedraw);
+  TEST_ASSERT_EQUAL_UINT32(2, restored.remote->revision);
+}
+
+void test_interactive_panel_returns_to_offline_status_without_remote_content() {
+  DisplayController controller;
+  controller.helperDisconnected(localFrame("HELPER OFFLINE"));
+  controller.showInteractive(
+      DisplayFrame{{"DEVICE INFO", "SH1106 128X64", "I2C 0X3C", "EC11"}});
+
+  const auto restored = controller.clearInteractive();
+
+  TEST_ASSERT_EQUAL(DisplayUpdateKind::Local, restored.kind);
+  TEST_ASSERT_NOT_NULL(restored.local);
+  TEST_ASSERT_EQUAL_STRING("HELPER OFFLINE", restored.local->lines[1].c_str());
+}
+
+OledControlPanelUpdate rotateOledEncoder(OledControlPanel &panel,
+                                         OledControlPanelSample &sample,
+                                         std::uint32_t &nowMs,
+                                         bool clockwise);
+
+void test_oled_control_panel_navigates_status_and_back_to_live_view() {
+  OledControlPanel panel;
+  OledControlPanelSample sample;
+  const auto status = DisplayFrame{{"KIVO USB ON", "READY 18 KEYS", "12 D", ""}};
+
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::None,
+                    panel.update(sample, 0, 10));
+  sample.encoderPressed = true;
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::None,
+                    panel.update(sample, 1, 10));
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
+                    panel.update(sample, 11, 10));
+  TEST_ASSERT_TRUE(panel.active());
+  TEST_ASSERT_EQUAL_STRING("> LIVE VIEW", panel.frame(status).lines[1].c_str());
+
+  sample.encoderPressed = false;
+  panel.update(sample, 12, 10);
+  panel.update(sample, 22, 10);
+  std::uint32_t nowMs = 22;
+  for (int step = 0; step < 2; ++step) {
+    TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
+                      rotateOledEncoder(panel, sample, nowMs, true));
+  }
+  TEST_ASSERT_EQUAL_STRING("> SYSTEM STATUS",
+                           panel.frame(status).lines[3].c_str());
+
+  sample.confirmPressed = true;
+  panel.update(sample, nowMs + 20, 10);
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
+                    panel.update(sample, nowMs + 30, 10));
+  TEST_ASSERT_EQUAL_STRING("SYSTEM STATUS",
+                           panel.frame(status).lines[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("12 D", panel.frame(status).lines[3].c_str());
+
+  sample.confirmPressed = false;
+  panel.update(sample, nowMs + 31, 10);
+  panel.update(sample, nowMs + 41, 10);
+  sample.backPressed = true;
+  panel.update(sample, nowMs + 42, 10);
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
+                    panel.update(sample, nowMs + 52, 10));
+  TEST_ASSERT_EQUAL_STRING("KIVO MENU", panel.frame(status).lines[0].c_str());
+
+  sample.backPressed = false;
+  panel.update(sample, nowMs + 53, 10);
+  panel.update(sample, nowMs + 63, 10);
+  sample.backPressed = true;
+  panel.update(sample, nowMs + 64, 10);
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::Dismiss,
+                    panel.update(sample, nowMs + 74, 10));
+  TEST_ASSERT_FALSE(panel.active());
+}
+
+void test_oled_control_panel_opens_on_encoder_rotation_when_closed() {
+  OledControlPanel panel;
+  OledControlPanelSample sample;
+  std::uint32_t nowMs = 0;
+
+  panel.update(sample, nowMs, 10);
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
+                    rotateOledEncoder(panel, sample, nowMs, true));
+  TEST_ASSERT_TRUE(panel.active());
+  TEST_ASSERT_EQUAL_STRING("  LIVE VIEW", panel.frame(DisplayFrame{}).lines[1].c_str());
+  TEST_ASSERT_EQUAL_STRING("> SUB2API", panel.frame(DisplayFrame{}).lines[2].c_str());
+}
+
+void test_oled_control_panel_ignores_push_noise_during_encoder_rotation() {
+  OledControlPanel panel;
+  OledControlPanelSample sample;
+  std::uint32_t nowMs = 0;
+
+  panel.update(sample, nowMs, 10);
+  sample.confirmPressed = true;
+  panel.update(sample, ++nowMs, 10);
+  nowMs += 10;
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
+                    panel.update(sample, nowMs, 10));
+  sample.confirmPressed = false;
+  panel.update(sample, ++nowMs, 10);
+  nowMs += 10;
+  panel.update(sample, nowMs, 10);
+
+  // The encoder push line goes low at the same time as the A/B transitions.
+  // It must not select LIVE VIEW and dismiss the menu.
+  sample.encoderPressed = true;
+  sample.encoderAHigh = false;
+  panel.update(sample, ++nowMs, 10);
+  sample.encoderBHigh = false;
+  panel.update(sample, ++nowMs, 10);
+  sample.encoderAHigh = true;
+  panel.update(sample, ++nowMs, 10);
+  sample.encoderBHigh = true;
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
+                    panel.update(sample, ++nowMs, 10));
+  nowMs += 10;
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::None,
+                    panel.update(sample, nowMs, 10));
+  TEST_ASSERT_TRUE(panel.active());
+  TEST_ASSERT_EQUAL_STRING("> SUB2API",
+                           panel.frame(DisplayFrame{}).lines[2].c_str());
+}
+
+OledControlPanelUpdate rotateOledEncoder(OledControlPanel &panel,
+                                         OledControlPanelSample &sample,
+                                         std::uint32_t &nowMs,
+                                         bool clockwise) {
+  if (clockwise) {
+    sample.encoderAHigh = false;
+    panel.update(sample, ++nowMs, 10);
+    sample.encoderBHigh = false;
+    panel.update(sample, ++nowMs, 10);
+    sample.encoderAHigh = true;
+    panel.update(sample, ++nowMs, 10);
+    sample.encoderBHigh = true;
+  } else {
+    sample.encoderBHigh = false;
+    panel.update(sample, ++nowMs, 10);
+    sample.encoderAHigh = false;
+    panel.update(sample, ++nowMs, 10);
+    sample.encoderBHigh = true;
+    panel.update(sample, ++nowMs, 10);
+    sample.encoderAHigh = true;
+  }
+  return panel.update(sample, ++nowMs, 10);
+}
+
+void test_oled_control_panel_renders_cost_token_and_tpm_on_sub2api_page() {
+  const OledUsageSnapshot usage{OledUsageState::Stale, 12345678ULL,
+                                1234567ULL, 98765ULL};
+  OledControlPanel panel;
+  OledControlPanelSample sample;
+  std::uint32_t nowMs = 0;
+  panel.setUsageSnapshot(usage);
+  TEST_ASSERT_FALSE(panel.usageActive());
+  panel.update(sample, nowMs, 10);
+  sample.encoderPressed = true;
+  panel.update(sample, ++nowMs, 10);
+  nowMs += 10;
+  panel.update(sample, nowMs, 10);
+  sample.encoderPressed = false;
+  panel.update(sample, ++nowMs, 10);
+  nowMs += 10;
+  panel.update(sample, nowMs, 10);
+  rotateOledEncoder(panel, sample, nowMs, true);
+  nowMs += 20;
+  sample.confirmPressed = true;
+  panel.update(sample, ++nowMs, 10);
+  nowMs += 10;
+  panel.update(sample, nowMs, 10);
+  TEST_ASSERT_TRUE(panel.usageActive());
+
+  const auto frame = panel.frame(DisplayFrame{});
+  TEST_ASSERT_EQUAL(DisplayFrameLayout::UsageEmphasis, frame.layout);
+  TEST_ASSERT_EQUAL_STRING("SUB2API / STALE", frame.lines[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("$12.35", frame.lines[1].c_str());
+  TEST_ASSERT_EQUAL_STRING("1M", frame.lines[2].c_str());
+  TEST_ASSERT_EQUAL_STRING("98K", frame.lines[3].c_str());
+  panel.reset();
+  TEST_ASSERT_FALSE(panel.usageActive());
+}
+
+void test_oled_control_panel_adjusts_brightness_with_the_encoder() {
+  OledControlPanel panel;
+  OledControlPanelSample sample;
+  const DisplayFrame status{};
+  std::uint32_t nowMs = 0;
+
+  panel.update(sample, nowMs, 10);
+  sample.encoderPressed = true;
+  panel.update(sample, ++nowMs, 10);
+  nowMs += 10;
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
+                    panel.update(sample, nowMs, 10));
+  sample.encoderPressed = false;
+  panel.update(sample, ++nowMs, 10);
+  nowMs += 10;
+  panel.update(sample, nowMs, 10);
+
+  for (int step = 0; step < 4; ++step) {
+    TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
+                      rotateOledEncoder(panel, sample, nowMs, true));
+  }
+  TEST_ASSERT_EQUAL_STRING("> BRIGHTNESS",
+                           panel.frame(status).lines[3].c_str());
+
+  nowMs += 20;
+  sample.confirmPressed = true;
+  panel.update(sample, ++nowMs, 10);
+  nowMs += 10;
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
+                    panel.update(sample, nowMs, 10));
+  TEST_ASSERT_EQUAL_UINT8(100, panel.brightnessPercent());
+  TEST_ASSERT_EQUAL_STRING("DISPLAY BRIGHTNESS",
+                           panel.frame(status).lines[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("LEVEL: 100%",
+                           panel.frame(status).lines[1].c_str());
+  TEST_ASSERT_EQUAL_STRING("[################]",
+                           panel.frame(status).lines[2].c_str());
+
+  sample.confirmPressed = false;
+  panel.update(sample, ++nowMs, 10);
+  nowMs += 10;
+  panel.update(sample, nowMs, 10);
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::BrightnessChanged,
+                    rotateOledEncoder(panel, sample, nowMs, false));
+  TEST_ASSERT_EQUAL_UINT8(95, panel.brightnessPercent());
+  TEST_ASSERT_EQUAL_STRING("LEVEL: 95%",
+                           panel.frame(status).lines[1].c_str());
+  TEST_ASSERT_EQUAL_STRING("[###############.]",
+                           panel.frame(status).lines[2].c_str());
+
+  for (int step = 0; step < 18; ++step) {
+    TEST_ASSERT_EQUAL(OledControlPanelUpdate::BrightnessChanged,
+                      rotateOledEncoder(panel, sample, nowMs, false));
+  }
+  TEST_ASSERT_EQUAL_UINT8(5, panel.brightnessPercent());
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::None,
+                    rotateOledEncoder(panel, sample, nowMs, false));
+
+  sample.backPressed = true;
+  panel.update(sample, ++nowMs, 10);
+  nowMs += 20;
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
+                    panel.update(sample, nowMs, 10));
+  TEST_ASSERT_EQUAL_STRING("KIVO MENU", panel.frame(status).lines[0].c_str());
+
+  panel.reset();
+  TEST_ASSERT_EQUAL_UINT8(5, panel.brightnessPercent());
+  TEST_ASSERT_FALSE(panel.active());
+}
+
+void test_oled_control_panel_clamps_loaded_brightness() {
+  OledControlPanel panel;
+
+  panel.setBrightnessPercent(55);
+  TEST_ASSERT_EQUAL_UINT8(55, panel.brightnessPercent());
+  panel.setBrightnessPercent(0);
+  TEST_ASSERT_EQUAL_UINT8(5, panel.brightnessPercent());
+  panel.setBrightnessPercent(255);
+  TEST_ASSERT_EQUAL_UINT8(100, panel.brightnessPercent());
+  panel.reset();
+  TEST_ASSERT_EQUAL_UINT8(100, panel.brightnessPercent());
+}
+
 void commitFullScene(RemoteDisplay &display, std::uint32_t revision) {
   TEST_ASSERT_EQUAL(DisplayResult::Accepted,
                     display.begin(revision, 0, DisplayMode::Full));
@@ -489,7 +785,7 @@ void test_display_regions_are_bounded_aligned_unique_and_fixed_capacity() {
   TEST_ASSERT_FALSE(display.region(0, {0, 4, 8, 8}));
   TEST_ASSERT_EQUAL(DisplayResult::Accepted,
                     display.begin(1, 0, DisplayMode::Full));
-  TEST_ASSERT_FALSE(display.region(0, {120, 24, 16, 8}));
+  TEST_ASSERT_FALSE(display.region(0, {120, 56, 16, 16}));
 
   TEST_ASSERT_EQUAL(DisplayResult::Accepted,
                     display.begin(1, 0, DisplayMode::Full));
@@ -512,7 +808,7 @@ void test_display_operations_require_regions_and_enforce_total_limit() {
 
   TEST_ASSERT_EQUAL(DisplayResult::Accepted,
                     display.begin(1, 0, DisplayMode::Full));
-  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 32}));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 64}));
   for (std::size_t index = 0; index < kMaxDisplayOps; ++index) {
     TEST_ASSERT_TRUE(display.clear(0));
   }
@@ -529,7 +825,7 @@ void test_display_text_accepts_declared_fonts_and_rejects_invalid_values() {
 
   TEST_ASSERT_EQUAL(DisplayResult::Accepted,
                     display.begin(1, 0, DisplayMode::Full));
-  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 32}));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 64}));
   TEST_ASSERT_TRUE(display.text(0, 0, 0, 0, longest));
   TEST_ASSERT_FALSE(display.text(0, 0, 0, 0, oversized));
 
@@ -538,21 +834,21 @@ void test_display_text_accepts_declared_fonts_and_rejects_invalid_values() {
     RemoteDisplay supported;
     TEST_ASSERT_EQUAL(DisplayResult::Accepted,
                       supported.begin(1, 0, DisplayMode::Full));
-    TEST_ASSERT_TRUE(supported.region(0, {0, 0, 128, 32}));
+    TEST_ASSERT_TRUE(supported.region(0, {0, 0, 128, 64}));
     TEST_ASSERT_TRUE(supported.text(0, 0, 21, fontId, "FONT"));
   }
 
   TEST_ASSERT_EQUAL(DisplayResult::Accepted,
                     display.begin(1, 0, DisplayMode::Full));
-  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 32}));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 64}));
   TEST_ASSERT_FALSE(display.text(0, 0, 21, 3, "FONT"));
   TEST_ASSERT_EQUAL(DisplayResult::Accepted,
                     display.begin(1, 0, DisplayMode::Full));
-  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 32}));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 64}));
   TEST_ASSERT_FALSE(display.text(0, 0, 0, 0, control));
   TEST_ASSERT_EQUAL(DisplayResult::Accepted,
                     display.begin(1, 0, DisplayMode::Full));
-  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 32}));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 64}));
   TEST_ASSERT_FALSE(display.text(0, 0, 0, 0, nonAscii));
 }
 
@@ -616,20 +912,20 @@ void test_display_layout_transitions_mark_the_full_panel_dirty() {
   RemoteDisplay display;
   TEST_ASSERT_EQUAL(DisplayResult::Accepted,
                     display.begin(1, 0, DisplayMode::Full));
-  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 32}));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 64}));
   TEST_ASSERT_TRUE(display.clear(0));
-  TEST_ASSERT_TRUE(display.text(0, 9, 22, 2, "CODEX 3 RUN"));
+  TEST_ASSERT_TRUE(display.text(0, 9, 38, 2, "CODEX 3 RUN"));
   TEST_ASSERT_NOT_NULL(display.commit(1));
 
   TEST_ASSERT_EQUAL(DisplayResult::Accepted,
                     display.begin(2, 1, DisplayMode::Delta));
-  TEST_ASSERT_TRUE(display.region(0, {0, 0, 64, 16}));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 64, 32}));
   TEST_ASSERT_TRUE(display.clear(0));
-  TEST_ASSERT_TRUE(display.text(0, 0, 12, 0, "CODEX"));
-  TEST_ASSERT_TRUE(display.region(1, {64, 0, 64, 16}));
+  TEST_ASSERT_TRUE(display.text(0, 0, 23, 0, "CODEX"));
+  TEST_ASSERT_TRUE(display.region(1, {64, 0, 64, 32}));
   TEST_ASSERT_TRUE(display.clear(1));
-  TEST_ASSERT_TRUE(display.text(1, 64, 12, 0, "3 RUN"));
-  TEST_ASSERT_TRUE(display.region(2, {0, 16, 128, 16}));
+  TEST_ASSERT_TRUE(display.text(1, 64, 23, 0, "3 RUN"));
+  TEST_ASSERT_TRUE(display.region(2, {0, 32, 128, 32}));
   TEST_ASSERT_TRUE(display.clear(2));
   const auto compact = display.commit(2);
 
@@ -638,13 +934,13 @@ void test_display_layout_transitions_mark_the_full_panel_dirty() {
   TEST_ASSERT_EQUAL_UINT16(0, compact->dirtyBounds[0].x);
   TEST_ASSERT_EQUAL_UINT16(0, compact->dirtyBounds[0].y);
   TEST_ASSERT_EQUAL_UINT16(128, compact->dirtyBounds[0].width);
-  TEST_ASSERT_EQUAL_UINT16(32, compact->dirtyBounds[0].height);
+  TEST_ASSERT_EQUAL_UINT16(64, compact->dirtyBounds[0].height);
 
   TEST_ASSERT_EQUAL(DisplayResult::Accepted,
                     display.begin(3, 0, DisplayMode::Full));
-  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 32}));
+  TEST_ASSERT_TRUE(display.region(0, {0, 0, 128, 64}));
   TEST_ASSERT_TRUE(display.clear(0));
-  TEST_ASSERT_TRUE(display.text(0, 9, 22, 2, "CODEX 3 RUN"));
+  TEST_ASSERT_TRUE(display.text(0, 9, 38, 2, "CODEX 3 RUN"));
   const auto full = display.commit(3);
 
   TEST_ASSERT_NOT_NULL(full);
@@ -652,7 +948,7 @@ void test_display_layout_transitions_mark_the_full_panel_dirty() {
   TEST_ASSERT_EQUAL_UINT16(0, full->dirtyBounds[0].x);
   TEST_ASSERT_EQUAL_UINT16(0, full->dirtyBounds[0].y);
   TEST_ASSERT_EQUAL_UINT16(128, full->dirtyBounds[0].width);
-  TEST_ASSERT_EQUAL_UINT16(32, full->dirtyBounds[0].height);
+  TEST_ASSERT_EQUAL_UINT16(64, full->dirtyBounds[0].height);
 }
 
 void test_parses_display_commands_and_decodes_ascii_base64() {
@@ -800,7 +1096,7 @@ void test_formats_display_protocol_replies_exactly() {
 }
 
 void test_commits_complete_matrix_topology_atomically() {
-  TopologyBuilder builder(kLuatOsEsp32S3Aio);
+  TopologyBuilder builder(kYdEsp32S3);
   TEST_ASSERT_TRUE(builder.begin(7, 30));
   TEST_ASSERT_TRUE(builder.addMatrix(7, 0, {1, 2}, {12, 13}));
 
@@ -812,7 +1108,7 @@ void test_commits_complete_matrix_topology_atomically() {
 }
 
 void test_runtime_topology_counts_direct_and_matrix_keys() {
-  TopologyBuilder builder(kVccGndYdRp2040);
+  TopologyBuilder builder(kYdRp2040);
   TEST_ASSERT_TRUE(builder.begin(8, 30));
   TEST_ASSERT_TRUE(builder.addDirect(8, 0, {0, 1}));
   TEST_ASSERT_TRUE(builder.addMatrix(8, 1, {2, 3}, {4, 5}));
@@ -824,33 +1120,45 @@ void test_runtime_topology_counts_direct_and_matrix_keys() {
 }
 
 void test_board_profiles_enforce_exact_safe_pins() {
-  TEST_ASSERT_TRUE(kLuatOsEsp32S3Aio.supports(18));
-  TEST_ASSERT_FALSE(kLuatOsEsp32S3Aio.supports(19));
-  TEST_ASSERT_TRUE(kVccGndYdRp2040.supports(0));
-  TEST_ASSERT_TRUE(kVccGndYdRp2040.supports(22));
-  for (std::uint8_t pin = 23; pin <= 25; ++pin) {
-    TEST_ASSERT_FALSE(kVccGndYdRp2040.supports(pin));
+  for (const auto pin : {0, 10, 11, 18, 21, 38, 39, 40, 41, 42, 47}) {
+    TEST_ASSERT_TRUE(kYdEsp32S3.supports(pin));
+  }
+  TEST_ASSERT_FALSE(kYdEsp32S3.supports(19));
+  TEST_ASSERT_FALSE(kYdEsp32S3.supports(20));
+  TEST_ASSERT_FALSE(kYdEsp32S3.supports(35));
+  TEST_ASSERT_FALSE(kYdEsp32S3.supports(36));
+  TEST_ASSERT_FALSE(kYdEsp32S3.supports(37));
+  TEST_ASSERT_FALSE(kYdEsp32S3.supports(43));
+  TEST_ASSERT_FALSE(kYdEsp32S3.supports(44));
+  TEST_ASSERT_FALSE(kYdEsp32S3.supports(45));
+  TEST_ASSERT_FALSE(kYdEsp32S3.supports(46));
+  TEST_ASSERT_FALSE(kYdEsp32S3.supports(48));
+  TEST_ASSERT_TRUE(kYdRp2040.supports(0));
+  TEST_ASSERT_TRUE(kYdRp2040.supports(22));
+  TEST_ASSERT_TRUE(kYdRp2040.supports(23));
+  for (std::uint8_t pin = 24; pin <= 25; ++pin) {
+    TEST_ASSERT_FALSE(kYdRp2040.supports(pin));
   }
   for (std::uint8_t pin = 26; pin <= 29; ++pin) {
-    TEST_ASSERT_TRUE(kVccGndYdRp2040.supports(pin));
+    TEST_ASSERT_TRUE(kYdRp2040.supports(pin));
   }
 
-  TopologyBuilder rp2040(kVccGndYdRp2040);
+  TopologyBuilder rp2040(kYdRp2040);
   TEST_ASSERT_TRUE(rp2040.begin(1, 30));
-  TEST_ASSERT_TRUE(rp2040.addDirect(1, 0, {0, 22, 26, 27, 28, 29}));
+  TEST_ASSERT_TRUE(rp2040.addDirect(1, 0, {0, 22, 23, 26, 27, 28, 29}));
 
-  TopologyBuilder reserved(kVccGndYdRp2040);
+  TopologyBuilder reserved(kYdRp2040);
   TEST_ASSERT_TRUE(reserved.begin(1, 30));
-  TEST_ASSERT_FALSE(reserved.addDirect(1, 0, {23}));
+  TEST_ASSERT_FALSE(reserved.addDirect(1, 0, {24}));
 }
 
 void test_board_profiles_report_oled_capability() {
-  TEST_ASSERT_FALSE(kLuatOsEsp32S3Aio.supportsOled);
-  TEST_ASSERT_TRUE(kVccGndYdRp2040.supportsOled);
+  TEST_ASSERT_FALSE(kYdEsp32S3.supportsOled);
+  TEST_ASSERT_TRUE(kYdRp2040.supportsOled);
 }
 
 void test_rp2040_standalone_debug_topology_matches_keyboard_wiring() {
-  const auto topology = makeRp2040StandaloneDebugTopology(kVccGndYdRp2040);
+  const auto topology = makeRp2040StandaloneDebugTopology(kYdRp2040);
 
   TEST_ASSERT_TRUE(topology.has_value());
   TEST_ASSERT_EQUAL_UINT16(30, topology->debounceMs);
@@ -867,7 +1175,7 @@ void test_rp2040_standalone_debug_topology_matches_keyboard_wiring() {
   TEST_ASSERT_EQUAL_UINT8(29, topology->oled->scl);
 
   TEST_ASSERT_FALSE(
-      makeRp2040StandaloneDebugTopology(kLuatOsEsp32S3Aio).has_value());
+      makeRp2040StandaloneDebugTopology(kYdEsp32S3).has_value());
 }
 
 void test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match() {
@@ -888,28 +1196,42 @@ void test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins() {
                     platform::selectRp2040OledBus(5, 6));
 }
 
-void test_formats_protocol_v8_hello_with_board_and_build() {
+void test_formats_protocol_v13_hello_with_board_and_build() {
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 8 rp2040 vccgnd-yd-rp2040 0.1.0+gabc1234 27 "
-      "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 26 "
+      "HELLO 13 rp2040 yd-rp2040 0.1.0+gabc1234 - 28 "
+      "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 26 "
       "27 28 29\n",
-      formatHello(kVccGndYdRp2040, "0.1.0+gabc1234").c_str());
+      formatHello(kYdRp2040, "0.1.0+gabc1234").c_str());
+}
+
+void test_formats_protocol_v13_hello_with_product_identity() {
+  TEST_ASSERT_EQUAL_STRING(
+      "HELLO 13 rp2040 yd-rp2040 0.1.0+gabc1234 key-k1-r01 28 "
+      "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 26 "
+      "27 28 29\n",
+      formatHello(kYdRp2040, "0.1.0+gabc1234", "key-k1-r01")
+          .c_str());
+  TEST_ASSERT_EQUAL_STRING(
+      "HELLO 13 rp2040 yd-rp2040 build - 28 "
+      "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 26 "
+      "27 28 29\n",
+      formatHello(kYdRp2040, "build", "-").c_str());
 }
 
 void test_rejects_empty_firmware_build_id() {
-  TEST_ASSERT_EQUAL_STRING("", formatHello(kVccGndYdRp2040, "").c_str());
+  TEST_ASSERT_EQUAL_STRING("", formatHello(kYdRp2040, "").c_str());
 }
 
 void test_rejects_whitespace_in_firmware_build_id() {
   TEST_ASSERT_EQUAL_STRING("",
-                           formatHello(kVccGndYdRp2040, "0.1.0 test").c_str());
+                           formatHello(kYdRp2040, "0.1.0 test").c_str());
 }
 
 void test_contact_edge_reports_unordered_pair_once_after_debounce() {
-  TopologyBuilder builder(kLuatOsEsp32S3Aio);
+  TopologyBuilder builder(kYdEsp32S3);
   TEST_ASSERT_TRUE(builder.begin(7, 30));
   TEST_ASSERT_TRUE(builder.addMatrix(7, 0, {1, 2}, {12, 13}));
-  GpioTriggerController controller(kLuatOsEsp32S3Aio, 0);
+  GpioTriggerController controller(kYdEsp32S3, 0);
   controller.configure(*builder.commit(7), 0);
 
   TEST_ASSERT_FALSE(controller.updateContact(0, 1, 12, true, 10).has_value());
@@ -925,6 +1247,15 @@ void test_parses_runtime_configuration_commands() {
   const auto hello = parseHelperCommand("HELLO\n");
   TEST_ASSERT_TRUE(hello.has_value());
   TEST_ASSERT_EQUAL(HelperCommandKind::Hello, hello->kind);
+
+  const auto productInfo = parseHelperCommand("PRODUCT_INFO\n");
+  TEST_ASSERT_TRUE(productInfo.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::ProductInfo, productInfo->kind);
+  const auto productRead = parseHelperCommand("PRODUCT_READ\r\n");
+  TEST_ASSERT_TRUE(productRead.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::ProductRead, productRead->kind);
+  TEST_ASSERT_FALSE(parseHelperCommand("PRODUCT_INFO extra\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("PRODUCT_READ 0\n").has_value());
 
   const auto begin = parseHelperCommand("CONFIG_BEGIN 3 30\n");
   TEST_ASSERT_TRUE(begin.has_value());
@@ -952,30 +1283,72 @@ void test_parses_runtime_configuration_commands() {
   TEST_ASSERT_EQUAL_UINT8(4, oled->oledSda);
   TEST_ASSERT_EQUAL_UINT8(5, oled->oledScl);
 
+  const auto sh1106 = parseHelperCommand("CONFIG_SH1106 3 28 29\n");
+  TEST_ASSERT_TRUE(sh1106.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::ConfigSh1106, sh1106->kind);
+  TEST_ASSERT_EQUAL_UINT8(28, sh1106->oledSda);
+  TEST_ASSERT_EQUAL_UINT8(29, sh1106->oledScl);
+
+  const auto oledControl =
+      parseHelperCommand("CONFIG_OLED_CONTROL 3 19 20 21 22 26\n");
+  TEST_ASSERT_TRUE(oledControl.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::ConfigOledControl,
+                    oledControl->kind);
+  TEST_ASSERT_EQUAL_UINT32(3, oledControl->revision);
+  TEST_ASSERT_EQUAL_UINT8(5, oledControl->pins.size());
+  TEST_ASSERT_EQUAL_UINT8(19, oledControl->pins[0]);
+  TEST_ASSERT_EQUAL_UINT8(26, oledControl->pins[4]);
+
   const auto commit = parseHelperCommand("CONFIG_COMMIT 3\n");
   TEST_ASSERT_TRUE(commit.has_value());
   TEST_ASSERT_EQUAL(HelperCommandKind::ConfigCommit, commit->kind);
+
+  const auto usage = parseHelperCommand(
+      "USAGE 3 18446744073709551615 1234567890123 987654321\n");
+  TEST_ASSERT_TRUE(usage.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::Usage, usage->kind);
+  TEST_ASSERT_EQUAL_UINT8(3, usage->usageState);
+  TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, usage->usageCostMicros);
+  TEST_ASSERT_EQUAL_UINT64(1234567890123ULL, usage->usageTodayTokens);
+  TEST_ASSERT_EQUAL_UINT64(987654321ULL, usage->usageTpm);
+  TEST_ASSERT_FALSE(parseHelperCommand("USAGE 8 1 2 3\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand(
+                        "USAGE 2 18446744073709551616 2 3\n")
+                        .has_value());
+
+  const auto usageView = parseHelperCommand("USAGE_VIEW\n");
+  TEST_ASSERT_TRUE(usageView.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::UsageView, usageView->kind);
+  TEST_ASSERT_FALSE(parseHelperCommand("USAGE_VIEW 1\n").has_value());
 }
 
 void test_oled_configuration_requires_supported_distinct_safe_pins() {
-  TopologyBuilder esp32(kLuatOsEsp32S3Aio);
+  TopologyBuilder esp32(kYdEsp32S3);
   TEST_ASSERT_TRUE(esp32.begin(1, 30));
   TEST_ASSERT_FALSE(esp32.addOled(1, 4, 5));
 
-  TopologyBuilder rp2040(kVccGndYdRp2040);
+  TopologyBuilder rp2040(kYdRp2040);
   TEST_ASSERT_TRUE(rp2040.begin(1, 30));
   TEST_ASSERT_FALSE(rp2040.addOled(1, 4, 4));
-  TEST_ASSERT_FALSE(rp2040.addOled(1, 4, 23));
+  TEST_ASSERT_FALSE(rp2040.addOled(1, 4, 24));
   TEST_ASSERT_TRUE(rp2040.addOled(1, 28, 29));
   const auto topology = rp2040.commit(1);
   TEST_ASSERT_TRUE(topology.has_value());
   TEST_ASSERT_TRUE(topology->oled.has_value());
   TEST_ASSERT_EQUAL_UINT8(28, topology->oled->sda);
   TEST_ASSERT_EQUAL_UINT8(29, topology->oled->scl);
+  TEST_ASSERT_EQUAL(OledDriver::Ssd1306, topology->oled->driver);
+
+  TopologyBuilder sh1106(kYdRp2040);
+  TEST_ASSERT_TRUE(sh1106.begin(2, 30));
+  TEST_ASSERT_TRUE(sh1106.addSh1106(2, 28, 29));
+  const auto sh1106Topology = sh1106.commit(2);
+  TEST_ASSERT_TRUE(sh1106Topology.has_value());
+  TEST_ASSERT_EQUAL(OledDriver::Sh1106, sh1106Topology->oled->driver);
 }
 
 void test_oled_pins_are_reserved_when_oled_command_arrives_first() {
-  TopologyBuilder builder(kVccGndYdRp2040);
+  TopologyBuilder builder(kYdRp2040);
   TEST_ASSERT_TRUE(builder.begin(1, 30));
   TEST_ASSERT_TRUE(builder.addOled(1, 4, 5));
   TEST_ASSERT_FALSE(builder.addDirect(1, 0, {6, 5}));
@@ -988,7 +1361,7 @@ void test_oled_pins_are_reserved_when_oled_command_arrives_first() {
 }
 
 void test_oled_pins_are_reserved_when_input_command_arrives_first() {
-  TopologyBuilder builder(kVccGndYdRp2040);
+  TopologyBuilder builder(kYdRp2040);
   TEST_ASSERT_TRUE(builder.begin(1, 30));
   TEST_ASSERT_TRUE(builder.addDirect(1, 0, {4}));
   TEST_ASSERT_FALSE(builder.addOled(1, 5, 4));
@@ -1001,6 +1374,24 @@ void test_oled_pins_are_reserved_when_input_command_arrives_first() {
   TEST_ASSERT_EQUAL_UINT8(6, topology->oled->scl);
 }
 
+void test_oled_control_panel_reserves_five_pins_without_counting_keys() {
+  TopologyBuilder builder(kYdRp2040);
+  TEST_ASSERT_TRUE(builder.begin(1, 30));
+  TEST_ASSERT_FALSE(builder.addOledControlPanel(1, 19, 20, 21, 22, 26));
+  TEST_ASSERT_TRUE(builder.addOled(1, 28, 29));
+  TEST_ASSERT_FALSE(builder.addOledControlPanel(1, 19, 19, 21, 22, 26));
+  TEST_ASSERT_TRUE(builder.addOledControlPanel(1, 19, 20, 21, 22, 26));
+  TEST_ASSERT_FALSE(builder.addDirect(1, 0, {6, 19}));
+  TEST_ASSERT_TRUE(builder.addDirect(1, 0, {6}));
+
+  const auto topology = builder.commit(1);
+  TEST_ASSERT_TRUE(topology.has_value());
+  TEST_ASSERT_TRUE(topology->oledControlPanel.has_value());
+  TEST_ASSERT_EQUAL_UINT8(19, topology->oledControlPanel->confirm);
+  TEST_ASSERT_EQUAL_UINT8(26, topology->oledControlPanel->back);
+  TEST_ASSERT_EQUAL_UINT8(1, topology->keyCount());
+}
+
 void test_parses_extended_registered_board_pin_domain() {
   const auto direct = parseHelperCommand(
       "CONFIG_DIRECT 3 0 9 10 11 19 20 22 26 27 28 29\n");
@@ -1010,11 +1401,11 @@ void test_parses_extended_registered_board_pin_domain() {
   TEST_ASSERT_EQUAL_UINT8(10, direct->pins[0]);
   TEST_ASSERT_EQUAL_UINT8(29, direct->pins[8]);
 
-  TopologyBuilder esp32(kLuatOsEsp32S3Aio);
+  TopologyBuilder esp32(kYdEsp32S3);
   TEST_ASSERT_TRUE(esp32.begin(3, 30));
   TEST_ASSERT_FALSE(esp32.addDirect(3, 0, direct->pins));
 
-  TopologyBuilder rp2040(kVccGndYdRp2040);
+  TopologyBuilder rp2040(kYdRp2040);
   TEST_ASSERT_TRUE(rp2040.begin(3, 30));
   TEST_ASSERT_TRUE(rp2040.addDirect(3, 0, direct->pins));
 }
@@ -1027,11 +1418,11 @@ void test_parser_defers_unsupported_pins_to_board_validation() {
   TEST_ASSERT_EQUAL_UINT8(23, direct->pins[0]);
   TEST_ASSERT_EQUAL_UINT8(25, direct->pins[2]);
 
-  TopologyBuilder esp32(kLuatOsEsp32S3Aio);
+  TopologyBuilder esp32(kYdEsp32S3);
   TEST_ASSERT_TRUE(esp32.begin(3, 30));
   TEST_ASSERT_FALSE(esp32.addDirect(3, 0, direct->pins));
 
-  TopologyBuilder rp2040(kVccGndYdRp2040);
+  TopologyBuilder rp2040(kYdRp2040);
   TEST_ASSERT_TRUE(rp2040.begin(3, 30));
   TEST_ASSERT_FALSE(rp2040.addDirect(3, 0, direct->pins));
 }
@@ -1089,6 +1480,20 @@ void test_rejects_malformed_runtime_commands() {
       parseHelperCommand("CONFIG_OLED 3 4 256\n").has_value());
   TEST_ASSERT_FALSE(
       parseHelperCommand("CONFIG_OLED 3 4 5 trailing\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("CONFIG_SH1106 3 4\n").has_value());
+  TEST_ASSERT_FALSE(
+      parseHelperCommand("CONFIG_SH1106 3 4 256\n").has_value());
+  TEST_ASSERT_FALSE(
+      parseHelperCommand("CONFIG_SH1106 3 4 5 trailing\n").has_value());
+  TEST_ASSERT_FALSE(
+      parseHelperCommand("CONFIG_OLED_CONTROL 3 19 20 21 22\n")
+          .has_value());
+  TEST_ASSERT_FALSE(
+      parseHelperCommand("CONFIG_OLED_CONTROL 3 19 20 21 22 256\n")
+          .has_value());
+  TEST_ASSERT_FALSE(
+      parseHelperCommand("CONFIG_OLED_CONTROL 3 19 20 21 22 26 trailing\n")
+          .has_value());
   TEST_ASSERT_FALSE(parseHelperCommand("PASTE 9 0 2\n").has_value());
   TEST_ASSERT_FALSE(parseHelperCommand("HOTKEY 9 2 1 0 40\n").has_value());
   TEST_ASSERT_FALSE(parseHelperCommand("DELAY 9 1 1 0\n").has_value());
@@ -1119,13 +1524,13 @@ void test_debounced_input_edges_do_not_create_action_state() {
 }
 
 void test_learning_reports_contact_and_restores_runtime_topology() {
-  TopologyBuilder builder(kLuatOsEsp32S3Aio);
+  TopologyBuilder builder(kYdEsp32S3);
   builder.begin(7, 30);
   builder.addDirect(7, 0, {6});
-  GpioTriggerController controller(kLuatOsEsp32S3Aio, 0);
+  GpioTriggerController controller(kYdEsp32S3, 0);
   controller.configure(*builder.commit(7), 0);
 
-  TEST_ASSERT_FALSE(controller.beginLearning(4, {1, 10, 12}, 0));
+  TEST_ASSERT_FALSE(controller.beginLearning(4, {1, 12, 35}, 0));
   TEST_ASSERT_TRUE(controller.beginLearning(4, {1, 12}, 0));
   TEST_ASSERT_FALSE(
       controller.updateLearningContact(12, 1, true, 10).has_value());
@@ -1139,26 +1544,31 @@ void test_learning_reports_contact_and_restores_runtime_topology() {
   TEST_ASSERT_EQUAL_UINT32(7, controller.topology().revision);
 }
 
-void test_rp2040_learning_accepts_gpio29_and_rejects_gpio23() {
-  GpioTriggerController esp32(kLuatOsEsp32S3Aio, 0);
+void test_rp2040_learning_accepts_gpio23_and_gpio29() {
+  GpioTriggerController esp32(kYdEsp32S3, 0);
   TEST_ASSERT_FALSE(esp32.beginLearning(4, {29}, 0));
 
-  GpioTriggerController rp2040(kVccGndYdRp2040, 0);
+  GpioTriggerController rp2040(kYdRp2040, 0);
   TEST_ASSERT_TRUE(rp2040.beginLearning(4, {29}, 0));
   TEST_ASSERT_TRUE(rp2040.endLearning(4, 1));
-  TEST_ASSERT_FALSE(rp2040.beginLearning(5, {23}, 1));
+  TEST_ASSERT_TRUE(rp2040.beginLearning(5, {23}, 1));
+  TEST_ASSERT_TRUE(rp2040.endLearning(5, 2));
+  TEST_ASSERT_FALSE(rp2040.beginLearning(6, {24}, 2));
 }
 
 void test_learning_rejects_active_oled_pins() {
-  TopologyBuilder builder(kVccGndYdRp2040);
+  TopologyBuilder builder(kYdRp2040);
   TEST_ASSERT_TRUE(builder.begin(7, 30));
   TEST_ASSERT_TRUE(builder.addDirect(7, 0, {6}));
   TEST_ASSERT_TRUE(builder.addOled(7, 4, 5));
-  GpioTriggerController controller(kVccGndYdRp2040, 0);
+  TEST_ASSERT_TRUE(builder.addOledControlPanel(7, 19, 20, 21, 22, 26));
+  GpioTriggerController controller(kYdRp2040, 0);
   controller.configure(*builder.commit(7), 0);
 
   TEST_ASSERT_FALSE(controller.beginLearning(8, {4, 7}, 0));
   TEST_ASSERT_FALSE(controller.beginLearning(8, {5, 7}, 0));
+  TEST_ASSERT_FALSE(controller.beginLearning(8, {19, 7}, 0));
+  TEST_ASSERT_FALSE(controller.beginLearning(8, {22, 7}, 0));
   TEST_ASSERT_TRUE(controller.beginLearning(8, {7, 8}, 0));
 }
 
@@ -1241,10 +1651,10 @@ void test_display_status_can_clear_stale_input_activity() {
 }
 
 void test_suppresses_new_contact_that_closes_a_ghost_cycle() {
-  TopologyBuilder builder(kLuatOsEsp32S3Aio);
+  TopologyBuilder builder(kYdEsp32S3);
   builder.begin(1, 1);
   builder.addMatrix(1, 0, {1, 2}, {12, 13});
-  GpioTriggerController controller(kLuatOsEsp32S3Aio, 0);
+  GpioTriggerController controller(kYdEsp32S3, 0);
   controller.configure(*builder.commit(1), 0);
 
   for (const auto pair :
@@ -1259,15 +1669,20 @@ void test_suppresses_new_contact_that_closes_a_ghost_cycle() {
 }
 
 void test_exposes_supported_gpio_inputs() {
-  GpioTriggerController controller(kLuatOsEsp32S3Aio);
+  GpioTriggerController controller(kYdEsp32S3);
   TEST_ASSERT_TRUE(controller.isSupportedPin(0));
   TEST_ASSERT_TRUE(controller.isSupportedPin(1));
   TEST_ASSERT_TRUE(controller.isSupportedPin(9));
+  TEST_ASSERT_TRUE(controller.isSupportedPin(10));
+  TEST_ASSERT_TRUE(controller.isSupportedPin(11));
   TEST_ASSERT_TRUE(controller.isSupportedPin(12));
   TEST_ASSERT_TRUE(controller.isSupportedPin(18));
-  TEST_ASSERT_FALSE(controller.isSupportedPin(10));
-  TEST_ASSERT_FALSE(controller.isSupportedPin(11));
+  TEST_ASSERT_TRUE(controller.isSupportedPin(21));
+  TEST_ASSERT_TRUE(controller.isSupportedPin(38));
+  TEST_ASSERT_TRUE(controller.isSupportedPin(47));
   TEST_ASSERT_FALSE(controller.isSupportedPin(19));
+  TEST_ASSERT_FALSE(controller.isSupportedPin(35));
+  TEST_ASSERT_FALSE(controller.isSupportedPin(48));
 }
 
 void test_stable_edges_emit_once_after_debounce() {
@@ -1715,6 +2130,8 @@ int main(int, char **) {
   RUN_TEST(test_dirty_tiles_round_outward_clip_and_stay_within_one_row);
   RUN_TEST(test_dirty_tiles_reject_sub_tile_budget_and_clear_explicitly);
   RUN_TEST(test_rotated_or_unsupported_panel_requests_full_refresh);
+  RUN_TEST(
+      test_usage_frame_diff_marks_only_changed_values_and_layout_transitions);
   RUN_TEST(test_startup_stays_local_until_first_full_remote_scene);
   RUN_TEST(test_startup_refresh_does_not_demote_remote_or_critical_content);
   RUN_TEST(test_display_reconfiguration_redraws_the_current_visible_source);
@@ -1725,6 +2142,14 @@ int main(int, char **) {
   RUN_TEST(test_reconnect_preserves_the_critical_override_from_before_disconnect);
   RUN_TEST(test_disconnected_remote_commit_is_discarded_before_reconnect_full);
   RUN_TEST(test_delayed_display_reconfiguration_preserves_offline_after_disconnect);
+  RUN_TEST(test_interactive_panel_restores_the_latest_remote_scene);
+  RUN_TEST(test_interactive_panel_returns_to_offline_status_without_remote_content);
+  RUN_TEST(test_oled_control_panel_navigates_status_and_back_to_live_view);
+  RUN_TEST(test_oled_control_panel_opens_on_encoder_rotation_when_closed);
+  RUN_TEST(test_oled_control_panel_ignores_push_noise_during_encoder_rotation);
+  RUN_TEST(test_oled_control_panel_renders_cost_token_and_tpm_on_sub2api_page);
+  RUN_TEST(test_oled_control_panel_adjusts_brightness_with_the_encoder);
+  RUN_TEST(test_oled_control_panel_clamps_loaded_brightness);
   RUN_TEST(test_display_transaction_commits_atomically);
   RUN_TEST(test_display_revision_rules_request_resync_without_mutation);
   RUN_TEST(test_new_begin_discards_uncommitted_transaction);
@@ -1748,7 +2173,8 @@ int main(int, char **) {
   RUN_TEST(test_rp2040_standalone_debug_topology_matches_keyboard_wiring);
   RUN_TEST(test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match);
   RUN_TEST(test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins);
-  RUN_TEST(test_formats_protocol_v8_hello_with_board_and_build);
+  RUN_TEST(test_formats_protocol_v13_hello_with_board_and_build);
+  RUN_TEST(test_formats_protocol_v13_hello_with_product_identity);
   RUN_TEST(test_rejects_empty_firmware_build_id);
   RUN_TEST(test_rejects_whitespace_in_firmware_build_id);
   RUN_TEST(test_contact_edge_reports_unordered_pair_once_after_debounce);
@@ -1756,13 +2182,14 @@ int main(int, char **) {
   RUN_TEST(test_oled_configuration_requires_supported_distinct_safe_pins);
   RUN_TEST(test_oled_pins_are_reserved_when_oled_command_arrives_first);
   RUN_TEST(test_oled_pins_are_reserved_when_input_command_arrives_first);
+  RUN_TEST(test_oled_control_panel_reserves_five_pins_without_counting_keys);
   RUN_TEST(test_parses_extended_registered_board_pin_domain);
   RUN_TEST(test_parser_defers_unsupported_pins_to_board_validation);
   RUN_TEST(test_parses_learning_and_ordered_action_commands);
   RUN_TEST(test_rejects_malformed_runtime_commands);
   RUN_TEST(test_debounced_input_edges_do_not_create_action_state);
   RUN_TEST(test_learning_reports_contact_and_restores_runtime_topology);
-  RUN_TEST(test_rp2040_learning_accepts_gpio29_and_rejects_gpio23);
+  RUN_TEST(test_rp2040_learning_accepts_gpio23_and_gpio29);
   RUN_TEST(test_learning_rejects_active_oled_pins);
   RUN_TEST(test_display_status_frames_have_two_sixteen_character_status_lines);
   RUN_TEST(test_standalone_debug_display_does_not_depend_on_usb_state);

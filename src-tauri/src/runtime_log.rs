@@ -854,7 +854,7 @@ mod tests {
             RuntimeDimension, RuntimeEvent, SerialObservation, UsbEnumerator, enumerate_devices,
         },
         device::{LearningTarget, RuntimeActivity},
-        hardware::{DeviceId, ESP32S3_FAMILY_ID, LUATOS_ESP32S3_AIO_BOARD_ID},
+        hardware::{DeviceId, ESP32S3_FAMILY_ID, YD_ESP32_S3_BOARD_ID},
         metrics::HomeMetricsSnapshot,
         workspace::{AppError, RuntimeAssignment},
     };
@@ -938,7 +938,7 @@ mod tests {
     fn device_status(connection: ConnectionDimension) -> DeviceStatus {
         let online = connection == ConnectionDimension::Online;
         DeviceStatus {
-            device_id: DeviceId::new(LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456").unwrap(),
+            device_id: DeviceId::new(YD_ESP32_S3_BOARD_ID, "ABCDEF123456").unwrap(),
             name: "Desk".into(),
             connection,
             mode: online.then_some(DeviceMode::Runtime),
@@ -948,8 +948,11 @@ mod tests {
             raw_serial: "ABCDEF123456".into(),
             port: online.then(|| "/dev/cu.test".into()),
             controller_family_id: ESP32S3_FAMILY_ID.into(),
-            board_profile_id: LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+            board_profile_id: YD_ESP32_S3_BOARD_ID.into(),
             firmware_build_id: None,
+            product_version_id: None,
+            product_definition: None,
+            product_config: None,
             firmware_protocol: None,
             pins: Vec::new(),
             runtime_assignment: None,
@@ -972,7 +975,7 @@ mod tests {
             raw_serial: Some("CANDIDATE123".into()),
             port: Some("/dev/cu.candidate".into()),
             controller_family_id: ESP32S3_FAMILY_ID.into(),
-            board_profile_id: LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+            board_profile_id: YD_ESP32_S3_BOARD_ID.into(),
             latest_error: None,
         }
     }
@@ -1280,10 +1283,10 @@ mod tests {
         let event = RuntimeEvent {
             timestamp_ms: 1_722_355_200_123,
             level: EventLevel::Warning,
-            device_id: DeviceId::new(LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456").unwrap(),
+            device_id: DeviceId::new(YD_ESP32_S3_BOARD_ID, "ABCDEF123456").unwrap(),
             raw_serial: "ABCDEF123456".into(),
             controller_family_id: ESP32S3_FAMILY_ID.into(),
-            board_profile_id: LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+            board_profile_id: YD_ESP32_S3_BOARD_ID.into(),
             port: Some("/dev/cu.test".into()),
             device_profile_id: Some("desk-profile".into()),
             hardware_profile_id: Some("desk-hardware".into()),
@@ -1305,10 +1308,7 @@ mod tests {
         assert_eq!(value["context"]["deviceId"], event.device_id.as_str());
         assert_eq!(value["context"]["rawSerial"], "ABCDEF123456");
         assert_eq!(value["context"]["controllerFamilyId"], "esp32s3");
-        assert_eq!(
-            value["context"]["boardProfileId"],
-            LUATOS_ESP32S3_AIO_BOARD_ID
-        );
+        assert_eq!(value["context"]["boardProfileId"], YD_ESP32_S3_BOARD_ID);
         assert_eq!(value["context"]["port"], "/dev/cu.test");
         assert_eq!(value["context"]["deviceProfileId"], "desk-profile");
         assert_eq!(value["context"]["hardwareProfileId"], "desk-hardware");

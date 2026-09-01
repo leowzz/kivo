@@ -287,7 +287,7 @@ mod tests {
         let grouped = build_menu(
             app.handle(),
             &tray_model(TrayDeviceSection::Grouped(vec![TrayDevice {
-                id: DeviceId::new("luatos-esp32s3-aio", "A").unwrap(),
+                id: DeviceId::new("yd-esp32-s3", "A").unwrap(),
                 name: "Desk".into(),
                 buttons: vec![configured],
             }])),

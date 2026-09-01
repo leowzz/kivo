@@ -144,7 +144,7 @@ test("explains firmware failure, hides cu port until expanded, and retries the e
   });
 
   expect(
-    screen.getByRole("heading", { name: "Kivo 固件未响应" }),
+    screen.getByRole("heading", { name: "设备暂时没有回应" }),
   ).toBeInTheDocument();
   expect(screen.getByText("/dev/cu.usbmodem1101")).not.toBeVisible();
   await user.click(screen.getByText("查看技术详情"));
@@ -168,8 +168,39 @@ test("keeps the wizard open and advances when a Candidate becomes the same Devic
     />,
   );
 
-  expect(screen.getByRole("heading", { name: "选择键盘配置" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "给你的键盘起个名字" })).toBeInTheDocument();
   expect(screen.getByText("RP2040 Pad")).toBeInTheDocument();
+});
+
+test("prefers a validated Device while a stale Candidate is still present", () => {
+  renderWizard({
+    targetId: "rp-device-id",
+    candidates: [candidate()],
+    devices: [unassignedDevice()],
+  });
+
+  expect(
+    screen.getByRole("heading", { name: "给你的键盘起个名字" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "重新检测" })).toBeNull();
+});
+
+test("identity conflicts only show disambiguation guidance", () => {
+  renderWizard({
+    targetId: "rp-device-id",
+    candidates: [
+      candidate({
+        issue: "duplicate_identity",
+        identity: "duplicate_identity",
+      }),
+    ],
+  });
+
+  expect(screen.getByRole("heading", { name: "发现重复设备" })).toBeInTheDocument();
+  expect(screen.getByText(/多个设备无法区分/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "重新检测" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "先新建配置" })).toBeNull();
+  expect(screen.getByRole("button", { name: "稍后处理" })).toBeInTheDocument();
 });
 
 test("firmware failure can enter independent profile creation", async () => {
@@ -249,7 +280,7 @@ test("uses a friendly target label when a Candidate has no serial", () => {
   expect(within(target).queryByText(/\/dev\/cu\./)).toBeNull();
 });
 
-test("lists only exact-board profiles and completes one exact Device", async () => {
+test("shows three onboarding steps, auto-selects compatible hardware, and completes one exact Device", async () => {
   const user = userEvent.setup();
   const onComplete = vi.fn().mockResolvedValue(undefined);
   renderWizard({
@@ -258,26 +289,30 @@ test("lists only exact-board profiles and completes one exact Device", async () 
     onComplete,
   });
 
-  expect(screen.getByRole("option", { name: "RP Profile" })).toBeInTheDocument();
-  expect(screen.queryByRole("option", { name: "ESP Profile" })).toBeNull();
-  await user.selectOptions(
-    screen.getByRole("combobox", { name: "键盘配置" }),
-    "rp-profile",
-  );
-  expect(screen.queryByRole("combobox", { name: "硬件配置" })).toBeNull();
+  expect(screen.getByRole("heading", { name: "给你的键盘起个名字" })).toBeInTheDocument();
+  expect(screen.queryByText("键盘配置")).toBeNull();
   await user.click(screen.getByRole("button", { name: "下一步" }));
-  await user.clear(screen.getByRole("textbox", { name: "键盘名称" }));
-  await user.type(screen.getByRole("textbox", { name: "键盘名称" }), "桌面 RP2040");
-  await user.click(screen.getByRole("button", { name: "完成设置" }));
+  expect(screen.getByRole("heading", { name: "选择一个用途开始" })).toBeInTheDocument();
+  expect(screen.getByRole("radio", { name: /RP Profile/ })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  expect(screen.queryByRole("radio", { name: /ESP Profile/ })).toBeNull();
+  expect(screen.getByText("已自动选择：RP Hardware")).not.toBeVisible();
+  await user.click(screen.getByText("接线方案（高级）"));
+  expect(screen.getByText("已自动选择：RP Hardware")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "下一步" }));
 
   expect(onComplete).toHaveBeenCalledTimes(1);
-  expect(onComplete).toHaveBeenCalledWith("rp-device-id", "桌面 RP2040", {
+  expect(onComplete).toHaveBeenCalledWith("rp-device-id", "RP2040 Pad · 4E811C", {
     device_profile_id: "rp-profile",
     hardware_profile_id: "rp-hardware",
   });
+  expect(screen.getByRole("heading", { name: "按一下实体按键" })).toBeInTheDocument();
+  expect(screen.getByText("等待实体按键输入…")).toBeInTheDocument();
 });
 
-test("preserves confirmation fields after setup failure", async () => {
+test("preserves the device name after setup failure", async () => {
   const user = userEvent.setup();
   const onComplete = vi.fn().mockRejectedValue(new Error("device_offline"));
   renderWizard({
@@ -285,25 +320,26 @@ test("preserves confirmation fields after setup failure", async () => {
     devices: [unassignedDevice()],
     onComplete,
   });
+  await user.clear(screen.getByRole("textbox", { name: "设备名称" }));
+  await user.type(screen.getByRole("textbox", { name: "设备名称" }), "保留名称");
   await user.click(screen.getByRole("button", { name: "下一步" }));
-  await user.clear(screen.getByRole("textbox", { name: "键盘名称" }));
-  await user.type(screen.getByRole("textbox", { name: "键盘名称" }), "保留名称");
-  await user.click(screen.getByRole("button", { name: "完成设置" }));
+  await user.click(screen.getByRole("button", { name: "下一步" }));
 
   expect(await screen.findByRole("alert")).toHaveTextContent("device_offline");
-  expect(screen.getByRole("textbox", { name: "键盘名称" })).toHaveValue("保留名称");
+  await user.click(screen.getByRole("button", { name: "返回" }));
+  expect(screen.getByRole("textbox", { name: "设备名称" })).toHaveValue("保留名称");
 });
 
-test("preserves confirmation fields when the same Device reconnects", async () => {
+test("preserves setup fields when the same Device reconnects", async () => {
   const user = userEvent.setup();
   const connected = unassignedDevice();
   const { rerender, props } = renderWizard({ devices: [connected] });
-  await user.click(screen.getByRole("button", { name: "下一步" }));
-  await user.clear(screen.getByRole("textbox", { name: "键盘名称" }));
+  await user.clear(screen.getByRole("textbox", { name: "设备名称" }));
   await user.type(
-    screen.getByRole("textbox", { name: "键盘名称" }),
+    screen.getByRole("textbox", { name: "设备名称" }),
     "重连后保留",
   );
+  await user.click(screen.getByRole("button", { name: "下一步" }));
 
   rerender(<DeviceSetupWizard {...props} devices={[]} />);
   expect(
@@ -312,9 +348,143 @@ test("preserves confirmation fields when the same Device reconnects", async () =
 
   rerender(<DeviceSetupWizard {...props} devices={[connected]} />);
   expect(
-    screen.getByRole("heading", { name: "确认键盘设置" }),
+    screen.getByRole("heading", { name: "选择一个用途开始" }),
   ).toBeInTheDocument();
-  expect(screen.getByRole("textbox", { name: "键盘名称" })).toHaveValue(
-    "重连后保留",
+  await user.click(screen.getByRole("button", { name: "返回" }));
+  expect(screen.getByRole("textbox", { name: "设备名称" })).toHaveValue("重连后保留");
+});
+
+test("shows controlled physical-key success and exposes retry for recovery", async () => {
+  const user = userEvent.setup();
+  const onComplete = vi.fn().mockResolvedValue(undefined);
+  const onVerificationRetry = vi.fn().mockResolvedValue(undefined);
+  const { rerender, props } = renderWizard({
+    devices: [unassignedDevice()],
+    onComplete,
+    onVerificationRetry,
+  });
+
+  await user.click(screen.getByRole("button", { name: "下一步" }));
+  await user.click(screen.getByRole("button", { name: "下一步" }));
+  expect(screen.getByText("等待实体按键输入…")).toBeInTheDocument();
+
+  rerender(
+    <DeviceSetupWizard
+      {...props}
+      devices={[unassignedDevice()]}
+      verification={{ status: "timeout", buttonLabel: "按键 1" }}
+    />,
   );
+  await user.click(screen.getByRole("button", { name: "重新按键" }));
+  expect(onVerificationRetry).toHaveBeenCalledWith("rp-device-id");
+
+  rerender(
+    <DeviceSetupWizard
+      {...props}
+      devices={[unassignedDevice()]}
+      verification={{ status: "error", detail: "paste denied" }}
+    />,
+  );
+  expect(screen.getByText("验证时遇到问题")).toBeInTheDocument();
+  expect(screen.getByText("paste denied")).toBeInTheDocument();
+
+  rerender(
+    <DeviceSetupWizard
+      {...props}
+      devices={[unassignedDevice()]}
+      verification={{ status: "success", buttonLabel: "按键 1" }}
+    />,
+  );
+  expect(screen.getByText("按键已响应")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "进入键盘工作区" })).toBeInTheDocument();
+});
+
+test("creates a compatible blank setup when the blank choice is selected", async () => {
+  const user = userEvent.setup();
+  const blank = {
+    ...profiles[0],
+    profile: { ...profiles[0].profile, id: "rp-blank", name: "RP2040 Pad · 4E811C" },
+  };
+  const onCreateProfile = vi.fn().mockResolvedValue({
+    ...snapshot(),
+    deviceProfiles: [...profiles, blank],
+    editorProfile: "rp-blank",
+  });
+  const onComplete = vi.fn().mockResolvedValue(undefined);
+  renderWizard({
+    devices: [unassignedDevice()],
+    onCreateProfile,
+    onComplete,
+  });
+
+  await user.click(screen.getByRole("button", { name: "下一步" }));
+  await user.click(screen.getByRole("radio", { name: /从空白开始/ }));
+  await user.click(screen.getByRole("button", { name: "下一步" }));
+
+  expect(onCreateProfile).toHaveBeenCalledWith({
+    kind: "blank",
+    name: "RP2040 Pad · 4E811C",
+    board_profile_id: "rp",
+  });
+  expect(onComplete).toHaveBeenCalledWith("rp-device-id", "RP2040 Pad · 4E811C", {
+    device_profile_id: "rp-blank",
+    hardware_profile_id: "rp-hardware",
+  });
+});
+
+test("lets the host prepare a device-specific assignment before completing setup", async () => {
+  const user = userEvent.setup();
+  const onPrepareProfile = vi.fn().mockResolvedValue({
+    device_profile_id: "rp-device-copy",
+    hardware_profile_id: "rp-hardware-copy",
+  });
+  const onComplete = vi.fn().mockResolvedValue(undefined);
+  renderWizard({
+    devices: [unassignedDevice()],
+    onPrepareProfile,
+    onComplete,
+  });
+
+  await user.click(screen.getByRole("button", { name: "下一步" }));
+  await user.click(screen.getByRole("button", { name: "下一步" }));
+
+  expect(onPrepareProfile).toHaveBeenCalledWith(
+    "rp-device-id",
+    "RP2040 Pad · 4E811C",
+    "rp-profile",
+    "rp-hardware",
+  );
+  expect(onComplete).toHaveBeenCalledWith("rp-device-id", "RP2040 Pad · 4E811C", {
+    device_profile_id: "rp-device-copy",
+    hardware_profile_id: "rp-hardware-copy",
+  });
+});
+
+test("lets the host prepare a blank device-specific assignment", async () => {
+  const user = userEvent.setup();
+  const onPrepareProfile = vi.fn().mockResolvedValue({
+    device_profile_id: "rp-device-blank",
+    hardware_profile_id: "rp-hardware-blank",
+  });
+  const onComplete = vi.fn().mockResolvedValue(undefined);
+  renderWizard({
+    devices: [unassignedDevice()],
+    onPrepareProfile,
+    onComplete,
+  });
+
+  await user.click(screen.getByRole("button", { name: "下一步" }));
+  await user.click(screen.getByRole("radio", { name: /从空白开始/ }));
+  await user.click(screen.getByRole("button", { name: "下一步" }));
+
+  expect(onPrepareProfile).toHaveBeenCalledWith(
+    "rp-device-id",
+    "RP2040 Pad · 4E811C",
+    null,
+    null,
+  );
+  expect(onComplete).toHaveBeenCalledWith("rp-device-id", "RP2040 Pad · 4E811C", {
+    device_profile_id: "rp-device-blank",
+    hardware_profile_id: "rp-hardware-blank",
+  });
 });

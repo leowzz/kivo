@@ -16,6 +16,8 @@ ESP32S3_MERGE_SCRIPT="$ROOT/scripts/merge_esp32s3_firmware.py"
 RELEASE_WORKFLOW="$ROOT/.github/workflows/release-windows.yml"
 WINDOWS_WORKFLOW="$ROOT/.github/workflows/windows-ci.yml"
 README="$ROOT/README.md"
+STUDIO_CONFIG="$ROOT/src-tauri/tauri.studio.conf.json"
+CARGO_MANIFEST="$ROOT/src-tauri/Cargo.toml"
 
 grep -Fq 'post:scripts/merge_esp32s3_firmware.py' "$PLATFORMIO_CONFIG"
 test -f "$ESP32S3_MERGE_SCRIPT"
@@ -33,6 +35,18 @@ grep -Fq 'firmware-publish:' "$RELEASE_WORKFLOW"
 grep -Fq 'needs: [release, firmware-build]' "$RELEASE_WORKFLOW"
 grep -Fq 'gh release upload "${GITHUB_REF_NAME}" release-firmware/* --clobber' "$RELEASE_WORKFLOW"
 grep -Fq 'ESP32-S3 and RP2040 firmware' "$RELEASE_WORKFLOW"
+grep -Fq 'Build Product Studio installer' "$RELEASE_WORKFLOW"
+grep -Fq 'Upload Product Studio installer' "$RELEASE_WORKFLOW"
+grep -Fq 'studio_bundle_dir:' "$RELEASE_WORKFLOW"
+grep -Fq 'Build Windows Product Studio NSIS installer' "$WINDOWS_WORKFLOW"
+grep -Fq 'helper-build-studio:' "$MAKEFILE"
+grep -Fq 'product-studio' "$MAKEFILE"
+grep -Fq '"active": true' "$STUDIO_CONFIG"
+grep -Fq 'Kivo Product Studio' "$STUDIO_CONFIG"
+grep -Fq '"mainBinaryName": "kivo"' "$STUDIO_CONFIG"
+grep -Fq 'product-cli = ["product-studio"]' "$CARGO_MANIFEST"
+grep -Fq 'required-features = ["product-cli"]' "$CARGO_MANIFEST"
+grep -Fq -- '--features product-studio,product-cli --bin kivo-product' "$MAKEFILE"
 grep -Fq 'python scripts/repo_version.py check "${GITHUB_REF_NAME}"' \
   "$RELEASE_WORKFLOW"
 ! grep -Fq 'config.version = tag.slice(1)' "$RELEASE_WORKFLOW"
@@ -55,6 +69,7 @@ grep -Fq 'version=vX.Y.Z' "$README"
 grep -Fq 'test/test_repo_version.py' "$MAKEFILE"
 grep -Fq 'test/test_release_transaction.py' "$MAKEFILE"
 grep -Fq 'test/test_platformio_build_id.py' "$MAKEFILE"
+grep -Fq 'test/test_studio_bundle.sh' "$MAKEFILE"
 grep -Fq '## 刷入固件' "$README"
 grep -Fq 'kivo-vX.Y.Z-esp32s3.bin' "$README"
 grep -Fq 'kivo-vX.Y.Z-rp2040.uf2' "$README"
@@ -74,6 +89,8 @@ grep -Fq 'void serviceDisplay();' "$PLATFORM_HEADER"
 grep -Fq 'bool configureDisplay(const std::optional<OledConfig> &config)' \
   "$RP2040_PLATFORM"
 grep -Fq 'new (std::nothrow)' "$RP2040_PLATFORM"
+grep -Fq 'U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C' "$RP2040_PLATFORM"
+grep -Fq 'U8G2_SH1106_128X64_NONAME_F_HW_I2C' "$RP2040_PLATFORM"
 grep -Fq 'if (!display->begin())' "$RP2040_PLATFORM"
 grep -Fq 'bool renderLocalDisplay(const DisplayFrame &frame)' "$RP2040_PLATFORM"
 grep -Fq 'bool renderRemoteDisplay(const RemoteDisplayCommit &scene,' "$RP2040_PLATFORM"
@@ -141,7 +158,7 @@ done
 
 require_serial_body="$(target_body require-serial)"
 grep -Fq 'test -n "$(SERIAL)"' <<<"$require_serial_body"
-grep -Fq 'expected = ["HELLO", "8", family, board, build]' "$ROOT/scripts/verify_runtime_firmware.py"
+grep -Fq 'expected = ["HELLO", "13", family, board, build, "-"]' "$ROOT/scripts/verify_runtime_firmware.py"
 
 for target in upload-esp32s3 upload-rp2040; do
   ! grep -Eq "^${target}:[[:space:]].*require-serial([[:space:]]|$)" "$MAKEFILE"
@@ -160,33 +177,34 @@ rp2040_upload_body="$(target_body upload-rp2040)"
 test "$(grep -n -- '-t upload' <<<"$esp32_upload_body" | cut -d: -f1)" -lt "$(grep -n 'verify_runtime_firmware.py' <<<"$esp32_upload_body" | cut -d: -f1)"
 grep -Fq -- 'esptool.py --chip esp32s3' <<<"$esp32_upload_body"
 grep -Fq -- '--after hard_reset run' <<<"$esp32_upload_body"
-grep -Fq -- '--board luatos-esp32s3-aio --mode runtime' <<<"$esp32_upload_body"
+grep -Fq -- '--board yd-esp32-s3 --mode runtime' <<<"$esp32_upload_body"
 ! grep -Fq -- '--mode bootloader' <<<"$esp32_upload_body"
 test "$(grep -n 'select_firmware_target.py' <<<"$esp32_upload_body" | cut -d: -f1)" -lt "$(grep -n '$(ESP32S3_BUILD)' <<<"$esp32_upload_body" | cut -d: -f1)"
 test "$(grep -n -- '-t upload' <<<"$esp32_upload_body" | cut -d: -f1)" -lt "$(grep -n -- 'esptool.py --chip esp32s3' <<<"$esp32_upload_body" | cut -d: -f1)"
 test "$(grep -n -- 'esptool.py --chip esp32s3' <<<"$esp32_upload_body" | cut -d: -f1)" -lt "$(grep -n 'verify_runtime_firmware.py' <<<"$esp32_upload_body" | cut -d: -f1)"
-grep -Fq -- '--board vccgnd-yd-rp2040 --mode runtime --mode bootloader' <<<"$rp2040_upload_body"
+grep -Fq -- '--board yd-rp2040 --mode runtime --mode bootloader' <<<"$rp2040_upload_body"
 test "$(grep -n 'select_firmware_target.py' <<<"$rp2040_upload_body" | cut -d: -f1)" -lt "$(grep -n '$(RP2040_BUILD)' <<<"$rp2040_upload_body" | cut -d: -f1)"
 grep -Fq 'scripts/upload_rp2040.py' <<<"$rp2040_upload_body"
 grep -Fq -- '--firmware .pio/build/rp2040/firmware.uf2' <<<"$rp2040_upload_body"
 grep -Fq 'runtime_serial=' <<<"$rp2040_upload_body"
 test "$(grep -n -- 'scripts/upload_rp2040.py' <<<"$rp2040_upload_body" | cut -d: -f1)" -lt "$(grep -n 'verify_runtime_firmware.py' <<<"$rp2040_upload_body" | cut -d: -f1)"
 
-grep -Eq '^upload:[[:space:]]*$' "$MAKEFILE"
+grep -Eq '^upload:[[:space:]]+upload-rp2040[[:space:]]*$' "$MAKEFILE"
 upload_body="$(target_body upload)"
-grep -Fq 'exit 2' <<<"$upload_body"
+test -z "$upload_body"
 ! grep -Fq 'SERIAL=' <<<"$upload_body"
 ! grep -Eq '(upload-esp32s3|upload-rp2040|enter_download_mode|picotool)' <<<"$upload_body"
 
 test_body="$(target_body test)"
 expected_test_commands=(
   'bash test/test_release.sh'
+  'bash test/test_studio_bundle.sh'
   '$(UV_CMD) run pytest test/test_repo_version.py test/test_release_transaction.py test/test_platformio_build_id.py'
   '$(UV_CMD) run pytest test/test_upload_targeting.py test/test_rp2040_upload.py'
   '$(UV_CMD) run pytest test/test_firmware_target_selector.py test/test_make_upload_selection.py'
   '$(UV_CMD) run pio test -e native'
   'cargo test --manifest-path src-tauri/Cargo.toml'
-  'cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings'
+  'cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings'
   'npm test'
   'npm run build'
 )

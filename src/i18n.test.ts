@@ -23,7 +23,7 @@ describe("i18n", () => {
 
   test("uses the approved device registry glossary without visible model terminology", () => {
     expect(t("zh-CN", "model.label")).toBe("设备配置");
-    expect(t("zh-CN", "model.select")).toBe("当前编辑配置");
+    expect(t("zh-CN", "model.select")).toBe("选择按键方案");
     expect(t("zh-CN", "hardware.title")).toBe("硬件配置");
     expect(t("zh-CN", "device.runtimeAssignment")).toBe("运行分配");
     expect(t("zh-CN", "device.boardProfile")).toBe("板型");

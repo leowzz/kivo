@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "product-studio", allow(dead_code, unused_imports))]
+
 mod coordinator;
 mod device;
 #[allow(dead_code)]
@@ -6,14 +8,19 @@ pub mod hardware;
 mod metrics;
 mod model;
 mod paste;
+pub mod product;
+pub mod product_build;
 mod profile;
 mod protocol;
 mod runtime_log;
 mod storage;
+#[cfg(feature = "product-studio")]
+mod studio;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod tray;
 #[allow(dead_code)]
 mod trigger;
+mod usage;
 mod workspace;
 
 use coordinator::{
@@ -40,13 +47,17 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{Emitter, Manager};
+use usage::{UsageService, UsageSettingsPatch, UsageSnapshot, UsageView};
 use workspace::{
     AppError, AssignmentResolution, BackupPreview, DuplicateProfileForDeviceRequest,
-    EditorSettingsPatch, ImportPreview, Language, RuntimeAssignment, Workspace,
+    EditorSettingsPatch, ImportPreview, Language, ProductDeviceConfig, RuntimeAssignment,
+    Workspace,
 };
 
 const DEVICE_SCAN_INTERVAL: Duration = Duration::from_millis(500);
 const RUNTIME_EVENT_POLL_INTERVAL: Duration = Duration::from_millis(5);
+#[cfg(feature = "product-studio")]
+const MAIN_APP_IDENTIFIER: &str = "cn.wleo.kivo";
 
 struct BackgroundDeviceScanner {
     enumerator: Arc<dyn UsbEnumerator>,
@@ -198,9 +209,11 @@ struct AppState {
     metrics: Option<Arc<MetricsStore>>,
     coordinator: Option<Arc<Mutex<RuntimeCoordinator>>>,
     paste: Option<Arc<PasteCoordinator>>,
+    usage: Option<Arc<UsageService>>,
     stop: Arc<AtomicBool>,
     scan_requested: Arc<AtomicBool>,
     display_thread: Mutex<Option<JoinHandle<()>>>,
+    usage_thread: Mutex<Option<JoinHandle<()>>>,
     coordinator_thread: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -214,6 +227,7 @@ struct AppSnapshot {
     candidates: Vec<CandidateStatus>,
     language: Language,
     home_metrics: Option<HomeMetricsSnapshot>,
+    usage: Option<UsageView>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -267,10 +281,12 @@ fn enrich_runtime_event(
         .read()
         .ok()
         .and_then(|workspace| workspace.settings.editor_profile.clone());
+    let updates_home = (event.activity.code == "input_state"
+        && event.activity.pressed == Some(true))
+        || event.activity.code == "feature_disabled";
     let matches_editor = event.device_profile_id.is_some()
         && event.device_profile_id == editor_profile
-        && event.activity.code == "input_state"
-        && event.activity.pressed == Some(true);
+        && updates_home;
     if matches_editor
         && let (Some(metrics), Some(device_profile_id)) =
             (metrics, event.device_profile_id.as_deref())
@@ -311,6 +327,7 @@ fn snapshot(state: &AppState) -> Result<AppSnapshot, AppError> {
             .as_deref()
             .and_then(|profile_id| metrics.home_snapshot(profile_id, None, now_ms()).ok())
     });
+    let usage = state.usage.as_ref().map(|usage| usage.view());
     Ok(AppSnapshot {
         device_profiles,
         editor_profile,
@@ -322,6 +339,7 @@ fn snapshot(state: &AppState) -> Result<AppSnapshot, AppError> {
         candidates,
         language,
         home_metrics,
+        usage,
     })
 }
 
@@ -442,6 +460,18 @@ fn save_settings_inner(
     mutate_workspace(state, move |workspace, _| workspace.save_settings(settings))
 }
 
+fn save_usage_settings_inner(
+    state: &AppState,
+    settings: UsageSettingsPatch,
+) -> Result<AppSnapshot, AppError> {
+    state
+        .usage
+        .as_ref()
+        .ok_or_else(|| state_error("usage_service_unavailable"))?
+        .save(settings)?;
+    snapshot(state)
+}
+
 fn import_profile_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, AppError> {
     mutate_workspace(state, |workspace, _| workspace.import_profile(path))
 }
@@ -467,6 +497,34 @@ fn rename_device_inner(
     mutate_workspace(state, move |workspace, coordinator| {
         require_addressable_identity(coordinator, device_id)?;
         workspace.rename_device(device_id, name)
+    })
+}
+
+fn save_product_device_config_inner(
+    state: &AppState,
+    device_id: &hardware::DeviceId,
+    config: ProductDeviceConfig,
+) -> Result<AppSnapshot, AppError> {
+    mutate_workspace(state, |workspace, coordinator| {
+        let definition = coordinator
+            .and_then(|coordinator| coordinator.product_definition(device_id))
+            .cloned()
+            .ok_or_else(|| AppError::new("product_definition_unavailable"))?;
+        workspace.save_product_device_config(device_id, &definition, config)
+    })
+}
+
+fn copy_product_device_config_inner(
+    state: &AppState,
+    source_device_id: &hardware::DeviceId,
+    target_device_id: &hardware::DeviceId,
+) -> Result<AppSnapshot, AppError> {
+    mutate_workspace(state, |workspace, coordinator| {
+        let definition = coordinator
+            .and_then(|coordinator| coordinator.product_definition(target_device_id))
+            .cloned()
+            .ok_or_else(|| AppError::new("product_definition_unavailable"))?;
+        workspace.copy_product_device_config(source_device_id, target_device_id, &definition)
     })
 }
 
@@ -706,11 +764,7 @@ fn restore_backup_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, Ap
         .workspace
         .write()
         .map_err(|_| state_error("workspace_unavailable"))?;
-    let metrics = state
-        .metrics
-        .as_deref()
-        .ok_or_else(|| state_error("metrics_unavailable"))?;
-    workspace.restore_backup(path, metrics)?;
+    workspace.restore_compatible_backup(path, state.metrics.as_deref())?;
     let revision = WorkspaceRevision::capture(&workspace);
     drop(workspace);
     let retired = coordinator
@@ -729,11 +783,7 @@ fn export_backup_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, App
         .workspace
         .read()
         .map_err(|_| state_error("workspace_unavailable"))?;
-    let metrics = state
-        .metrics
-        .as_deref()
-        .ok_or_else(|| state_error("metrics_unavailable"))?;
-    workspace.export_backup(path, metrics)?;
+    workspace.export_user_backup(path)?;
     drop(workspace);
     snapshot(state)
 }
@@ -853,6 +903,22 @@ fn save_settings(
 }
 
 #[tauri::command]
+fn save_usage_settings(
+    state: tauri::State<'_, AppState>,
+    settings: UsageSettingsPatch,
+) -> Result<AppSnapshot, AppError> {
+    let context = serde_json::json!({
+        "enabled": settings.enabled,
+        "baseUrl": settings.base_url,
+        "email": settings.email,
+        "intervalSeconds": settings.interval_seconds,
+    });
+    runtime_log::operation(now_ms(), "usage_settings_saved", context, || {
+        save_usage_settings_inner(&state, settings)
+    })
+}
+
+#[tauri::command]
 fn rename_device(
     state: tauri::State<'_, AppState>,
     device_id: hardware::DeviceId,
@@ -862,6 +928,24 @@ fn rename_device(
     runtime_log::operation(now_ms(), "device_renamed", context, || {
         rename_device_inner(&state, &device_id, name)
     })
+}
+
+#[tauri::command]
+fn save_product_device_config(
+    state: tauri::State<'_, AppState>,
+    device_id: hardware::DeviceId,
+    config: ProductDeviceConfig,
+) -> Result<AppSnapshot, AppError> {
+    save_product_device_config_inner(&state, &device_id, config)
+}
+
+#[tauri::command]
+fn copy_product_device_config(
+    state: tauri::State<'_, AppState>,
+    source_device_id: hardware::DeviceId,
+    target_device_id: hardware::DeviceId,
+) -> Result<AppSnapshot, AppError> {
+    copy_product_device_config_inner(&state, &source_device_id, &target_device_id)
 }
 
 #[tauri::command]
@@ -1103,17 +1187,20 @@ fn get_startup_failure(state: tauri::State<'_, StartupState>) -> Option<StartupF
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             app.manage(StartupState::default());
             let result: SetupResult = (|| {
+                #[cfg(feature = "product-studio")]
+                let studio_repo_root = studio::setup(app)?;
+                #[cfg(feature = "product-studio")]
+                let config_directory = app.path().config_dir()?.join(MAIN_APP_IDENTIFIER);
+                #[cfg(not(feature = "product-studio"))]
                 let config_directory = app.path().app_config_dir()?;
                 let codex_home_fallback = app.path().home_dir()?.join(".codex");
-                let codex_cursor_store = app
-                    .path()
-                    .app_data_dir()?
-                    .join("display/codex-cursors-v1.json");
+                let app_data_directory = app.path().app_data_dir()?;
+                let codex_cursor_store = app_data_directory.join("display/codex-cursors-v1.json");
                 fs::create_dir_all(&config_directory)?;
                 if let Err(error) = runtime_log::install(app.handle(), &config_directory) {
                     eprintln!("failed to install runtime logger: {error}");
@@ -1124,6 +1211,16 @@ pub fn run() {
                     "application_started",
                     serde_json::json!({"version": env!("CARGO_PKG_VERSION")}),
                 ));
+                #[cfg(feature = "product-studio")]
+                let bundled_profiles = studio_repo_root.map_or_else(
+                    || {
+                        app.path()
+                            .resource_dir()
+                            .map(|directory| directory.join("models"))
+                    },
+                    |repo_root| Ok(repo_root.join("models/prod")),
+                )?;
+                #[cfg(not(feature = "product-studio"))]
                 let bundled_profiles = app.path().resource_dir()?.join("models");
                 let workspace = match Workspace::load(&config_directory, &bundled_profiles) {
                     Ok(workspace) => workspace,
@@ -1149,7 +1246,10 @@ pub fn run() {
                     };
                 let operation_barrier = Arc::new(RwLock::new(()));
                 let workspace = Arc::new(RwLock::new(workspace));
-                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                #[cfg(all(
+                    any(target_os = "macos", target_os = "windows"),
+                    not(feature = "product-studio")
+                ))]
                 {
                     let workspace_guard = workspace
                         .read()
@@ -1161,6 +1261,7 @@ pub fn run() {
                     paste.handle(),
                     metrics.clone(),
                     Arc::clone(&operation_barrier),
+                    &config_directory,
                 ));
                 let providers =
                     built_in_provider_registry(&codex_home_fallback, &codex_cursor_store);
@@ -1178,10 +1279,18 @@ pub fn run() {
                     )));
                 let stop = Arc::new(AtomicBool::new(false));
                 let scan_requested = Arc::new(AtomicBool::new(false));
+                let (usage_snapshot_sender, usage_snapshots) =
+                    mpsc::channel::<Arc<UsageSnapshot>>();
+                let (usage, usage_thread) = UsageService::spawn(
+                    &app_data_directory,
+                    Arc::clone(&stop),
+                    usage_snapshot_sender,
+                )?;
                 let display_thread =
                     DisplayService::spawn(providers, Arc::clone(&stop), display_snapshot_sender)?;
                 let coordinator_thread = {
                     let coordinator = Arc::clone(&coordinator);
+                    let usage = Arc::clone(&usage);
                     let workspace = Arc::clone(&workspace);
                     let metrics = metrics.clone();
                     let stop = Arc::clone(&stop);
@@ -1191,6 +1300,7 @@ pub fn run() {
                         let _stop_on_drop = StopOnDrop::new(Arc::clone(&stop));
                         let mut scanner = BackgroundDeviceScanner::new(enumerator);
                         let mut log_inventory = runtime_log::DeviceLogInventory::default();
+                        let mut usage_active = false;
                         while !stop.load(Ordering::Relaxed) {
                             if scan_requested.swap(false, Ordering::Relaxed) {
                                 scanner.request_scan();
@@ -1230,11 +1340,26 @@ pub fn run() {
                                 runtime_log::emit_runtime_event(&payload);
                                 let _ = app_handle.emit("runtime-event", payload);
                             }
+                            let usage_requested = coordinator
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .usage_requested();
+                            if usage_requested != usage_active
+                                && usage.set_active(usage_requested).is_ok()
+                            {
+                                usage_active = usage_requested;
+                            }
                             if let Some(snapshot) = newest_display_snapshot(&display_snapshots) {
                                 coordinator
                                     .lock()
                                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                                     .update_display(snapshot);
+                            }
+                            if let Some(snapshot) = usage_snapshots.try_iter().last() {
+                                coordinator
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                    .update_usage(Arc::clone(&snapshot));
                             }
                             thread::sleep(RUNTIME_EVENT_POLL_INTERVAL);
                         }
@@ -1250,9 +1375,11 @@ pub fn run() {
                     metrics,
                     coordinator: Some(coordinator),
                     paste: Some(paste),
+                    usage: Some(usage),
                     stop,
                     scan_requested,
                     display_thread: Mutex::new(Some(display_thread)),
+                    usage_thread: Mutex::new(Some(usage_thread)),
                     coordinator_thread: Mutex::new(Some(coordinator_thread)),
                 });
                 runtime_log::emit_lifecycle(runtime_log::RuntimeLogEntry::new(
@@ -1265,35 +1392,87 @@ pub fn run() {
             })();
             settle_setup_result(result, |error| report_startup_failure(app, error));
             Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            get_startup_failure,
-            get_snapshot,
-            retry_candidate,
-            save_device_profile,
-            create_device_profile,
-            duplicate_profile_for_device,
-            save_settings,
-            rename_device,
-            save_runtime_assignment,
-            complete_device_setup,
-            clear_runtime_assignment,
-            forget_device,
-            get_device_metrics,
-            begin_learning,
-            end_learning,
-            preview_device_profile_import,
-            import_device_profile,
-            export_device_profile,
-            delete_device_profile,
-            preview_backup,
-            export_backup,
-            restore_backup,
-        ])
+        });
+
+    #[cfg(not(feature = "product-studio"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        get_startup_failure,
+        get_snapshot,
+        retry_candidate,
+        save_device_profile,
+        create_device_profile,
+        duplicate_profile_for_device,
+        save_settings,
+        save_usage_settings,
+        rename_device,
+        save_product_device_config,
+        copy_product_device_config,
+        save_runtime_assignment,
+        complete_device_setup,
+        clear_runtime_assignment,
+        forget_device,
+        get_device_metrics,
+        begin_learning,
+        end_learning,
+        preview_device_profile_import,
+        import_device_profile,
+        export_device_profile,
+        delete_device_profile,
+        preview_backup,
+        export_backup,
+        restore_backup,
+    ]);
+
+    #[cfg(feature = "product-studio")]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        get_startup_failure,
+        get_snapshot,
+        retry_candidate,
+        save_device_profile,
+        create_device_profile,
+        duplicate_profile_for_device,
+        save_settings,
+        save_usage_settings,
+        rename_device,
+        save_product_device_config,
+        copy_product_device_config,
+        save_runtime_assignment,
+        complete_device_setup,
+        clear_runtime_assignment,
+        forget_device,
+        get_device_metrics,
+        begin_learning,
+        end_learning,
+        preview_device_profile_import,
+        import_device_profile,
+        export_device_profile,
+        delete_device_profile,
+        preview_backup,
+        export_backup,
+        restore_backup,
+        studio::studio_select_repository,
+        studio::studio_get_snapshot,
+        studio::studio_load_product,
+        studio::studio_validate_product,
+        studio::studio_save_product,
+        studio::studio_copy_product,
+        studio::studio_delete_product,
+        studio::studio_build_product,
+    ]);
+
+    let app = builder
         .build(tauri::generate_context!())
         .expect("error while building Kivo");
 
     app.run(|app_handle, event| match event {
+        #[cfg(feature = "product-studio")]
+        tauri::RunEvent::WindowEvent {
+            event: tauri::WindowEvent::CloseRequested { api, .. },
+            ..
+        } if studio::cancel_active_build_for_shutdown(app_handle) => {
+            api.prevent_close();
+        }
+        #[cfg(not(feature = "product-studio"))]
         tauri::RunEvent::WindowEvent {
             label,
             event: tauri::WindowEvent::CloseRequested { api, .. },
@@ -1313,6 +1492,12 @@ pub fn run() {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
+        }
+        #[cfg(feature = "product-studio")]
+        tauri::RunEvent::ExitRequested { api, .. }
+            if studio::cancel_active_build_for_shutdown(app_handle) =>
+        {
+            api.prevent_exit();
         }
         tauri::RunEvent::ExitRequested { .. } => {
             runtime_log::emit_lifecycle(runtime_log::RuntimeLogEntry::new(
@@ -1335,6 +1520,14 @@ pub fn run() {
                     .take()
                 {
                     let _ = display.join();
+                }
+                if let Some(usage) = state
+                    .usage_thread
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take()
+                {
+                    let _ = usage.join();
                 }
                 if let Some(coordinator) = state
                     .coordinator_thread
@@ -1404,11 +1597,9 @@ mod tests {
 
     #[test]
     fn repeated_operation_contexts_use_camel_case_identifiers() {
-        let device_id = hardware::DeviceId::new(
-            crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
-            "PRIVATE-SERIAL",
-        )
-        .unwrap();
+        let device_id =
+            hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "PRIVATE-SERIAL")
+                .unwrap();
         let assignment = RuntimeAssignment {
             device_profile_id: "profile-1".into(),
             hardware_profile_id: "hardware-1".into(),
@@ -1486,8 +1677,7 @@ mod tests {
     #[test]
     fn learning_operation_context_counts_without_serializing_pins() {
         let device_id =
-            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "LEARNING")
-                .unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "LEARNING").unwrap();
         let pins = [6, 7, 8];
 
         let context =
@@ -1507,7 +1697,7 @@ mod tests {
     }
 
     #[test]
-    fn board_summaries_report_ssd1306_support() {
+    fn board_summaries_report_sh1106_support() {
         let summaries = BOARD_PROFILES
             .iter()
             .map(BoardProfileSummary::from)
@@ -1739,13 +1929,15 @@ mod tests {
         DeviceProfile {
             schema_version: PROFILE_SCHEMA_VERSION,
             profile: profile::test_model_layout(),
+            snapshot_metadata: None,
             trigger_settings: TriggerSettings::default(),
             hardware_profiles: vec![HardwareProfile {
                 id: "esp-primary".into(),
                 name: "ESP primary".into(),
-                board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+                board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
                 debounce_ms: 30,
                 ssd1306: None,
+                sh1106: None,
                 inputs: vec![InputSource::Direct {
                     id: "direct".into(),
                     keys: BTreeMap::from([("UP".into(), 6)]),
@@ -1765,9 +1957,11 @@ mod tests {
                 .map(Arc::new),
             coordinator: None,
             paste: None,
+            usage: None,
             stop: Arc::new(AtomicBool::new(false)),
             scan_requested: Arc::new(AtomicBool::new(false)),
             display_thread: Mutex::new(None),
+            usage_thread: Mutex::new(None),
             coordinator_thread: Mutex::new(None),
         }
     }
@@ -1965,8 +2159,10 @@ mod tests {
                         controller_family_id: board.family_id.into(),
                         board_profile_id: board.id.into(),
                         firmware_build_id: "restore-test".into(),
+                        product_version_id: None,
                         pins: board.safe_pins.to_vec(),
                     },
+                    product_definition: None,
                 })
                 .unwrap();
             Ok(Box::new(RestoreWorker {
@@ -2019,8 +2215,10 @@ mod tests {
                         controller_family_id: board.family_id.into(),
                         board_profile_id: board.id.into(),
                         firmware_build_id: "save-test".into(),
+                        product_version_id: None,
                         pins: board.safe_pins.to_vec(),
                     },
+                    product_definition: None,
                 })
                 .unwrap();
             Ok(Box::new(SaveWorker {
@@ -2072,7 +2270,7 @@ mod tests {
         let boards = value["boardProfiles"].as_array().unwrap();
         let rp2040 = boards
             .iter()
-            .find(|board| board["id"] == crate::hardware::VCCGND_YD_RP2040_BOARD_ID)
+            .find(|board| board["id"] == crate::hardware::YD_RP2040_BOARD_ID)
             .unwrap();
         assert_eq!(
             rp2040["controllerFamilyId"],
@@ -2082,7 +2280,7 @@ mod tests {
         assert_eq!(rp2040["bootloaderUsb"], "2e8a:0003");
         assert_eq!(
             rp2040["safePins"],
-            serde_json::to_value((0_u8..=22).chain(26..=29).collect::<Vec<_>>()).unwrap()
+            serde_json::to_value((0_u8..=23).chain(26..=29).collect::<Vec<_>>()).unwrap()
         );
     }
 
@@ -2096,8 +2294,7 @@ mod tests {
             Arc::clone(&state.workspace),
         );
         coordinator.scan_once().unwrap();
-        let id = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
-            .unwrap();
+        let id = hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SAVE-A").unwrap();
         state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
         assert!(!state.scan_requested.load(AtomicOrdering::Relaxed));
 
@@ -2109,7 +2306,7 @@ mod tests {
                 && candidate.issue == coordinator::CandidateIssue::FirmwareNotResponding
         }));
         let missing =
-            hardware::DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "MISSING").unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "MISSING").unwrap();
         assert_eq!(
             retry_candidate_inner(&state, &missing).unwrap_err().code,
             "candidate_not_found"
@@ -2221,8 +2418,7 @@ mod tests {
         state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
 
         let device =
-            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
-                .unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SAVE-A").unwrap();
         let assignment = RuntimeAssignment {
             device_profile_id: "red-phone-v1".into(),
             hardware_profile_id: "esp-primary".into(),
@@ -2254,8 +2450,7 @@ mod tests {
         let directory = TestDirectory::new();
         let state = Arc::new(product_state(&directory.0, vec![product_profile()]));
         let device =
-            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "DUPLICATE-A")
-                .unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "DUPLICATE-A").unwrap();
         {
             let mut workspace = state.workspace.write().unwrap();
             workspace.enroll_device(device.clone()).unwrap();
@@ -2328,7 +2523,7 @@ mod tests {
             .record_button_press(
                 &MetricAttribution {
                     device_id: hardware::DeviceId::new(
-                        crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+                        crate::hardware::YD_ESP32_S3_BOARD_ID,
                         "DUPLICATE-A",
                     )
                     .unwrap(),
@@ -2354,10 +2549,8 @@ mod tests {
         );
         coordinator.scan_once().unwrap();
         coordinator.drain_worker_events();
-        let a = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
-            .unwrap();
-        let b = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-B")
-            .unwrap();
+        let a = hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SAVE-A").unwrap();
+        let b = hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SAVE-B").unwrap();
         state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
         launcher.commands.lock().unwrap().clear();
         let assignment = workspace::RuntimeAssignment {
@@ -2538,8 +2731,7 @@ mod tests {
         assert!(coordinator.candidates()[0].device_id.is_none());
         state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
         let unregistered =
-            hardware::DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "NOT-ENROLLED")
-                .unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "NOT-ENROLLED").unwrap();
 
         assert_eq!(
             rename_device_inner(&state, &unregistered, "Nope".into())
@@ -2581,10 +2773,8 @@ mod tests {
     fn runtime_event_home_update_is_editor_profile_aggregate_only() {
         let directory = TestDirectory::new();
         let state = product_state(&directory.0, vec![product_profile()]);
-        let a = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "EVENT-A")
-            .unwrap();
-        let b = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "EVENT-B")
-            .unwrap();
+        let a = hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "EVENT-A").unwrap();
+        let b = hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "EVENT-B").unwrap();
         let timestamp = now_ms();
         for device_id in [&a, &b] {
             state
@@ -2612,7 +2802,7 @@ mod tests {
             device_id: a,
             raw_serial: "EVENT-A".into(),
             controller_family_id: crate::hardware::ESP32S3_FAMILY_ID.into(),
-            board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+            board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
             port: Some("/dev/event-a".into()),
             device_profile_id: Some("red-phone-v1".into()),
             hardware_profile_id: Some("esp-primary".into()),
@@ -2622,6 +2812,17 @@ mod tests {
 
         let matching = enrich_runtime_event(&state.workspace, state.metrics.as_deref(), event);
         assert_eq!(matching.home_update.as_ref().unwrap().total_presses, 2);
+
+        let blocked = enrich_runtime_event(
+            &state.workspace,
+            state.metrics.as_deref(),
+            coordinator::RuntimeEvent {
+                activity: device::RuntimeActivity::new("feature_disabled"),
+                home_update: None,
+                ..matching.clone()
+            },
+        );
+        assert!(blocked.home_update.is_some());
 
         let mismatched = enrich_runtime_event(
             &state.workspace,
@@ -2647,10 +2848,8 @@ mod tests {
         );
         coordinator.scan_once().unwrap();
         coordinator.drain_worker_events();
-        let a = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
-            .unwrap();
-        let b = hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-B")
-            .unwrap();
+        let a = hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SAVE-A").unwrap();
+        let b = hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SAVE-B").unwrap();
         {
             let mut workspace = state.workspace.write().unwrap();
             for id in [&a, &b] {
@@ -2695,8 +2894,7 @@ mod tests {
         coordinator.scan_once().unwrap();
         coordinator.drain_worker_events();
         let device_id =
-            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
-                .unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SAVE-A").unwrap();
         {
             let mut workspace = state.workspace.write().unwrap();
             workspace
@@ -2753,8 +2951,7 @@ mod tests {
         coordinator.scan_once().unwrap();
         coordinator.drain_worker_events();
         let device_id =
-            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
-                .unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SAVE-A").unwrap();
         {
             let mut workspace = state.workspace.write().unwrap();
             workspace
@@ -2798,8 +2995,7 @@ mod tests {
         let directory = TestDirectory::new();
         let state = product_state(&directory.0, vec![product_profile()]);
         let id =
-            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456")
-                .unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ABCDEF123456").unwrap();
         {
             let mut workspace = state.workspace.write().unwrap();
             workspace.enroll_device(id.clone()).unwrap();
@@ -2841,8 +3037,7 @@ mod tests {
             .unwrap()
             .as_millis() as u64;
         let device_id =
-            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456")
-                .unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ABCDEF123456").unwrap();
         state
             .metrics
             .as_ref()
@@ -2887,7 +3082,7 @@ mod tests {
         let timestamp = now_ms();
         let attribution = MetricAttribution {
             device_id: hardware::DeviceId::new(
-                crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+                crate::hardware::YD_ESP32_S3_BOARD_ID,
                 "ABCDEF123456",
             )
             .unwrap(),
@@ -2938,8 +3133,7 @@ mod tests {
         coordinator.scan_once().unwrap();
         coordinator.drain_worker_events();
         let device_id =
-            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "SAVE-A")
-                .unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "SAVE-A").unwrap();
         state.coordinator = Some(Arc::new(Mutex::new(coordinator)));
         save_runtime_assignment_inner(
             &state,
@@ -3006,8 +3200,7 @@ mod tests {
         drop(lifecycle_after_restore);
 
         let esp =
-            hardware::DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "RESTORE-ESP")
-                .unwrap();
+            hardware::DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "RESTORE-ESP").unwrap();
         let stale = state
             .coordinator
             .as_ref()
@@ -3063,7 +3256,7 @@ mod tests {
         export_backup_inner(&state, &backup).unwrap();
         let attribution = MetricAttribution {
             device_id: hardware::DeviceId::new(
-                crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+                crate::hardware::YD_ESP32_S3_BOARD_ID,
                 "ABCDEF123456",
             )
             .unwrap(),
@@ -3127,7 +3320,7 @@ mod tests {
             commit_started_thread.store(true, AtomicOrdering::SeqCst);
             let attribution = MetricAttribution {
                 device_id: hardware::DeviceId::new(
-                    crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
+                    crate::hardware::YD_ESP32_S3_BOARD_ID,
                     "ABCDEF123456",
                 )
                 .unwrap(),

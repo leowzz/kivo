@@ -13,7 +13,7 @@ constexpr std::size_t kMaxDisplayRegions = 8;
 constexpr std::size_t kMaxDisplayOps = 24;
 constexpr std::size_t kMaxDisplayTextBytes = 48;
 constexpr std::uint16_t kRemoteDisplayWidth = 128;
-constexpr std::uint16_t kRemoteDisplayHeight = 32;
+constexpr std::uint16_t kRemoteDisplayHeight = 64;
 constexpr std::uint8_t kRemoteDisplayMaxFontId = 2;
 
 enum class DisplayMode : std::uint8_t { Full, Delta };

@@ -7,3 +7,6 @@
 
 std::string formatHello(const BoardProfile &profile,
                         std::string_view firmwareBuildId);
+std::string formatHello(const BoardProfile &profile,
+                        std::string_view firmwareBuildId,
+                        std::string_view productVersionId);

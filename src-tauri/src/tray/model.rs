@@ -339,13 +339,15 @@ mod tests {
                     },
                 ],
             },
+            snapshot_metadata: None,
             trigger_settings: TriggerSettings::default(),
             hardware_profiles: vec![HardwareProfile {
                 id: "hardware".into(),
                 name: "Hardware".into(),
-                board_profile_id: "luatos-esp32s3-aio".into(),
+                board_profile_id: "yd-esp32-s3".into(),
                 debounce_ms: 30,
                 ssd1306: None,
+                sh1106: None,
                 inputs: Vec::new(),
             }],
             actions: BTreeMap::from([(
@@ -359,7 +361,7 @@ mod tests {
 
     fn device(serial: &str, name: &str) -> DeviceStatus {
         DeviceStatus {
-            device_id: DeviceId::new("luatos-esp32s3-aio", serial).unwrap(),
+            device_id: DeviceId::new("yd-esp32-s3", serial).unwrap(),
             name: name.into(),
             connection: ConnectionDimension::Online,
             mode: Some(DeviceMode::Runtime),
@@ -369,8 +371,11 @@ mod tests {
             raw_serial: serial.into(),
             port: Some(format!("/dev/{serial}")),
             controller_family_id: "esp32s3".into(),
-            board_profile_id: "luatos-esp32s3-aio".into(),
+            board_profile_id: "yd-esp32-s3".into(),
             firmware_build_id: Some("test".into()),
+            product_version_id: None,
+            product_definition: None,
+            product_config: None,
             firmware_protocol: Some(6),
             pins: vec![1],
             runtime_assignment: Some(RuntimeAssignment {
@@ -528,7 +533,7 @@ mod tests {
     fn excludes_workspace_assignment_with_mismatched_hardware_board() {
         let directory = tempfile::tempdir().unwrap();
         let mut incompatible_profile = profile();
-        incompatible_profile.hardware_profiles[0].board_profile_id = "vccgnd-yd-rp2040".into();
+        incompatible_profile.hardware_profiles[0].board_profile_id = "yd-rp2040".into();
         let mut workspace =
             Workspace::create(directory.path(), vec![incompatible_profile]).unwrap();
         let status = device("MISMATCH", "Mismatch");

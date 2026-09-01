@@ -14,6 +14,7 @@ Kivo 是一套由设备固件和 Tauri 桌面 helper 组成的实体按键工作
 - **学习实体接线**：支持独立 GPIO 按键与触点矩阵，并可通过指定设备进行按键学习。
 - **管理多台设备**：每台设备保留独立的 Runtime Assignment，切换编辑中的配置不会改动其他设备。
 - **复用设备配置**：一个 Device Profile 可以包含多个 Hardware Profile，适配不同板卡或接线版本。
+- **功能开关门控**：Hardware Profile 可把一个 GPIO 开关绑定到若干按钮；开关断开时，这些按钮不会执行动作。
 - **观察实际使用**：首页展示累计次数、今日次数、活跃按键、七日热力图和最近活动。
 - **迁移与恢复**：支持单个设备配置导入导出，以及包含设备分配和统计数据的完整备份恢复。
 
@@ -36,8 +37,8 @@ Kivo 是一套由设备固件和 Tauri 桌面 helper 组成的实体按键工作
 
 | 板卡 | 选择这个文件 |
 |---|---|
-| LuatOS ESP32-S3-AIO | `kivo-vX.Y.Z-esp32s3.bin` |
-| VCC-GND YD-RP2040 | `kivo-vX.Y.Z-rp2040.uf2` |
+| YD-ESP32-S3 | `kivo-vX.Y.Z-esp32s3.bin` |
+| YD-RP2040 | `kivo-vX.Y.Z-rp2040.uf2` |
 
 ### YD-RP2040：拖入文件管理器
 
@@ -71,24 +72,43 @@ ESP32-S3 的下载模式不会显示成磁盘。请使用 Chrome 或 Edge：
 | Runtime Assignment | 把一个 Device Profile 和兼容的 Hardware Profile 分配给一台 Device |
 | Editor Profile | 当前正在界面中编辑的 Device Profile，不影响其他设备运行 |
 
+功能开关属于 Hardware Profile 的输入源，不会出现在按键布局中。配置时只需选择开关 GPIO 和受影响的按钮。开关闭合时启用按钮；断开或 helper 尚未确认开关状态时屏蔽按钮。被屏蔽的按键不会计入动作统计，正在执行的动作会完整结束。
+
+## 硬件产品命名
+
+Kivo 实体产品使用 `<product-family>-k<key-count>-<capabilities>-r<hardware-revision>`
+形式的 Product Version ID。产品能力变体和 PCB 修订彼此独立，软件发布版本、固件
+版本、生产批次和单台设备序列号不进入该 ID。
+
+当前规划中的 **Kivo Workbench One** 包含 18 个独立实体按键、麦克风、集成显示屏，
+以及可旋转、可按压的编码器，其首版命名为：
+
+```text
+workbench-one-k18-mic-disp-encp-r01
+```
+
+其中 `k18` 不包含编码器按压，`encp` 明确表示编码器同时支持旋转和按压。该名称
+记录的是计划目标，不代表硬件、固件或实体设备已经完成验收。完整字段定义、token
+顺序和升级规则见[产品版本 ID 命名规范](docs/product-version-id-naming.md)。
+
 ## 支持的控制器
 
 | 板卡 | Controller Family | 运行时 USB | 固件环境 | 上传命令 |
 |---|---|---|---|---|
-| LuatOS ESP32-S3-AIO | ESP32-S3 | `303a:4002` | `esp32s3` | `make upload-esp32s3` |
-| VCC-GND YD-RP2040 | RP2040 | `2e8a:102e` | `rp2040` | `make upload-rp2040` |
+| YD-ESP32-S3 | ESP32-S3 | `303a:4002` | `esp32s3` | `make upload-esp32s3` |
+| YD-RP2040 | RP2040 | `2e8a:102e` | `rp2040` | `make upload-rp2040` |
 
 YD-RP2040 的 UF2 bootloader USB 标识为 `2e8a:0003`。Kivo 会先校验 USB 身份，再通过 `HELLO` 协议确认板卡和固件；不受该 Board Profile 支持的 GPIO 会被拒绝。
 
-YD-RP2040 的 Hardware Profile 还可以启用固定为 `128x32`、地址为 `0x3C` 的 SSD1306 OLED，并分别选择 SDA 与 SCL 引脚。OLED 占用的两个 GPIO 不会再出现在按键输入或学习模式中；运行时配置成功后屏幕才会开始显示状态。
+YD-RP2040 的 Hardware Profile 支持两种地址为 `0x3C` 的 OLED：原有 SSD1306 128x32 模块占用 SDA/SCL 两个 GPIO；`sh1106-1.3-128x64-ec11` 模块使用 SH1106 128x64 屏，并带 EC11 旋转、EC11 按压、确认和返回，共占用七个 GPIO。OLED 和控制面板占用的 GPIO 不会再分配给按键输入或学习模式。
 
 ## Codex 状态屏
 
 启用 OLED 的设备会显示本机 Codex 任务的低干扰状态：汇总画面为 `CODEX <N> RUN`，需要操作时显示 `NEEDS INPUT` 或 `APPROVAL NEEDED`，响应生成后短暂显示 `RESPONSE READY`，数据源不可用时显示 `CODEX OFFLINE`。Codex 数据源异常不会停止 Kivo 的按键 Runtime。
 
-Kivo 只消费任务身份、工作目录和状态/生命周期信号；对话正文、推理、工具内容和最终回复不会显示或保留。固件协议 3-6 不接收显示命令，继续显示原有本地调试画面。V1 面板固定为 rotation 0 的 SSD1306 128x32 单色屏，现有 Device Profile YAML 无需迁移。
+Kivo 只消费任务身份、工作目录和状态/生命周期信号；对话正文、推理、工具内容和最终回复不会显示或保留。SSD1306 继续使用原有 `ssd1306` 配置和 128x32 渲染器；SH1106 使用独立的 `sh1106` 配置、128x64 渲染器和协议 11 固件。两种屏均固定为 rotation 0，互不迁移。
 
-刷入协议 7 固件后仍需在实体 OLED 上检查文字、状态切换和持续按键输入。自动测试和固件构建不能替代物理屏幕与输入验收。
+刷入固件后仍需分别在实体 SSD1306 和 SH1106 上检查文字与状态切换，并在 SH1106 模块上检查旋钮方向、按压、确认和返回。自动测试和固件构建不能替代物理屏幕与输入验收。
 
 ![小黑同时给 ESP32-S3 和 YD-RP2040 两台设备上弦](assets/readme-illustrations/03-parallel-devices.png)
 
@@ -114,7 +134,7 @@ nvm install
 nvm use
 uv sync
 npm ci
-make helper
+make client
 ```
 
 `.env` 会被有意忽略，且只包含 `version=vX.Y.Z`。它为本地固件构建和 `make release` 提供仓库版本。
@@ -169,6 +189,23 @@ make upload-esp32s3 SERIAL=ABCDEF123456
 make upload-rp2040 SERIAL=E0C9125B0D9B
 ```
 
+监控固件的 USB CDC 串口（默认 `115200` 波特率）：
+
+```bash
+make monitor                 # 默认选择 RP2040
+make monitor-rp2040
+make monitor-esp32s3
+```
+
+未传 `SERIAL` 时会打开设备选择器；也可以直接指定设备和波特率：
+
+```bash
+make monitor-rp2040 SERIAL=E0C9125B0D9B
+make monitor-esp32s3 SERIAL=ABCDEF123456 BAUD=921600
+```
+
+监控命令会先停止可能占用串口的 Kivo helper。按 `Ctrl+C` 退出监控。
+
 ## 测试与构建
 
 ```bash
@@ -176,7 +213,7 @@ make test
 make helper-build
 ```
 
-`make test` 会运行发布脚本测试、Python 上传/选择测试、PlatformIO native 测试、Rust 测试与 Clippy、前端测试和生产构建。`make helper-build` 在 macOS 构建应用包，在 Windows 构建 NSIS 安装程序。Windows CI 也会在每次 pull request 中运行平台测试并实际生成 NSIS 安装程序。
+`make test` 会运行发布脚本测试、Python 上传/选择测试、PlatformIO native 测试、Rust 测试与 Clippy、前端测试和生产构建。`make helper-build` 会连续构建 Kivo 和 Kivo Product Studio 两套包：macOS 生成应用包，Windows 生成对应的 NSIS 安装程序。Windows CI 也会在每次 pull request 中验证两套 NSIS 安装程序。
 
 ## 项目结构
 
@@ -191,7 +228,10 @@ test/                Python、PlatformIO 与发布流程测试
 docs/                硬件改造、兼容性与设计记录
 ```
 
-领域术语以 [`CONTEXT.md`](CONTEXT.md) 为准。电话硬件改造和电气安全要求见 [`docs/telephone-usb-voice-terminal-mod-guide.md`](docs/telephone-usb-voice-terminal-mod-guide.md)；改造设备必须彻底隔离原 PSTN 电话线路。
+领域术语以 [`CONTEXT.md`](CONTEXT.md) 为准，实体产品版本命名见
+[`docs/product-version-id-naming.md`](docs/product-version-id-naming.md)。电话硬件改造和
+电气安全要求见 [`docs/telephone-usb-voice-terminal-mod-guide.md`](docs/telephone-usb-voice-terminal-mod-guide.md)；
+改造设备必须彻底隔离原 PSTN 电话线路。
 
 ## 平台状态
 

@@ -9,6 +9,7 @@ import type {
   BoardProfileSummary,
   DeviceStatus,
   HardwareProfile,
+  LearningTarget,
   ModelLayout,
 } from "./types";
 
@@ -34,12 +35,12 @@ const boardProfiles: BoardProfileSummary[] = [
     supportsOled: false,
   },
   {
-    id: "vccgnd-yd-rp2040",
+    id: "yd-rp2040",
     controllerFamilyId: "rp2040",
     displayName: "YD-RP2040",
     runtimeUsb: "2e8a:000a",
     bootloaderUsb: "2e8a:0003",
-    safePins: Array.from({ length: 23 }, (_, pin) => pin),
+    safePins: Array.from({ length: 24 }, (_, pin) => pin),
     supportsOled: true,
   },
 ];
@@ -302,7 +303,7 @@ test("retains and visibly marks every invalid pin after changing Board Profile",
   const user = userEvent.setup();
   const onChange = renderMapping();
 
-  await user.selectOptions(screen.getByLabelText("板型"), "vccgnd-yd-rp2040");
+  await user.selectOptions(screen.getByLabelText("板型"), "yd-rp2040");
 
   const updated = onChange.mock.calls.at(-1)?.[0] as HardwareProfile[];
   expect(updated[0].inputs).toEqual(hardwareProfiles[0].inputs);
@@ -338,7 +339,7 @@ test("uses the exact offline safe set and explicitly narrows it with one compati
       device({
         deviceId: "wrong-board",
         name: "Wrong board",
-        boardProfileId: "vccgnd-yd-rp2040",
+        boardProfileId: "yd-rp2040",
         controllerFamilyId: "rp2040",
         capabilities: [0, 1, 2],
       }),
@@ -367,7 +368,7 @@ test("offers learning only for online identity-valid runtime Devices on the exac
       device({
         deviceId: "wrong-board",
         name: "Wrong board",
-        boardProfileId: "vccgnd-yd-rp2040",
+        boardProfileId: "yd-rp2040",
         controllerFamilyId: "rp2040",
       }),
     ],
@@ -382,16 +383,157 @@ test("offers learning only for online identity-valid runtime Devices on the exac
   expect(screen.getByLabelText("消抖")).toBeEnabled();
 });
 
-test("exposes GPIO0 through GPIO22 and GPIO26 through GPIO29 for vccgnd-yd-rp2040", async () => {
+test("shows a locked learning session with target, mapped progress, navigation, and finish callback", async () => {
+  const user = userEvent.setup();
+  const onEndLearning = vi.fn();
+  const onFinishLearning = vi.fn();
+  const onSelectButton = vi.fn();
+  const target: LearningTarget = {
+    deviceId: "device-front",
+    deviceProfileId: "desk-phone",
+    hardwareProfileId: "front-desk",
+    editingRevision: 4,
+    firmwareRevision: 2,
+    pins: [1, 2, 6, 12, 13],
+  };
+  const partiallyMapped = structuredClone(hardwareProfiles);
+  partiallyMapped[0].inputs = [{ type: "direct", id: "direct", keys: { ONE: 6 } }];
+  render(
+    <HardwareMapping
+      language="zh-CN"
+      layout={layout}
+      hardwareProfiles={partiallyMapped}
+      boardProfiles={boardProfiles}
+      devices={[device({ learning: target })]}
+      learning={target}
+      initialHardwareProfileId="front-desk"
+      initialDeviceId="device-front"
+      selectedButtonId={"TWO"}
+      onSelectButton={onSelectButton}
+      onChange={vi.fn()}
+      onSelectionChange={vi.fn()}
+      onBeginLearning={vi.fn()}
+      onEndLearning={onEndLearning}
+      onFinishLearning={onFinishLearning}
+    />,
+  );
+
+  expect(screen.getAllByText("正在学习").length).toBeGreaterThanOrEqual(1);
+  expect(screen.getByText("当前目标")).toBeInTheDocument();
+  expect(within(screen.getByText("当前目标").parentElement as HTMLElement).getByText("2")).toBeInTheDocument();
+  expect(screen.getByText("已映射 1 / 2")).toBeInTheDocument();
+  expect(screen.getAllByText("尚未映射").length).toBeGreaterThanOrEqual(1);
+  expect(screen.getByRole("combobox", { name: "硬件配置" })).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "硬件配置" })).toHaveValue("front-desk");
+  expect(screen.getByLabelText("板型")).toBeDisabled();
+  expect(screen.getByLabelText("在线设备")).toBeDisabled();
+  expect(screen.getByLabelText("在线设备")).toHaveValue("device-front");
+  expect(screen.getByRole("button", { name: "上一个按键" })).toBeEnabled();
+
+  await user.click(screen.getByRole("button", { name: "完成学习并进入测试" }));
+  expect(onEndLearning).toHaveBeenCalledWith("device-front");
+  expect(onFinishLearning).toHaveBeenCalledWith("device-front");
+  expect(screen.getByRole("button", { name: "正在结束学习..." })).toBeDisabled();
+});
+
+test("shows mapped and conflict status for bindings already present in the selected hardware profile", () => {
+  const conflicting = structuredClone(hardwareProfiles);
+  conflicting[0].inputs = [
+    { type: "direct", id: "direct-a", keys: { ONE: 6 } },
+    { type: "direct", id: "direct-b", keys: { ONE: 6, TWO: 12 } },
+  ];
+  const target: LearningTarget = {
+    deviceId: "device-front",
+    deviceProfileId: "desk-phone",
+    hardwareProfileId: "front-desk",
+    editingRevision: 5,
+    firmwareRevision: 2,
+    pins: [1, 2, 6, 12, 13],
+  };
+  render(
+    <HardwareMapping
+      language="zh-CN"
+      layout={layout}
+      hardwareProfiles={conflicting}
+      boardProfiles={boardProfiles}
+      devices={[device({ learning: target })]}
+      learning={target}
+      initialHardwareProfileId="front-desk"
+      initialDeviceId="device-front"
+      selectedButtonId="TWO"
+      onSelectButton={vi.fn()}
+      onChange={vi.fn()}
+      onSelectionChange={vi.fn()}
+      onBeginLearning={vi.fn()}
+      onEndLearning={vi.fn()}
+    />,
+  );
+
+  expect(screen.getAllByText("存在冲突映射").length).toBeGreaterThanOrEqual(1);
+  expect(screen.getAllByText("GPIO 6").length).toBeGreaterThanOrEqual(2);
+  expect(screen.getAllByText("已映射：GPIO 12").length).toBeGreaterThanOrEqual(1);
+  expect(screen.getByText("已映射 2 / 2")).toBeInTheDocument();
+});
+
+test("undoes the last learned binding and returns to that key", async () => {
+  const user = userEvent.setup();
+  const onChange = vi.fn();
+  const onSelectButton = vi.fn();
+  const target: LearningTarget = {
+    deviceId: "device-front",
+    deviceProfileId: "desk-phone",
+    hardwareProfileId: "front-desk",
+    editingRevision: 6,
+    firmwareRevision: 2,
+    pins: [1, 2, 6, 12, 13],
+  };
+  const initial = structuredClone(hardwareProfiles);
+  initial[0].inputs = [{ type: "direct", id: "direct", keys: { ONE: 6 } }];
+  const learned = structuredClone(initial);
+  learned[0].inputs[0] = {
+    type: "direct",
+    id: "direct",
+    keys: { ONE: 6, TWO: 13 },
+  };
+  const props = {
+    language: "zh-CN" as const,
+    layout,
+    boardProfiles,
+    devices: [device({ learning: target })],
+    learning: target,
+    initialHardwareProfileId: "front-desk",
+    initialDeviceId: "device-front",
+    selectedButtonId: "TWO",
+    onSelectButton,
+    onChange,
+    onSelectionChange: vi.fn(),
+    onBeginLearning: vi.fn(),
+    onEndLearning: vi.fn(),
+  };
+  const { rerender } = render(
+    <HardwareMapping {...props} hardwareProfiles={initial} />,
+  );
+
+  rerender(<HardwareMapping {...props} hardwareProfiles={learned} />);
+  const undo = await screen.findByRole("button", { name: "撤销" });
+  expect(undo).toBeEnabled();
+  await user.click(undo);
+
+  expect(onChange).toHaveBeenLastCalledWith(initial);
+  expect(onSelectButton).toHaveBeenLastCalledWith("TWO");
+  expect(undo).toBeDisabled();
+});
+
+test("exposes GPIO0 through GPIO23 and GPIO26 through GPIO29 for yd-rp2040", async () => {
   const user = userEvent.setup();
   const rpProfile: HardwareProfile = {
     id: "rp",
     name: "RP",
-    board_profile_id: "vccgnd-yd-rp2040",
+    board_profile_id: "yd-rp2040",
     debounce_ms: 30,
     inputs: [],
   };
-  const unsafeRegistry = boardProfiles.map((board) => board.id === "vccgnd-yd-rp2040"
+  const unsafeRegistry = boardProfiles.map((board) => board.id === "yd-rp2040"
     ? { ...board, safePins: Array.from({ length: 30 }, (_, pin) => pin) }
     : board);
   renderMapping({ profiles: [rpProfile], boards: unsafeRegistry });
@@ -399,25 +541,25 @@ test("exposes GPIO0 through GPIO22 and GPIO26 through GPIO29 for vccgnd-yd-rp204
 
   expect(screen.getAllByRole("checkbox", { name: /^GPIO/ }).map((input) => Number(input.getAttribute("value"))))
     .toEqual([
-      ...Array.from({ length: 23 }, (_, pin) => pin),
+      ...Array.from({ length: 24 }, (_, pin) => pin),
       26,
       27,
       28,
       29,
     ]);
-  for (let pin = 23; pin <= 25; pin += 1) {
+  for (let pin = 24; pin <= 25; pin += 1) {
     expect(screen.queryByRole("checkbox", { name: `GPIO ${pin}` })).toBeNull();
   }
 });
 
 test("accepts GPIO26 through GPIO29 across direct, matrix, and OLED ownership", () => {
-  const rpBoards = boardProfiles.map((board) => board.id === "vccgnd-yd-rp2040"
+  const rpBoards = boardProfiles.map((board) => board.id === "yd-rp2040"
     ? { ...board, safePins: Array.from({ length: 30 }, (_, pin) => pin) }
     : board);
   const profile: HardwareProfile = {
     id: "high-gpio",
     name: "High GPIO",
-    board_profile_id: "vccgnd-yd-rp2040",
+    board_profile_id: "yd-rp2040",
     debounce_ms: 30,
     ssd1306: { sda: 28, scl: 29 },
     inputs: [
@@ -448,6 +590,31 @@ test("accepts GPIO26 through GPIO29 across direct, matrix, and OLED ownership", 
   expect(within(direct).queryByRole("option", { name: "29" })).toBeNull();
   expect(within(sda).queryByRole("option", { name: "26" })).toBeNull();
   expect(within(sda).queryByRole("option", { name: "27" })).toBeNull();
+});
+
+test("configures affected buttons without exposing switch polarity", async () => {
+  const user = userEvent.setup();
+  const onChange = renderMapping({
+    profiles: [{
+      ...structuredClone(hardwareProfiles[0]),
+      inputs: [{
+        type: "feature_switch",
+        id: "mode",
+        name: "Mode",
+        gpio: 12,
+        buttons: [],
+      }],
+    }],
+  });
+
+  expect(screen.queryByLabelText("常态")).toBeNull();
+  expect(screen.queryByLabelText("以下状态启用按钮")).toBeNull();
+  await user.click(screen.getByRole("checkbox", { name: "1" }));
+
+  const updates = onChange.mock.calls.map(([profiles]) => (profiles as HardwareProfile[])[0].inputs[0]);
+  expect(updates).toEqual(expect.arrayContaining([
+    expect.objectContaining({ buttons: ["ONE"] }),
+  ]));
 });
 
 test("keeps repeated add names collision-free when custom names occupy generated suffixes", async () => {
@@ -623,12 +790,23 @@ test("renders and rejects matrix endpoints missing from source pins until repair
   expect(hardwareProfilesAreValid(repaired, boardProfiles)).toBe(true);
 });
 
+test("rejects hardware bindings for buttons removed from the layout", () => {
+  const inconsistent = structuredClone(hardwareProfiles);
+  inconsistent[0].inputs[0] = {
+    type: "direct",
+    id: "direct",
+    keys: { ONE: 6, REMOVED: 12 },
+  };
+
+  expect(hardwareProfilesAreValid(inconsistent, boardProfiles, layout)).toBe(false);
+});
+
 test("edits OLED SDA and OLED SCL through separate controlled selectors", async () => {
   const user = userEvent.setup();
   const profile = {
     id: "oled",
     name: "OLED",
-    board_profile_id: "vccgnd-yd-rp2040",
+    board_profile_id: "yd-rp2040",
     debounce_ms: 30,
     inputs: [],
     ssd1306: { sda: 18, scl: 19 },
@@ -649,7 +827,10 @@ test("edits OLED SDA and OLED SCL through separate controlled selectors", async 
   };
   const { rerender } = render(<HardwareMapping {...props} hardwareProfiles={[profile]} />);
 
-  expect(screen.getByRole("checkbox", { name: "SSD1306 OLED" })).toBeChecked();
+  const displayComponent = screen.getByRole("combobox", { name: "显示组件" });
+  expect(displayComponent).toHaveValue("ssd1306");
+  expect(within(displayComponent).getByRole("option", { name: "SSD1306 OLED" })).toBeEnabled();
+  expect(within(displayComponent).getByRole("option", { name: "SH1106 OLED + EC11" })).toBeEnabled();
   expect(screen.getByText("128x32 / 0x3C")).toBeInTheDocument();
   expect(screen.getByRole("combobox", { name: "OLED SDA" })).toHaveValue("18");
   expect(screen.getByRole("combobox", { name: "OLED SCL" })).toHaveValue("19");
@@ -668,7 +849,7 @@ test("edits OLED SDA and OLED SCL through separate controlled selectors", async 
   expect(afterScl[0].ssd1306).toEqual({ sda: 20, scl: 21 });
 });
 
-test("enables OLED on the first two unowned safe pins", async () => {
+test("enables SSD1306 on the first two unowned safe pins", async () => {
   const user = userEvent.setup();
   const directKeys = Object.fromEntries(
     Array.from({ length: 18 }, (_, gpio) => [`KEY_${gpio}`, gpio]),
@@ -676,13 +857,16 @@ test("enables OLED on the first two unowned safe pins", async () => {
   const profile: HardwareProfile = {
     id: "eighteen-direct",
     name: "Eighteen direct",
-    board_profile_id: "vccgnd-yd-rp2040",
+    board_profile_id: "yd-rp2040",
     debounce_ms: 30,
     inputs: [{ type: "direct", id: "direct", keys: directKeys }],
   };
   const onChange = renderMapping({ profiles: [profile] });
 
-  await user.click(screen.getByRole("checkbox", { name: "SSD1306 OLED" }));
+  const displayComponent = screen.getByRole("combobox", { name: "显示组件" });
+  expect(within(displayComponent).getByRole("option", { name: "SSD1306 OLED" })).toBeEnabled();
+  expect(within(displayComponent).getByRole("option", { name: "SH1106 OLED + EC11" })).toBeDisabled();
+  await user.selectOptions(displayComponent, "ssd1306");
 
   const updated = onChange.mock.calls.at(-1)?.[0] as Array<HardwareProfile & {
     ssd1306?: { sda: number; scl: number };
@@ -690,27 +874,127 @@ test("enables OLED on the first two unowned safe pins", async () => {
   expect(updated[0].ssd1306).toEqual({ sda: 18, scl: 19 });
 });
 
+test("switches SSD1306 to SH1106 while reserving all seven display pins", async () => {
+  const user = userEvent.setup();
+  const profile: HardwareProfile = {
+    id: "display-module",
+    name: "Display module",
+    board_profile_id: "yd-rp2040",
+    debounce_ms: 30,
+    inputs: [{ type: "direct", id: "direct", keys: { ONE: 0 } }],
+  };
+  const onChange = vi.fn<(profiles: HardwareProfile[]) => void>();
+  const props = {
+    language: "zh-CN" as const,
+    layout,
+    boardProfiles,
+    devices: [] as DeviceStatus[],
+    selectedButtonId: null,
+    onSelectButton: vi.fn(),
+    onChange,
+    onSelectionChange: vi.fn(),
+    learning: null,
+    onBeginLearning: vi.fn(),
+    onEndLearning: vi.fn(),
+  };
+  const { rerender } = render(<HardwareMapping {...props} hardwareProfiles={[profile]} />);
+
+  let displayComponent = screen.getByRole("combobox", { name: "显示组件" });
+  expect(within(displayComponent).getByRole("option", { name: "SSD1306 OLED" })).toBeEnabled();
+  expect(within(displayComponent).getByRole("option", { name: "SH1106 OLED + EC11" })).toBeEnabled();
+  await user.selectOptions(displayComponent, "ssd1306");
+
+  const withSsd1306 = onChange.mock.calls.at(-1)?.[0] as HardwareProfile[];
+  expect(withSsd1306[0].ssd1306).toEqual({ sda: 1, scl: 2 });
+  expect(withSsd1306[0].sh1106).toBeUndefined();
+  rerender(<HardwareMapping {...props} hardwareProfiles={withSsd1306} />);
+
+  displayComponent = screen.getByRole("combobox", { name: "显示组件" });
+  await user.selectOptions(displayComponent, "sh1106");
+
+  const withSh1106 = onChange.mock.calls.at(-1)?.[0] as HardwareProfile[];
+  expect(withSh1106[0].ssd1306).toBeUndefined();
+  expect(withSh1106[0].sh1106).toEqual({
+    sda: 1,
+    scl: 2,
+    control_panel: {
+      type: "ec11_confirm_back",
+      confirm: 3,
+      encoder_press: 4,
+      encoder_a: 5,
+      encoder_b: 6,
+      back: 7,
+    },
+  });
+  rerender(<HardwareMapping {...props} hardwareProfiles={withSh1106} />);
+
+  expect(screen.getByRole("combobox", { name: "显示组件" })).toHaveValue("sh1106");
+  expect(screen.getByText("1.3 英寸 / 128x64 / 0x3C / 7 IO")).toBeInTheDocument();
+  expect(screen.getByRole("combobox", { name: "OLED SDA" })).toHaveValue("1");
+  expect(screen.getByRole("combobox", { name: "OLED SCL" })).toHaveValue("2");
+  expect(screen.getByRole("combobox", { name: "确认 KEY1" })).toHaveValue("3");
+  expect(screen.getByRole("combobox", { name: "编码器按压 PSH" })).toHaveValue("4");
+  expect(screen.getByRole("combobox", { name: "编码器 A 相 TRA" })).toHaveValue("5");
+  expect(screen.getByRole("combobox", { name: "编码器 B 相 TRB" })).toHaveValue("6");
+  expect(screen.getByRole("combobox", { name: "返回 KEY0" })).toHaveValue("7");
+
+  const direct = screen.getByRole("combobox", { name: "1 GPIO" });
+  for (let pin = 1; pin <= 7; pin += 1) {
+    expect(within(direct).queryByRole("option", { name: String(pin) })).toBeNull();
+  }
+
+  await user.click(screen.getByText("适配新设备"));
+  for (let pin = 1; pin <= 7; pin += 1) {
+    expect(screen.queryByRole("checkbox", { name: `GPIO ${pin}` })).toBeNull();
+  }
+});
+
 test("rejects unsupported, unsafe, same-pin, conflicting, and duplicate pin ownership", () => {
   const base = {
     id: "validation",
     name: "Validation",
-    board_profile_id: "vccgnd-yd-rp2040",
+    board_profile_id: "yd-rp2040",
     debounce_ms: 30,
     inputs: [] as HardwareProfile["inputs"],
   };
-  const withOled = (ssd1306: { sda: number; scl: number }, inputs = base.inputs) => ({
+  const withOled = (sh1106: NonNullable<HardwareProfile["sh1106"]>, inputs = base.inputs) => ({
     ...base,
     inputs,
-    ssd1306,
+    sh1106,
   });
 
   expect(hardwareProfilesAreValid([
     { ...withOled({ sda: 1, scl: 2 }), board_profile_id: "esp-board" },
   ], boardProfiles)).toBe(false);
-  expect(hardwareProfilesAreValid([withOled({ sda: 23, scl: 22 })], boardProfiles)).toBe(false);
+  expect(hardwareProfilesAreValid([withOled({ sda: 24, scl: 22 })], boardProfiles)).toBe(false);
   expect(hardwareProfilesAreValid([withOled({ sda: 18, scl: 18 })], boardProfiles)).toBe(false);
   expect(hardwareProfilesAreValid([
     withOled({ sda: 18, scl: 19 }, [{ type: "direct", id: "direct", keys: { ONE: 18 } }]),
+  ], boardProfiles)).toBe(false);
+  const controlPanel = {
+    type: "ec11_confirm_back" as const,
+    confirm: 3,
+    encoder_press: 4,
+    encoder_a: 5,
+    encoder_b: 6,
+    back: 7,
+  };
+  expect(hardwareProfilesAreValid([
+    withOled({ sda: 18, scl: 19, control_panel: controlPanel }),
+  ], boardProfiles)).toBe(true);
+  expect(hardwareProfilesAreValid([
+    withOled({
+      sda: 18,
+      scl: 19,
+      control_panel: { ...controlPanel, confirm: 18 },
+    }),
+  ], boardProfiles)).toBe(false);
+  expect(hardwareProfilesAreValid([
+    withOled({
+      sda: 18,
+      scl: 19,
+      control_panel: { ...controlPanel, back: 24 },
+    }),
   ], boardProfiles)).toBe(false);
   expect(hardwareProfilesAreValid([{
     ...base,
@@ -735,7 +1019,7 @@ test("labels a matrix pin shared with OLED as a pin conflict", () => {
     profiles: [{
       id: "matrix-oled-conflict",
       name: "Matrix OLED conflict",
-      board_profile_id: "vccgnd-yd-rp2040",
+      board_profile_id: "yd-rp2040",
       debounce_ms: 30,
       ssd1306: { sda: 18, scl: 19 },
       inputs: [{
@@ -758,7 +1042,7 @@ test("reserves OLED pins from OLED counterparts, input selectors, and learning w
   const profile = {
     id: "reserved",
     name: "Reserved",
-    board_profile_id: "vccgnd-yd-rp2040",
+    board_profile_id: "yd-rp2040",
     debounce_ms: 30,
     inputs: [{ type: "direct" as const, id: "direct", keys: { ONE: 0 } }],
     ssd1306: { sda: 18, scl: 19 },

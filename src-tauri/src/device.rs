@@ -8,18 +8,21 @@ use crate::{
         WorkerLauncher, WorkerRendererRegistry, WorkerStart,
     },
     display::{
-        DisplayRenderer, DisplaySnapshot, RenderedScene, RendererRegistry, SceneTracker,
-        SceneUpdate, built_in_renderer_registry,
+        DisplayRenderer, DisplaySnapshot, RenderedScene, RendererRegistry, SH1106_PANEL_ID,
+        SSD1306_PANEL_ID, SceneTracker, SceneUpdate, built_in_renderer_registry,
     },
     hardware::{BoardProfile, DeviceId},
     metrics::{HomeMetricsSnapshot, MetricAttribution, MetricsStore},
     paste::{Clock, PasteHandle, PasteReply, PasteRequest, SystemClock},
-    profile::{ActionTrigger, DeviceProfile},
+    product::{PRODUCT_DEFINITION_SCHEMA_VERSION, ProductDefinition, ProductDefinitionCache},
+    profile::{ActionTrigger, DeviceProfile, InputSource, SwitchState},
     protocol::{
         ACTION_RUN_PROTOCOL_VERSION, ActionSequence, DISPLAY_LARGE_FONT_PROTOCOL_VERSION,
         DISPLAY_PROTOCOL_VERSION, DeviceMessage, HelloCapabilities, InputState,
-        OLED_PROTOCOL_VERSION, PhysicalInput, display_commands, format_paste_command,
-        is_hello_line, parse_device, topology_commands, validate_hello,
+        OLED_PROTOCOL_VERSION, PhysicalInput, ProductDefinitionTransfer, SH1106_PROTOCOL_VERSION,
+        USAGE_PROTOCOL_VERSION, USAGE_VIEW_PROTOCOL_VERSION, display_commands,
+        format_paste_command, is_hello_line, parse_device, topology_commands, usage_command,
+        validate_hello,
     },
     trigger::{TriggerEdge, TriggerOccurrence, TriggerTracker},
 };
@@ -29,6 +32,7 @@ use serialport::{SerialPortInfo, SerialPortType};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     io::{BufRead, BufReader, ErrorKind, Read, Write},
+    path::Path,
     sync::{
         Arc, RwLock,
         atomic::{AtomicBool, Ordering},
@@ -43,7 +47,7 @@ use std::process::Command;
 
 const ACTION_ACK_TIMEOUT: Duration = Duration::from_millis(1800);
 const DISPLAY_ACK_TIMEOUT: Duration = Duration::from_secs(2);
-const SSD1306_PANEL_ID: &str = "ssd1306_128x32_mono";
+const PRODUCT_READ_TIMEOUT: Duration = Duration::from_secs(15);
 const EMPTY_TOPOLOGY_DEBOUNCE_MS: u16 = 30;
 pub(crate) const SERIAL_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(10);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -59,6 +63,10 @@ pub struct RuntimeActivity {
     context: Option<RuntimeEventContext>,
     #[serde(skip)]
     metric_press: Option<MetricPress>,
+    #[serde(skip)]
+    feature_disabled_log: Option<FeatureDisabledLog>,
+    #[serde(skip)]
+    action_result_log: Option<ActionResultLog>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -66,6 +74,22 @@ struct MetricPress {
     attribution: MetricAttribution,
     button_id: String,
     occurred_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FeatureDisabledLog {
+    attribution: MetricAttribution,
+    button_id: String,
+    occurred_at_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ActionResultLog {
+    attribution: MetricAttribution,
+    button_id: String,
+    action_kind: String,
+    succeeded: bool,
+    occurred_at_ms: Option<u64>,
 }
 
 impl RuntimeActivity {
@@ -79,6 +103,8 @@ impl RuntimeActivity {
             learning_target: None,
             context: None,
             metric_press: None,
+            feature_disabled_log: None,
+            action_result_log: None,
         }
     }
 
@@ -134,6 +160,7 @@ pub struct DeviceSession {
     pending_receive_sequences: BTreeMap<u64, usize>,
     gesture_placeholders: BTreeMap<u64, usize>,
     trigger_metadata: BTreeMap<(PhysicalInput, u64), TriggerMetadata>,
+    feature_switch_states: BTreeMap<String, SwitchState>,
     active_receive_sequence: Option<u64>,
     pending_paste: Option<PendingPaste>,
     pending_reconfiguration: Option<PendingReconfiguration>,
@@ -159,6 +186,13 @@ pub struct RuntimeProfileSnapshot {
     pub profile: DeviceProfile,
     pub hardware_profile_id: String,
     pub metric_attribution: MetricAttribution,
+}
+
+fn format_switch_state(state: SwitchState) -> &'static str {
+    match state {
+        SwitchState::Open => "open",
+        SwitchState::Closed => "closed",
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -203,10 +237,8 @@ impl DeviceSession {
     pub fn new(profile: RuntimeProfileSnapshot) -> Self {
         Self {
             profile: Some(Arc::new(profile)),
-            candidate_board: crate::hardware::board_by_id(
-                crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
-            )
-            .unwrap(),
+            candidate_board: crate::hardware::board_by_id(crate::hardware::YD_ESP32_S3_BOARD_ID)
+                .unwrap(),
             hello: None,
             revision: 0,
             configuring: None,
@@ -221,6 +253,7 @@ impl DeviceSession {
             pending_receive_sequences: BTreeMap::new(),
             gesture_placeholders: BTreeMap::new(),
             trigger_metadata: BTreeMap::new(),
+            feature_switch_states: BTreeMap::new(),
             active_receive_sequence: None,
             pending_paste: None,
             pending_reconfiguration: None,
@@ -248,6 +281,7 @@ impl DeviceSession {
             pending_receive_sequences: BTreeMap::new(),
             gesture_placeholders: BTreeMap::new(),
             trigger_metadata: BTreeMap::new(),
+            feature_switch_states: BTreeMap::new(),
             active_receive_sequence: None,
             pending_paste: None,
             pending_reconfiguration: None,
@@ -261,6 +295,22 @@ impl DeviceSession {
         &mut self,
         snapshot: Option<Arc<RuntimeProfileSnapshot>>,
     ) -> SessionOutput {
+        let switch_ids = snapshot
+            .as_deref()
+            .and_then(|runtime| {
+                runtime
+                    .profile
+                    .hardware_profile(&runtime.hardware_profile_id)
+            })
+            .into_iter()
+            .flat_map(|hardware| &hardware.inputs)
+            .filter_map(|source| match source {
+                InputSource::FeatureSwitch { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        self.feature_switch_states
+            .retain(|id, _| switch_ids.contains(id.as_str()));
         self.profile = snapshot.clone();
         if let Some(pending) = self.pending_reconfiguration.as_mut() {
             pending.snapshot = snapshot;
@@ -281,6 +331,7 @@ impl DeviceSession {
         self.settle_placeholders(&mut output);
         self.ready = false;
         self.configuring = None;
+        self.feature_switch_states.clear();
         self.profile = snapshot.clone();
         self.pending_reconfiguration = Some(PendingReconfiguration {
             snapshot,
@@ -360,6 +411,7 @@ impl DeviceSession {
         let mut output = SessionOutput::default();
         if let Some(mut sequence) = self.active.take() {
             let run_id = sequence.run_id();
+            let pending_step = sequence.awaiting_step();
             let detail = if code == "action_step_failed" && sequence.is_awaiting_paste() {
                 Some("clipboard_write_failed".into())
             } else {
@@ -367,9 +419,16 @@ impl DeviceSession {
             };
             sequence.abort();
             output.lines.push(format!("SKIP {run_id}\n"));
-            let mut activity = RuntimeActivity::new(code);
+            let mut activity = pending_step
+                .as_ref()
+                .map(|step| action_activity(code, step))
+                .unwrap_or_else(|| RuntimeActivity::new(code));
             activity.detail = detail;
             activity.context = self.active_context.clone();
+            if let Some(step) = pending_step.as_ref() {
+                activity =
+                    with_action_result_log(activity, self.active_snapshot.as_deref(), step, false);
+            }
             output.activities.push(activity);
             self.pending_paste = None;
             self.active_snapshot = None;
@@ -523,7 +582,13 @@ impl DeviceSession {
             | DeviceMessage::LearnOk { .. }
             | DeviceMessage::DisplayOk { .. }
             | DeviceMessage::DisplayResync { .. }
-            | DeviceMessage::DisplayError { .. } => {}
+            | DeviceMessage::DisplayError { .. }
+            | DeviceMessage::UsageView { .. }
+            | DeviceMessage::ProductInfo { .. }
+            | DeviceMessage::ProductBegin { .. }
+            | DeviceMessage::ProductChunk { .. }
+            | DeviceMessage::ProductEnd { .. }
+            | DeviceMessage::ProductError { .. } => {}
         }
         output
     }
@@ -608,14 +673,36 @@ impl DeviceSession {
                 .button_for(&runtime.hardware_profile_id, &input)
                 .map(str::to_owned)
         });
-        let metric_press = (state == InputState::Down)
-            .then(|| metric_snapshot.as_ref().zip(button.as_deref()))
-            .flatten()
-            .map(|(runtime, button_id)| MetricPress {
-                attribution: runtime.metric_attribution.clone(),
-                button_id: button_id.into(),
-                occurred_at_ms,
-            });
+        let feature_switch = metric_snapshot.as_ref().and_then(|runtime| {
+            runtime
+                .profile
+                .feature_switch_for(&runtime.hardware_profile_id, &input)
+                .and_then(|source| match source {
+                    InputSource::FeatureSwitch { id, .. } => Some(id.clone()),
+                    _ => None,
+                })
+        });
+        let metric_press = if state == InputState::Down
+            && button.as_deref().is_some_and(|button_id| {
+                metric_snapshot.as_ref().is_some_and(|runtime| {
+                    runtime.profile.button_is_enabled(
+                        &runtime.hardware_profile_id,
+                        button_id,
+                        &self.feature_switch_states,
+                    )
+                })
+            }) {
+            metric_snapshot
+                .as_ref()
+                .zip(button.as_deref())
+                .map(|(runtime, button_id)| MetricPress {
+                    attribution: runtime.metric_attribution.clone(),
+                    button_id: button_id.into(),
+                    occurred_at_ms,
+                })
+        } else {
+            None
+        };
         let mut activity = RuntimeActivity {
             input: Some(input),
             pressed: Some(state == InputState::Down),
@@ -627,6 +714,24 @@ impl DeviceSession {
             activity.params.insert("button".into(), button);
         }
         output.activities.push(activity);
+        if let Some(id) = feature_switch {
+            let switch_state = match state {
+                InputState::Down => SwitchState::Closed,
+                InputState::Up => SwitchState::Open,
+            };
+            self.feature_switch_states.insert(id.clone(), switch_state);
+            if !self.is_v6() && state == InputState::Down {
+                output.lines.push(format!("SKIP {event_id}\n"));
+            }
+            output.activities.push(
+                RuntimeActivity::new("feature_switch_changed")
+                    .with_param("switch", id)
+                    .with_param("state", format_switch_state(switch_state))
+                    .with_context(context),
+            );
+            output.completed_receive_sequences.push(receive_sequence);
+            return;
+        }
         let Some(snapshot) = action_snapshot else {
             if state == InputState::Down {
                 output.lines.push(format!("SKIP {event_id}\n"));
@@ -905,6 +1010,7 @@ impl DeviceSession {
         output: &mut SessionOutput,
     ) {
         self.profile = snapshot;
+        self.feature_switch_states.clear();
         self.ready = false;
         self.configuring = None;
         if self.hello.is_none() {
@@ -931,16 +1037,27 @@ impl DeviceSession {
                 .push(RuntimeActivity::new("invalid_assignment"));
             return;
         };
-        if hardware.board_profile_id != self.candidate_board.id {
+        if !crate::hardware::board_profile_ids_match(
+            &hardware.board_profile_id,
+            self.candidate_board.id,
+        ) {
             output
                 .activities
                 .push(RuntimeActivity::new("assignment_board_mismatch"));
             return;
         }
-        if hardware.ssd1306.is_some() && hello.protocol < OLED_PROTOCOL_VERSION {
+        let required_oled_protocol = if hardware.sh1106.is_some() {
+            Some(SH1106_PROTOCOL_VERSION)
+        } else if hardware.ssd1306.is_some() {
+            Some(OLED_PROTOCOL_VERSION)
+        } else {
+            None
+        };
+        if let Some(required) = required_oled_protocol.filter(|required| hello.protocol < *required)
+        {
             output.activities.push(activity_from_error(
                 crate::workspace::AppError::new("protocol_mismatch")
-                    .with_param("expected", OLED_PROTOCOL_VERSION.to_string())
+                    .with_param("expected", required.to_string())
                     .with_param("actual", hello.protocol.to_string()),
             ));
             return;
@@ -1004,6 +1121,7 @@ impl DeviceSession {
         self.active_snapshot = None;
         self.active_context = None;
         self.active_release_placeholder = None;
+        self.feature_switch_states.clear();
         self.active_receive_sequence = None;
         self.pending_paste = None;
         self.queue.clear();
@@ -1144,10 +1262,14 @@ impl DeviceSession {
                 return;
             }
         };
-        output.activities.push(
-            action_activity("action_step_completed", &completed)
-                .with_context(self.active_context.clone()),
-        );
+        let activity = action_activity("action_step_completed", &completed)
+            .with_context(self.active_context.clone());
+        output.activities.push(with_action_result_log(
+            activity,
+            self.active_snapshot.as_deref(),
+            &completed,
+            true,
+        ));
         if sequence.is_complete() {
             self.active = None;
             self.active_snapshot = None;
@@ -1202,6 +1324,35 @@ impl DeviceSession {
                 .get(&button)
                 .map(|triggers| triggers.actions_for(occurrence.trigger).to_vec())
                 .unwrap_or_default();
+            if !runtime.profile.button_is_enabled(
+                &runtime.hardware_profile_id,
+                &button,
+                &self.feature_switch_states,
+            ) {
+                if !self.is_v6() {
+                    output.lines.push(format!("SKIP {}\n", queued.event_id));
+                }
+                self.finish_queued_occurrence(
+                    queued.receive_sequence,
+                    queued.release_placeholder,
+                    output,
+                );
+                let feature_disabled_log = FeatureDisabledLog {
+                    attribution: runtime.metric_attribution.clone(),
+                    button_id: button.clone(),
+                    occurred_at_ms: occurrence
+                        .context
+                        .as_ref()
+                        .map(|context| context.timestamp_ms),
+                };
+                output.activities.push(RuntimeActivity {
+                    feature_disabled_log: Some(feature_disabled_log),
+                    ..RuntimeActivity::new("feature_disabled")
+                        .with_param("button", button)
+                        .with_context(occurrence.context)
+                });
+                continue;
+            }
             if actions.is_empty() {
                 if !self.is_v6() {
                     output.lines.push(format!("SKIP {}\n", queued.event_id));
@@ -1301,13 +1452,15 @@ impl DeviceSession {
         } else {
             error
         };
-        output.activities.push(
-            RuntimeActivity::new("action_step_failed")
-                .with_param("button", &step.button)
-                .with_param("step", step.step.to_string())
-                .with_detail(detail)
-                .with_context(self.active_context.clone()),
-        );
+        let activity = action_activity("action_step_failed", step)
+            .with_detail(detail)
+            .with_context(self.active_context.clone());
+        output.activities.push(with_action_result_log(
+            activity,
+            self.active_snapshot.as_deref(),
+            step,
+            false,
+        ));
         self.active = None;
         self.active_snapshot = None;
         self.active_context = None;
@@ -1426,6 +1579,29 @@ fn action_activity(code: &str, step: &crate::protocol::ActionStep) -> RuntimeAct
     activity
 }
 
+fn with_action_result_log(
+    mut activity: RuntimeActivity,
+    snapshot: Option<&RuntimeProfileSnapshot>,
+    step: &crate::protocol::ActionStep,
+    succeeded: bool,
+) -> RuntimeActivity {
+    if let (Some(snapshot), Some(action_kind)) =
+        (snapshot, activity.params.get("actionKind").cloned())
+    {
+        activity.action_result_log = Some(ActionResultLog {
+            attribution: snapshot.metric_attribution.clone(),
+            button_id: step.button.clone(),
+            action_kind,
+            succeeded,
+            occurred_at_ms: activity
+                .context
+                .as_ref()
+                .map(|context| context.timestamp_ms),
+        });
+    }
+    activity
+}
+
 fn trigger_name(trigger: ActionTrigger) -> &'static str {
     match trigger {
         ActionTrigger::Press => "press",
@@ -1491,20 +1667,35 @@ fn persist_metrics(
     activity: &RuntimeActivity,
     snapshot_at_ms: u64,
 ) -> Result<Option<HomeMetricsSnapshot>, rusqlite::Error> {
-    let Some(metric_press) = activity.metric_press.as_ref() else {
+    let attribution = if let Some(metric_press) = activity.metric_press.as_ref() {
+        metrics.record_button_press(
+            &metric_press.attribution,
+            &metric_press.button_id,
+            metric_press.occurred_at_ms,
+        )?;
+        &metric_press.attribution
+    } else if let Some(log) = activity.feature_disabled_log.as_ref() {
+        metrics.record_feature_disabled(
+            &log.attribution,
+            &log.button_id,
+            log.occurred_at_ms.unwrap_or(snapshot_at_ms),
+        )?;
+        &log.attribution
+    } else if let Some(log) = activity.action_result_log.as_ref() {
+        metrics.record_action_result(
+            &log.attribution,
+            &log.button_id,
+            &log.action_kind,
+            log.succeeded,
+            activity.detail.as_deref(),
+            log.occurred_at_ms.unwrap_or(snapshot_at_ms),
+        )?;
+        &log.attribution
+    } else {
         return Ok(None);
     };
-    metrics.record_button_press(
-        &metric_press.attribution,
-        &metric_press.button_id,
-        metric_press.occurred_at_ms,
-    )?;
     metrics
-        .home_snapshot(
-            &metric_press.attribution.device_profile_id,
-            None,
-            snapshot_at_ms,
-        )
+        .home_snapshot(&attribution.device_profile_id, None, snapshot_at_ms)
         .map(Some)
 }
 
@@ -1532,6 +1723,7 @@ pub struct SystemWorkerLauncher {
     operation_barrier: Arc<RwLock<()>>,
     transport_factory: Arc<dyn SerialTransportFactory>,
     clock: Arc<dyn Clock>,
+    product_cache: Option<Arc<ProductDefinitionCache>>,
 }
 
 impl SystemWorkerLauncher {
@@ -1539,14 +1731,19 @@ impl SystemWorkerLauncher {
         paste: PasteHandle,
         metrics: Option<Arc<MetricsStore>>,
         operation_barrier: Arc<RwLock<()>>,
+        config_directory: &Path,
     ) -> Self {
-        Self::with_runtime(
+        let mut launcher = Self::with_runtime(
             paste,
             metrics,
             operation_barrier,
             Arc::new(SystemSerialTransportFactory),
             Arc::new(SystemClock::default()),
-        )
+        );
+        launcher.product_cache = Some(Arc::new(ProductDefinitionCache::new(
+            config_directory.join("product-definitions"),
+        )));
+        launcher
     }
 
     pub fn with_runtime(
@@ -1562,6 +1759,7 @@ impl SystemWorkerLauncher {
             operation_barrier,
             transport_factory,
             clock,
+            product_cache: None,
         }
     }
 }
@@ -1650,7 +1848,15 @@ impl DeviceDisplayLink {
                     .profile
                     .hardware_profile(&runtime.hardware_profile_id)
             })
-            .and_then(|hardware| hardware.ssd1306.as_ref().map(|_| SSD1306_PANEL_ID));
+            .and_then(|hardware| {
+                if hardware.sh1106.is_some() && protocol >= SH1106_PROTOCOL_VERSION {
+                    Some(SH1106_PANEL_ID)
+                } else if hardware.ssd1306.is_some() && protocol >= OLED_PROTOCOL_VERSION {
+                    Some(SSD1306_PANEL_ID)
+                } else {
+                    None
+                }
+            });
         self.configure_panel(protocol, panel_id, registry);
     }
 
@@ -1798,6 +2004,7 @@ struct WorkerRuntime {
     transport_factory: Arc<dyn SerialTransportFactory>,
     clock: Arc<dyn Clock>,
     renderers: Arc<RendererRegistry>,
+    product_cache: Option<Arc<ProductDefinitionCache>>,
 }
 
 pub(crate) fn apply_worker_context_update(
@@ -1861,6 +2068,7 @@ impl WorkerLauncher for SystemWorkerLauncher {
             transport_factory: Arc::clone(&self.transport_factory),
             clock: Arc::clone(&self.clock),
             renderers: renderers.into_inner(),
+            product_cache: self.product_cache.clone(),
         };
         let join = thread::Builder::new()
             .name(format!("kivo-device-{}", start.device_id.as_str()))
@@ -1916,11 +2124,27 @@ fn run_isolated_worker_inner(
         .map_err(|error| format!("serial_handshake_failed: {error}"))?;
     let mut device = BufReader::new(port);
     let hello = read_valid_hello(&mut device, board, clock, stop)?;
+    let product_definition = read_embedded_product_definition(
+        &mut device,
+        &hello,
+        board,
+        clock,
+        stop,
+        runtime.product_cache.as_deref(),
+    )?;
+    if hello.protocol >= USAGE_VIEW_PROTOCOL_VERSION {
+        device
+            .get_mut()
+            .write_all(b"USAGE_VIEW\n")
+            .and_then(|()| device.get_mut().flush())
+            .map_err(|error| format!("usage_view_write_failed: {error}"))?;
+    }
     events
         .send(WorkerEvent::HelloValidated {
             generation: start.generation,
             device_id: start.device_id.clone(),
             capabilities: hello.clone(),
+            product_definition,
         })
         .map_err(|_| "coordinator_stopped".to_owned())?;
     let mut session = DeviceSession::without_model(board);
@@ -2007,6 +2231,13 @@ fn run_isolated_worker_inner(
                 WorkerCommand::UpdateDisplay(snapshot) => {
                     display_link.update_desired(snapshot)?;
                     (SessionOutput::default(), current_context.clone())
+                }
+                WorkerCommand::UpdateUsage(snapshot) => {
+                    let mut output = SessionOutput::default();
+                    if display_protocol >= USAGE_PROTOCOL_VERSION {
+                        output.lines.push(usage_command(&snapshot));
+                    }
+                    (output, current_context.clone())
                 }
                 WorkerCommand::Shutdown => return Ok(()),
             };
@@ -2200,6 +2431,17 @@ fn run_isolated_worker_inner(
                     | DeviceMessage::DisplayError { .. }) => {
                         display_link.on_message(&message);
                     }
+                    DeviceMessage::UsageView { active } => {
+                        if display_protocol >= USAGE_VIEW_PROTOCOL_VERSION {
+                            events
+                                .send(WorkerEvent::UsageView {
+                                    generation: start.generation,
+                                    device_id: start.device_id.clone(),
+                                    active,
+                                })
+                                .map_err(|_| "coordinator_stopped".to_owned())?;
+                        }
+                    }
                     DeviceMessage::State {
                         event_id,
                         input,
@@ -2335,6 +2577,108 @@ fn read_valid_hello<R: BufRead>(
         }
     }
     Err("serial_handshake_timeout".into())
+}
+
+fn read_embedded_product_definition<T: Read + Write>(
+    device: &mut BufReader<T>,
+    hello: &HelloCapabilities,
+    board: &BoardProfile,
+    clock: &dyn Clock,
+    stop: &AtomicBool,
+    cache: Option<&ProductDefinitionCache>,
+) -> Result<Option<ProductDefinition>, String> {
+    let Some(expected_product_id) = hello.product_version_id.as_deref() else {
+        return Ok(None);
+    };
+    device
+        .get_mut()
+        .write_all(b"PRODUCT_INFO\n")
+        .and_then(|()| device.get_mut().flush())
+        .map_err(|error| format!("product_info_write_failed: {error}"))?;
+    let deadline = clock.monotonic_now() + PRODUCT_READ_TIMEOUT;
+    let mut line = Vec::new();
+    let (length, sha256) = loop {
+        if stop.load(Ordering::Relaxed) || clock.monotonic_now() >= deadline {
+            return Err("product_read_timeout".into());
+        }
+        line.clear();
+        match device.read_until(b'\n', &mut line) {
+            Ok(0) => return Err("device_disconnected".into()),
+            Ok(_) => {
+                let text =
+                    std::str::from_utf8(&line).map_err(|_| "invalid_product_info".to_owned())?;
+                match parse_device(text) {
+                    Some(DeviceMessage::ProductInfo {
+                        product_version_id: Some(product_version_id),
+                        schema_version,
+                        length,
+                        sha256: Some(sha256),
+                    }) if product_version_id == expected_product_id
+                        && schema_version == PRODUCT_DEFINITION_SCHEMA_VERSION =>
+                    {
+                        break (length, sha256);
+                    }
+                    Some(DeviceMessage::ProductError { code }) => {
+                        return Err(format!("product_info_failed:{code}"));
+                    }
+                    _ => return Err("invalid_product_info".into()),
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::TimedOut => {}
+            Err(error) => return Err(format!("product_info_read_failed: {error}")),
+        }
+    };
+
+    if let Some(definition) =
+        cache.and_then(|cache| cache.load(&sha256, length, expected_product_id, board.id))
+    {
+        return Ok(Some(definition));
+    }
+
+    device
+        .get_mut()
+        .write_all(b"PRODUCT_READ\n")
+        .and_then(|()| device.get_mut().flush())
+        .map_err(|error| format!("product_read_write_failed: {error}"))?;
+    let mut transfer =
+        ProductDefinitionTransfer::new(length, sha256.clone()).map_err(|error| error.code)?;
+    let bytes = loop {
+        if stop.load(Ordering::Relaxed) || clock.monotonic_now() >= deadline {
+            return Err("product_read_timeout".into());
+        }
+        line.clear();
+        match device.read_until(b'\n', &mut line) {
+            Ok(0) => return Err("device_disconnected".into()),
+            Ok(_) => {
+                let text = std::str::from_utf8(&line)
+                    .map_err(|_| "invalid_product_transfer_sequence".to_owned())?;
+                let message = parse_device(text)
+                    .ok_or_else(|| "invalid_product_transfer_sequence".to_owned())?;
+                if let Some(bytes) = transfer.push(message).map_err(|error| error.code)? {
+                    break bytes;
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::TimedOut => {}
+            Err(error) => return Err(format!("product_read_failed: {error}")),
+        }
+    };
+    let definition = ProductDefinition::parse_json(&bytes).map_err(|error| error.code)?;
+    if definition.product.product_version_id != expected_product_id
+        || !crate::hardware::board_profile_ids_match(
+            &definition.hardware_profile.board_profile_id,
+            board.id,
+        )
+    {
+        return Err("product_definition_identity_mismatch".into());
+    }
+    let normalized = definition.normalize().map_err(|error| error.code)?;
+    if normalized.sha256 != sha256 || normalized.json.as_bytes() != bytes {
+        return Err("product_definition_not_canonical".into());
+    }
+    if let Some(cache) = cache {
+        let _ = cache.store(&normalized);
+    }
+    Ok(Some(definition))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2547,9 +2891,10 @@ mod tests {
         metrics::{MetricAttribution, MetricsStore},
         model::{ButtonDefinition, ButtonGroup, ModelLayout},
         paste::{ClipboardWriter, PasteCoordinator},
+        product::{PRODUCT_DEFINITION_SCHEMA_VERSION, ProductDefinition, ProductIdentity},
         profile::{
             ButtonAction, DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION,
-            Ssd1306Config,
+            Sh1106Config, Ssd1306Config,
         },
         protocol::{
             DISPLAY_LARGE_FONT_PROTOCOL_VERSION, DISPLAY_PROTOCOL_VERSION, DeviceMessage,
@@ -2559,7 +2904,8 @@ mod tests {
     use serialport::{SerialPortInfo, SerialPortType, UsbPortInfo};
     use std::{
         cell::RefCell,
-        collections::BTreeMap,
+        collections::{BTreeMap, BTreeSet},
+        io::Cursor,
         sync::Mutex,
         time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
@@ -2567,6 +2913,103 @@ mod tests {
     struct RecordingTargetOpener {
         targets: Arc<Mutex<Vec<String>>>,
         error: Option<String>,
+    }
+
+    struct MemoryTransport {
+        input: Cursor<Vec<u8>>,
+        output: Vec<u8>,
+    }
+
+    impl Read for MemoryTransport {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.input.read(buffer)
+        }
+    }
+
+    impl Write for MemoryTransport {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.output.extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn embedded_product_definition() -> ProductDefinition {
+        ProductDefinition {
+            schema_version: PRODUCT_DEFINITION_SCHEMA_VERSION,
+            product: ProductIdentity {
+                display_name: "Kivo Key 1".into(),
+                family_id: "key".into(),
+                variant_id: "key-rp-k1".into(),
+                hardware_revision: 1,
+                product_version_id: "key-rp-k1-r01".into(),
+                capabilities: Vec::new(),
+            },
+            layout: ModelLayout {
+                id: "key-rp-k1".into(),
+                name: "Kivo Key 1".into(),
+                groups: vec![ButtonGroup {
+                    id: "keys".into(),
+                    columns: 1,
+                    buttons: vec![ButtonDefinition {
+                        id: "K1".into(),
+                        label: "K1".into(),
+                    }],
+                }],
+            },
+            hardware_profile: HardwareProfile {
+                id: "hardware".into(),
+                name: "Hardware".into(),
+                board_profile_id: crate::hardware::YD_RP2040_BOARD_ID.into(),
+                debounce_ms: 30,
+                ssd1306: None,
+                sh1106: None,
+                inputs: vec![InputSource::Direct {
+                    id: "direct".into(),
+                    keys: BTreeMap::from([("K1".into(), 0)]),
+                }],
+            },
+        }
+    }
+
+    #[test]
+    fn embedded_product_cache_hit_skips_product_read_transfer() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = ProductDefinitionCache::new(directory.path().into());
+        let normalized = embedded_product_definition().normalize().unwrap();
+        cache.store(&normalized).unwrap();
+        let response = format!(
+            "PRODUCT_INFO key-rp-k1-r01 1 {} {}\n",
+            normalized.byte_length, normalized.sha256
+        );
+        let mut device = BufReader::new(MemoryTransport {
+            input: Cursor::new(response.into_bytes()),
+            output: Vec::new(),
+        });
+        let hello = HelloCapabilities {
+            protocol: 9,
+            controller_family_id: "rp2040".into(),
+            board_profile_id: crate::hardware::YD_RP2040_BOARD_ID.into(),
+            firmware_build_id: "test".into(),
+            product_version_id: Some("key-rp-k1-r01".into()),
+            pins: vec![0],
+        };
+
+        let loaded = read_embedded_product_definition(
+            &mut device,
+            &hello,
+            crate::hardware::board_by_id(crate::hardware::YD_RP2040_BOARD_ID).unwrap(),
+            &SystemClock::default(),
+            &AtomicBool::new(false),
+            Some(&cache),
+        )
+        .unwrap();
+
+        assert_eq!(loaded, Some(normalized.definition));
+        assert_eq!(device.into_inner().output, b"PRODUCT_INFO\n");
     }
 
     impl TargetOpener for RecordingTargetOpener {
@@ -2580,11 +3023,8 @@ mod tests {
         RuntimeProfileSnapshot {
             hardware_profile_id: "esp-primary".into(),
             metric_attribution: MetricAttribution {
-                device_id: DeviceId::new(
-                    crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID,
-                    "ABCDEF123456",
-                )
-                .unwrap(),
+                device_id: DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ABCDEF123456")
+                    .unwrap(),
                 device_name: "Desk".into(),
                 device_profile_id: "phone".into(),
                 hardware_profile_id: "esp-primary".into(),
@@ -2603,13 +3043,15 @@ mod tests {
                         }],
                     }],
                 },
+                snapshot_metadata: None,
                 trigger_settings: TriggerSettings::default(),
                 hardware_profiles: vec![HardwareProfile {
                     id: "esp-primary".into(),
                     name: "ESP primary".into(),
-                    board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+                    board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
                     debounce_ms: 30,
                     ssd1306: None,
+                    sh1106: None,
                     inputs: vec![InputSource::Direct {
                         id: "direct".into(),
                         keys: BTreeMap::from([("A".into(), 6)]),
@@ -2633,10 +3075,40 @@ mod tests {
     fn oled_runtime_model() -> RuntimeProfileSnapshot {
         let mut runtime = runtime_model();
         let hardware = &mut runtime.profile.hardware_profiles[0];
-        hardware.board_profile_id = crate::hardware::VCCGND_YD_RP2040_BOARD_ID.into();
-        hardware.ssd1306 = Some(Ssd1306Config { sda: 4, scl: 5 });
+        hardware.board_profile_id = crate::hardware::YD_RP2040_BOARD_ID.into();
+        hardware.ssd1306 = Some(Ssd1306Config {
+            sda: 4,
+            scl: 5,
+            control_panel: None,
+        });
         runtime.metric_attribution.device_id =
-            DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "ABCDEF123456").unwrap();
+            DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "ABCDEF123456").unwrap();
+        runtime
+    }
+
+    fn sh1106_runtime_model() -> RuntimeProfileSnapshot {
+        let mut runtime = oled_runtime_model();
+        let hardware = &mut runtime.profile.hardware_profiles[0];
+        let ssd1306 = hardware.ssd1306.take().unwrap();
+        hardware.sh1106 = Some(Sh1106Config {
+            sda: ssd1306.sda,
+            scl: ssd1306.scl,
+            control_panel: None,
+        });
+        runtime
+    }
+
+    fn runtime_model_with_feature_switch() -> RuntimeProfileSnapshot {
+        let mut runtime = runtime_model();
+        runtime.profile.hardware_profiles[0]
+            .inputs
+            .push(InputSource::FeatureSwitch {
+                id: "mode".into(),
+                name: "Mode switch".into(),
+                gpio: 7,
+                buttons: BTreeSet::from(["A".into()]),
+            });
+        runtime.profile.validate().unwrap();
         runtime
     }
 
@@ -2720,7 +3192,7 @@ mod tests {
     }
 
     #[test]
-    fn protocol_seven_oled_starts_with_a_full_scene_at_base_zero() {
+    fn protocol_seven_ssd1306_starts_with_a_full_scene_at_base_zero() {
         let registry = built_in_renderer_registry();
         let mut link = DeviceDisplayLink::default();
         link.configure(
@@ -2778,6 +3250,40 @@ mod tests {
             version_eight_lines
                 .iter()
                 .any(|line| line.starts_with("DISPLAY_TEXT 0 9 22 2 "))
+        );
+    }
+
+    #[test]
+    fn sh1106_requires_protocol_eleven_and_uses_the_full_panel() {
+        let registry = built_in_renderer_registry();
+        let now = Instant::now();
+        let mut version_ten = DeviceDisplayLink::default();
+        version_ten.configure(
+            SH1106_PROTOCOL_VERSION - 1,
+            Some(&sh1106_runtime_model()),
+            &registry,
+        );
+        version_ten.update_desired(display_snapshot(3)).unwrap();
+        assert!(version_ten.next_lines(now).unwrap().is_empty());
+
+        let mut version_eleven = DeviceDisplayLink::default();
+        version_eleven.configure(
+            SH1106_PROTOCOL_VERSION,
+            Some(&sh1106_runtime_model()),
+            &registry,
+        );
+        version_eleven.update_desired(display_snapshot(3)).unwrap();
+        let version_eleven_lines = version_eleven.next_lines(now).unwrap();
+
+        assert!(
+            version_eleven_lines
+                .iter()
+                .any(|line| line == "DISPLAY_REGION 0 0 0 128 64\n")
+        );
+        assert!(
+            version_eleven_lines
+                .iter()
+                .any(|line| line.starts_with("DISPLAY_TEXT 0 9 38 2 "))
         );
     }
 
@@ -3090,6 +3596,191 @@ mod tests {
     }
 
     #[test]
+    fn persists_completed_and_failed_action_steps_as_device_activity() {
+        let timestamp = 1_720_086_400_000;
+        let path = std::env::temp_dir().join(format!(
+            "kivo-action-result-metrics-{}-{}.sqlite3",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = MetricsStore::open(&path).unwrap();
+        let mut completed_session = DeviceSession::new(runtime_model());
+        completed_session.ready = true;
+        completed_session.on_message(
+            DeviceMessage::State {
+                event_id: 1,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            &mut |_| Ok(()),
+        );
+        let completed = completed_session
+            .on_message(DeviceMessage::Done { run_id: 1, step: 1 }, &mut |_| Ok(()));
+        let completed_activity = completed
+            .activities
+            .iter()
+            .find(|activity| activity.code == "action_step_completed")
+            .unwrap();
+
+        persist_metrics(&store, completed_activity, timestamp).unwrap();
+
+        let mut failed_session = DeviceSession::new(runtime_model());
+        failed_session.ready = true;
+        failed_session.on_message(
+            DeviceMessage::State {
+                event_id: 2,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            &mut |_| Ok(()),
+        );
+        let failed = failed_session
+            .fail_active_deferred("action_ack_timeout", Some("device_timeout".into()));
+        let failed_activity = failed
+            .activities
+            .iter()
+            .find(|activity| activity.code == "action_ack_timeout")
+            .unwrap();
+
+        persist_metrics(&store, failed_activity, timestamp + 1).unwrap();
+
+        let snapshot = store
+            .device_snapshot(
+                &DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ABCDEF123456").unwrap(),
+                timestamp + 1,
+            )
+            .unwrap();
+        assert_eq!(snapshot.logs.len(), 2);
+        assert_eq!(snapshot.logs[0].kind, "action_failed");
+        assert_eq!(snapshot.logs[0].action_kind.as_deref(), Some("paste"));
+        assert_eq!(snapshot.logs[0].detail.as_deref(), Some("device_timeout"));
+        assert_eq!(snapshot.logs[1].kind, "action_success");
+        assert_eq!(snapshot.logs[1].button_id.as_deref(), Some("A"));
+        assert_eq!(snapshot.logs[1].action_kind.as_deref(), Some("paste"));
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn feature_switch_gates_buttons_without_becoming_a_button_trigger() {
+        let mut session = DeviceSession::new(runtime_model_with_feature_switch());
+        session.ready = true;
+        session.hello = Some(HelloCapabilities {
+            protocol: ACTION_RUN_PROTOCOL_VERSION,
+            controller_family_id: crate::hardware::ESP32S3_FAMILY_ID.into(),
+            board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
+            firmware_build_id: "test".into(),
+            product_version_id: None,
+            pins: vec![6, 7],
+        });
+
+        let blocked = session.on_message(
+            DeviceMessage::State {
+                event_id: 1,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            &mut |_| Ok(()),
+        );
+        let blocked_activity = blocked
+            .activities
+            .iter()
+            .find(|activity| activity.code == "feature_disabled")
+            .unwrap();
+        assert_eq!(
+            blocked_activity
+                .feature_disabled_log
+                .as_ref()
+                .map(|log| log.button_id.as_str()),
+            Some("A")
+        );
+        let path = std::env::temp_dir().join(format!(
+            "kivo-feature-disabled-{}-{}.sqlite3",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = MetricsStore::open(&path).unwrap();
+        let update = persist_metrics(&store, blocked_activity, 1_720_086_400_000)
+            .unwrap()
+            .unwrap();
+        assert_eq!(update.total_presses, 0);
+        assert_eq!(update.logs[0].kind, "feature_disabled");
+        assert_eq!(update.logs[0].button_id.as_deref(), Some("A"));
+        assert!(blocked.paste_requests.is_empty());
+
+        session.on_message(
+            DeviceMessage::State {
+                event_id: 2,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Up,
+            },
+            &mut |_| Ok(()),
+        );
+
+        session.on_message(
+            DeviceMessage::State {
+                event_id: 3,
+                input: PhysicalInput::Direct { gpio: 7 },
+                state: InputState::Down,
+            },
+            &mut |_| Ok(()),
+        );
+        let enabled = session.on_message(
+            DeviceMessage::State {
+                event_id: 4,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            &mut |_| Ok(()),
+        );
+        assert!(
+            enabled
+                .activities
+                .iter()
+                .any(|activity| activity.code == "action_step_started")
+        );
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn feature_switch_state_survives_snapshot_updates_and_clears_on_reconfigure() {
+        let runtime = runtime_model_with_feature_switch();
+        let mut session = DeviceSession::new(runtime.clone());
+        session.ready = true;
+
+        session.on_message(
+            DeviceMessage::State {
+                event_id: 1,
+                input: PhysicalInput::Direct { gpio: 7 },
+                state: InputState::Down,
+            },
+            &mut |_| Ok(()),
+        );
+        assert_eq!(
+            session.feature_switch_states.get("mode"),
+            Some(&SwitchState::Closed)
+        );
+
+        let mut updated = runtime.clone();
+        updated.profile.profile.name = "Updated".into();
+        session.update_snapshot(Some(Arc::new(updated)));
+        assert_eq!(
+            session.feature_switch_states.get("mode"),
+            Some(&SwitchState::Closed)
+        );
+
+        session.reconfigure(Some(Arc::new(runtime)), 2);
+        assert!(session.feature_switch_states.is_empty());
+    }
+
+    #[test]
     fn persists_the_session_profile_that_interpreted_the_event() {
         let original = runtime_model();
         let original_device = original.metric_attribution.device_id.clone();
@@ -3189,8 +3880,9 @@ mod tests {
         DeviceMessage::Hello(HelloCapabilities {
             protocol: 4,
             controller_family_id: crate::hardware::ESP32S3_FAMILY_ID.into(),
-            board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+            board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
             firmware_build_id: "test".into(),
+            product_version_id: None,
             pins: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18],
         })
     }
@@ -3266,11 +3958,11 @@ mod tests {
         let event = RuntimeEvent {
             timestamp_ms: 101,
             level: EventLevel::Error,
-            device_id: DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456")
+            device_id: DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ABCDEF123456")
                 .unwrap(),
             raw_serial: "ABCDEF123456".into(),
             controller_family_id: crate::hardware::ESP32S3_FAMILY_ID.into(),
-            board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+            board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
             port: None,
             device_profile_id: Some("phone".into()),
             hardware_profile_id: Some("esp-primary".into()),
@@ -3310,8 +4002,7 @@ mod tests {
 
     #[test]
     fn protocol_v3_oled_profile_is_rejected_before_configuration() {
-        let board =
-            crate::hardware::board_by_id(crate::hardware::VCCGND_YD_RP2040_BOARD_ID).unwrap();
+        let board = crate::hardware::board_by_id(crate::hardware::YD_RP2040_BOARD_ID).unwrap();
         let mut session = DeviceSession::without_model(board);
         session.update_snapshot(Some(Arc::new(oled_runtime_model())));
         let legacy_hello = HelloCapabilities {
@@ -3319,6 +4010,7 @@ mod tests {
             controller_family_id: board.family_id.into(),
             board_profile_id: board.id.into(),
             firmware_build_id: "legacy".into(),
+            product_version_id: None,
             pins: board.safe_pins.to_vec(),
         };
 
@@ -3370,8 +4062,7 @@ mod tests {
 
     #[test]
     fn unassigned_hello_waits_for_coordinator_revision_before_clearing_topology() {
-        let board =
-            crate::hardware::board_by_id(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID).unwrap();
+        let board = crate::hardware::board_by_id(crate::hardware::YD_ESP32_S3_BOARD_ID).unwrap();
         let mut session = DeviceSession::without_model(board);
 
         let hello = session.on_message_deferred(hello(), 0, 100);
@@ -4018,7 +4709,7 @@ mod tests {
             generation: 1,
             device_id,
             port: "/dev/action-deadline".into(),
-            board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+            board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
         };
         let paste = PasteCoordinator::with_timeout(FailingClipboard, Duration::from_millis(100));
         let (events, _received_events) = mpsc::channel();
@@ -4503,7 +5194,7 @@ mod tests {
         session.on_message_deferred(DeviceMessage::Hello(hello), 0, 100);
         session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
         let target = LearningTarget {
-            device_id: DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ABCDEF123456")
+            device_id: DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ABCDEF123456")
                 .unwrap(),
             device_profile_id: "phone".into(),
             hardware_profile_id: "esp-primary".into(),
@@ -4560,8 +5251,9 @@ mod tests {
             DeviceMessage::Hello(HelloCapabilities {
                 protocol: 4,
                 controller_family_id: crate::hardware::ESP32S3_FAMILY_ID.into(),
-                board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+                board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
                 firmware_build_id: "test".into(),
+                product_version_id: None,
                 pins: vec![1, 2],
             }),
             &mut |_| Ok(()),
@@ -4613,14 +5305,14 @@ mod tests {
         session.on_message(DeviceMessage::ConfigOk { revision: 2 }, &mut copy);
         assert!(session.ready);
 
-        session.on_line("HELLO 4 esp32s3 luatos-esp32s3-aio build 2 0", &mut copy);
+        session.on_line("HELLO 4 esp32s3 yd-esp32-s3 build 2 0", &mut copy);
         assert!(!session.ready);
         assert!(session.hello.is_none());
 
         session.on_message(DeviceMessage::Hello(hello.clone()), &mut copy);
         session.on_message(DeviceMessage::ConfigOk { revision: 3 }, &mut copy);
         let _ = hello;
-        session.on_line("HELLO 4 esp32s3 vccgnd-yd-rp2040 build 2 0 6", &mut copy);
+        session.on_line("HELLO 4 esp32s3 yd-rp2040 build 2 0 6", &mut copy);
         assert!(!session.ready);
         assert!(session.hello.is_none());
     }

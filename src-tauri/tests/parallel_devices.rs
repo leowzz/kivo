@@ -475,6 +475,7 @@ fn profile(
 ) -> DeviceProfile {
     DeviceProfile {
         schema_version: PROFILE_SCHEMA_VERSION,
+        snapshot_metadata: None,
         profile: ModelLayout {
             id: id.into(),
             name: id.into(),
@@ -500,6 +501,7 @@ fn profile(
             board_profile_id: board_id.into(),
             debounce_ms: 30,
             ssd1306: None,
+            sh1106: None,
             inputs: vec![InputSource::Direct {
                 id: "direct".into(),
                 keys: BTreeMap::from([("HOT".into(), hot_pin), ("PASTE".into(), paste_pin)]),
@@ -643,7 +645,7 @@ fn wait_for_input_event(coordinator: &mut RuntimeCoordinator, serial: &str) {
 
 #[test]
 fn held_input_on_one_device_does_not_block_another_devices_paste_sequence() {
-    let rp = board("vccgnd-yd-rp2040");
+    let rp = board("yd-rp2040");
     let specs = [
         (
             "HOLD",
@@ -780,8 +782,8 @@ fn held_input_on_one_device_does_not_block_another_devices_paste_sequence() {
 #[test]
 fn four_concurrent_devices_keep_runtime_and_global_paste_isolated() {
     assert_due_fake_deadline_fires_on_registration();
-    let esp = board("luatos-esp32s3-aio");
-    let rp = board("vccgnd-yd-rp2040");
+    let esp = board("yd-esp32-s3");
+    let rp = board("yd-rp2040");
     let specs = [
         (
             "ESP-A",

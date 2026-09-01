@@ -19,16 +19,17 @@ struct BoardProfile {
   }
 };
 
-inline constexpr std::array<std::uint8_t, 17> kEsp32S3SafePins = {
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18};
-inline constexpr std::array<std::uint8_t, 27> kYdRp2040SafePins = {
+inline constexpr std::array<std::uint8_t, 26> kYdEsp32S3SafePins = {
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+    13, 14, 15, 16, 17, 18, 21, 38, 39, 40, 41, 42, 47};
+inline constexpr std::array<std::uint8_t, 28> kYdRp2040SafePins = {
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
-    12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 26,
+    12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 26,
     27, 28, 29};
 
-inline constexpr BoardProfile kLuatOsEsp32S3Aio = {
-    "esp32s3", "luatos-esp32s3-aio", kEsp32S3SafePins.data(),
-    kEsp32S3SafePins.size(), false};
-inline constexpr BoardProfile kVccGndYdRp2040 = {
-    "rp2040", "vccgnd-yd-rp2040", kYdRp2040SafePins.data(),
+inline constexpr BoardProfile kYdEsp32S3 = {
+    "esp32s3", "yd-esp32-s3", kYdEsp32S3SafePins.data(),
+    kYdEsp32S3SafePins.size(), false};
+inline constexpr BoardProfile kYdRp2040 = {
+    "rp2040", "yd-rp2040", kYdRp2040SafePins.data(),
     kYdRp2040SafePins.size(), true};

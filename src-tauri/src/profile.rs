@@ -2,13 +2,17 @@ use crate::{
     hardware::board_by_id,
     model::ModelLayout,
     protocol::{
-        ACTION_RUN_PROTOCOL_VERSION, ADVANCED_ACTION_PROTOCOL_VERSION, OLED_PROTOCOL_VERSION,
-        PhysicalInput, encode_hotkey,
+        ACTION_RUN_PROTOCOL_VERSION, ADVANCED_ACTION_PROTOCOL_VERSION,
+        OLED_CONTROL_PANEL_PROTOCOL_VERSION, OLED_PROTOCOL_VERSION, PhysicalInput,
+        SH1106_PROTOCOL_VERSION, encode_hotkey,
     },
     workspace::AppError,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[cfg(test)]
 use crate::model::{ButtonDefinition, ButtonGroup};
@@ -29,6 +33,39 @@ pub enum CreateDeviceProfileRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct SnapshotMetadata {
+    pub created_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_device_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_device_name: Option<String>,
+}
+
+impl SnapshotMetadata {
+    pub fn new() -> Self {
+        let created_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        Self {
+            created_at,
+            source_device_id: None,
+            source_device_name: None,
+        }
+    }
+
+    pub fn from_device(device_id: impl Into<String>, device_name: impl Into<String>) -> Self {
+        Self {
+            source_device_id: Some(device_id.into()),
+            source_device_name: Some(device_name.into()),
+            ..Self::new()
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ButtonAction {
     Paste { text: String },
@@ -45,6 +82,12 @@ pub enum ActionTrigger {
     Release,
     LongPress,
     DoublePress,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SwitchState {
+    Open,
+    Closed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -176,12 +219,21 @@ pub enum InputSource {
         pins: Vec<u8>,
         keys: BTreeMap<String, [u8; 2]>,
     },
+    FeatureSwitch {
+        id: String,
+        name: String,
+        gpio: u8,
+        #[serde(default)]
+        buttons: BTreeSet<String>,
+    },
 }
 
 impl InputSource {
     fn id(&self) -> &str {
         match self {
-            Self::Direct { id, .. } | Self::ContactMatrix { id, .. } => id,
+            Self::Direct { id, .. }
+            | Self::ContactMatrix { id, .. }
+            | Self::FeatureSwitch { id, .. } => id,
         }
     }
 }
@@ -190,6 +242,42 @@ impl InputSource {
 pub struct Ssd1306Config {
     pub sda: u8,
     pub scl: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_panel: Option<OledControlPanelConfig>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct Sh1106Config {
+    pub sda: u8,
+    pub scl: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_panel: Option<OledControlPanelConfig>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum OledControlPanelConfig {
+    Ec11ConfirmBack {
+        confirm: u8,
+        encoder_press: u8,
+        encoder_a: u8,
+        encoder_b: u8,
+        back: u8,
+    },
+}
+
+impl OledControlPanelConfig {
+    pub fn pins(&self) -> [u8; 5] {
+        match self {
+            Self::Ec11ConfirmBack {
+                confirm,
+                encoder_press,
+                encoder_a,
+                encoder_b,
+                back,
+            } => [*confirm, *encoder_press, *encoder_a, *encoder_b, *back],
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -201,6 +289,8 @@ pub struct HardwareProfile {
     pub debounce_ms: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssd1306: Option<Ssd1306Config>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sh1106: Option<Sh1106Config>,
     #[serde(default)]
     pub inputs: Vec<InputSource>,
 }
@@ -213,6 +303,8 @@ fn default_debounce_ms() -> u16 {
 pub struct DeviceProfile {
     pub schema_version: u16,
     pub profile: ModelLayout,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_metadata: Option<SnapshotMetadata>,
     #[serde(default)]
     pub trigger_settings: TriggerSettings,
     #[serde(default)]
@@ -229,6 +321,7 @@ pub fn blank_device_profile(id: String, name: String, board_profile_id: String) 
             name,
             groups: Vec::new(),
         },
+        snapshot_metadata: Some(SnapshotMetadata::new()),
         trigger_settings: TriggerSettings::default(),
         hardware_profiles: vec![HardwareProfile {
             id: "hardware".into(),
@@ -236,6 +329,7 @@ pub fn blank_device_profile(id: String, name: String, board_profile_id: String) 
             board_profile_id,
             debounce_ms: default_debounce_ms(),
             ssd1306: None,
+            sh1106: None,
             inputs: Vec::new(),
         }],
         actions: BTreeMap::new(),
@@ -308,16 +402,22 @@ impl ProfileChange {
     }
 }
 
-fn topology_signature(
-    hardware: Option<&HardwareProfile>,
-) -> Option<(&str, u16, Option<&Ssd1306Config>, &[InputSource])> {
-    hardware.map(|hardware| {
-        (
-            hardware.board_profile_id.as_str(),
-            hardware.debounce_ms,
-            hardware.ssd1306.as_ref(),
-            hardware.inputs.as_slice(),
-        )
+#[derive(Eq, PartialEq)]
+struct TopologySignature<'a> {
+    board_profile_id: &'a str,
+    debounce_ms: u16,
+    ssd1306: Option<&'a Ssd1306Config>,
+    sh1106: Option<&'a Sh1106Config>,
+    inputs: &'a [InputSource],
+}
+
+fn topology_signature(hardware: Option<&HardwareProfile>) -> Option<TopologySignature<'_>> {
+    hardware.map(|hardware| TopologySignature {
+        board_profile_id: hardware.board_profile_id.as_str(),
+        debounce_ms: hardware.debounce_ms,
+        ssd1306: hardware.ssd1306.as_ref(),
+        sh1106: hardware.sh1106.as_ref(),
+        inputs: hardware.inputs.as_slice(),
     })
 }
 
@@ -330,6 +430,27 @@ impl DeviceProfile {
             .any(|hardware| hardware.ssd1306.is_some())
         {
             required = required.max(OLED_PROTOCOL_VERSION);
+        }
+        if self
+            .hardware_profiles
+            .iter()
+            .any(|hardware| hardware.sh1106.is_some())
+        {
+            required = required.max(SH1106_PROTOCOL_VERSION);
+        }
+        if self.hardware_profiles.iter().any(|hardware| {
+            hardware
+                .ssd1306
+                .as_ref()
+                .and_then(|oled| oled.control_panel.as_ref())
+                .is_some()
+                || hardware
+                    .sh1106
+                    .as_ref()
+                    .and_then(|oled| oled.control_panel.as_ref())
+                    .is_some()
+        }) {
+            required = required.max(OLED_CONTROL_PANEL_PROTOCOL_VERSION);
         }
         for actions in self.actions.values() {
             if !actions.release.is_empty()
@@ -404,10 +525,45 @@ impl DeviceProfile {
                     }
                     runtime_source = runtime_source.checked_add(1)?;
                 }
+                InputSource::FeatureSwitch { .. } => {
+                    runtime_source = runtime_source.checked_add(1)?;
+                }
                 InputSource::Direct { .. } | InputSource::ContactMatrix { .. } => {}
             }
         }
         None
+    }
+
+    pub fn feature_switch_for(
+        &self,
+        hardware_id: &str,
+        input: &PhysicalInput,
+    ) -> Option<&InputSource> {
+        let hardware = self.hardware_profile(hardware_id)?;
+        hardware.inputs.iter().find(|source| {
+            let InputSource::FeatureSwitch { gpio, .. } = source else {
+                return false;
+            };
+            matches!(input, PhysicalInput::Direct { gpio: input_gpio } if input_gpio == gpio)
+        })
+    }
+
+    pub fn button_is_enabled(
+        &self,
+        hardware_id: &str,
+        button: &str,
+        states: &BTreeMap<String, SwitchState>,
+    ) -> bool {
+        self.hardware_profile(hardware_id)
+            .into_iter()
+            .flat_map(|hardware| &hardware.inputs)
+            .filter_map(|source| {
+                let InputSource::FeatureSwitch { id, buttons, .. } = source else {
+                    return None;
+                };
+                buttons.contains(button).then_some(id)
+            })
+            .all(|id| states.get(id) == Some(&SwitchState::Closed))
     }
 
     pub fn validate(&self) -> Result<(), AppError> {
@@ -458,14 +614,31 @@ impl DeviceProfile {
             let mut source_ids = BTreeSet::new();
             let mut owned_pins = BTreeSet::new();
             let mut bound_buttons = BTreeSet::new();
+            if hardware.ssd1306.is_some() && hardware.sh1106.is_some() {
+                return Err(AppError::new("multiple_oled_displays")
+                    .with_param("hardware_profile", &hardware.id));
+            }
             if let Some(ssd1306) = &hardware.ssd1306 {
-                if !board.supports_oled {
-                    return Err(
-                        AppError::new("oled_not_supported").with_param("board_profile", board.id)
-                    );
-                }
-                validate_pin(ssd1306.sda, board.safe_pins, &mut owned_pins)?;
-                validate_pin(ssd1306.scl, board.safe_pins, &mut owned_pins)?;
+                validate_oled(
+                    ssd1306.sda,
+                    ssd1306.scl,
+                    ssd1306.control_panel.as_ref(),
+                    board.supports_oled,
+                    board.id,
+                    board.safe_pins,
+                    &mut owned_pins,
+                )?;
+            }
+            if let Some(sh1106) = &hardware.sh1106 {
+                validate_oled(
+                    sh1106.sda,
+                    sh1106.scl,
+                    sh1106.control_panel.as_ref(),
+                    board.supports_oled,
+                    board.id,
+                    board.safe_pins,
+                    &mut owned_pins,
+                )?;
             }
             for source in &hardware.inputs {
                 if !valid_id(source.id()) || !source_ids.insert(source.id()) {
@@ -505,6 +678,24 @@ impl DeviceProfile {
                             edges.push(pair);
                         }
                         validate_bipartite(&edges)?;
+                    }
+                    InputSource::FeatureSwitch {
+                        id: _,
+                        name,
+                        gpio,
+                        buttons: gated_buttons,
+                    } => {
+                        if name.trim().is_empty() {
+                            return Err(AppError::new("invalid_feature_switch_name")
+                                .with_param("hardware_profile", &hardware.id));
+                        }
+                        validate_pin(*gpio, board.safe_pins, &mut owned_pins)?;
+                        for button in gated_buttons {
+                            if !buttons.contains(button.as_str()) {
+                                return Err(AppError::new("unknown_feature_switch_button")
+                                    .with_param("button", button));
+                            }
+                        }
                     }
                 }
             }
@@ -600,6 +791,28 @@ fn validate_pin(pin: u8, safe_pins: &[u8], owned: &mut BTreeSet<u8>) -> Result<(
     Ok(())
 }
 
+fn validate_oled(
+    sda: u8,
+    scl: u8,
+    control_panel: Option<&OledControlPanelConfig>,
+    supported: bool,
+    board_id: &str,
+    safe_pins: &[u8],
+    owned: &mut BTreeSet<u8>,
+) -> Result<(), AppError> {
+    if !supported {
+        return Err(AppError::new("oled_not_supported").with_param("board_profile", board_id));
+    }
+    validate_pin(sda, safe_pins, owned)?;
+    validate_pin(scl, safe_pins, owned)?;
+    if let Some(control_panel) = control_panel {
+        for pin in control_panel.pins() {
+            validate_pin(pin, safe_pins, owned)?;
+        }
+    }
+    Ok(())
+}
+
 fn normalized_pair(left: u8, right: u8) -> (u8, u8) {
     if left < right {
         (left, right)
@@ -684,14 +897,16 @@ mod tests {
         DeviceProfile {
             schema_version: PROFILE_SCHEMA_VERSION,
             profile: test_model_layout(),
+            snapshot_metadata: None,
             trigger_settings: TriggerSettings::default(),
             hardware_profiles: vec![
                 HardwareProfile {
                     id: "esp-primary".into(),
                     name: "ESP primary".into(),
-                    board_profile_id: "luatos-esp32s3-aio".into(),
+                    board_profile_id: "yd-esp32-s3".into(),
                     debounce_ms: 30,
                     ssd1306: None,
+                    sh1106: None,
                     inputs: vec![InputSource::Direct {
                         id: "direct".into(),
                         keys: BTreeMap::from([("UP".into(), 6)]),
@@ -700,9 +915,10 @@ mod tests {
                 HardwareProfile {
                     id: "esp-secondary".into(),
                     name: "ESP secondary".into(),
-                    board_profile_id: "luatos-esp32s3-aio".into(),
+                    board_profile_id: "yd-esp32-s3".into(),
                     debounce_ms: 30,
                     ssd1306: None,
+                    sh1106: None,
                     inputs: vec![InputSource::Direct {
                         id: "direct".into(),
                         keys: BTreeMap::from([("UP".into(), 7)]),
@@ -810,6 +1026,62 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unknown_hardware_button_bindings() {
+        let mut profile = profile();
+        let InputSource::Direct { keys, .. } = &mut profile.hardware_profiles[0].inputs[0] else {
+            panic!("profile fixture must start with a direct input");
+        };
+        keys.insert("MISSING".into(), 8);
+
+        let error = profile.validate().unwrap_err();
+        assert_eq!(error.code, "unknown_hardware_button");
+        assert_eq!(
+            error.params.get("button").map(String::as_str),
+            Some("MISSING")
+        );
+    }
+
+    #[test]
+    fn feature_switches_validate_targets_and_round_trip() {
+        let mut profile = profile();
+        profile.hardware_profiles[0]
+            .inputs
+            .push(InputSource::FeatureSwitch {
+                id: "mode".into(),
+                name: "Mode switch".into(),
+                gpio: 7,
+                buttons: BTreeSet::from(["UP".into()]),
+            });
+
+        profile.validate().unwrap();
+        let yaml = serde_yaml_ng::to_string(&profile).unwrap();
+        assert!(!yaml.contains("normal_state"));
+        assert!(!yaml.contains("enabled_when"));
+        let restored: DeviceProfile = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(restored, profile);
+
+        let mut legacy = serde_yaml_ng::to_value(&profile).unwrap();
+        let feature_switch = legacy["hardware_profiles"][0]["inputs"][1]
+            .as_mapping_mut()
+            .unwrap();
+        feature_switch.insert("normal_state".into(), "closed".into());
+        feature_switch.insert("enabled_when".into(), "open".into());
+        let restored_legacy: DeviceProfile = serde_yaml_ng::from_value(legacy).unwrap();
+        assert_eq!(restored_legacy, profile);
+
+        profile.hardware_profiles[0].inputs[1] = InputSource::FeatureSwitch {
+            id: "mode".into(),
+            name: "Mode switch".into(),
+            gpio: 7,
+            buttons: BTreeSet::from(["MISSING".into()]),
+        };
+        assert_eq!(
+            profile.validate().unwrap_err().code,
+            "unknown_feature_switch_button"
+        );
+    }
+
+    #[test]
     fn profile_protocol_requirement_tracks_trigger_and_chord_features() {
         let mut press_only = profile();
         press_only.actions.insert(
@@ -849,6 +1121,28 @@ mod tests {
             }]),
         );
         assert_eq!(modifier_only.minimum_protocol_version(), 6);
+
+        let mut control_panel = yaml_profile(
+            "yd-rp2040",
+            Some((28, 29)),
+            "    inputs:\n      - type: direct\n        id: direct\n        keys:\n          UP: 6",
+        );
+        control_panel.hardware_profiles[0]
+            .ssd1306
+            .as_mut()
+            .unwrap()
+            .control_panel = Some(OledControlPanelConfig::Ec11ConfirmBack {
+            confirm: 19,
+            encoder_press: 20,
+            encoder_a: 21,
+            encoder_b: 22,
+            back: 26,
+        });
+        assert!(control_panel.validate().is_ok());
+        assert_eq!(
+            control_panel.minimum_protocol_version(),
+            OLED_CONTROL_PANEL_PROTOCOL_VERSION
+        );
     }
 
     #[test]
@@ -868,17 +1162,17 @@ mod tests {
 
     #[test]
     fn ssd1306_accepts_any_two_distinct_safe_pins_on_supported_board() {
-        let profile = yaml_profile("vccgnd-yd-rp2040", Some((0, 22)), "    inputs: []");
+        let profile = yaml_profile("yd-rp2040", Some((0, 22)), "    inputs: []");
 
         assert!(profile.validate().is_ok());
     }
 
     #[test]
-    fn direct_input_accepts_new_rp2040_safe_gpio() {
+    fn direct_input_accepts_rp2040_gpio_23() {
         let profile = yaml_profile(
-            "vccgnd-yd-rp2040",
+            "yd-rp2040",
             None,
-            "    inputs:\n      - type: direct\n        id: direct\n        keys:\n          UP: 26",
+            "    inputs:\n      - type: direct\n        id: direct\n        keys:\n          UP: 23",
         );
 
         assert!(profile.validate().is_ok());
@@ -887,7 +1181,7 @@ mod tests {
     #[test]
     fn contact_matrix_accepts_new_rp2040_safe_gpios() {
         let profile = yaml_profile(
-            "vccgnd-yd-rp2040",
+            "yd-rp2040",
             None,
             "    inputs:\n      - type: contact_matrix\n        id: matrix\n        pins: [26, 27]\n        keys:\n          UP: [26, 27]",
         );
@@ -897,18 +1191,18 @@ mod tests {
 
     #[test]
     fn ssd1306_accepts_gpio_28_and_29() {
-        let profile = yaml_profile("vccgnd-yd-rp2040", Some((28, 29)), "    inputs: []");
+        let profile = yaml_profile("yd-rp2040", Some((28, 29)), "    inputs: []");
 
         assert!(profile.validate().is_ok());
     }
 
     #[test]
-    fn rp2040_gpio_23_through_25_remain_unsupported() {
-        for gpio in 23..=25 {
+    fn rp2040_gpio_24_and_25_remain_unsupported() {
+        for gpio in 24..=25 {
             let inputs = format!(
                 "    inputs:\n      - type: direct\n        id: direct\n        keys:\n          UP: {gpio}"
             );
-            let profile = yaml_profile("vccgnd-yd-rp2040", None, &inputs);
+            let profile = yaml_profile("yd-rp2040", None, &inputs);
 
             let error = profile.validate().unwrap_err();
             assert_eq!(error.code, "unsupported_gpio");
@@ -918,7 +1212,7 @@ mod tests {
 
     #[test]
     fn ssd1306_rejects_the_same_pin_for_sda_and_scl() {
-        let profile = yaml_profile("vccgnd-yd-rp2040", Some((4, 4)), "    inputs: []");
+        let profile = yaml_profile("yd-rp2040", Some((4, 4)), "    inputs: []");
 
         assert_eq!(
             profile.validate().unwrap_err().code,
@@ -928,14 +1222,14 @@ mod tests {
 
     #[test]
     fn ssd1306_rejects_unsupported_boards_before_pin_validation() {
-        let profile = yaml_profile("luatos-esp32s3-aio", Some((23, 24)), "    inputs: []");
+        let profile = yaml_profile("yd-esp32-s3", Some((23, 24)), "    inputs: []");
 
         assert_eq!(profile.validate().unwrap_err().code, "oled_not_supported");
     }
 
     #[test]
     fn ssd1306_rejects_unsafe_pins() {
-        let profile = yaml_profile("vccgnd-yd-rp2040", Some((23, 5)), "    inputs: []");
+        let profile = yaml_profile("yd-rp2040", Some((24, 5)), "    inputs: []");
 
         assert_eq!(profile.validate().unwrap_err().code, "unsupported_gpio");
     }
@@ -943,7 +1237,7 @@ mod tests {
     #[test]
     fn ssd1306_rejects_direct_input_pin_conflicts() {
         let profile = yaml_profile(
-            "vccgnd-yd-rp2040",
+            "yd-rp2040",
             Some((4, 5)),
             "    inputs:\n      - type: direct\n        id: direct\n        keys:\n          UP: 4",
         );
@@ -957,7 +1251,7 @@ mod tests {
     #[test]
     fn ssd1306_rejects_matrix_pin_conflicts() {
         let profile = yaml_profile(
-            "vccgnd-yd-rp2040",
+            "yd-rp2040",
             Some((4, 5)),
             "    inputs:\n      - type: contact_matrix\n        id: matrix\n        pins: [1, 5]\n        keys:\n          UP: [1, 5]",
         );
@@ -970,7 +1264,7 @@ mod tests {
 
     #[test]
     fn ssd1306_yaml_is_backward_compatible_when_omitted() {
-        let profile = yaml_profile("vccgnd-yd-rp2040", None, "    inputs: []");
+        let profile = yaml_profile("yd-rp2040", None, "    inputs: []");
 
         assert!(profile.validate().is_ok());
         assert!(
@@ -982,7 +1276,7 @@ mod tests {
 
     #[test]
     fn ssd1306_yaml_round_trips_when_configured() {
-        let profile = yaml_profile("vccgnd-yd-rp2040", Some((4, 5)), "    inputs: []");
+        let profile = yaml_profile("yd-rp2040", Some((4, 5)), "    inputs: []");
 
         let serialized = serde_yaml_ng::to_string(&profile).unwrap();
         let deserialized: DeviceProfile = serde_yaml_ng::from_str(&serialized).unwrap();
@@ -994,9 +1288,49 @@ mod tests {
     }
 
     #[test]
+    fn sh1106_round_trips_separately_and_requires_protocol_eleven() {
+        let mut profile = yaml_profile("yd-rp2040", None, "    inputs: []");
+        profile.hardware_profiles[0].sh1106 = Some(Sh1106Config {
+            sda: 28,
+            scl: 29,
+            control_panel: Some(OledControlPanelConfig::Ec11ConfirmBack {
+                confirm: 19,
+                encoder_press: 20,
+                encoder_a: 21,
+                encoder_b: 22,
+                back: 26,
+            }),
+        });
+
+        profile.validate().unwrap();
+        let serialized = serde_yaml_ng::to_string(&profile).unwrap();
+        let restored: DeviceProfile = serde_yaml_ng::from_str(&serialized).unwrap();
+
+        assert!(serialized.contains("sh1106:"));
+        assert!(!serialized.contains("ssd1306:"));
+        assert_eq!(profile.minimum_protocol_version(), SH1106_PROTOCOL_VERSION);
+        assert_eq!(restored, profile);
+    }
+
+    #[test]
+    fn hardware_profile_rejects_ssd1306_and_sh1106_together() {
+        let mut profile = yaml_profile("yd-rp2040", Some((4, 5)), "    inputs: []");
+        profile.hardware_profiles[0].sh1106 = Some(Sh1106Config {
+            sda: 28,
+            scl: 29,
+            control_panel: None,
+        });
+
+        assert_eq!(
+            profile.validate().unwrap_err().code,
+            "multiple_oled_displays"
+        );
+    }
+
+    #[test]
     fn ssd1306_changes_are_topology_changes() {
-        let old = yaml_profile("vccgnd-yd-rp2040", None, "    inputs: []");
-        let new = yaml_profile("vccgnd-yd-rp2040", Some((4, 5)), "    inputs: []");
+        let old = yaml_profile("yd-rp2040", None, "    inputs: []");
+        let new = yaml_profile("yd-rp2040", Some((4, 5)), "    inputs: []");
 
         let change = ProfileChange::between(Some(&old), Some(&new));
 

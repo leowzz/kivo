@@ -6,16 +6,24 @@ use crate::{
     hardware::{BoardProfile, DeviceId, HardwareRegistry, compiled_registry},
     metrics::{HomeMetricsSnapshot, MetricAttribution},
     paste::PasteHandle,
+    product::ProductDefinition,
     profile::{DeviceProfile, ProfileChange},
     protocol::{HelloCapabilities, InputState, PhysicalInput, validate_hello},
-    workspace::{AppError, AssignmentResolution, RuntimeAssignment, SettingsDocument, Workspace},
+    usage::UsageSnapshot,
+    workspace::{
+        AppError, AssignmentResolution, ProductDeviceConfig, RuntimeAssignment, SettingsDocument,
+        Workspace,
+    },
 };
 use nusb::MaybeFuture;
 use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, RwLock, mpsc},
+    time::{Duration, Instant},
 };
+
+const WORKER_RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SerialObservation {
@@ -168,6 +176,9 @@ pub struct DeviceStatus {
     pub controller_family_id: String,
     pub board_profile_id: String,
     pub firmware_build_id: Option<String>,
+    pub product_version_id: Option<String>,
+    pub product_definition: Option<ProductDefinition>,
+    pub product_config: Option<ProductDeviceConfig>,
     #[serde(rename = "firmwareProtocol")]
     pub firmware_protocol: Option<u16>,
     #[serde(rename = "capabilities")]
@@ -321,6 +332,7 @@ pub enum WorkerCommand {
         captured: CapturedInput,
     },
     UpdateDisplay(Arc<DisplaySnapshot>),
+    UpdateUsage(Arc<UsageSnapshot>),
     Shutdown,
 }
 
@@ -331,6 +343,7 @@ pub enum WorkerEvent {
         generation: u64,
         device_id: DeviceId,
         capabilities: HelloCapabilities,
+        product_definition: Option<ProductDefinition>,
     },
     Input {
         generation: u64,
@@ -347,6 +360,11 @@ pub enum WorkerEvent {
         device_id: DeviceId,
         context: RuntimeEventContext,
         activity: RuntimeActivity,
+    },
+    UsageView {
+        generation: u64,
+        device_id: DeviceId,
+        active: bool,
     },
     Disconnected {
         generation: u64,
@@ -478,7 +496,11 @@ pub struct RuntimeCoordinator {
     paste: Option<PasteHandle>,
     renderers: Arc<RendererRegistry>,
     display_snapshot: Option<Arc<DisplaySnapshot>>,
+    usage_snapshot: Option<Arc<UsageSnapshot>>,
     workers: BTreeMap<DeviceId, WorkerSlot>,
+    usage_view_devices: BTreeSet<DeviceId>,
+    recovering_devices: BTreeSet<DeviceId>,
+    reconnect_not_before: BTreeMap<DeviceId, Instant>,
     devices: BTreeMap<DeviceId, DeviceStatus>,
     candidates: Vec<CandidateStatus>,
     event_sender: mpsc::Sender<WorkerEvent>,
@@ -486,6 +508,7 @@ pub struct RuntimeCoordinator {
     generation: u64,
     receive_sequence: u64,
     sequence_owners: BTreeMap<u64, DeviceId>,
+    product_definitions: BTreeMap<DeviceId, ProductDefinition>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -621,7 +644,11 @@ impl RuntimeCoordinator {
             paste,
             renderers,
             display_snapshot: None,
+            usage_snapshot: None,
             workers: BTreeMap::new(),
+            usage_view_devices: BTreeSet::new(),
+            recovering_devices: BTreeSet::new(),
+            reconnect_not_before: BTreeMap::new(),
             devices: BTreeMap::new(),
             candidates: Vec::new(),
             event_sender,
@@ -629,6 +656,7 @@ impl RuntimeCoordinator {
             generation: 1,
             receive_sequence: 0,
             sequence_owners: BTreeMap::new(),
+            product_definitions: BTreeMap::new(),
         }
     }
 
@@ -656,10 +684,10 @@ impl RuntimeCoordinator {
                 classified.push(ClassifiedObservation::Bootloader { board, observation });
             }
         }
-        self.reconcile(classified);
+        self.reconcile(classified, Instant::now());
     }
 
-    fn reconcile(&mut self, observations: Vec<ClassifiedObservation>) {
+    fn reconcile(&mut self, observations: Vec<ClassifiedObservation>, now: Instant) {
         self.candidates.clear();
         self.rebuild_offline_devices();
         let mut groups = BTreeMap::<DeviceId, Vec<ClassifiedObservation>>::new();
@@ -713,6 +741,8 @@ impl RuntimeCoordinator {
             let observation = &group[0];
             match observation {
                 ClassifiedObservation::Bootloader { .. } => {
+                    self.recovering_devices.remove(&device_id);
+                    self.reconnect_not_before.remove(&device_id);
                     self.stop_worker(&device_id);
                     if let Some(status) = self.devices.get_mut(&device_id) {
                         set_observed(status, observation, IdentityDimension::Valid);
@@ -780,6 +810,14 @@ impl RuntimeCoordinator {
                         }
                         continue;
                     }
+                    if self
+                        .reconnect_not_before
+                        .get(&device_id)
+                        .is_some_and(|retry_at| now < *retry_at)
+                    {
+                        continue;
+                    }
+                    self.reconnect_not_before.remove(&device_id);
                     let start = WorkerStart {
                         generation: self.generation,
                         device_id: device_id.clone(),
@@ -799,6 +837,22 @@ impl RuntimeCoordinator {
                                         .err()
                                 })
                             {
+                                worker.stop();
+                                worker.join();
+                                self.candidates.push(candidate_from_runtime(
+                                    board,
+                                    observation,
+                                    Some(device_id),
+                                    IdentityDimension::Validating,
+                                    Some(error),
+                                ));
+                                continue;
+                            }
+                            if let Some(error) = self.usage_snapshot.as_ref().and_then(|snapshot| {
+                                worker
+                                    .send(WorkerCommand::UpdateUsage(Arc::clone(snapshot)))
+                                    .err()
+                            }) {
                                 worker.stop();
                                 worker.join();
                                 self.candidates.push(candidate_from_runtime(
@@ -888,8 +942,9 @@ impl RuntimeCoordinator {
                 generation: _,
                 device_id,
                 capabilities,
+                product_definition,
             } => {
-                self.accept_hello(device_id, capabilities);
+                self.accept_hello(device_id, capabilities, product_definition);
                 None
             }
             WorkerEvent::Input {
@@ -948,6 +1003,13 @@ impl RuntimeCoordinator {
                 context,
                 activity,
             } => {
+                if matches!(
+                    activity.code.as_str(),
+                    "topology_active" | "topology_cleared"
+                ) {
+                    self.recovering_devices.remove(&device_id);
+                    self.reconnect_not_before.remove(&device_id);
+                }
                 let event = self.runtime_event(&device_id, context, activity.clone());
                 if self.workers.contains_key(&device_id)
                     && let Some(status) = self.devices.get_mut(&device_id)
@@ -970,6 +1032,18 @@ impl RuntimeCoordinator {
                 }
                 Some(event)
             }
+            WorkerEvent::UsageView {
+                generation: _,
+                device_id,
+                active,
+            } => {
+                if active && self.workers.contains_key(&device_id) {
+                    self.usage_view_devices.insert(device_id);
+                } else {
+                    self.usage_view_devices.remove(&device_id);
+                }
+                None
+            }
             WorkerEvent::Disconnected {
                 generation: _,
                 device_id,
@@ -977,6 +1051,10 @@ impl RuntimeCoordinator {
             } => {
                 if !self.workers.contains_key(&device_id) {
                     return None;
+                }
+                if !self.recovering_devices.insert(device_id.clone()) {
+                    self.reconnect_not_before
+                        .insert(device_id.clone(), Instant::now() + WORKER_RECONNECT_BACKOFF);
                 }
                 self.stop_worker(&device_id);
                 if let Some(status) = self.devices.get_mut(&device_id) {
@@ -1031,7 +1109,12 @@ impl RuntimeCoordinator {
         }
     }
 
-    fn accept_hello(&mut self, device_id: DeviceId, capabilities: HelloCapabilities) {
+    fn accept_hello(
+        &mut self,
+        device_id: DeviceId,
+        capabilities: HelloCapabilities,
+        product_definition: Option<ProductDefinition>,
+    ) {
         if !self.workers.contains_key(&device_id) {
             return;
         }
@@ -1043,12 +1126,28 @@ impl RuntimeCoordinator {
             self.reject_worker(&device_id, error.code);
             return;
         }
+        if capabilities.product_version_id.as_deref()
+            != product_definition
+                .as_ref()
+                .map(|definition| definition.product.product_version_id.as_str())
+        {
+            self.reject_worker(&device_id, "product_version_id_mismatch".into());
+            return;
+        }
         let revision = {
             let mut workspace = self
                 .workspace
                 .write()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            match workspace.enroll_device_with_registry(self.registry, device_id.clone()) {
+            let enrolled = match product_definition.as_ref() {
+                Some(definition) => workspace.enroll_product_device_with_registry(
+                    self.registry,
+                    device_id.clone(),
+                    definition,
+                ),
+                None => workspace.enroll_device_with_registry(self.registry, device_id.clone()),
+            };
+            match enrolled {
                 Ok(_) => Ok(WorkspaceRevision::capture(&workspace)),
                 Err(error) => Err(error),
             }
@@ -1061,13 +1160,35 @@ impl RuntimeCoordinator {
             }
         };
         self.workspace_revision = revision;
-        let profile = runtime_profile(&self.workspace_revision, &device_id);
+        if let Some(definition) = product_definition {
+            self.product_definitions
+                .insert(device_id.clone(), definition);
+        } else {
+            self.product_definitions.remove(&device_id);
+        }
+        let profile = runtime_profile(
+            &self.workspace_revision,
+            &device_id,
+            self.product_definitions.get(&device_id),
+        );
+        if profile.is_none() {
+            self.recovering_devices.remove(&device_id);
+            self.reconnect_not_before.remove(&device_id);
+        }
         self.rebuild_device(&device_id);
         if let Some(status) = self.devices.get_mut(&device_id) {
             status.connection = ConnectionDimension::Online;
             status.mode = Some(DeviceMode::Runtime);
             status.identity = IdentityDimension::Valid;
             status.firmware_build_id = Some(capabilities.firmware_build_id.clone());
+            status.product_version_id = capabilities.product_version_id.clone();
+            status.product_definition = self.product_definitions.get(&device_id).cloned();
+            status.product_config = self
+                .workspace_revision
+                .settings
+                .devices
+                .get(&device_id)
+                .and_then(|device| device.product_config.clone());
             status.firmware_protocol = Some(capabilities.protocol);
             status.pins = capabilities.pins;
             status.port = self.workers.get(&device_id).map(|slot| slot.port.clone());
@@ -1118,6 +1239,7 @@ impl RuntimeCoordinator {
     }
 
     fn stop_worker(&mut self, id: &DeviceId) {
+        self.usage_view_devices.remove(id);
         if let Some(mut slot) = self.workers.remove(id) {
             slot.worker.stop();
             slot.worker.join();
@@ -1190,13 +1312,46 @@ impl RuntimeCoordinator {
         }
     }
 
+    pub fn update_usage(&mut self, snapshot: Arc<UsageSnapshot>) {
+        self.usage_snapshot = Some(Arc::clone(&snapshot));
+        let failures = self
+            .workers
+            .iter()
+            .filter_map(|(id, slot)| {
+                slot.worker
+                    .send(WorkerCommand::UpdateUsage(Arc::clone(&snapshot)))
+                    .err()
+                    .map(|error| (id.clone(), error))
+            })
+            .collect::<Vec<_>>();
+        for (id, error) in failures {
+            if let Some(status) = self.devices.get_mut(&id) {
+                status.runtime = RuntimeDimension::RuntimeError;
+                status.latest_error = Some(runtime_error(error));
+            }
+        }
+    }
+
+    pub fn usage_requested(&self) -> bool {
+        !self.usage_view_devices.is_empty()
+    }
+
+    pub(crate) fn product_definition(&self, id: &DeviceId) -> Option<&ProductDefinition> {
+        self.product_definitions.get(id)
+    }
+
     pub fn apply_workspace_revision(&mut self, next: WorkspaceRevision) {
         let updates = self
             .workers
             .keys()
             .filter_map(|id| {
-                workspace_worker_update(&self.workspace_revision, &next, id)
-                    .map(|update| (id.clone(), runtime_profile(&next, id).map(Arc::new), update))
+                workspace_worker_update(&self.workspace_revision, &next, id).map(|update| {
+                    (
+                        id.clone(),
+                        runtime_profile(&next, id, self.product_definitions.get(id)).map(Arc::new),
+                        update,
+                    )
+                })
             })
             .collect::<Vec<_>>();
         self.workspace_revision = next;
@@ -1361,7 +1516,12 @@ impl RuntimeCoordinator {
         {
             return Err(AppError::new("no_learning_session"));
         }
-        let snapshot = runtime_profile(&self.workspace_revision, device_id).map(Arc::new);
+        let snapshot = runtime_profile(
+            &self.workspace_revision,
+            device_id,
+            self.product_definitions.get(device_id),
+        )
+        .map(Arc::new);
         let has_assignment = snapshot.is_some();
         let slot = self
             .workers
@@ -1403,7 +1563,12 @@ impl RuntimeCoordinator {
             .map(|id| {
                 (
                     id.clone(),
-                    runtime_profile(&self.workspace_revision, id).map(Arc::new),
+                    runtime_profile(
+                        &self.workspace_revision,
+                        id,
+                        self.product_definitions.get(id),
+                    )
+                    .map(Arc::new),
                 )
             })
             .collect::<Vec<_>>();
@@ -1482,6 +1647,7 @@ impl RuntimeCoordinator {
         {
             return Err("candidate_not_retryable".into());
         }
+        self.reconnect_not_before.remove(device_id);
         self.stop_worker(device_id);
         Ok(())
     }
@@ -1499,12 +1665,15 @@ fn activity_level(code: &str) -> EventLevel {
         | "input_state"
         | "learning_ready"
         | "learning_input"
+        | "feature_switch_changed"
+        | "trigger_occurred"
         | "action_step_started"
         | "action_step_completed" => EventLevel::Info,
         "input_before_configuration"
         | "unexpected_action_acknowledgement"
         | "unmapped_input"
         | "empty_action_list"
+        | "feature_disabled"
         | "no_runtime_assignment"
         | "invalid_assignment" => EventLevel::Warning,
         _ => EventLevel::Error,
@@ -1521,6 +1690,7 @@ fn event_generation(event: &WorkerEvent) -> u64 {
         | WorkerEvent::Input { generation, .. }
         | WorkerEvent::SequenceFinished { generation, .. }
         | WorkerEvent::Activity { generation, .. }
+        | WorkerEvent::UsageView { generation, .. }
         | WorkerEvent::Disconnected { generation, .. } => *generation,
     }
 }
@@ -1649,6 +1819,11 @@ fn workspace_worker_update(
     let new_device = new.settings.devices.get(id);
     let old_assignment = old_device.and_then(|device| device.runtime_assignment.as_ref());
     let new_assignment = new_device.and_then(|device| device.runtime_assignment.as_ref());
+    let old_product = old_device.and_then(|device| device.product_config.as_ref());
+    let new_product = new_device.and_then(|device| device.product_config.as_ref());
+    if old_product != new_product {
+        return Some(WorkspaceWorkerUpdate::Snapshot);
+    }
     if old_assignment != new_assignment {
         return Some(WorkspaceWorkerUpdate::Reconfigure);
     }
@@ -1693,28 +1868,35 @@ fn offline_status(
     let board = registry
         .board_by_id(&record.board_profile_id)
         .expect("validated persisted board profile");
-    let (assignment, runtime_assignment) = match workspace.assignment_resolution(id) {
-        AssignmentResolution::Unassigned { device } => (
-            AssignmentDimension::Unassigned,
-            device.runtime_assignment.clone(),
-        ),
-        AssignmentResolution::Valid {
-            device,
-            assignment: _,
-            profile: _,
-            hardware: _,
-        } => (
+    let (assignment, runtime_assignment) = if record.product_config.is_some() {
+        (
             AssignmentDimension::Valid,
-            device.runtime_assignment.clone(),
-        ),
-        AssignmentResolution::InvalidAssignment {
-            device,
-            assignment: _,
-        } => (
-            AssignmentDimension::InvalidAssignment,
-            device.runtime_assignment.clone(),
-        ),
-        AssignmentResolution::UnknownDevice => unreachable!("known device was read"),
+            record.runtime_assignment.clone(),
+        )
+    } else {
+        match workspace.assignment_resolution(id) {
+            AssignmentResolution::Unassigned { device } => (
+                AssignmentDimension::Unassigned,
+                device.runtime_assignment.clone(),
+            ),
+            AssignmentResolution::Valid {
+                device,
+                assignment: _,
+                profile: _,
+                hardware: _,
+            } => (
+                AssignmentDimension::Valid,
+                device.runtime_assignment.clone(),
+            ),
+            AssignmentResolution::InvalidAssignment {
+                device,
+                assignment: _,
+            } => (
+                AssignmentDimension::InvalidAssignment,
+                device.runtime_assignment.clone(),
+            ),
+            AssignmentResolution::UnknownDevice => unreachable!("known device was read"),
+        }
     };
     DeviceStatus {
         device_id: id.clone(),
@@ -1729,6 +1911,12 @@ fn offline_status(
         controller_family_id: board.family_id.into(),
         board_profile_id: board.id.into(),
         firmware_build_id: None,
+        product_version_id: record
+            .product_config
+            .as_ref()
+            .map(|config| config.product_version_id.clone()),
+        product_definition: None,
+        product_config: record.product_config.clone(),
         firmware_protocol: None,
         pins: Vec::new(),
         runtime_assignment,
@@ -1737,7 +1925,30 @@ fn offline_status(
     }
 }
 
-fn runtime_profile(workspace: &WorkspaceRevision, id: &DeviceId) -> Option<RuntimeProfileSnapshot> {
+fn runtime_profile(
+    workspace: &WorkspaceRevision,
+    id: &DeviceId,
+    product_definition: Option<&ProductDefinition>,
+) -> Option<RuntimeProfileSnapshot> {
+    let device = workspace.settings.devices.get(id)?;
+    if let (Some(config), Some(definition)) = (&device.product_config, product_definition) {
+        if config.product_version_id != definition.product.product_version_id {
+            return None;
+        }
+        let profile =
+            definition.as_runtime_profile(config.trigger_settings.clone(), config.actions.clone());
+        let hardware_profile_id = definition.hardware_profile.id.clone();
+        return Some(RuntimeProfileSnapshot {
+            profile,
+            hardware_profile_id: hardware_profile_id.clone(),
+            metric_attribution: MetricAttribution {
+                device_id: id.clone(),
+                device_name: device.name.clone(),
+                device_profile_id: config.product_version_id.clone(),
+                hardware_profile_id,
+            },
+        });
+    }
     let AssignmentResolution::Valid {
         device,
         assignment,
@@ -1770,6 +1981,7 @@ mod tests {
             TEST_SECOND_RP2040_BOARD_ID, test_registry,
         },
         paste::{ClipboardWriter, PasteCoordinator, PasteReply, PasteRequest},
+        product::{PRODUCT_DEFINITION_SCHEMA_VERSION, ProductDefinition, ProductIdentity},
         profile::{
             ButtonAction, DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION,
             ProfileChange,
@@ -1791,6 +2003,11 @@ mod tests {
 
     static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+    #[test]
+    fn trigger_occurred_is_info() {
+        assert_eq!(activity_level("trigger_occurred"), EventLevel::Info);
+    }
+
     fn usb_serial_port(port_name: &str, serial_number: &str) -> SerialPortInfo {
         SerialPortInfo {
             port_name: port_name.into(),
@@ -1798,7 +2015,7 @@ mod tests {
                 vid: 0x2e8a,
                 pid: 0x102e,
                 serial_number: Some(serial_number.into()),
-                manufacturer: Some("VCC-GND".into()),
+                manufacturer: Some("YD".into()),
                 product: Some("Kivo Keyboard RP2040".into()),
             }),
         }
@@ -1955,7 +2172,7 @@ mod tests {
             raw_serial: Some("50031519384E811C".into()),
             port: Some("/dev/cu.usbmodem1101".into()),
             controller_family_id: "rp2040".into(),
-            board_profile_id: crate::hardware::VCCGND_YD_RP2040_BOARD_ID.into(),
+            board_profile_id: crate::hardware::YD_RP2040_BOARD_ID.into(),
             latest_error: Some("serial_handshake_timeout".into()),
         };
 
@@ -1972,8 +2189,9 @@ mod tests {
             HelloCapabilities {
                 protocol: 4,
                 controller_family_id: "wrong-family".into(),
-                board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+                board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
                 firmware_build_id: "bad".into(),
+                product_version_id: None,
                 pins: vec![0],
             },
         );
@@ -1985,8 +2203,8 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let a = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "RETRY-A").unwrap();
-        let b = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "RETRY-B").unwrap();
+        let a = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "RETRY-A").unwrap();
+        let b = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "RETRY-B").unwrap();
         assert!(
             coordinator
                 .candidates()
@@ -2040,7 +2258,7 @@ mod tests {
     #[test]
     fn retry_candidate_rejects_missing_and_duplicate_identity() {
         let (_directory, enumerator, _launcher, mut coordinator) = harness();
-        let missing = DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "MISSING").unwrap();
+        let missing = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "MISSING").unwrap();
         assert_eq!(
             coordinator.retry_candidate(&missing).unwrap_err(),
             "candidate_not_found"
@@ -2054,8 +2272,7 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let duplicate =
-            DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "DUPLICATE").unwrap();
+        let duplicate = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "DUPLICATE").unwrap();
         assert_eq!(
             coordinator.retry_candidate(&duplicate).unwrap_err(),
             "candidate_identity_conflict"
@@ -2092,6 +2309,7 @@ mod tests {
         update_port_failures: Arc<Mutex<BTreeSet<String>>>,
         display_failures: Arc<Mutex<BTreeSet<DeviceId>>>,
         hellos: Mutex<BTreeMap<String, HelloCapabilities>>,
+        product_definitions: Mutex<BTreeMap<String, ProductDefinition>>,
         stopped: Arc<Mutex<Vec<DeviceId>>>,
         joined: Arc<Mutex<Vec<DeviceId>>>,
         commands: Arc<Mutex<BTreeMap<DeviceId, Vec<WorkerCommand>>>>,
@@ -2126,6 +2344,13 @@ mod tests {
 
         fn set_hello(&self, port: &str, hello: HelloCapabilities) {
             self.hellos.lock().unwrap().insert(port.into(), hello);
+        }
+
+        fn set_product_definition(&self, port: &str, definition: ProductDefinition) {
+            self.product_definitions
+                .lock()
+                .unwrap()
+                .insert(port.into(), definition);
         }
 
         fn sequences(&self) -> BTreeSet<u64> {
@@ -2220,11 +2445,13 @@ mod tests {
                 .unwrap()
                 .remove(&start.port)
                 .unwrap_or_else(|| hello_for(&start));
+            let product_definition = self.product_definitions.lock().unwrap().remove(&start.port);
             events
                 .send(WorkerEvent::HelloValidated {
                     generation: start.generation,
                     device_id: start.device_id.clone(),
                     capabilities,
+                    product_definition,
                 })
                 .unwrap();
             Ok(Box::new(FakeWorker {
@@ -2272,16 +2499,57 @@ mod tests {
         DeviceProfile {
             schema_version: PROFILE_SCHEMA_VERSION,
             profile: crate::profile::test_model_layout(),
+            snapshot_metadata: None,
             trigger_settings: TriggerSettings::default(),
             hardware_profiles: vec![HardwareProfile {
                 id: "esp".into(),
                 name: "ESP".into(),
-                board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+                board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
                 debounce_ms: 30,
                 ssd1306: None,
+                sh1106: None,
                 inputs: Vec::new(),
             }],
             actions: BTreeMap::new(),
+        }
+    }
+
+    fn product_definition() -> ProductDefinition {
+        let layout = crate::model::ModelLayout {
+            id: "key-rp-k1".into(),
+            name: "Kivo Key 1".into(),
+            groups: vec![crate::model::ButtonGroup {
+                id: "keys".into(),
+                columns: 1,
+                buttons: vec![crate::model::ButtonDefinition {
+                    id: "K1".into(),
+                    label: "K1".into(),
+                }],
+            }],
+        };
+        ProductDefinition {
+            schema_version: PRODUCT_DEFINITION_SCHEMA_VERSION,
+            product: ProductIdentity {
+                display_name: "Kivo Key 1".into(),
+                family_id: "key".into(),
+                variant_id: "key-rp-k1".into(),
+                hardware_revision: 1,
+                product_version_id: "key-rp-k1-r01".into(),
+                capabilities: Vec::new(),
+            },
+            layout,
+            hardware_profile: HardwareProfile {
+                id: "hardware".into(),
+                name: "Hardware".into(),
+                board_profile_id: crate::hardware::YD_RP2040_BOARD_ID.into(),
+                debounce_ms: 30,
+                ssd1306: None,
+                sh1106: None,
+                inputs: vec![InputSource::Direct {
+                    id: "direct".into(),
+                    keys: BTreeMap::from([("K1".into(), 0)]),
+                }],
+            },
         }
     }
 
@@ -2328,6 +2596,7 @@ mod tests {
             controller_family_id: board.family_id.into(),
             board_profile_id: board.id.into(),
             firmware_build_id: "test-build".into(),
+            product_version_id: None,
             pins: board.safe_pins.to_vec(),
         }
     }
@@ -2381,6 +2650,7 @@ mod tests {
                 controller_family_id: board.family_id.into(),
                 board_profile_id: board.id.into(),
                 firmware_build_id: "fixture-build".into(),
+                product_version_id: None,
                 pins: board.safe_pins.to_vec(),
             },
         );
@@ -2567,10 +2837,36 @@ mod tests {
 
         scan(&mut coordinator);
 
-        let id = DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "HOTPLUG").unwrap();
+        let id = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "HOTPLUG").unwrap();
         assert!(matches!(
             launcher.commands_for(&id).first(),
             Some(WorkerCommand::UpdateDisplay(actual)) if Arc::ptr_eq(actual, &snapshot)
+        ));
+    }
+
+    #[test]
+    fn usage_snapshot_received_before_hotplug_is_replayed_to_the_new_worker() {
+        let (_directory, enumerator, launcher, mut coordinator) = harness();
+        let snapshot = Arc::new(UsageSnapshot {
+            state: crate::usage::UsageState::Ready,
+            has_data: true,
+            cost_micros: 12_345_678,
+            today_tokens: 1_234_567,
+            tpm: 98_765,
+            updated_at_ms: Some(1_788_224_400_000),
+        });
+        coordinator.update_usage(Arc::clone(&snapshot));
+        enumerator.set(
+            vec![serial("/dev/rp", 0x2e8a, 0x102e, Some("USAGE-HOTPLUG"))],
+            Vec::new(),
+        );
+
+        scan(&mut coordinator);
+
+        let id = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "USAGE-HOTPLUG").unwrap();
+        assert!(matches!(
+            launcher.commands_for(&id).first(),
+            Some(WorkerCommand::UpdateUsage(actual)) if Arc::ptr_eq(actual, &snapshot)
         ));
     }
 
@@ -2602,7 +2898,7 @@ mod tests {
         );
         scan(&mut coordinator);
 
-        let id = DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "RESTART").unwrap();
+        let id = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "RESTART").unwrap();
         assert!(matches!(
             launcher.commands_for(&id).first(),
             Some(WorkerCommand::UpdateDisplay(actual)) if Arc::ptr_eq(actual, &latest)
@@ -2612,7 +2908,7 @@ mod tests {
     #[test]
     fn failed_initial_display_replay_does_not_insert_the_worker() {
         let (_directory, enumerator, launcher, mut coordinator) = harness();
-        let id = DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "DISPLAY-FAIL").unwrap();
+        let id = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "DISPLAY-FAIL").unwrap();
         coordinator.update_display(Arc::new(DisplaySnapshot {
             items: Vec::new(),
             health: BTreeMap::new(),
@@ -2663,9 +2959,8 @@ mod tests {
         let directory = TestDirectory::new();
         let mut workspace = Workspace::create(&directory.0, vec![profile()]).unwrap();
         let unassigned =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "UNASSIGNED").unwrap();
-        let assigned =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "ASSIGNED").unwrap();
+            DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "UNASSIGNED").unwrap();
+        let assigned = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ASSIGNED").unwrap();
         workspace.enroll_device(unassigned.clone()).unwrap();
         workspace.enroll_device(assigned.clone()).unwrap();
         workspace
@@ -2711,6 +3006,66 @@ mod tests {
     }
 
     #[test]
+    fn product_device_configures_without_a_runtime_assignment() {
+        let (_directory, enumerator, launcher, mut coordinator) = harness();
+        let port = "/dev/product";
+        let serial_number = "PRODUCT001";
+        let id = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, serial_number).unwrap();
+        let definition = product_definition();
+        launcher.set_hello(
+            port,
+            HelloCapabilities {
+                protocol: 9,
+                controller_family_id: "rp2040".into(),
+                board_profile_id: crate::hardware::YD_RP2040_BOARD_ID.into(),
+                firmware_build_id: "product-build".into(),
+                product_version_id: Some("key-rp-k1-r01".into()),
+                pins: crate::hardware::board_by_id(crate::hardware::YD_RP2040_BOARD_ID)
+                    .unwrap()
+                    .safe_pins
+                    .to_vec(),
+            },
+        );
+        launcher.set_product_definition(port, definition);
+        enumerator.set(
+            vec![serial(port, 0x2e8a, 0x102e, Some(serial_number))],
+            Vec::new(),
+        );
+
+        scan(&mut coordinator);
+
+        let status = coordinator
+            .devices()
+            .into_iter()
+            .find(|status| status.device_id == id)
+            .unwrap();
+        assert_eq!(status.product_version_id.as_deref(), Some("key-rp-k1-r01"));
+        assert!(status.product_definition.is_some());
+        assert!(status.product_config.is_some());
+        let record = coordinator
+            .workspace
+            .read()
+            .unwrap()
+            .settings
+            .devices
+            .get(&id)
+            .cloned()
+            .unwrap();
+        assert!(record.runtime_assignment.is_none());
+        assert_eq!(
+            record.product_config.unwrap().product_version_id,
+            "key-rp-k1-r01"
+        );
+        assert!(matches!(
+            launcher.commands_for(&id).as_slice(),
+            [WorkerCommand::Reconfigure {
+                snapshot: Some(_),
+                revision: 1,
+            }]
+        ));
+    }
+
+    #[test]
     fn second_rp2040_board_traverses_injected_registry_domain_flow() {
         assert_eq!(
             exercise_registry_board(
@@ -2738,8 +3093,7 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let device_id =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "EVENT-A").unwrap();
+        let device_id = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "EVENT-A").unwrap();
         let mut old_profile = profile();
         old_profile.hardware_profiles[0].inputs = vec![InputSource::Direct {
             id: "buttons".into(),
@@ -2779,7 +3133,7 @@ mod tests {
 
         let generation = launcher.starts()[0].generation;
         let old_snapshot =
-            Arc::new(runtime_profile(&coordinator.workspace_revision, &device_id).unwrap());
+            Arc::new(runtime_profile(&coordinator.workspace_revision, &device_id, None).unwrap());
         let board = crate::hardware::board_by_id(device_id.board_profile_id()).unwrap();
         let mut session = DeviceSession::new((*old_snapshot).clone());
         session.on_message_deferred(
@@ -2788,6 +3142,7 @@ mod tests {
                 controller_family_id: board.family_id.into(),
                 board_profile_id: board.id.into(),
                 firmware_build_id: "test".into(),
+                product_version_id: None,
                 pins: board.safe_pins.to_vec(),
             }),
             0,
@@ -2890,7 +3245,7 @@ mod tests {
         );
         assert_eq!(
             event.board_profile_id,
-            crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID
+            crate::hardware::YD_ESP32_S3_BOARD_ID
         );
         assert_eq!(event.port.as_deref(), Some("/dev/esp-event"));
         assert_eq!(event.device_profile_id.as_deref(), Some("red-phone-v1"));
@@ -2964,8 +3319,7 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let device_id =
-            DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "PORT-A").unwrap();
+        let device_id = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "PORT-A").unwrap();
         {
             let mut workspace = coordinator.workspace.write().unwrap();
             workspace
@@ -2982,7 +3336,7 @@ mod tests {
         launcher.clear_commands();
 
         let snapshot =
-            Arc::new(runtime_profile(&coordinator.workspace_revision, &device_id).unwrap());
+            Arc::new(runtime_profile(&coordinator.workspace_revision, &device_id, None).unwrap());
         let mut session = DeviceSession::new((*snapshot).clone());
         let board = crate::hardware::board_by_id(device_id.board_profile_id()).unwrap();
         session.on_message_deferred(
@@ -2991,6 +3345,7 @@ mod tests {
                 controller_family_id: board.family_id.into(),
                 board_profile_id: board.id.into(),
                 firmware_build_id: "test".into(),
+                product_version_id: None,
                 pins: board.safe_pins.to_vec(),
             }),
             0,
@@ -3203,6 +3558,48 @@ mod tests {
     }
 
     #[test]
+    fn usage_polling_tracks_active_views_across_devices_and_disconnects() {
+        let (_directory, enumerator, _launcher, mut coordinator) = harness();
+        enumerator.set(
+            vec![
+                serial("/dev/a", 0x303a, 0x4002, Some("A")),
+                serial("/dev/b", 0x303a, 0x4002, Some("B")),
+            ],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+        let a = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "A").unwrap();
+        let b = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "B").unwrap();
+
+        assert!(!coordinator.usage_requested());
+        coordinator.handle_worker_event(WorkerEvent::UsageView {
+            generation: 1,
+            device_id: a.clone(),
+            active: true,
+        });
+        coordinator.handle_worker_event(WorkerEvent::UsageView {
+            generation: 1,
+            device_id: b.clone(),
+            active: true,
+        });
+        assert!(coordinator.usage_requested());
+
+        coordinator.handle_worker_event(WorkerEvent::UsageView {
+            generation: 1,
+            device_id: a,
+            active: false,
+        });
+        assert!(coordinator.usage_requested());
+
+        coordinator.handle_worker_event(WorkerEvent::Disconnected {
+            generation: 1,
+            device_id: b,
+            error: None,
+        });
+        assert!(!coordinator.usage_requested());
+    }
+
+    #[test]
     fn stale_disconnect_after_coordinator_stop_does_not_override_bootloader_mode() {
         let (_directory, enumerator, _launcher, mut coordinator) = harness();
         enumerator.set(
@@ -3210,7 +3607,7 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let id = DeviceId::new(crate::hardware::VCCGND_YD_RP2040_BOARD_ID, "MODE").unwrap();
+        let id = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "MODE").unwrap();
 
         enumerator.set(Vec::new(), vec![boot("1-1", "MODE")]);
         scan(&mut coordinator);
@@ -3230,6 +3627,62 @@ mod tests {
     }
 
     #[test]
+    fn repeated_worker_disconnect_backs_off_until_the_retry_deadline() {
+        let (_directory, enumerator, launcher, mut coordinator) = harness();
+        enumerator.set(
+            vec![serial(
+                "/dev/esp",
+                0x303a,
+                0x4002,
+                Some("RECONNECT-BACKOFF"),
+            )],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+        let id = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "RECONNECT-BACKOFF").unwrap();
+        {
+            let mut workspace = coordinator.workspace.write().unwrap();
+            workspace
+                .set_assignment(
+                    &id,
+                    RuntimeAssignment {
+                        device_profile_id: "red-phone-v1".into(),
+                        hardware_profile_id: "esp".into(),
+                    },
+                )
+                .unwrap();
+            let revision = WorkspaceRevision::capture(&workspace);
+            drop(workspace);
+            coordinator.apply_workspace_revision(revision);
+        }
+
+        coordinator.handle_worker_event(WorkerEvent::Disconnected {
+            generation: 1,
+            device_id: id.clone(),
+            error: Some("serial_read_failed".into()),
+        });
+        scan(&mut coordinator);
+
+        assert_eq!(launcher.starts().len(), 2);
+
+        coordinator.handle_worker_event(WorkerEvent::Disconnected {
+            generation: 1,
+            device_id: id.clone(),
+            error: Some("serial_read_failed".into()),
+        });
+        scan(&mut coordinator);
+
+        assert_eq!(launcher.starts().len(), 2);
+
+        coordinator
+            .reconnect_not_before
+            .insert(id, Instant::now() - Duration::from_millis(1));
+        scan(&mut coordinator);
+
+        assert_eq!(launcher.starts().len(), 3);
+    }
+
+    #[test]
     fn topology_rejection_moves_only_that_device_to_runtime_error() {
         let (_directory, enumerator, _launcher, mut coordinator) = harness();
         enumerator.set(
@@ -3240,7 +3693,7 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let rejected = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "A").unwrap();
+        let rejected = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "A").unwrap();
 
         coordinator.handle_worker_event(WorkerEvent::Activity {
             generation: 1,
@@ -3298,8 +3751,9 @@ mod tests {
             HelloCapabilities {
                 protocol: 4,
                 controller_family_id: "wrong-family".into(),
-                board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+                board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
                 firmware_build_id: "bad".into(),
+                product_version_id: None,
                 pins: vec![0],
             },
         );
@@ -3331,7 +3785,7 @@ mod tests {
     #[test]
     fn stale_hello_from_a_stopped_worker_cannot_enroll() {
         let (_directory, _enumerator, _launcher, mut coordinator) = harness();
-        let id = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "STALE").unwrap();
+        let id = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "STALE").unwrap();
         let board = crate::hardware::board_by_id(id.board_profile_id()).unwrap();
 
         coordinator.handle_worker_event(WorkerEvent::HelloValidated {
@@ -3342,8 +3796,10 @@ mod tests {
                 controller_family_id: board.family_id.into(),
                 board_profile_id: board.id.into(),
                 firmware_build_id: "stale".into(),
+                product_version_id: None,
                 pins: board.safe_pins.to_vec(),
             },
+            product_definition: None,
         });
 
         assert!(
@@ -3377,14 +3833,14 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let id = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "A").unwrap();
+        let id = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "A").unwrap();
         coordinator.handle_worker_event(input_event(id, 9, 10));
 
         enumerator.set(Vec::new(), Vec::new());
         scan(&mut coordinator);
         handle.register_sequence(2).unwrap();
         let (reply, replies) = std::sync::mpsc::channel();
-        let next_id = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "B").unwrap();
+        let next_id = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "B").unwrap();
         handle
             .submit(PasteRequest {
                 receive_sequence: 2,
@@ -3434,7 +3890,7 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let id = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "A").unwrap();
+        let id = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "A").unwrap();
 
         coordinator.handle_worker_event(input_event(id.clone(), 8, 10));
         coordinator.handle_worker_event(input_event(id, 9, 11));
@@ -3451,12 +3907,12 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let owner = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "A").unwrap();
+        let owner = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "A").unwrap();
         coordinator.handle_worker_event(input_event(owner.clone(), 8, 10));
 
         coordinator.handle_worker_event(WorkerEvent::SequenceFinished {
             generation: 1,
-            device_id: DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "B").unwrap(),
+            device_id: DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "B").unwrap(),
             receive_sequence: 1,
         });
         assert_eq!(coordinator.sequence_owners.get(&1), Some(&owner));
@@ -3479,8 +3935,8 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let a = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "A").unwrap();
-        let b = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "B").unwrap();
+        let a = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "A").unwrap();
+        let b = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "B").unwrap();
         {
             let mut workspace = coordinator.workspace.write().unwrap();
             for id in [&a, &b] {
@@ -3531,7 +3987,7 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let id = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "A").unwrap();
+        let id = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "A").unwrap();
         {
             let mut workspace = coordinator.workspace.write().unwrap();
             workspace
@@ -3594,9 +4050,10 @@ mod tests {
         expanded.hardware_profiles.push(HardwareProfile {
             id: "esp-secondary".into(),
             name: "ESP secondary".into(),
-            board_profile_id: crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID.into(),
+            board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
             debounce_ms: 30,
             ssd1306: None,
+            sh1106: None,
             inputs: Vec::new(),
         });
         coordinator
@@ -3613,8 +4070,8 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let a = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "A").unwrap();
-        let b = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "B").unwrap();
+        let a = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "A").unwrap();
+        let b = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "B").unwrap();
         {
             let mut workspace = coordinator.workspace.write().unwrap();
             workspace
@@ -3687,8 +4144,8 @@ mod tests {
             Vec::new(),
         );
         scan(&mut coordinator);
-        let a = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "A").unwrap();
-        let b = DeviceId::new(crate::hardware::LUATOS_ESP32S3_AIO_BOARD_ID, "B").unwrap();
+        let a = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "A").unwrap();
+        let b = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "B").unwrap();
         let persisted = coordinator.workspace.read().unwrap().profiles["red-phone-v1"].clone();
         launcher.clear_commands();
 

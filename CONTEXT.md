@@ -6,6 +6,33 @@ editing, runtime selection, and controller identity.
 
 ## Language
 
+**Product Family**:
+A named generation of one physical Kivo product line, independent of its
+capability variants, PCB revisions, firmware versions, and individual units.
+`workbench-one` is the Product Family ID for Kivo Workbench One.
+_Avoid_: Controller Family, Board Profile, Device Profile, SKU
+
+**Product Variant**:
+One immutable user-visible capability set within a Product Family. Its ID
+records the dedicated key count and registered capabilities, but not component
+models, lifecycle stage, firmware version, or hardware serial. Changing the key
+count or a recorded capability creates a new Product Variant.
+_Avoid_: Hardware Revision, Board Profile, Device Profile
+
+**Hardware Revision**:
+The zero-padded `rNN` revision of one Product Variant. A PCB, pinout, or
+component change that preserves the variant's published capabilities advances
+the Hardware Revision instead of renaming the Product Variant.
+_Avoid_: Firmware version, schema version, Product Variant
+
+**Product Version ID**:
+The canonical machine ID formed from a Product Variant ID and Hardware
+Revision. Product Version IDs follow
+`<product-family>-k<key-count>-<capabilities>-r<hardware-revision>`; the full
+rules and current Workbench One assignment are documented in
+`docs/product-version-id-naming.md`.
+_Avoid_: Device ID, Board Profile ID, Device Profile ID, firmware build ID
+
 **Device Profile**:
 An assignable keypad or telephone configuration containing its visible layout,
 button definitions, button actions, and one or more Hardware Profiles.

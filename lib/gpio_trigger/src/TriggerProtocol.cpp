@@ -45,6 +45,19 @@ std::optional<std::uint32_t> parseNumber(std::string_view value) {
   return result;
 }
 
+std::optional<std::uint64_t> parseWideNumber(std::string_view value) {
+  if (value.empty()) return std::nullopt;
+  std::uint64_t result = 0;
+  for (const char character : value) {
+    if (character < '0' || character > '9') return std::nullopt;
+    const auto digit = static_cast<std::uint64_t>(character - '0');
+    if (result > (std::numeric_limits<std::uint64_t>::max() - digit) / 10U)
+      return std::nullopt;
+    result = result * 10U + digit;
+  }
+  return result;
+}
+
 std::optional<std::string_view> takeToken(std::string_view &line) {
   while (!line.empty() && line.front() == ' ') line.remove_prefix(1);
   if (line.empty()) return std::nullopt;
@@ -58,6 +71,11 @@ std::optional<std::string_view> takeToken(std::string_view &line) {
 std::optional<std::uint32_t> takeNumber(std::string_view &line) {
   const auto token = takeToken(line);
   return token.has_value() ? parseNumber(*token) : std::nullopt;
+}
+
+std::optional<std::uint64_t> takeWideNumber(std::string_view &line) {
+  const auto token = takeToken(line);
+  return token.has_value() ? parseWideNumber(*token) : std::nullopt;
 }
 
 bool takePins(std::string_view &line, std::size_t count,
@@ -162,6 +180,20 @@ std::optional<HelperCommand> parseHelperCommand(std::string_view line) {
                : std::optional<HelperCommand>{{HelperCommandKind::Hello}};
   }
 
+  if (*kind == "USAGE_VIEW") {
+    return takeToken(line).has_value()
+               ? std::nullopt
+               : std::optional<HelperCommand>{
+                     HelperCommand{HelperCommandKind::UsageView}};
+  }
+
+  if (*kind == "PRODUCT_INFO" || *kind == "PRODUCT_READ") {
+    if (takeToken(line).has_value()) return std::nullopt;
+    return HelperCommand{*kind == "PRODUCT_INFO"
+                             ? HelperCommandKind::ProductInfo
+                             : HelperCommandKind::ProductRead};
+  }
+
   if (*kind == "CONFIG_BEGIN") {
     const auto revision = takeNumber(line);
     const auto debounce = takeNumber(line);
@@ -216,7 +248,7 @@ std::optional<HelperCommand> parseHelperCommand(std::string_view line) {
     return command;
   }
 
-  if (*kind == "CONFIG_OLED") {
+  if (*kind == "CONFIG_OLED" || *kind == "CONFIG_SH1106") {
     const auto revision = takeNumber(line);
     const auto sda = takeNumber(line);
     const auto scl = takeNumber(line);
@@ -224,10 +256,23 @@ std::optional<HelperCommand> parseHelperCommand(std::string_view line) {
         !scl.has_value() || *scl > 255 || takeToken(line).has_value()) {
       return std::nullopt;
     }
-    HelperCommand command{HelperCommandKind::ConfigOled};
+    HelperCommand command{*kind == "CONFIG_OLED"
+                              ? HelperCommandKind::ConfigOled
+                              : HelperCommandKind::ConfigSh1106};
     command.revision = *revision;
     command.oledSda = static_cast<std::uint8_t>(*sda);
     command.oledScl = static_cast<std::uint8_t>(*scl);
+    return command;
+  }
+
+  if (*kind == "CONFIG_OLED_CONTROL") {
+    const auto revision = takeNumber(line);
+    if (!revision.has_value()) return std::nullopt;
+    HelperCommand command{HelperCommandKind::ConfigOledControl};
+    command.revision = *revision;
+    if (!takePins(line, 5, command.pins) || takeToken(line).has_value()) {
+      return std::nullopt;
+    }
     return command;
   }
 
@@ -238,6 +283,24 @@ std::optional<HelperCommand> parseHelperCommand(std::string_view line) {
                               ? HelperCommandKind::ConfigCommit
                               : HelperCommandKind::LearnEnd};
     command.revision = *revision;
+    return command;
+  }
+
+  if (*kind == "USAGE") {
+    const auto state = takeNumber(line);
+    const auto costMicros = takeWideNumber(line);
+    const auto todayTokens = takeWideNumber(line);
+    const auto tpm = takeWideNumber(line);
+    if (!state.has_value() || *state > 7 || !costMicros.has_value() ||
+        !todayTokens.has_value() || !tpm.has_value() ||
+        takeToken(line).has_value()) {
+      return std::nullopt;
+    }
+    HelperCommand command{HelperCommandKind::Usage};
+    command.usageState = static_cast<std::uint8_t>(*state);
+    command.usageCostMicros = *costMicros;
+    command.usageTodayTokens = *todayTokens;
+    command.usageTpm = *tpm;
     return command;
   }
 

@@ -27,7 +27,24 @@ trigger_settings:
 hardware_profiles:
   - id: hardware
     name: Default hardware
-    board_profile_id: vccgnd-yd-rp2040
+    board_profile_id: yd-rp2040
+    debounce_ms: 30
+    inputs:
+      - type: direct
+        id: direct-1
+        keys:
+          K1: 1
+          K2: 2
+          K3: 3
+          K4: 4
+          K5: 5
+          K6: 6
+          K7: 7
+          K8: 8
+          K9: 9
+  - id: esp-hardware
+    name: YD-ESP32-S3 3x3 direct
+    board_profile_id: yd-esp32-s3
     debounce_ms: 30
     inputs:
       - type: direct

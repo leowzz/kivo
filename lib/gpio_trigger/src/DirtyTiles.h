@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -28,11 +29,11 @@ class DirtyTiles {
 
   void markPixels(const DisplayRect &bounds);
   void clear();
-  bool hasDirty() const { return bits_ != 0; }
+  bool hasDirty() const;
   std::optional<TileRun> takeRun(std::size_t maxDataBytes);
 
  private:
   std::uint8_t widthTiles_;
   std::uint8_t heightTiles_;
-  std::uint64_t bits_ = 0;
+  std::array<std::uint64_t, 2> bits_{};
 };

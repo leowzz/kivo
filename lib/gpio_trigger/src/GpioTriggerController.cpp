@@ -61,10 +61,17 @@ bool GpioTriggerController::beginLearning(
     std::uint32_t nowMs) {
   if (learningRevision_.has_value() || pins.empty()) return false;
   for (const auto pin : pins) {
+    const auto panelOwnsPin = topology_.oledControlPanel.has_value() &&
+        (pin == topology_.oledControlPanel->confirm ||
+         pin == topology_.oledControlPanel->encoderPress ||
+         pin == topology_.oledControlPanel->encoderA ||
+         pin == topology_.oledControlPanel->encoderB ||
+         pin == topology_.oledControlPanel->back);
     if (!isSupportedPin(pin) ||
         std::count(pins.begin(), pins.end(), pin) != 1 ||
         (topology_.oled.has_value() &&
-         (pin == topology_.oled->sda || pin == topology_.oled->scl))) {
+         (pin == topology_.oled->sda || pin == topology_.oled->scl)) ||
+        panelOwnsPin) {
       return false;
     }
   }
