@@ -7,11 +7,14 @@
 
 #include "GpioTriggerController.h"
 
+enum class DisplayFrameLayout { Rows, UsageEmphasis };
+
 struct DisplayFrame {
   std::array<std::string, 4> lines;
+  DisplayFrameLayout layout = DisplayFrameLayout::Rows;
 
   bool operator==(const DisplayFrame &other) const {
-    return lines == other.lines;
+    return lines == other.lines && layout == other.layout;
   }
 };
 

@@ -265,10 +265,10 @@ DisplayFrame OledControlPanel::frame(const DisplayFrame &status) const {
                             ? "SUB2API / STALE"
                             : "SUB2API";
       if (hasUsage(usage_)) {
-        result.lines[1] = "COST " + formatCost(usage_.costMicros);
-        result.lines[2] =
-            "TOKENS " + formatCompact(usage_.todayTokens, true);
-        result.lines[3] = "TPM " + formatCompact(usage_.tpm, false);
+        result.layout = DisplayFrameLayout::UsageEmphasis;
+        result.lines[1] = formatCost(usage_.costMicros);
+        result.lines[2] = formatCompact(usage_.todayTokens, true);
+        result.lines[3] = formatCompact(usage_.tpm, false);
       } else {
         result.lines[1] = usageStatus(usage_.state);
         result.lines[2] = "COST - / TOKENS -";

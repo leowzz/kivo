@@ -319,7 +319,26 @@ bool renderLocalDisplay(const DisplayFrame &frame) {
   }
   display->setFont(u8g2_font_6x13_tf);
   display->clearBuffer();
-  if (displayDriver == OledDriver::Sh1106) {
+  if (displayDriver == OledDriver::Sh1106 &&
+      frame.layout == DisplayFrameLayout::UsageEmphasis) {
+    display->drawStr(0, 11, frame.lines[0].c_str());
+
+    display->setFont(u8g2_font_6x13_tf);
+    display->drawStr(0, 35, "COST");
+    display->setFont(u8g2_font_10x20_tf);
+    display->drawStr(30, 39, frame.lines[1].c_str());
+
+    display->drawHLine(0, 45, kDisplayWidth);
+    display->setFont(u8g2_font_6x13_tf);
+    const std::string tokens = "TOK " + frame.lines[2];
+    const std::string tpm = "TPM " + frame.lines[3];
+    display->drawStr(0, 61, tokens.c_str());
+    const auto tpmWidth = display->getStrWidth(tpm.c_str());
+    const auto tpmX = tpmWidth < kDisplayWidth
+                          ? static_cast<std::uint8_t>(kDisplayWidth - tpmWidth)
+                          : 0;
+    display->drawStr(tpmX, 61, tpm.c_str());
+  } else if (displayDriver == OledDriver::Sh1106) {
     for (std::size_t index = 0; index < kSh1106LocalBaselines.size(); ++index) {
       display->drawStr(0, kSh1106LocalBaselines[index],
                        frame.lines[index].c_str());

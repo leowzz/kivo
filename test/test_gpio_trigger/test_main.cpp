@@ -583,10 +583,11 @@ void test_oled_control_panel_renders_cost_token_and_tpm_on_sub2api_page() {
   panel.update(sample, nowMs, 10);
 
   const auto frame = panel.frame(DisplayFrame{});
+  TEST_ASSERT_EQUAL(DisplayFrameLayout::UsageEmphasis, frame.layout);
   TEST_ASSERT_EQUAL_STRING("SUB2API / STALE", frame.lines[0].c_str());
-  TEST_ASSERT_EQUAL_STRING("COST $12.35", frame.lines[1].c_str());
-  TEST_ASSERT_EQUAL_STRING("TOKENS 1M", frame.lines[2].c_str());
-  TEST_ASSERT_EQUAL_STRING("TPM 98K", frame.lines[3].c_str());
+  TEST_ASSERT_EQUAL_STRING("$12.35", frame.lines[1].c_str());
+  TEST_ASSERT_EQUAL_STRING("1M", frame.lines[2].c_str());
+  TEST_ASSERT_EQUAL_STRING("98K", frame.lines[3].c_str());
 }
 
 void test_oled_control_panel_adjusts_brightness_with_the_encoder() {
