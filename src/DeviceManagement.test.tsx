@@ -138,7 +138,7 @@ test("offers offline-device removal and never exposes it for online devices", as
   expect(onForgetDevice).toHaveBeenCalledWith("esp-offline");
 });
 
-test("preserves source order while showing offline Devices", () => {
+test("shows connected devices before offline devices while preserving source order within each group", () => {
   const { container } = renderManagement({ devices: [
     device({ deviceId: "offline-a", hardwareSerial: "OFFLINE-A", connection: "offline", mode: null, runtime: "inactive" }),
     device({ deviceId: "attention-a", hardwareSerial: "ATTENTION-A", assignment: "invalid_assignment", runtime: "inactive" }),
@@ -152,10 +152,10 @@ test("preserves source order while showing offline Devices", () => {
       identifier.textContent,
     ),
   ).toEqual([
-    "OFFLINE-A",
     "ATTENTION-A",
     "READY-A",
     "PROGRESS-A",
+    "OFFLINE-A",
     "OFFLINE-B",
     "AD-001",
   ]);

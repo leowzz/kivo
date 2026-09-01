@@ -274,7 +274,13 @@ export function DeviceManagement({
       ),
     [candidates, language],
   );
-  const visibleDevices = devices;
+  const visibleDevices = useMemo(
+    () => [
+      ...devices.filter((device) => device.connection === "online"),
+      ...devices.filter((device) => device.connection === "offline"),
+    ],
+    [devices],
+  );
   const visibleCandidates = candidates;
   const rows = useMemo<Row[]>(
     () => [
