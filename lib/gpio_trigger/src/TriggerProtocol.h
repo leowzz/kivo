@@ -20,6 +20,7 @@ enum class HelperCommandKind {
   ConfigSh1106,
   ConfigOledControl,
   ConfigCommit,
+  UsageView,
   Usage,
   DisplayBegin,
   DisplayRegion,

@@ -20,8 +20,9 @@ use crate::{
         ACTION_RUN_PROTOCOL_VERSION, ActionSequence, DISPLAY_LARGE_FONT_PROTOCOL_VERSION,
         DISPLAY_PROTOCOL_VERSION, DeviceMessage, HelloCapabilities, InputState,
         OLED_PROTOCOL_VERSION, PhysicalInput, ProductDefinitionTransfer, SH1106_PROTOCOL_VERSION,
-        USAGE_PROTOCOL_VERSION, display_commands, format_paste_command, is_hello_line,
-        parse_device, topology_commands, usage_command, validate_hello,
+        USAGE_PROTOCOL_VERSION, USAGE_VIEW_PROTOCOL_VERSION, display_commands,
+        format_paste_command, is_hello_line, parse_device, topology_commands, usage_command,
+        validate_hello,
     },
     trigger::{TriggerEdge, TriggerOccurrence, TriggerTracker},
 };
@@ -582,6 +583,7 @@ impl DeviceSession {
             | DeviceMessage::DisplayOk { .. }
             | DeviceMessage::DisplayResync { .. }
             | DeviceMessage::DisplayError { .. }
+            | DeviceMessage::UsageView { .. }
             | DeviceMessage::ProductInfo { .. }
             | DeviceMessage::ProductBegin { .. }
             | DeviceMessage::ProductChunk { .. }
@@ -2130,6 +2132,13 @@ fn run_isolated_worker_inner(
         stop,
         runtime.product_cache.as_deref(),
     )?;
+    if hello.protocol >= USAGE_VIEW_PROTOCOL_VERSION {
+        device
+            .get_mut()
+            .write_all(b"USAGE_VIEW\n")
+            .and_then(|()| device.get_mut().flush())
+            .map_err(|error| format!("usage_view_write_failed: {error}"))?;
+    }
     events
         .send(WorkerEvent::HelloValidated {
             generation: start.generation,
@@ -2421,6 +2430,17 @@ fn run_isolated_worker_inner(
                     | DeviceMessage::DisplayResync { .. }
                     | DeviceMessage::DisplayError { .. }) => {
                         display_link.on_message(&message);
+                    }
+                    DeviceMessage::UsageView { active } => {
+                        if display_protocol >= USAGE_VIEW_PROTOCOL_VERSION {
+                            events
+                                .send(WorkerEvent::UsageView {
+                                    generation: start.generation,
+                                    device_id: start.device_id.clone(),
+                                    active,
+                                })
+                                .map_err(|_| "coordinator_stopped".to_owned())?;
+                        }
                     }
                     DeviceMessage::State {
                         event_id,

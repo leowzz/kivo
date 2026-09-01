@@ -580,6 +580,7 @@ void test_oled_control_panel_renders_cost_token_and_tpm_on_sub2api_page() {
   OledControlPanelSample sample;
   std::uint32_t nowMs = 0;
   panel.setUsageSnapshot(usage);
+  TEST_ASSERT_FALSE(panel.usageActive());
   panel.update(sample, nowMs, 10);
   sample.encoderPressed = true;
   panel.update(sample, ++nowMs, 10);
@@ -595,6 +596,7 @@ void test_oled_control_panel_renders_cost_token_and_tpm_on_sub2api_page() {
   panel.update(sample, ++nowMs, 10);
   nowMs += 10;
   panel.update(sample, nowMs, 10);
+  TEST_ASSERT_TRUE(panel.usageActive());
 
   const auto frame = panel.frame(DisplayFrame{});
   TEST_ASSERT_EQUAL(DisplayFrameLayout::UsageEmphasis, frame.layout);
@@ -602,6 +604,8 @@ void test_oled_control_panel_renders_cost_token_and_tpm_on_sub2api_page() {
   TEST_ASSERT_EQUAL_STRING("$12.35", frame.lines[1].c_str());
   TEST_ASSERT_EQUAL_STRING("1M", frame.lines[2].c_str());
   TEST_ASSERT_EQUAL_STRING("98K", frame.lines[3].c_str());
+  panel.reset();
+  TEST_ASSERT_FALSE(panel.usageActive());
 }
 
 void test_oled_control_panel_adjusts_brightness_with_the_encoder() {
@@ -1192,23 +1196,23 @@ void test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins() {
                     platform::selectRp2040OledBus(5, 6));
 }
 
-void test_formats_protocol_v12_hello_with_board_and_build() {
+void test_formats_protocol_v13_hello_with_board_and_build() {
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 12 rp2040 yd-rp2040 0.1.0+gabc1234 - 28 "
+      "HELLO 13 rp2040 yd-rp2040 0.1.0+gabc1234 - 28 "
       "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 26 "
       "27 28 29\n",
       formatHello(kYdRp2040, "0.1.0+gabc1234").c_str());
 }
 
-void test_formats_protocol_v12_hello_with_product_identity() {
+void test_formats_protocol_v13_hello_with_product_identity() {
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 12 rp2040 yd-rp2040 0.1.0+gabc1234 key-k1-r01 28 "
+      "HELLO 13 rp2040 yd-rp2040 0.1.0+gabc1234 key-k1-r01 28 "
       "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 26 "
       "27 28 29\n",
       formatHello(kYdRp2040, "0.1.0+gabc1234", "key-k1-r01")
           .c_str());
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 12 rp2040 yd-rp2040 build - 28 "
+      "HELLO 13 rp2040 yd-rp2040 build - 28 "
       "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 26 "
       "27 28 29\n",
       formatHello(kYdRp2040, "build", "-").c_str());
@@ -1311,6 +1315,11 @@ void test_parses_runtime_configuration_commands() {
   TEST_ASSERT_FALSE(parseHelperCommand(
                         "USAGE 2 18446744073709551616 2 3\n")
                         .has_value());
+
+  const auto usageView = parseHelperCommand("USAGE_VIEW\n");
+  TEST_ASSERT_TRUE(usageView.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::UsageView, usageView->kind);
+  TEST_ASSERT_FALSE(parseHelperCommand("USAGE_VIEW 1\n").has_value());
 }
 
 void test_oled_configuration_requires_supported_distinct_safe_pins() {
@@ -2164,8 +2173,8 @@ int main(int, char **) {
   RUN_TEST(test_rp2040_standalone_debug_topology_matches_keyboard_wiring);
   RUN_TEST(test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match);
   RUN_TEST(test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins);
-  RUN_TEST(test_formats_protocol_v12_hello_with_board_and_build);
-  RUN_TEST(test_formats_protocol_v12_hello_with_product_identity);
+  RUN_TEST(test_formats_protocol_v13_hello_with_board_and_build);
+  RUN_TEST(test_formats_protocol_v13_hello_with_product_identity);
   RUN_TEST(test_rejects_empty_firmware_build_id);
   RUN_TEST(test_rejects_whitespace_in_firmware_build_id);
   RUN_TEST(test_contact_edge_reports_unordered_pair_once_after_debounce);

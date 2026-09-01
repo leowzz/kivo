@@ -361,6 +361,11 @@ pub enum WorkerEvent {
         context: RuntimeEventContext,
         activity: RuntimeActivity,
     },
+    UsageView {
+        generation: u64,
+        device_id: DeviceId,
+        active: bool,
+    },
     Disconnected {
         generation: u64,
         device_id: DeviceId,
@@ -493,6 +498,7 @@ pub struct RuntimeCoordinator {
     display_snapshot: Option<Arc<DisplaySnapshot>>,
     usage_snapshot: Option<Arc<UsageSnapshot>>,
     workers: BTreeMap<DeviceId, WorkerSlot>,
+    usage_view_devices: BTreeSet<DeviceId>,
     recovering_devices: BTreeSet<DeviceId>,
     reconnect_not_before: BTreeMap<DeviceId, Instant>,
     devices: BTreeMap<DeviceId, DeviceStatus>,
@@ -640,6 +646,7 @@ impl RuntimeCoordinator {
             display_snapshot: None,
             usage_snapshot: None,
             workers: BTreeMap::new(),
+            usage_view_devices: BTreeSet::new(),
             recovering_devices: BTreeSet::new(),
             reconnect_not_before: BTreeMap::new(),
             devices: BTreeMap::new(),
@@ -1025,6 +1032,18 @@ impl RuntimeCoordinator {
                 }
                 Some(event)
             }
+            WorkerEvent::UsageView {
+                generation: _,
+                device_id,
+                active,
+            } => {
+                if active && self.workers.contains_key(&device_id) {
+                    self.usage_view_devices.insert(device_id);
+                } else {
+                    self.usage_view_devices.remove(&device_id);
+                }
+                None
+            }
             WorkerEvent::Disconnected {
                 generation: _,
                 device_id,
@@ -1220,6 +1239,7 @@ impl RuntimeCoordinator {
     }
 
     fn stop_worker(&mut self, id: &DeviceId) {
+        self.usage_view_devices.remove(id);
         if let Some(mut slot) = self.workers.remove(id) {
             slot.worker.stop();
             slot.worker.join();
@@ -1310,6 +1330,10 @@ impl RuntimeCoordinator {
                 status.latest_error = Some(runtime_error(error));
             }
         }
+    }
+
+    pub fn usage_requested(&self) -> bool {
+        !self.usage_view_devices.is_empty()
     }
 
     pub(crate) fn product_definition(&self, id: &DeviceId) -> Option<&ProductDefinition> {
@@ -1666,6 +1690,7 @@ fn event_generation(event: &WorkerEvent) -> u64 {
         | WorkerEvent::Input { generation, .. }
         | WorkerEvent::SequenceFinished { generation, .. }
         | WorkerEvent::Activity { generation, .. }
+        | WorkerEvent::UsageView { generation, .. }
         | WorkerEvent::Disconnected { generation, .. } => *generation,
     }
 }
@@ -3530,6 +3555,48 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn usage_polling_tracks_active_views_across_devices_and_disconnects() {
+        let (_directory, enumerator, _launcher, mut coordinator) = harness();
+        enumerator.set(
+            vec![
+                serial("/dev/a", 0x303a, 0x4002, Some("A")),
+                serial("/dev/b", 0x303a, 0x4002, Some("B")),
+            ],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+        let a = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "A").unwrap();
+        let b = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "B").unwrap();
+
+        assert!(!coordinator.usage_requested());
+        coordinator.handle_worker_event(WorkerEvent::UsageView {
+            generation: 1,
+            device_id: a.clone(),
+            active: true,
+        });
+        coordinator.handle_worker_event(WorkerEvent::UsageView {
+            generation: 1,
+            device_id: b.clone(),
+            active: true,
+        });
+        assert!(coordinator.usage_requested());
+
+        coordinator.handle_worker_event(WorkerEvent::UsageView {
+            generation: 1,
+            device_id: a,
+            active: false,
+        });
+        assert!(coordinator.usage_requested());
+
+        coordinator.handle_worker_event(WorkerEvent::Disconnected {
+            generation: 1,
+            device_id: b,
+            error: None,
+        });
+        assert!(!coordinator.usage_requested());
     }
 
     #[test]

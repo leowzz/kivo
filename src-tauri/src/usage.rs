@@ -146,6 +146,7 @@ impl Default for PersistedDocument {
 
 enum UsageCommand {
     Reload { password: Option<String> },
+    SetActive(bool),
 }
 
 pub struct UsageService {
@@ -262,6 +263,12 @@ impl UsageService {
             .map_err(|_| AppError::new("usage_service_unavailable"))?;
         Ok(self.view())
     }
+
+    pub fn set_active(&self, active: bool) -> Result<(), AppError> {
+        self.commands
+            .send(UsageCommand::SetActive(active))
+            .map_err(|_| AppError::new("usage_service_unavailable"))
+    }
 }
 
 fn settings_summary(document: &PersistedDocument) -> UsageSettingsSummary {
@@ -332,19 +339,33 @@ fn run_service(
         .ok();
     let mut password = None;
     let mut wait = Duration::ZERO;
+    let mut active = false;
 
     while !stop.load(Ordering::Relaxed) {
-        match commands.recv_timeout(wait.min(Duration::from_millis(500))) {
+        let command_wait = if active {
+            wait.min(Duration::from_millis(500))
+        } else {
+            Duration::from_millis(500)
+        };
+        match commands.recv_timeout(command_wait) {
             Ok(UsageCommand::Reload { password: next }) => {
                 password = next;
                 wait = Duration::ZERO;
             }
+            Ok(UsageCommand::SetActive(next)) => {
+                active = next;
+                wait = Duration::ZERO;
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) if !active => continue,
             Err(mpsc::RecvTimeoutError::Timeout) if wait > Duration::from_millis(500) => {
                 wait -= Duration::from_millis(500);
                 continue;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        if !active {
+            continue;
         }
         if wait > Duration::ZERO {
             wait = Duration::ZERO;
@@ -699,6 +720,40 @@ mod tests {
         let persisted = fs::read_to_string(path).unwrap();
         assert!(persisted.contains("\"interval_seconds\": 30"));
         assert!(!persisted.contains("do-not-store-this"));
+
+        stop.store(true, Ordering::Relaxed);
+        thread.join().unwrap();
+    }
+
+    #[test]
+    fn does_not_fetch_until_sub2api_view_is_active() {
+        let directory = tempfile::tempdir().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let (updates, _received) = mpsc::channel();
+        let (service, thread) =
+            UsageService::spawn(directory.path(), Arc::clone(&stop), updates).unwrap();
+
+        service
+            .save(UsageSettingsPatch {
+                enabled: true,
+                base_url: "https://127.0.0.1:9".into(),
+                email: "test@example.com".into(),
+                password: "test-password".into(),
+                interval_seconds: 30,
+            })
+            .unwrap();
+
+        thread::sleep(Duration::from_millis(600));
+        assert_eq!(service.view().snapshot.state, UsageState::Connecting);
+
+        service.set_active(true).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while service.view().snapshot.state == UsageState::Connecting
+            && std::time::Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(service.view().snapshot.state, UsageState::NetworkError);
 
         stop.store(true, Ordering::Relaxed);
         thread.join().unwrap();

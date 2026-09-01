@@ -122,7 +122,7 @@ def run_smoke(
 ) -> None:
     if not valid_pins:
         raise RuntimeError("valid pins are required")
-    if protocol_version < 3 or protocol_version > 12:
+    if protocol_version < 3 or protocol_version > 13:
         raise RuntimeError("unsupported protocol version")
     write_line(device, "HELLO\n")
     validate_hello(read_line(device), family, board, build, protocol_version)
@@ -176,7 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--valid-pins", required=True, type=parse_pins)
     parser.add_argument("--rejected-pins", required=True, type=parse_pins)
     parser.add_argument("--exercise-actions", action="store_true")
-    parser.add_argument("--protocol-version", type=int, choices=range(3, 13), default=12)
+    parser.add_argument("--protocol-version", type=int, choices=range(3, 14), default=13)
     return parser
 
 

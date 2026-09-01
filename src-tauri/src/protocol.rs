@@ -11,7 +11,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-pub const HOST_PROTOCOL_VERSION: u16 = 12;
+pub const HOST_PROTOCOL_VERSION: u16 = 13;
 pub const DISPLAY_PROTOCOL_VERSION: u16 = 7;
 pub const DISPLAY_LARGE_FONT_PROTOCOL_VERSION: u16 = 8;
 pub const ACTION_RUN_PROTOCOL_VERSION: u16 = 6;
@@ -19,6 +19,7 @@ pub const OLED_PROTOCOL_VERSION: u16 = 4;
 pub const SH1106_PROTOCOL_VERSION: u16 = 11;
 pub const OLED_CONTROL_PANEL_PROTOCOL_VERSION: u16 = 10;
 pub const USAGE_PROTOCOL_VERSION: u16 = 12;
+pub const USAGE_VIEW_PROTOCOL_VERSION: u16 = 13;
 pub const ADVANCED_ACTION_PROTOCOL_VERSION: u16 = 5;
 const PRODUCT_DEFINITION_PROTOCOL_VERSION: u16 = 9;
 const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 3;
@@ -98,6 +99,9 @@ pub enum DeviceMessage {
     DisplayError {
         revision: u32,
         code: String,
+    },
+    UsageView {
+        active: bool,
     },
 }
 
@@ -278,6 +282,8 @@ pub fn parse_device(line: &str) -> Option<DeviceMessage> {
             revision: revision.parse().ok()?,
             code: (*code).to_owned(),
         }),
+        ["USAGE_VIEW", "0"] => Some(DeviceMessage::UsageView { active: false }),
+        ["USAGE_VIEW", "1"] => Some(DeviceMessage::UsageView { active: true }),
         _ => None,
     }
 }
@@ -1308,6 +1314,20 @@ mod tests {
                 code: "invalid_text".into(),
             })
         );
+    }
+
+    #[test]
+    fn parses_sub2api_view_state() {
+        assert_eq!(
+            parse_device("USAGE_VIEW 1\n"),
+            Some(DeviceMessage::UsageView { active: true })
+        );
+        assert_eq!(
+            parse_device("USAGE_VIEW 0\n"),
+            Some(DeviceMessage::UsageView { active: false })
+        );
+        assert!(parse_device("USAGE_VIEW 2\n").is_none());
+        assert!(parse_device("USAGE_VIEW 1 trailing\n").is_none());
     }
 
     #[test]

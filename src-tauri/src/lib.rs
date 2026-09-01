@@ -1290,6 +1290,7 @@ pub fn run() {
                     DisplayService::spawn(providers, Arc::clone(&stop), display_snapshot_sender)?;
                 let coordinator_thread = {
                     let coordinator = Arc::clone(&coordinator);
+                    let usage = Arc::clone(&usage);
                     let workspace = Arc::clone(&workspace);
                     let metrics = metrics.clone();
                     let stop = Arc::clone(&stop);
@@ -1299,6 +1300,7 @@ pub fn run() {
                         let _stop_on_drop = StopOnDrop::new(Arc::clone(&stop));
                         let mut scanner = BackgroundDeviceScanner::new(enumerator);
                         let mut log_inventory = runtime_log::DeviceLogInventory::default();
+                        let mut usage_active = false;
                         while !stop.load(Ordering::Relaxed) {
                             if scan_requested.swap(false, Ordering::Relaxed) {
                                 scanner.request_scan();
@@ -1337,6 +1339,15 @@ pub fn run() {
                                     enrich_runtime_event(&workspace, metrics.as_deref(), event);
                                 runtime_log::emit_runtime_event(&payload);
                                 let _ = app_handle.emit("runtime-event", payload);
+                            }
+                            let usage_requested = coordinator
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .usage_requested();
+                            if usage_requested != usage_active
+                                && usage.set_active(usage_requested).is_ok()
+                            {
+                                usage_active = usage_requested;
                             }
                             if let Some(snapshot) = newest_display_snapshot(&display_snapshots) {
                                 coordinator

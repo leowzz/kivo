@@ -180,6 +180,13 @@ std::optional<HelperCommand> parseHelperCommand(std::string_view line) {
                : std::optional<HelperCommand>{{HelperCommandKind::Hello}};
   }
 
+  if (*kind == "USAGE_VIEW") {
+    return takeToken(line).has_value()
+               ? std::nullopt
+               : std::optional<HelperCommand>{
+                     HelperCommand{HelperCommandKind::UsageView}};
+  }
+
   if (*kind == "PRODUCT_INFO" || *kind == "PRODUCT_READ") {
     if (takeToken(line).has_value()) return std::nullopt;
     return HelperCommand{*kind == "PRODUCT_INFO"

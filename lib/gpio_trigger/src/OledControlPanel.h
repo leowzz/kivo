@@ -41,6 +41,7 @@ class OledControlPanel {
                                 std::uint32_t nowMs,
                                 std::uint16_t debounceMs);
   bool active() const { return view_ != View::Closed; }
+  bool usageActive() const { return view_ == View::Usage; }
   std::uint8_t brightnessPercent() const { return brightnessPercent_; }
   DisplayFrame frame(const DisplayFrame &status) const;
 
