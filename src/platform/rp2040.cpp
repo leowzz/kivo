@@ -311,10 +311,78 @@ void setDisplayBrightness(std::uint8_t percent) {
   display->setContrast(contrast);
 }
 
+std::uint8_t rightAlignedTextX(const std::string &text) {
+  const auto width = display->getStrWidth(text.c_str());
+  return width < kDisplayWidth
+             ? static_cast<std::uint8_t>(kDisplayWidth - width)
+             : 0;
+}
+
+void redrawChangedText(const std::uint8_t *font, std::uint8_t baseline,
+                       std::uint8_t previousX,
+                       const std::string &previousText, std::uint8_t nextX,
+                       const std::string &nextText) {
+  display->setFont(font);
+  const auto previousWidth = display->getStrWidth(previousText.c_str());
+  const auto nextWidth = display->getStrWidth(nextText.c_str());
+  const auto left = std::min<std::uint16_t>(previousX, nextX);
+  const auto right = std::min<std::uint16_t>(
+      kDisplayWidth,
+      std::max<std::uint16_t>(previousX + previousWidth, nextX + nextWidth));
+  const auto top = static_cast<std::uint16_t>(
+      std::max<int>(0, baseline - display->getAscent()));
+  const auto bottom = static_cast<std::uint16_t>(std::min<int>(
+      displayHeightTiles * 8U, baseline - display->getDescent() + 1));
+  const DisplayRect bounds{left, top, static_cast<std::uint16_t>(right - left),
+                           static_cast<std::uint16_t>(bottom - top)};
+
+  display->setDrawColor(0);
+  display->drawBox(bounds.x, bounds.y, bounds.width, bounds.height);
+  display->setDrawColor(1);
+  display->drawStr(nextX, baseline, nextText.c_str());
+  dirtyTiles.markPixels(bounds);
+}
+
+void renderUsageChanges(const DisplayFrame &previous,
+                        const DisplayFrame &next,
+                        std::uint8_t changedLines) {
+  if ((changedLines & 0x01U) != 0) {
+    redrawChangedText(u8g2_font_6x13_tf, 11, 0, previous.lines[0], 0,
+                      next.lines[0]);
+  }
+  if ((changedLines & 0x02U) != 0) {
+    redrawChangedText(u8g2_font_10x20_tf, 39, 30, previous.lines[1], 30,
+                      next.lines[1]);
+  }
+  if ((changedLines & 0x04U) != 0) {
+    redrawChangedText(u8g2_font_6x13_tf, 61, 0,
+                      "TOK " + previous.lines[2], 0,
+                      "TOK " + next.lines[2]);
+  }
+  if ((changedLines & 0x08U) != 0) {
+    display->setFont(u8g2_font_6x13_tf);
+    const std::string previousTpm = "TPM " + previous.lines[3];
+    const std::string nextTpm = "TPM " + next.lines[3];
+    redrawChangedText(u8g2_font_6x13_tf, 61,
+                      rightAlignedTextX(previousTpm), previousTpm,
+                      rightAlignedTextX(nextTpm), nextTpm);
+  }
+}
+
 bool renderLocalDisplay(const DisplayFrame &frame) {
   if (!display || !displayHealthy) return !displayRequested;
   if (displayBufferSource == DisplayBufferSource::Local &&
       lastDisplayFrame.has_value() && *lastDisplayFrame == frame) {
+    return true;
+  }
+  if (displayDriver == OledDriver::Sh1106 &&
+      frame.layout == DisplayFrameLayout::UsageEmphasis &&
+      displayBufferSource == DisplayBufferSource::Local &&
+      lastDisplayFrame.has_value() &&
+      lastDisplayFrame->layout == DisplayFrameLayout::UsageEmphasis) {
+    renderUsageChanges(*lastDisplayFrame, frame,
+                       changedDisplayFrameLines(*lastDisplayFrame, frame));
+    lastDisplayFrame = frame;
     return true;
   }
   display->setFont(u8g2_font_6x13_tf);
@@ -333,11 +401,7 @@ bool renderLocalDisplay(const DisplayFrame &frame) {
     const std::string tokens = "TOK " + frame.lines[2];
     const std::string tpm = "TPM " + frame.lines[3];
     display->drawStr(0, 61, tokens.c_str());
-    const auto tpmWidth = display->getStrWidth(tpm.c_str());
-    const auto tpmX = tpmWidth < kDisplayWidth
-                          ? static_cast<std::uint8_t>(kDisplayWidth - tpmWidth)
-                          : 0;
-    display->drawStr(tpmX, 61, tpm.c_str());
+    display->drawStr(rightAlignedTextX(tpm), 61, tpm.c_str());
   } else if (displayDriver == OledDriver::Sh1106) {
     for (std::size_t index = 0; index < kSh1106LocalBaselines.size(); ++index) {
       display->drawStr(0, kSh1106LocalBaselines[index],

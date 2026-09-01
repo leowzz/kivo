@@ -116,6 +116,20 @@ void test_rotated_or_unsupported_panel_requests_full_refresh() {
   TEST_ASSERT_EQUAL(RefreshMode::Tiles, selectRefreshMode(true, 0));
 }
 
+void test_usage_frame_diff_marks_only_changed_values_and_layout_transitions() {
+  DisplayFrame before{{"SUB2API", "$1.00", "10K", "2K"},
+                      DisplayFrameLayout::UsageEmphasis};
+  auto tokensChanged = before;
+  tokensChanged.lines[2] = "11K";
+
+  TEST_ASSERT_EQUAL_HEX8(0x04,
+                         changedDisplayFrameLines(before, tokensChanged));
+
+  auto rows = tokensChanged;
+  rows.layout = DisplayFrameLayout::Rows;
+  TEST_ASSERT_EQUAL_HEX8(0x0F, changedDisplayFrameLines(tokensChanged, rows));
+}
+
 GpioTriggerController directController(std::uint32_t startMs) {
   TopologyBuilder builder(kYdEsp32S3);
   builder.begin(1, 30);
@@ -2107,6 +2121,8 @@ int main(int, char **) {
   RUN_TEST(test_dirty_tiles_round_outward_clip_and_stay_within_one_row);
   RUN_TEST(test_dirty_tiles_reject_sub_tile_budget_and_clear_explicitly);
   RUN_TEST(test_rotated_or_unsupported_panel_requests_full_refresh);
+  RUN_TEST(
+      test_usage_frame_diff_marks_only_changed_values_and_layout_transitions);
   RUN_TEST(test_startup_stays_local_until_first_full_remote_scene);
   RUN_TEST(test_startup_refresh_does_not_demote_remote_or_critical_content);
   RUN_TEST(test_display_reconfiguration_redraws_the_current_visible_source);
