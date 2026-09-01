@@ -1674,12 +1674,10 @@ test("keeps an offline Device visible and opens the connected Device directly", 
     }),
   ];
 
-  const user = userEvent.setup();
   render(<App />);
 
   await screen.findByTitle("ONLINE");
   expect(screen.getAllByText("离线键盘").length).toBeGreaterThan(0);
-  await user.click(deviceRow("ONLINE"));
   expect(screen.getByRole("heading", { name: "在线键盘" })).toBeInTheDocument();
   expect(screen.getByLabelText("碳膜电话键盘")).toBeInTheDocument();
   expect(screen.queryByText("/dev/cu.online")).toBeNull();

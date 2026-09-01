@@ -485,10 +485,14 @@ export default function App({
       devices: visibleDevices,
       candidates: snapshot.candidates,
     });
+    const defaultDeviceId =
+      visibleDevices.find((device) => device.connection === "online")?.deviceId ??
+      visibleDevices[0]?.deviceId ??
+      null;
     setSelectedManagedDeviceId((current) =>
       current && visibleDevices.some((device) => device.deviceId === current)
         ? current
-        : visibleDevices[0]?.deviceId ?? null,
+        : defaultDeviceId,
     );
     setSavedDeviceProfiles(Object.fromEntries(serverProfiles.map((profile) =>
       [profile.profile.id, JSON.stringify(profile)]
