@@ -1,4 +1,4 @@
-import { Activity, Check, Keyboard, Pencil, Plus, RefreshCw, Settings2, Trash2, X } from "lucide-react";
+import { Check, Keyboard, Pencil, Plus, RefreshCw, Settings2, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ActionEditor } from "./ActionEditor";
 import { ConfigurationSettingsDialog } from "./ConfigurationSettingsDialog";
@@ -9,6 +9,7 @@ import { reconcileProfileLayout } from "./profileEditing";
 import {
   candidateDisplayLabel,
   compatibleHardwareProfiles,
+  deviceSummary,
   primaryDeviceLabel,
 } from "./deviceStatus";
 import { candidateSetupId } from "./deviceSetupSession";
@@ -19,8 +20,8 @@ import type {
   CandidateStatus,
   DeviceProfile,
   DeviceStatus,
-  HomeMetricsSnapshot,
   Language,
+  ProductConfigurationProfile,
   RuntimeAssignment,
   TriggerActions,
   TriggerSettings,
@@ -30,37 +31,13 @@ type Selection = { kind: "device" | "candidate"; id: string };
 type Row = { selection: Selection };
 type AssignmentDraft = { deviceProfileId: string; hardwareProfileId: string };
 type OperationError = { owner: Selection; message: string };
-type WorkspaceTab = "buttons" | "test" | "activity";
 type AdvancedTab = "layout" | "io";
-type InterfaceMode = "product" | "maker";
 export type DeviceExecutionFeedback = {
   buttonId: string | null;
   status: "success" | "error";
   detail: string | null;
 };
-type ActionFailureInsight = {
-  buttonId: string | null;
-  actionKind: string | null;
-  detail: string | null;
-  count: number;
-  timestampMs: number;
-};
-
-const WORKSPACE_TABS: readonly WorkspaceTab[] = ["buttons", "test", "activity"];
 const ADVANCED_TABS: readonly AdvancedTab[] = ["layout", "io"];
-const ACTION_KIND_MESSAGES: Record<string, MessageKey> = {
-  paste: "behavior.summary.paste",
-  hotkey: "behavior.summary.hotkey",
-  delay: "behavior.summary.delay",
-  media: "behavior.summary.media",
-  open: "behavior.summary.open",
-};
-const ACTION_FAILURE_CODES = new Set([
-  "action_step_failed",
-  "action_timeout",
-  "action_ack_timeout",
-  "action_cancelled",
-]);
 const STARTER_PROFILE_IDS = new Set([
   "daily-shortcuts",
   "creator-workspace",
@@ -73,18 +50,6 @@ function errorMessage(error: unknown) {
     return String(error.code);
   }
   return String(error);
-}
-
-function formatSnapshotDate(language: Language, timestamp: number | undefined) {
-  if (!timestamp) return null;
-  try {
-    return new Intl.DateTimeFormat(language, {
-      dateStyle: "medium",
-      timeStyle: "short",
-    }).format(new Date(timestamp));
-  } catch {
-    return null;
-  }
 }
 
 const candidateMessages: Record<
@@ -127,20 +92,21 @@ const candidateMessages: Record<
 
 interface DeviceManagementProps {
   client?: boolean;
+  studioMode?: boolean;
   language: Language;
   devices: DeviceStatus[];
   candidates: CandidateStatus[];
   boardProfiles: BoardProfileSummary[];
   deviceProfiles: DeviceProfile[];
-  metrics: { deviceId: string; snapshot: HomeMetricsSnapshot } | null;
+  productConfigurations?: ProductConfigurationProfile[];
   onRename(deviceId: string, name: string): void | Promise<void>;
   onSaveRuntimeAssignment(
     deviceId: string,
     assignment: RuntimeAssignment,
   ): void | Promise<void>;
-  onCopyProductConfig?(sourceDeviceId: string, targetDeviceId: string): Promise<void>;
+  onSelectProductConfiguration?(deviceId: string, configurationId: string): Promise<void>;
+  onCreateProductConfiguration?(request: { deviceId: string; name: string; copyCurrent: boolean }): Promise<void>;
   onForgetDevice?(deviceId: string): void;
-  onMetricsChange(deviceId: string | null): void;
   onOpenSetup(targetId: string | null): void;
   onCreateFromTemplate?(profileId: string): void;
   onRetryCandidate(deviceId: string): void | Promise<void>;
@@ -208,17 +174,18 @@ function TechnicalDetail({ label, value, valueClassName }: { label: string; valu
 
 export function DeviceManagement({
   client = false,
+  studioMode = false,
   language,
   devices,
   candidates,
   boardProfiles,
   deviceProfiles,
-  metrics,
+  productConfigurations = [],
   onRename,
   onSaveRuntimeAssignment,
-  onCopyProductConfig,
+  onSelectProductConfiguration,
+  onCreateProductConfiguration,
   onForgetDevice,
-  onMetricsChange,
   onOpenSetup,
   onCreateFromTemplate,
   onRetryCandidate,
@@ -246,15 +213,14 @@ export function DeviceManagement({
     hardwareProfileId: "",
   });
   const [assignmentSaving, setAssignmentSaving] = useState(false);
-  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("buttons");
   const [advancedTab, setAdvancedTab] = useState<AdvancedTab>("io");
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [interfaceMode, setInterfaceMode] = useState<InterfaceMode>("product");
   const [localSelectedButtonId, setLocalSelectedButtonId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [copySourceDeviceId, setCopySourceDeviceId] = useState("");
-  const [copyingProductConfig, setCopyingProductConfig] = useState(false);
-  const [pendingTestDeviceId, setPendingTestDeviceId] = useState<string | null>(null);
+  const [productConfigurationCreating, setProductConfigurationCreating] = useState(false);
+  const [productConfigurationName, setProductConfigurationName] = useState("");
+  const [copyCurrentProductConfiguration, setCopyCurrentProductConfiguration] = useState(true);
+  const [productConfigurationSaving, setProductConfigurationSaving] = useState(false);
   const previous = useRef<Row[]>([]);
   const candidateRetryInFlight = useRef(false);
   const pendingAssignment = useRef<RuntimeAssignment | null>(null);
@@ -282,6 +248,7 @@ export function DeviceManagement({
     [devices],
   );
   const visibleCandidates = candidates;
+  const summary = deviceSummary(devices);
   const rows = useMemo<Row[]>(
     () => [
       ...visibleDevices.map((device) => ({
@@ -352,10 +319,6 @@ export function DeviceManagement({
     activeSelection.id === error.owner.id
       ? error.message
       : null;
-  const selectedMetrics =
-    selectedDevice && metrics?.deviceId === selectedDevice.deviceId
-      ? metrics.snapshot
-      : null;
   const handleKeypadEscape = useCallback(() => {
     const deviceId = selectedDevice?.deviceId ?? activeDeviceId;
     const target = deviceId
@@ -366,31 +329,18 @@ export function DeviceManagement({
     target?.focus();
   }, [activeDeviceId, rows, selectedDevice?.deviceId]);
   useEffect(() => {
-    onMetricsChange(selectedDevice?.deviceId ?? null);
-  }, [onMetricsChange, selectedDevice?.deviceId]);
-  useEffect(() => {
     setRenaming(false);
     setName(selectedDevice?.name ?? "");
     setLocalSelectedButtonId(null);
-    setWorkspaceTab("buttons");
     setAdvancedTab("io");
     setAdvancedOpen(false);
+    setProductConfigurationCreating(false);
   }, [selectedDevice?.deviceId]);
   useEffect(() => {
     if (!learningDeviceId) return;
-    setInterfaceMode("maker");
     setAdvancedTab("io");
     setAdvancedOpen(true);
-    setWorkspaceTab("buttons");
   }, [learningDeviceId]);
-  useEffect(() => {
-    if (!pendingTestDeviceId) return;
-    const pendingDevice = devices.find(({ deviceId }) => deviceId === pendingTestDeviceId);
-    if (pendingDevice?.learning) return;
-    setPendingTestDeviceId(null);
-    setAdvancedOpen(false);
-    setWorkspaceTab("test");
-  }, [devices, pendingTestDeviceId]);
   useEffect(() => {
     const assignment = selectedDevice?.runtimeAssignment;
     const profile = deviceProfiles.find(
@@ -457,23 +407,14 @@ export function DeviceManagement({
     : undefined;
   const editingProfile = productEditingProfile ?? deviceProfiles.find((item) => item.profile.id === (assignmentDraft.deviceProfileId || selectedDevice?.runtimeAssignment?.device_profile_id));
   const isProductDevice = Boolean(productEditingProfile);
-  const productCopySources = useMemo(
+  const compatibleProductConfigurations = useMemo(
     () => selectedDevice?.productVersionId
-      ? devices.filter((device) =>
-          device.deviceId !== selectedDevice.deviceId &&
-          device.productVersionId === selectedDevice.productVersionId &&
-          device.productConfig,
+      ? productConfigurations.filter((configuration) =>
+          configuration.product_version_id === selectedDevice.productVersionId
         )
       : [],
-    [devices, selectedDevice?.deviceId, selectedDevice?.productVersionId],
+    [productConfigurations, selectedDevice?.productVersionId],
   );
-  useEffect(() => {
-    setCopySourceDeviceId((current) =>
-      productCopySources.some((device) => device.deviceId === current)
-        ? current
-        : (productCopySources[0]?.deviceId ?? ""),
-    );
-  }, [productCopySources]);
   const buttons = useMemo(
     () => editingProfile?.profile.groups.flatMap((group) => group.buttons) ?? [],
     [editingProfile?.profile.groups],
@@ -510,7 +451,11 @@ export function DeviceManagement({
       }
     : { press: [], release: [], long_press: [], double_press: [] };
   const sharedDeviceCount = editingProfile
-    ? devices.filter((device) => device.runtimeAssignment?.device_profile_id === editingProfile.profile.id).length
+    ? isProductDevice
+      ? devices.filter((device) =>
+          device.productConfigurationId === selectedDevice?.productConfigurationId
+        ).length
+      : devices.filter((device) => device.runtimeAssignment?.device_profile_id === editingProfile.profile.id).length
     : 0;
   const updateEditingProfile = useCallback(
     (next: DeviceProfile) => isProductDevice
@@ -541,32 +486,8 @@ export function DeviceManagement({
   const handleEndLearning = useCallback((deviceId: string) => {
     onEndLearning?.(deviceId);
   }, [onEndLearning]);
-  const handleFinishLearning = useCallback((deviceId: string) => {
-    setPendingTestDeviceId(deviceId);
-  }, []);
-  const selectWorkspaceTab = useCallback((tab: WorkspaceTab) => {
-    if (learningDeviceId && tab === "test") return;
-    setWorkspaceTab(tab);
-  }, [learningDeviceId]);
-  const handleWorkspaceTabKeyDown = useCallback((event: KeyboardEvent<HTMLButtonElement>) => {
-    const currentIndex = WORKSPACE_TABS.indexOf(workspaceTab);
-    let nextIndex = -1;
-    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-      nextIndex = (currentIndex + 1) % WORKSPACE_TABS.length;
-    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-      nextIndex = (currentIndex - 1 + WORKSPACE_TABS.length) % WORKSPACE_TABS.length;
-    } else if (event.key === "Home") {
-      nextIndex = 0;
-    } else if (event.key === "End") {
-      nextIndex = WORKSPACE_TABS.length - 1;
-    }
-    if (nextIndex < 0) return;
-    event.preventDefault();
-    selectWorkspaceTab(WORKSPACE_TABS[nextIndex]);
-  }, [selectWorkspaceTab, workspaceTab]);
   const selectAdvancedTab = useCallback((tab: AdvancedTab) => {
     if (learningDeviceId && tab !== "io") return;
-    setInterfaceMode("maker");
     setAdvancedOpen(true);
     setAdvancedTab(tab);
   }, [learningDeviceId]);
@@ -589,121 +510,11 @@ export function DeviceManagement({
   const selectedCandidateMessages = selectedCandidate
     ? candidateMessages[selectedCandidate.issue]
     : null;
-  const pressedButtonLabels = buttons
-    .filter((button) => pressedButtonIds.has(button.id))
-    .map((button) => button.label);
-  const selectedExecutionFeedback = executionFeedback && (
-    !executionFeedback.buttonId || executionFeedback.buttonId === effectiveSelectedButtonId
-  )
-    ? executionFeedback
-    : null;
   const failedButtonIds = new Set(
     executionFeedback?.status === "error" && executionFeedback.buttonId
       ? [executionFeedback.buttonId]
       : [],
   );
-  const usageByButton = useMemo(() => {
-    const usage = new Map<string, number>();
-    if (selectedMetrics?.heatmap.length) {
-      for (const entry of selectedMetrics.heatmap) {
-        usage.set(entry.buttonId, (usage.get(entry.buttonId) ?? 0) + entry.presses);
-      }
-    } else {
-      for (const log of selectedMetrics?.logs ?? []) {
-        if (log.kind !== "button" || !log.buttonId) continue;
-        usage.set(log.buttonId, (usage.get(log.buttonId) ?? 0) + 1);
-      }
-    }
-    return usage;
-  }, [selectedMetrics]);
-  const popularButtons = useMemo(
-    () => [...usageByButton.entries()]
-      .sort(([leftId, leftCount], [rightId, rightCount]) =>
-        rightCount - leftCount || leftId.localeCompare(rightId),
-      )
-      .slice(0, 5),
-    [usageByButton],
-  );
-  const unusedButtons = useMemo(
-    () => buttons.filter((button) => !usageByButton.has(button.id)),
-    [buttons, usageByButton],
-  );
-  const activityDays = useMemo(() => {
-    const byDay = new Map<string, { total: number; buttons: Map<string, number> }>();
-    for (const entry of selectedMetrics?.heatmap ?? []) {
-      const day = byDay.get(entry.day) ?? { total: 0, buttons: new Map<string, number>() };
-      day.total += entry.presses;
-      day.buttons.set(entry.buttonId, (day.buttons.get(entry.buttonId) ?? 0) + entry.presses);
-      byDay.set(entry.day, day);
-    }
-    return [...byDay.entries()].sort(([left], [right]) => left.localeCompare(right));
-  }, [selectedMetrics]);
-  const maxActivityDay = Math.max(1, ...activityDays.map(([, day]) => day.total));
-  const latestActionFailure = useMemo(() => {
-    const runtimeError = selectedDevice?.latestError;
-    const runtimeFailure = runtimeError && ACTION_FAILURE_CODES.has(runtimeError.code)
-      ? runtimeError
-      : null;
-    const feedbackFailure = executionFeedback?.status === "error"
-      ? executionFeedback
-      : null;
-    if (!runtimeFailure && !feedbackFailure) return null;
-    const buttonId = runtimeFailure?.params.button ?? feedbackFailure?.buttonId ?? null;
-    const step = runtimeFailure?.params.step ? Number(runtimeFailure.params.step) : NaN;
-    const action = buttonId && Number.isInteger(step) && step > 0
-      ? editingProfile?.actions[buttonId]?.press[step - 1]
-      : undefined;
-    return {
-      buttonId,
-      detail: runtimeFailure?.detail ?? feedbackFailure?.detail ?? null,
-      actionKind: runtimeFailure?.params.actionKind ?? action?.type ?? null,
-    };
-  }, [editingProfile, executionFeedback, selectedDevice?.latestError]);
-  const persistedActionFailures = useMemo<ActionFailureInsight[]>(() => {
-    const grouped = new Map<string, ActionFailureInsight>();
-    for (const log of selectedMetrics?.logs ?? []) {
-      if (log.kind !== "action_failed") continue;
-      const buttonId = log.buttonId ?? null;
-      const actionKind = log.actionKind ?? null;
-      if (!buttonId && !actionKind) continue;
-      const key = `${buttonId ?? ""}\u0000${actionKind ?? ""}`;
-      const current = grouped.get(key);
-      if (!current) {
-        grouped.set(key, {
-          buttonId,
-          actionKind,
-          detail: log.detail ?? null,
-          count: 1,
-          timestampMs: log.timestampMs,
-        });
-        continue;
-      }
-      current.count += 1;
-      if (log.timestampMs >= current.timestampMs) {
-        current.detail = log.detail ?? null;
-        current.timestampMs = log.timestampMs;
-      }
-    }
-    return [...grouped.values()]
-      .sort((left, right) => right.count - left.count || right.timestampMs - left.timestampMs)
-      .slice(0, 5);
-  }, [selectedMetrics]);
-  const actionFailureInsights = useMemo<ActionFailureInsight[]>(() => {
-    if (!latestActionFailure) return persistedActionFailures;
-    const key = `${latestActionFailure.buttonId ?? ""}\u0000${latestActionFailure.actionKind ?? ""}`;
-    const alreadyPersisted = persistedActionFailures.some((failure) =>
-      `${failure.buttonId ?? ""}\u0000${failure.actionKind ?? ""}` === key,
-    );
-    if (alreadyPersisted) return persistedActionFailures;
-    return [
-      {
-        ...latestActionFailure,
-        count: 1,
-        timestampMs: Date.now(),
-      },
-      ...persistedActionFailures,
-    ].slice(0, 5);
-  }, [latestActionFailure, persistedActionFailures]);
   const canRetryCandidate = Boolean(
     selectedCandidate?.deviceId &&
     [
@@ -731,19 +542,37 @@ export function DeviceManagement({
       setCandidateRetrying(false);
     }
   };
-  const copyProductConfig = async () => {
-    if (!selectedDevice || !copySourceDeviceId || !onCopyProductConfig) return;
-    setCopyingProductConfig(true);
+  const selectProductConfiguration = async (configurationId: string) => {
+    if (!selectedDevice || !onSelectProductConfiguration) return;
     setError(null);
     try {
-      await onCopyProductConfig(copySourceDeviceId, selectedDevice.deviceId);
+      await onSelectProductConfiguration(selectedDevice.deviceId, configurationId);
+    } catch (reason) {
+      setError({
+        owner: { kind: "device", id: selectedDevice.deviceId },
+        message: errorMessage(reason),
+      });
+    }
+  };
+  const createProductConfiguration = async () => {
+    if (!selectedDevice || !productConfigurationName.trim() || !onCreateProductConfiguration) return;
+    setProductConfigurationSaving(true);
+    setError(null);
+    try {
+      await onCreateProductConfiguration({
+        deviceId: selectedDevice.deviceId,
+        name: productConfigurationName.trim(),
+        copyCurrent: copyCurrentProductConfiguration,
+      });
+      setProductConfigurationCreating(false);
+      setProductConfigurationName("");
     } catch (reason) {
       setError({
         owner: { kind: "device", id: selectedDevice.deviceId },
         message: errorMessage(reason),
       });
     } finally {
-      setCopyingProductConfig(false);
+      setProductConfigurationSaving(false);
     }
   };
   const selectAssignment = async (deviceProfileId: string) => {
@@ -816,14 +645,39 @@ export function DeviceManagement({
       setAssignmentSaving(false);
     }
   };
+  const selectTitleConfiguration = (value: string) => {
+    if (value === "__create__") {
+      if (selectedDevice?.productVersionId) {
+        setProductConfigurationName("");
+        setCopyCurrentProductConfiguration(true);
+        setProductConfigurationCreating(true);
+      } else {
+        onCreateFromTemplate?.(editingProfile?.profile.id ?? "");
+      }
+      return;
+    }
+    if (selectedDevice?.productVersionId) {
+      void selectProductConfiguration(value);
+    } else {
+      void selectAssignment(value);
+    }
+  };
   return (
-    <div className={`device-management${client ? " is-client" : ""}${editingProfile && (client || workspaceTab === "buttons") ? " is-workspace" : ""}`}>
+    <div className={`device-management${client ? " is-client" : ""}${studioMode ? " is-studio-mode" : ""}${!client && !studioMode ? " is-main-mode" : ""}${editingProfile ? " is-workspace" : ""}`}>
       <section
         className="device-list-region"
         aria-label={t(language, "devices.list")}
       >
         <header className="device-list-header">
-          <h2>{t(language, "nav.devices")}</h2>
+          <div className="device-list-heading">
+            <h2>{t(language, "nav.devices")}</h2>
+            {!client && !studioMode && (
+              <span>{t(language, "devices.deckSummary", {
+                total: visibleDevices.length,
+                attention: summary.attention + visibleCandidates.length,
+              })}</span>
+            )}
+          </div>
           {!client && (
             <button
               className="primary-button"
@@ -1029,45 +883,54 @@ export function DeviceManagement({
         {selectedDevice && (
           <>
             <div className="device-detail-title">
-              <h2>
-                {renaming ? t(language, "devices.rename") : selectedDevice.name}
-              </h2>
-              {!client && !renaming && (
-                <button
-                  className="icon-button"
-                  type="button"
-                  aria-label={t(language, "devices.rename")}
-                  title={t(language, "devices.rename")}
-                  onClick={() => setRenaming(true)}
-                >
-                  <Pencil size={16} />
-                </button>
-              )}
-              {!client && !renaming && (
-                <div
-                  className="device-mode-switch"
-                  role="group"
-                  aria-label={t(language, "devices.interfaceMode")}
-                >
-                  <button
-                    type="button"
-                    aria-pressed={interfaceMode === "product"}
-                    disabled={Boolean(learningDeviceId)}
-                    onClick={() => {
-                      setInterfaceMode("product");
-                      setAdvancedOpen(false);
-                    }}
-                  >
-                    {t(language, "devices.productMode")}
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={interfaceMode === "maker"}
-                    onClick={() => setInterfaceMode("maker")}
-                  >
-                    {t(language, "devices.makerMode")}
-                  </button>
+              <div className="device-detail-heading-copy">
+                {!client && !studioMode && <span>{t(language, "nav.layout")}</span>}
+                <div className="device-detail-name-row">
+                  <h2>
+                    {renaming ? t(language, "devices.rename") : selectedDevice.name}
+                  </h2>
+                  {!client && !renaming && (
+                    <button
+                      className="icon-button"
+                      type="button"
+                      aria-label={t(language, "devices.rename")}
+                      title={t(language, "devices.rename")}
+                      onClick={() => setRenaming(true)}
+                    >
+                      <Pencil size={16} />
+                    </button>
+                  )}
                 </div>
+              </div>
+              {!client && !studioMode && (
+                <label className="device-configuration-selector">
+                  <span>{t(language, "devices.useConfiguration")}</span>
+                  <select
+                    aria-label={t(language, "devices.useConfiguration")}
+                    value={selectedDevice.productVersionId
+                      ? selectedDevice.productConfigurationId ?? ""
+                      : assignmentDraft.deviceProfileId}
+                    disabled={Boolean(learningDeviceId) || assignmentSaving || productConfigurationSaving}
+                    onChange={(event) => selectTitleConfiguration(event.target.value)}
+                  >
+                    {!selectedDevice.productVersionId && <option value="">{t(language, "model.select")}</option>}
+                    {(selectedDevice.productVersionId
+                      ? compatibleProductConfigurations.map((configuration) => ({ id: configuration.id, name: configuration.name }))
+                      : deviceProfiles
+                          .filter((profile) => compatibleHardwareProfiles(
+                            profile.hardware_profiles,
+                            selectedDevice.boardProfileId,
+                          ).length > 0)
+                          .map((profile) => ({ id: profile.profile.id, name: profile.profile.name })))
+                      .map((configuration) => (
+                        <option key={configuration.id} value={configuration.id}>{configuration.name}</option>
+                      ))}
+                    <option value="__create__">+ {t(language, "profile.create")}</option>
+                  </select>
+                  {sharedDeviceCount > 1 && selectedDevice.productVersionId && (
+                    <small>{t(language, "devices.sharedByDevices", { count: sharedDeviceCount })}</small>
+                  )}
+                </label>
               )}
             </div>
             {renaming && (
@@ -1097,67 +960,25 @@ export function DeviceManagement({
                 </button>
               </div>
             )}
-            {editingProfile && !client && (
-              <div className="device-workspace-toolbar is-primary">
-                <div className="device-workspace-tabs" role="tablist" aria-label={t(language, "devices.workspaceNavigation")}>
-                  <button
-                    id="device-workspace-tab-buttons"
-                    type="button"
-                    role="tab"
-                    aria-controls="device-workspace-panel-buttons"
-                    aria-selected={workspaceTab === "buttons"}
-                    tabIndex={workspaceTab === "buttons" ? 0 : -1}
-                    onClick={() => selectWorkspaceTab("buttons")}
-                    onKeyDown={handleWorkspaceTabKeyDown}
-                  >
-                    {t(language, "devices.workspaceButtons")}
-                  </button>
-                  <button
-                    id="device-workspace-tab-test"
-                    type="button"
-                    role="tab"
-                    aria-controls="device-workspace-panel-test"
-                    aria-selected={workspaceTab === "test"}
-                    tabIndex={workspaceTab === "test" ? 0 : -1}
-                    disabled={Boolean(learningDeviceId)}
-                    onClick={() => selectWorkspaceTab("test")}
-                    onKeyDown={handleWorkspaceTabKeyDown}
-                  >
-                    {t(language, "devices.workspaceTest")}
-                  </button>
-                  <button
-                    id="device-workspace-tab-activity"
-                    type="button"
-                    role="tab"
-                    aria-controls="device-workspace-panel-activity"
-                    aria-selected={workspaceTab === "activity"}
-                    tabIndex={workspaceTab === "activity" ? 0 : -1}
-                    onClick={() => selectWorkspaceTab("activity")}
-                    onKeyDown={handleWorkspaceTabKeyDown}
-                  >
-                    <Activity size={14} aria-hidden="true" />
-                    {t(language, "devices.workspaceActivity")}
-                  </button>
-                </div>
+            {studioMode && (
+              <div className="device-context-summary">
+                <Detail
+                  label={t(language, "devices.board")}
+                  value={
+                    boards.get(selectedDevice.boardProfileId)?.displayName ??
+                    selectedDevice.boardProfileId
+                  }
+                />
+                <Detail
+                  label={t(language, "devices.status")}
+                  value={status(selectedDevice, language)}
+                />
+                <Detail
+                  label={t(language, "devices.assignment")}
+                  value={selectedDevice.productVersionId ?? assignmentLabel(selectedDevice, deviceProfiles)}
+                />
               </div>
             )}
-            <div className="device-context-summary">
-              <Detail
-                label={t(language, "devices.board")}
-                value={
-                  boards.get(selectedDevice.boardProfileId)?.displayName ??
-                  selectedDevice.boardProfileId
-                }
-              />
-              <Detail
-                label={t(language, "devices.status")}
-                value={status(selectedDevice, language)}
-              />
-              <Detail
-                label={t(language, "devices.assignment")}
-                value={selectedDevice.productVersionId ?? assignmentLabel(selectedDevice, deviceProfiles)}
-              />
-            </div>
             {selectedDevice.connection === "online" &&
               selectedDevice.mode === "runtime" &&
               selectedDevice.identity === "valid" &&
@@ -1178,8 +999,8 @@ export function DeviceManagement({
                       <button className="secondary-button" type="button" disabled={Boolean(learningDeviceId)} onClick={() => void onDuplicateProfileForDevice?.({ deviceId: selectedDevice.deviceId, sourceProfile: editingProfile, name: `${editingProfile.profile.name} (${selectedDevice.name})` })}>{t(language, "devices.duplicateForDevice")}</button>
               </div>
             )}
-            {editingProfile && (client || workspaceTab === "buttons") && (
-              <div id="device-workspace-panel-buttons" className="keypad-stage device-keypad-stage" role="tabpanel" aria-labelledby="device-workspace-tab-buttons">
+            {editingProfile && (
+              <div className="keypad-stage device-keypad-stage">
                 <Keypad
                   layout={editingProfile.profile}
                   actions={editingProfile.actions}
@@ -1193,181 +1014,7 @@ export function DeviceManagement({
                 />
               </div>
             )}
-            {!client && editingProfile && workspaceTab === "test" && (
-              <div id="device-workspace-panel-test" className="device-test-panel" role="tabpanel" aria-labelledby="device-workspace-tab-test">
-                <div className="device-test-heading">
-                  <div>
-                    <h3>{t(language, "devices.testTitle")}</h3>
-                    <p>{t(language, "devices.testHint")}</p>
-                  </div>
-                  <div className="device-test-actions">
-                    <button className="secondary-button" type="button" onClick={() => selectAdvancedTab("io")}>
-                      <RefreshCw size={14} aria-hidden="true" />
-                      {t(language, "devices.testRelearn")}
-                    </button>
-                    <span className="device-test-live"><i aria-hidden="true" />{t(language, "devices.testLive")}</span>
-                  </div>
-                </div>
-                <div
-                  className={`device-test-status${selectedExecutionFeedback?.status === "error" ? " is-error" : ""}`}
-                  role={selectedExecutionFeedback?.status === "error" ? "alert" : "status"}
-                  aria-live="polite"
-                >
-                  {pressedButtonLabels.length > 0
-                    ? t(language, "devices.testPressed", { buttons: pressedButtonLabels.join(", ") })
-                    : selectedExecutionFeedback?.status === "success"
-                      ? t(language, "devices.actionSent")
-                      : selectedExecutionFeedback?.status === "error"
-                        ? `${t(language, "devices.actionFailed")}${selectedExecutionFeedback.detail ? `: ${selectedExecutionFeedback.detail}` : ""}`
-                        : t(language, "devices.testWaiting")}
-                </div>
-                <div className="keypad-stage device-keypad-stage">
-                  <Keypad
-                    layout={editingProfile.profile}
-                    actions={editingProfile.actions}
-                    selectedButtonId={effectiveSelectedButtonId}
-                    pressedButtonIds={pressedButtonIds}
-                    failedButtonIds={failedButtonIds}
-                    failureLabel={t(language, "devices.actionFailed")}
-                    actionCountLabel={(count) => t(language, "model.actionCount", { count })}
-                    onSelect={selectButton}
-                    onEscape={handleKeypadEscape}
-                  />
-                </div>
-              </div>
-            )}
-            {!client && (!editingProfile || workspaceTab === "activity") && (
-              <div
-                id={editingProfile ? "device-workspace-panel-activity" : undefined}
-                className="device-activity-panel"
-                role={editingProfile ? "tabpanel" : undefined}
-                aria-labelledby={editingProfile ? "device-workspace-tab-activity" : undefined}
-              >
-                <div className="device-activity-heading">
-                  <div>
-                    <h3>{t(language, "devices.activity")}</h3>
-                    <p>{t(language, "devices.activityHint")}</p>
-                  </div>
-                </div>
-                {selectedMetrics ? (
-                  <>
-                    <section className="device-metrics" aria-label={t(language, "devices.metricsSummary")}>
-                      <div><span>{t(language, "home.todayPresses")}</span><strong>{selectedMetrics.todayPresses}</strong></div>
-                      <div><span>{t(language, "home.totalPresses")}</span><strong>{selectedMetrics.totalPresses}</strong></div>
-                      <div><span>{t(language, "home.activeButtons")}</span><strong>{selectedMetrics.activeButtonCount}</strong></div>
-                      <div><span>{t(language, "home.topButton")}</span><strong>{buttons.find((button) => button.id === selectedMetrics.topButton?.buttonId)?.label ?? selectedMetrics.topButton?.buttonId ?? "-"}</strong></div>
-                    </section>
-                    <section className="device-activity-insight" aria-label={t(language, "devices.activityHeatmap")}>
-                      <h4>{t(language, "devices.activityHeatmap")}</h4>
-                      {activityDays.length > 0 ? (
-                        <div className="heatmap" aria-label={t(language, "devices.activityHeatmap")}>
-                          {activityDays.map(([day, summary]) => {
-                            const level = Math.min(4, Math.max(1, Math.ceil((summary.total / maxActivityDay) * 4)));
-                            const labels = [...summary.buttons.entries()]
-                              .sort(([, left], [, right]) => right - left)
-                              .slice(0, 3)
-                              .map(([buttonId]) => buttons.find((button) => button.id === buttonId)?.label ?? buttonId)
-                              .join("、");
-                            return (
-                              <div className={`heat-cell heat-${level}`} key={day}>
-                                <span>{day}</span>
-                                <strong>{summary.total}</strong>
-                                <small>{labels}</small>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : <p className="panel-empty">{t(language, "activity.empty")}</p>}
-                    </section>
-                    <section className="device-activity-insight" aria-label={t(language, "devices.popularButtons")}>
-                      <h4>{t(language, "devices.popularButtons")}</h4>
-                      {popularButtons.length > 0 ? (
-                        <ul>
-                          {popularButtons.map(([buttonId, count]) => (
-                            <li key={buttonId}>
-                              <button className="secondary-button" type="button" onClick={() => {
-                                selectButton(buttonId);
-                                setWorkspaceTab("buttons");
-                              }}>
-                                {buttons.find((button) => button.id === buttonId)?.label ?? buttonId}
-                              </button>
-                              <span>{count}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : <p className="panel-empty">{t(language, "activity.empty")}</p>}
-                    </section>
-                    {editingProfile && (
-                      <section className="device-activity-insight" aria-label={t(language, "devices.unusedButtons")}>
-                        <h4>{t(language, "devices.unusedButtons")}</h4>
-                        {unusedButtons.length > 0 ? (
-                          <ul>
-                            {unusedButtons.map((button) => (
-                              <li key={button.id}>
-                                <button className="secondary-button" type="button" onClick={() => {
-                                  selectButton(button.id);
-                                  setWorkspaceTab("buttons");
-                                }}>
-                                  {button.label}
-                                </button>
-                                <span>{button.id}</span>
-                              </li>
-                            ))}
-                          </ul>
-                        ) : <p className="panel-empty">{t(language, "devices.noUnusedButtons")}</p>}
-                      </section>
-                    )}
-                    {actionFailureInsights.length > 0 && (
-                      <section className="device-activity-insight" aria-label={t(language, "devices.failedActions")} role="alert">
-                        <h4>{t(language, "devices.failedActions")}</h4>
-                        <ul>
-                          {actionFailureInsights.map((failure) => {
-                            const button = buttons.find((candidate) => candidate.id === failure.buttonId);
-                            return (
-                              <li key={`${failure.buttonId ?? "unknown"}:${failure.actionKind ?? "unknown"}`}>
-                                {button ? (
-                                  <button className="secondary-button" type="button" onClick={() => {
-                                    selectButton(button.id);
-                                    setWorkspaceTab("buttons");
-                                  }}>
-                                    <span className="sr-only">{t(language, "devices.editButton")}: </span>
-                                    {button.label}
-                                  </button>
-                                ) : <span>{failure.buttonId ?? "-"}</span>}
-                                <span>
-                                  {" · "}
-                                  {failure.actionKind && ACTION_KIND_MESSAGES[failure.actionKind]
-                                    ? t(language, ACTION_KIND_MESSAGES[failure.actionKind])
-                                    : t(language, "devices.actionKindUnknown")}
-                                  {failure.count > 1 && ` · ${t(language, "devices.failureCount", { count: failure.count })}`}
-                                  {failure.detail ? `: ${failure.detail}` : ""}
-                                </span>
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      </section>
-                    )}
-                    <div className="device-activity-wrap">
-                      <table className="device-activity" aria-label={t(language, "devices.activity")}>
-                        <tbody>
-                          {selectedMetrics.logs.map((log) => (
-                            <tr key={`${log.timestampMs}:${log.deviceId}:${log.deviceProfileId}:${log.hardwareProfileId}:${log.message}`}>
-                              <td><time>{new Date(log.timestampMs).toLocaleTimeString()}</time></td>
-                              <td>{log.deviceName}</td>
-                              <td>{log.deviceProfileId}</td>
-                              <td>{log.hardwareProfileId}</td>
-                              <td>{log.actionKind ? `${log.message}${log.detail ? `: ${log.detail}` : ""}` : log.message}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </>
-                ) : <p className="panel-empty">{t(language, "activity.empty")}</p>}
-              </div>
-            )}
-            {!client && interfaceMode === "maker" && (
+            {!client && studioMode && (
               <details
                 className="device-advanced-disclosure"
                 open={advancedOpen}
@@ -1384,47 +1031,6 @@ export function DeviceManagement({
                   <span>{t(language, "devices.advancedDisclosure")}</span>
                 </summary>
                 <div className="device-advanced-body">
-                  {editingProfile && isProductDevice && (
-                    <section className="device-assignment" aria-label={t(language, "devices.copyProductConfig")}>
-                      {editingProfile.snapshot_metadata?.created_at && (
-                        <p>
-                          {t(language, "data.createdAt", {
-                            time: formatSnapshotDate(language, editingProfile.snapshot_metadata.created_at) ?? "",
-                          })}
-                        </p>
-                      )}
-                      {editingProfile.snapshot_metadata?.source_device_name && (
-                        <p>
-                          {t(language, "data.sourceDevice", {
-                            name: editingProfile.snapshot_metadata.source_device_name,
-                          })}
-                        </p>
-                      )}
-                      <label>
-                        {t(language, "devices.copyProductConfig")}
-                        <select
-                          aria-label={t(language, "devices.copySource")}
-                          value={copySourceDeviceId}
-                          disabled={Boolean(learningDeviceId) || copyingProductConfig || productCopySources.length === 0}
-                          onChange={(event) => setCopySourceDeviceId(event.target.value)}
-                        >
-                          {productCopySources.length === 0 ? (
-                            <option value="">{t(language, "devices.copySourceEmpty")}</option>
-                          ) : productCopySources.map((device) => (
-                            <option key={device.deviceId} value={device.deviceId}>{device.name}</option>
-                          ))}
-                        </select>
-                      </label>
-                      <button
-                        className="secondary-button"
-                        type="button"
-                        disabled={Boolean(learningDeviceId) || !copySourceDeviceId || copyingProductConfig || !onCopyProductConfig}
-                        onClick={() => void copyProductConfig()}
-                      >
-                        {t(language, copyingProductConfig ? "devices.copyingProductConfig" : "devices.copyProductConfigAction")}
-                      </button>
-                    </section>
-                  )}
                   {!isProductDevice && (
                     <section className="device-assignment" aria-label={t(language, "devices.assignment")}>
                       <label>
@@ -1490,7 +1096,7 @@ export function DeviceManagement({
                   {editingProfile && !isProductDevice && advancedTab === "io" && (
                     <div id="device-advanced-panel-io" role="tabpanel" aria-labelledby="device-advanced-tab-io">
                       <h3>{t(language, "hardware.title")}</h3>
-                      <HardwareMapping language={language} layout={editingProfile.profile} hardwareProfiles={editingProfile.hardware_profiles} boardProfiles={boardProfiles} devices={devices} learning={selectedDevice.learning} initialHardwareProfileId={assignmentDraft.hardwareProfileId || selectedDevice.runtimeAssignment?.hardware_profile_id} initialDeviceId={selectedDevice.deviceId} selectedButtonId={effectiveSelectedButtonId} onSelectButton={selectButton} onChange={(hardwareProfiles) => updateEditingProfile({ ...editingProfile, hardware_profiles: hardwareProfiles })} onSelectionChange={handleWorkspaceSelection} onBeginLearning={handleBeginLearning} onEndLearning={handleEndLearning} onFinishLearning={handleFinishLearning} />
+                      <HardwareMapping language={language} layout={editingProfile.profile} hardwareProfiles={editingProfile.hardware_profiles} boardProfiles={boardProfiles} devices={devices} learning={selectedDevice.learning} initialHardwareProfileId={assignmentDraft.hardwareProfileId || selectedDevice.runtimeAssignment?.hardware_profile_id} initialDeviceId={selectedDevice.deviceId} selectedButtonId={effectiveSelectedButtonId} onSelectButton={selectButton} onChange={(hardwareProfiles) => updateEditingProfile({ ...editingProfile, hardware_profiles: hardwareProfiles })} onSelectionChange={handleWorkspaceSelection} onBeginLearning={handleBeginLearning} onEndLearning={handleEndLearning} />
                     </div>
                   )}
                   {editingProfile && !isProductDevice && advancedTab === "layout" && (
@@ -1555,7 +1161,7 @@ export function DeviceManagement({
           </>
         )}
       </aside>
-      {editingProfile && (client || workspaceTab === "buttons") && (
+      {editingProfile && (
         <ActionEditor
           language={language}
           button={selectedButton}
@@ -1600,7 +1206,60 @@ export function DeviceManagement({
           }}
         />
       )}
-      {!client && editingProfile && <ConfigurationSettingsDialog open={settingsOpen} language={language} profile={editingProfile} sharedDeviceCount={sharedDeviceCount} allowDuplicate={!isProductDevice} onCancel={() => setSettingsOpen(false)} onSave={(settings: TriggerSettings) => { updateEditingProfile({ ...editingProfile, trigger_settings: settings }); setSettingsOpen(false); if (!isProductDevice) void onSaveSharedProfile?.({ ...editingProfile, trigger_settings: settings }); }} onDraftChange={isProductDevice ? undefined : (settings) => updateEditingProfile({ ...editingProfile, trigger_settings: settings })} onDuplicate={async (name) => { if (selectedDevice) await onDuplicateProfileForDevice?.({ deviceId: selectedDevice.deviceId, sourceProfile: { ...editingProfile }, name }); setSettingsOpen(false); }} />}
+      {!client && studioMode && editingProfile && <ConfigurationSettingsDialog open={settingsOpen} language={language} profile={editingProfile} sharedDeviceCount={sharedDeviceCount} allowDuplicate={!isProductDevice} onCancel={() => setSettingsOpen(false)} onSave={(settings: TriggerSettings) => { updateEditingProfile({ ...editingProfile, trigger_settings: settings }); setSettingsOpen(false); if (!isProductDevice) void onSaveSharedProfile?.({ ...editingProfile, trigger_settings: settings }); }} onDraftChange={isProductDevice ? undefined : (settings) => updateEditingProfile({ ...editingProfile, trigger_settings: settings })} onDuplicate={async (name) => { if (selectedDevice) await onDuplicateProfileForDevice?.({ deviceId: selectedDevice.deviceId, sourceProfile: { ...editingProfile }, name }); setSettingsOpen(false); }} />}
+      {productConfigurationCreating && selectedDevice && (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="product-configuration-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="product-configuration-create-title"
+          >
+            <header>
+              <h2 id="product-configuration-create-title">{t(language, "productConfiguration.create")}</h2>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label={t(language, "common.close")}
+                title={t(language, "common.close")}
+                disabled={productConfigurationSaving}
+                onClick={() => setProductConfigurationCreating(false)}
+              >
+                <X size={16} />
+              </button>
+            </header>
+            <form onSubmit={(event) => { event.preventDefault(); void createProductConfiguration(); }}>
+              <label>
+                {t(language, "productConfiguration.name")}
+                <input
+                  autoFocus
+                  value={productConfigurationName}
+                  disabled={productConfigurationSaving}
+                  onChange={(event) => setProductConfigurationName(event.target.value)}
+                />
+              </label>
+              <label className="product-configuration-copy-option">
+                <input
+                  type="checkbox"
+                  checked={copyCurrentProductConfiguration}
+                  disabled={productConfigurationSaving}
+                  onChange={(event) => setCopyCurrentProductConfiguration(event.target.checked)}
+                />
+                <span>{t(language, "productConfiguration.copyCurrent")}</span>
+              </label>
+              <p>{t(language, "productConfiguration.scope")}</p>
+              <footer>
+                <button type="button" disabled={productConfigurationSaving} onClick={() => setProductConfigurationCreating(false)}>
+                  {t(language, "common.cancel")}
+                </button>
+                <button className="primary-button" type="submit" disabled={productConfigurationSaving || !productConfigurationName.trim()}>
+                  {t(language, productConfigurationSaving ? "save.saving" : "profile.createAction")}
+                </button>
+              </footer>
+            </form>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

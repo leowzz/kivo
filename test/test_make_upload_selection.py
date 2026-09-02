@@ -34,6 +34,7 @@ def run_make(
     selected_serial: str = "SELECTED-SERIAL",
     runtime_serial: str | None = None,
     selector_exit: int = 0,
+    firmware: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     log_path = tmp_path / "uv.log"
     fake_uv = tmp_path / "fake-uv"
@@ -46,7 +47,13 @@ case " $* " in
     if [ "$KIVO_SELECTOR_EXIT" -ne 0 ]; then
       exit "$KIVO_SELECTOR_EXIT"
     fi
-    printf '%s\\n' "$KIVO_SELECTOR_SERIAL"
+    case " $* " in
+      *" --output target "*) printf '%s\\n' "$KIVO_SELECTOR_TARGET" ;;
+      *) printf '%s\\n' "$KIVO_SELECTOR_SERIAL" ;;
+    esac
+    ;;
+  *" scripts/select_product_firmware.py "*)
+    printf '%s\\n' "$KIVO_PRODUCT_FIRMWARE"
     ;;
   *" scripts/enter_download_mode.py "*)
     printf '%s\\n' "/dev/fake-download"
@@ -61,6 +68,8 @@ esac
     environment = os.environ | {
         "KIVO_TEST_LOG": str(log_path),
         "KIVO_SELECTOR_SERIAL": selected_serial,
+        "KIVO_SELECTOR_TARGET": f"yd-rp2040 {selected_serial}",
+        "KIVO_PRODUCT_FIRMWARE": "output/products/product-a/test-build/firmware.uf2",
         "KIVO_RUNTIME_SERIAL": runtime_serial or selected_serial,
         "KIVO_SELECTOR_EXIT": str(selector_exit),
     }
@@ -72,6 +81,8 @@ esac
         command.append(f"ENV_FILE={env_file}")
     if serial is not None:
         command.append(f"SERIAL={serial}")
+    if firmware is not None:
+        command.append(f"FIRMWARE={firmware}")
 
     result = subprocess.run(
         command,
@@ -228,6 +239,53 @@ def test_bootsel_selection_verifies_with_the_resolved_runtime_serial(
         "verify_runtime_firmware.py" in line and "--serial RUNTIME-SERIAL" in line
         for line in invocations
     )
+
+
+def test_upload_prod_selects_device_then_product_and_verifies_artifact(
+    tmp_path: Path,
+) -> None:
+    firmware = "output/products/product-a/test-build/firmware.uf2"
+    result, invocations = run_make(tmp_path, "upload-prod", firmware=firmware)
+
+    assert result.returncode == 0, result.stderr
+    assert "scripts/kill_helper.py" in invocations[0]
+    assert "scripts/select_firmware_target.py" in invocations[1]
+    assert "--board all --mode runtime --mode bootloader --output target" in invocations[1]
+    assert "scripts/select_product_firmware.py" in invocations[2]
+    assert "--board yd-rp2040" in invocations[2]
+    assert "--firmware output/products/product-a/test-build/firmware.uf2" in invocations[2]
+    upload_index = next(
+        index for index, line in enumerate(invocations) if "scripts/upload_rp2040.py" in line
+    )
+    verify_index = next(
+        index
+        for index, line in enumerate(invocations)
+        if "verify_runtime_firmware.py" in line
+    )
+    assert 2 < upload_index < verify_index
+    assert "--product-version-id product-a" in invocations[verify_index]
+    assert "--build test-build" in invocations[verify_index]
+
+
+def test_upload_prod_uses_esp32_factory_artifact_for_esp_target(tmp_path: Path) -> None:
+    firmware = "output/products/esp-product/test-build/firmware.factory.bin"
+    result, invocations = run_make(
+        tmp_path,
+        "upload-prod",
+        firmware=firmware,
+        extra_environment={
+            "KIVO_SELECTOR_TARGET": "yd-esp32-s3 ESP-SERIAL",
+            "KIVO_PRODUCT_FIRMWARE": firmware,
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert any("scripts/enter_download_mode.py --serial ESP-SERIAL" in line for line in invocations)
+    assert any("esptool.py --chip esp32s3" in line and firmware in line for line in invocations)
+    verify = next(line for line in invocations if "verify_runtime_firmware.py" in line)
+    assert "--serial ESP-SERIAL" in verify
+    assert "--family esp32s3" in verify
+    assert "--product-version-id esp-product" in verify
 
 
 @pytest.mark.parametrize(

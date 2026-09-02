@@ -84,21 +84,29 @@
 
 ## 4. User Data And Compatibility
 
-- Settings schema 升级，Device Record 增加可选 `ProductDeviceConfig`：Product
-  Version ID、每设备 Trigger Settings 和按键 Actions。
+- Settings schema v4 增加按 Product Version ID 隔离的 `ProductConfigurationProfile`
+  注册表；Device Record 只保存当前 `product_configuration_id`。
+- Product Configuration Profile 是命名的共享配置，只包含 Trigger Settings 和按键
+  Actions，不包含布局、按键定义、Hardware Profile 或 GPIO。
 - 默认长按和双击阈值保持 500 ms 与 300 ms，默认 Actions 为空。
 - Product Device 连接后自动登记并显示内嵌布局，不创建 Runtime Assignment，也不进入
   按键布局或硬件配置向导。
+- Product Definition 中的布局和硬件配置只能在 Product Studio 修改，并随产品固件发布；
+  主应用不能覆盖这些字段。
 - 保存 Actions 时，后端必须按当前 Product Definition 校验按键 ID。
 - Runtime 层增加统一的 resolved configuration：Product Device 使用内嵌
-  layout/hardware 与每设备 Actions；legacy Device 继续使用 Device Profile、
+  layout/hardware 与所选共享配置的 Actions；legacy Device 继续使用 Device Profile、
   Hardware Profile 和 Runtime Assignment。
-- 同型号的不同 Device 各自保存 Actions；提供显式“从另一设备复制”，但不存在共享可变
-  Action Profile。
+- 同一 Product Version ID 的 Device 可共享和切换 Product Configuration Profile；编辑共享
+  配置会更新所有当前引用它的 Device。不同 Product Version ID 之间禁止选择或共享。
+- 首台 Product Device 为 Product Version 创建默认配置；后续同版本 Device 自动选择该版本
+  最早创建的配置。用户可从当前配置复制或新建空配置后切换。
+- schema v3 的每设备 `ProductDeviceConfig` 在升级时各自迁移为独立命名配置，先保持原有
+  行为，避免升级时意外合并不同设备的 Actions。
 - Product Device 上已有 legacy Runtime Assignment 时保留但不启用；重新刷回无 Product
   Definition 的通用固件后仍可恢复 legacy 行为。
-- 默认用户备份改为轻量 schema，仅包含 Device ID、Product Version ID、Trigger
-  Settings 和 Actions。
+- 默认用户备份 schema v2 保存 Product Configuration Profiles 和 Device 到配置的引用，
+  以保留共享关系；继续读取旧的每设备轻量备份并迁移为独立配置。
 - 轻量备份恢复按 Device ID 合并，未列出的设备不变，Product Version ID 不匹配时不应用。
 - 现有全量备份保留只读预览和导入兼容，但不再作为普通用户默认导出。
 - Product Definition 缓存、硬件布局和指标不进入轻量备份。
@@ -114,9 +122,10 @@
   255 字节行限制、错误请求和重启恢复。
 - Host protocol：协议 3-8 回归、v9 产品定义读取、v10 显示控制面板配置、缓存命中、
   缺块、乱序、base64、长度、SHA、超时和 schema 错误。
-- Runtime integration：Product Device 零配置进入可编辑状态、同型号两台设备 Actions
-  隔离、动作执行、定义变化导致未知按键错误、legacy Runtime Assignment 不回归。
-- Backup：轻量导出与合并恢复、离线 Device 恢复、型号不匹配、旧全量备份导入兼容。
+- Runtime integration：Product Device 零配置进入可编辑状态、同 Product Version 多设备共享
+  与切换配置、共享动作更新、定义变化导致未知按键错误、legacy Runtime Assignment 不回归。
+- Backup：轻量导出与共享引用恢复、离线 Device 恢复、型号不匹配、v1 轻量备份和旧全量
+  备份导入兼容。
 - Studio UI：顶层 Tab 切换与状态保持、完整开发调试工作区、新建或复制、布局和引脚编辑、
   校验阻止保存或构建、dirty 状态、构建成功、构建失败和 busy 日志。
 - Packaging：普通 `npm run build` 仍只构建普通入口；`make helper-build` 和发布流水线

@@ -48,6 +48,17 @@ function configuredActions() {
   return JSON.parse(screen.getByTestId("actions-json").textContent ?? "{}") as TriggerActions;
 }
 
+test("edits and trims the selected button note", async () => {
+  const user = userEvent.setup();
+  render(<Harness language="zh-CN" />);
+
+  const note = screen.getByRole("textbox", { name: "按键备注" });
+  await user.type(note, "  发给当前联系人  ");
+  await user.tab();
+
+  expect(configuredActions().note).toBe("发给当前联系人");
+});
+
 test("keeps press visible and collapses advanced trigger groups by default", async () => {
   const user = userEvent.setup();
   render(<Harness initial={{

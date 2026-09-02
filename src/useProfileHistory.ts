@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import type { DeviceProfile, ProductDeviceConfig } from "./types";
+import type { DeviceProfile, ProductConfigurationProfile } from "./types";
 
 export const DEFAULT_PROFILE_HISTORY_MAX_SNAPSHOTS = 50;
 
@@ -30,25 +30,25 @@ export interface ProfileHistory {
 }
 
 export interface ProductConfigHistoryEntry {
-  deviceId: string;
-  config: ProductDeviceConfig;
+  configurationId: string;
+  config: ProductConfigurationProfile;
 }
 
 export interface ProductConfigHistory {
   /** Current immutable configs, kept in the same order as the supplied entries. */
   configs: ProductConfigHistoryEntry[];
-  get(deviceId: string): ProductDeviceConfig | undefined;
-  canUndo(deviceId: string): boolean;
-  canRedo(deviceId: string): boolean;
-  record(deviceId: string, config: ProductDeviceConfig): ProductDeviceConfig;
+  get(configurationId: string): ProductConfigurationProfile | undefined;
+  canUndo(configurationId: string): boolean;
+  canRedo(configurationId: string): boolean;
+  record(configurationId: string, config: ProductConfigurationProfile): ProductConfigurationProfile;
   update(
-    deviceId: string,
-    update: (config: ProductDeviceConfig) => ProductDeviceConfig,
-  ): ProductDeviceConfig | undefined;
-  undo(deviceId: string): ProductDeviceConfig | undefined;
-  redo(deviceId: string): ProductDeviceConfig | undefined;
+    configurationId: string,
+    update: (config: ProductConfigurationProfile) => ProductConfigurationProfile,
+  ): ProductConfigurationProfile | undefined;
+  undo(configurationId: string): ProductConfigurationProfile | undefined;
+  redo(configurationId: string): ProductConfigurationProfile | undefined;
   /** Drop navigable history while keeping each device's current config. */
-  clear(deviceId?: string): void;
+  clear(configurationId?: string): void;
   /** Reconcile an authoritative config list while preserving unchanged timelines. */
   sync(entries: readonly ProductConfigHistoryEntry[]): void;
   /** Replace authoritative configs and drop all history for the replaced devices. */
@@ -62,9 +62,9 @@ interface Timeline {
 }
 
 interface ProductTimeline {
-  past: ProductDeviceConfig[];
-  present: ProductDeviceConfig;
-  future: ProductDeviceConfig[];
+  past: ProductConfigurationProfile[];
+  present: ProductConfigurationProfile;
+  future: ProductConfigurationProfile[];
 }
 
 interface Mutation<T> {
@@ -76,7 +76,7 @@ function cloneProfile(profile: DeviceProfile): DeviceProfile {
   return structuredClone(profile);
 }
 
-function cloneProductConfig(config: ProductDeviceConfig): ProductDeviceConfig {
+function cloneProductConfig(config: ProductConfigurationProfile): ProductConfigurationProfile {
   return structuredClone(config);
 }
 
@@ -252,30 +252,30 @@ class ProductConfigHistoryStore {
   }
 
   get configs(): ProductConfigHistoryEntry[] {
-    return [...this.timelines.entries()].map(([deviceId, { present }]) => ({
-      deviceId,
+    return [...this.timelines.entries()].map(([configurationId, { present }]) => ({
+      configurationId,
       config: cloneProductConfig(present),
     }));
   }
 
-  get(deviceId: string): ProductDeviceConfig | undefined {
-    const timeline = this.timelines.get(deviceId);
+  get(configurationId: string): ProductConfigurationProfile | undefined {
+    const timeline = this.timelines.get(configurationId);
     return timeline ? cloneProductConfig(timeline.present) : undefined;
   }
 
-  canUndo(deviceId: string): boolean {
-    return (this.timelines.get(deviceId)?.past.length ?? 0) > 0;
+  canUndo(configurationId: string): boolean {
+    return (this.timelines.get(configurationId)?.past.length ?? 0) > 0;
   }
 
-  canRedo(deviceId: string): boolean {
-    return (this.timelines.get(deviceId)?.future.length ?? 0) > 0;
+  canRedo(configurationId: string): boolean {
+    return (this.timelines.get(configurationId)?.future.length ?? 0) > 0;
   }
 
-  record(deviceId: string, config: ProductDeviceConfig): Mutation<ProductDeviceConfig> {
+  record(configurationId: string, config: ProductConfigurationProfile): Mutation<ProductConfigurationProfile> {
     const next = cloneProductConfig(config);
-    const timeline = this.timelines.get(deviceId);
+    const timeline = this.timelines.get(configurationId);
     if (!timeline) {
-      this.timelines.set(deviceId, { past: [], present: next, future: [] });
+      this.timelines.set(configurationId, { past: [], present: next, future: [] });
       return { value: cloneProductConfig(next), changed: true };
     }
     if (valuesEqual(timeline.present, next)) {
@@ -288,16 +288,16 @@ class ProductConfigHistoryStore {
   }
 
   update(
-    deviceId: string,
-    update: (config: ProductDeviceConfig) => ProductDeviceConfig,
-  ): Mutation<ProductDeviceConfig | undefined> {
-    const timeline = this.timelines.get(deviceId);
+    configurationId: string,
+    update: (config: ProductConfigurationProfile) => ProductConfigurationProfile,
+  ): Mutation<ProductConfigurationProfile | undefined> {
+    const timeline = this.timelines.get(configurationId);
     if (!timeline) return { value: undefined, changed: false };
-    return this.record(deviceId, update(cloneProductConfig(timeline.present)));
+    return this.record(configurationId, update(cloneProductConfig(timeline.present)));
   }
 
-  undo(deviceId: string): Mutation<ProductDeviceConfig | undefined> {
-    const timeline = this.timelines.get(deviceId);
+  undo(configurationId: string): Mutation<ProductConfigurationProfile | undefined> {
+    const timeline = this.timelines.get(configurationId);
     if (!timeline || timeline.past.length === 0) return { value: undefined, changed: false };
     const previous = timeline.past[timeline.past.length - 1];
     timeline.past = timeline.past.slice(0, -1);
@@ -306,8 +306,8 @@ class ProductConfigHistoryStore {
     return { value: cloneProductConfig(previous), changed: true };
   }
 
-  redo(deviceId: string): Mutation<ProductDeviceConfig | undefined> {
-    const timeline = this.timelines.get(deviceId);
+  redo(configurationId: string): Mutation<ProductConfigurationProfile | undefined> {
+    const timeline = this.timelines.get(configurationId);
     if (!timeline || timeline.future.length === 0) return { value: undefined, changed: false };
     const next = timeline.future[0];
     timeline.future = timeline.future.slice(1);
@@ -316,9 +316,9 @@ class ProductConfigHistoryStore {
     return { value: cloneProductConfig(next), changed: true };
   }
 
-  clear(deviceId?: string): Mutation<void> {
+  clear(configurationId?: string): Mutation<void> {
     let changed = false;
-    const timelines = deviceId ? [this.timelines.get(deviceId)] : [...this.timelines.values()];
+    const timelines = configurationId ? [this.timelines.get(configurationId)] : [...this.timelines.values()];
     for (const timeline of timelines) {
       if (!timeline || timeline.past.length === 0 && timeline.future.length === 0) continue;
       timeline.past = [];
@@ -334,18 +334,18 @@ class ProductConfigHistoryStore {
     const next = new Map<string, ProductTimeline>();
     let changed = previous.size !== entries.length;
 
-    entries.forEach(({ deviceId, config }, index) => {
+    entries.forEach(({ configurationId, config }, index) => {
       const snapshot = cloneProductConfig(config);
-      const existing = previous.get(deviceId);
+      const existing = previous.get(configurationId);
       if (existing && valuesEqual(existing.present, snapshot)) {
-        next.set(deviceId, existing);
-        if (previousIds[index] !== deviceId) changed = true;
+        next.set(configurationId, existing);
+        if (previousIds[index] !== configurationId) changed = true;
       } else {
-        next.set(deviceId, { past: [], present: snapshot, future: [] });
+        next.set(configurationId, { past: [], present: snapshot, future: [] });
         changed = true;
       }
     });
-    if (!changed && previousIds.some((deviceId, index) => deviceId !== entries[index]?.deviceId)) {
+    if (!changed && previousIds.some((configurationId, index) => configurationId !== entries[index]?.configurationId)) {
       changed = true;
     }
     this.timelines = next;
@@ -359,14 +359,14 @@ class ProductConfigHistoryStore {
 
   private createTimelines(entries: readonly ProductConfigHistoryEntry[]): Map<string, ProductTimeline> {
     const timelines = new Map<string, ProductTimeline>();
-    for (const { deviceId, config } of entries) {
+    for (const { configurationId, config } of entries) {
       const snapshot = cloneProductConfig(config);
-      timelines.set(deviceId, { past: [], present: snapshot, future: [] });
+      timelines.set(configurationId, { past: [], present: snapshot, future: [] });
     }
     return timelines;
   }
 
-  private boundPast(past: ProductDeviceConfig[]): ProductDeviceConfig[] {
+  private boundPast(past: ProductConfigurationProfile[]): ProductConfigurationProfile[] {
     const pastLimit = this.maxSnapshots - 1;
     return pastLimit === 0 ? [] : past.slice(-pastLimit);
   }
@@ -437,20 +437,20 @@ export function useProductConfigHistory(
     return mutation.value;
   }, []);
 
-  const get = useCallback((deviceId: string) => store.get(deviceId), [store]);
-  const canUndo = useCallback((deviceId: string) => store.canUndo(deviceId), [store]);
-  const canRedo = useCallback((deviceId: string) => store.canRedo(deviceId), [store]);
+  const get = useCallback((configurationId: string) => store.get(configurationId), [store]);
+  const canUndo = useCallback((configurationId: string) => store.canUndo(configurationId), [store]);
+  const canRedo = useCallback((configurationId: string) => store.canRedo(configurationId), [store]);
   const record = useCallback(
-    (deviceId: string, config: ProductDeviceConfig) => commit(() => store.record(deviceId, config)),
+    (configurationId: string, config: ProductConfigurationProfile) => commit(() => store.record(configurationId, config)),
     [commit, store],
   );
   const update = useCallback(
-    (deviceId: string, updater: (config: ProductDeviceConfig) => ProductDeviceConfig) => commit(() => store.update(deviceId, updater)),
+    (configurationId: string, updater: (config: ProductConfigurationProfile) => ProductConfigurationProfile) => commit(() => store.update(configurationId, updater)),
     [commit, store],
   );
-  const undo = useCallback((deviceId: string) => commit(() => store.undo(deviceId)), [commit, store]);
-  const redo = useCallback((deviceId: string) => commit(() => store.redo(deviceId)), [commit, store]);
-  const clear = useCallback((deviceId?: string) => { commit(() => store.clear(deviceId)); }, [commit, store]);
+  const undo = useCallback((configurationId: string) => commit(() => store.undo(configurationId)), [commit, store]);
+  const redo = useCallback((configurationId: string) => commit(() => store.redo(configurationId)), [commit, store]);
+  const clear = useCallback((configurationId?: string) => { commit(() => store.clear(configurationId)); }, [commit, store]);
   const sync = useCallback((entries: readonly ProductConfigHistoryEntry[]) => { commit(() => store.sync(entries)); }, [commit, store]);
   const reset = useCallback((entries: readonly ProductConfigHistoryEntry[]) => { commit(() => store.reset(entries)); }, [commit, store]);
   return useMemo(() => ({

@@ -11,8 +11,8 @@ use crate::{
     protocol::{HelloCapabilities, InputState, PhysicalInput, validate_hello},
     usage::UsageSnapshot,
     workspace::{
-        AppError, AssignmentResolution, ProductDeviceConfig, RuntimeAssignment, SettingsDocument,
-        Workspace,
+        AppError, AssignmentResolution, ProductConfigurationProfile, RuntimeAssignment,
+        SettingsDocument, Workspace,
     },
 };
 use nusb::MaybeFuture;
@@ -178,7 +178,8 @@ pub struct DeviceStatus {
     pub firmware_build_id: Option<String>,
     pub product_version_id: Option<String>,
     pub product_definition: Option<ProductDefinition>,
-    pub product_config: Option<ProductDeviceConfig>,
+    pub product_configuration_id: Option<String>,
+    pub product_config: Option<ProductConfigurationProfile>,
     #[serde(rename = "firmwareProtocol")]
     pub firmware_protocol: Option<u16>,
     #[serde(rename = "capabilities")]
@@ -1183,12 +1184,23 @@ impl RuntimeCoordinator {
             status.firmware_build_id = Some(capabilities.firmware_build_id.clone());
             status.product_version_id = capabilities.product_version_id.clone();
             status.product_definition = self.product_definitions.get(&device_id).cloned();
+            status.product_configuration_id = self
+                .workspace_revision
+                .settings
+                .devices
+                .get(&device_id)
+                .and_then(|device| device.product_configuration_id.clone());
             status.product_config = self
                 .workspace_revision
                 .settings
                 .devices
                 .get(&device_id)
-                .and_then(|device| device.product_config.clone());
+                .and_then(|device| {
+                    self.workspace_revision
+                        .settings
+                        .product_configuration_for_device(device)
+                        .cloned()
+                });
             status.firmware_protocol = Some(capabilities.protocol);
             status.pins = capabilities.pins;
             status.port = self.workers.get(&device_id).map(|slot| slot.port.clone());
@@ -1611,6 +1623,8 @@ impl RuntimeCoordinator {
                 status.name = persisted.name;
                 status.assignment = persisted.assignment;
                 status.runtime_assignment = persisted.runtime_assignment;
+                status.product_configuration_id = persisted.product_configuration_id;
+                status.product_config = persisted.product_config;
             }
         }
     }
@@ -1819,8 +1833,10 @@ fn workspace_worker_update(
     let new_device = new.settings.devices.get(id);
     let old_assignment = old_device.and_then(|device| device.runtime_assignment.as_ref());
     let new_assignment = new_device.and_then(|device| device.runtime_assignment.as_ref());
-    let old_product = old_device.and_then(|device| device.product_config.as_ref());
-    let new_product = new_device.and_then(|device| device.product_config.as_ref());
+    let old_product =
+        old_device.and_then(|device| old.settings.product_configuration_for_device(device));
+    let new_product =
+        new_device.and_then(|device| new.settings.product_configuration_for_device(device));
     if old_product != new_product {
         return Some(WorkspaceWorkerUpdate::Snapshot);
     }
@@ -1868,7 +1884,8 @@ fn offline_status(
     let board = registry
         .board_by_id(&record.board_profile_id)
         .expect("validated persisted board profile");
-    let (assignment, runtime_assignment) = if record.product_config.is_some() {
+    let product_configuration = workspace.settings.product_configuration_for_device(record);
+    let (assignment, runtime_assignment) = if product_configuration.is_some() {
         (
             AssignmentDimension::Valid,
             record.runtime_assignment.clone(),
@@ -1912,11 +1929,13 @@ fn offline_status(
         board_profile_id: board.id.into(),
         firmware_build_id: None,
         product_version_id: record
-            .product_config
+            .product_configuration_id
             .as_ref()
+            .and_then(|id| workspace.settings.product_configurations.get(id))
             .map(|config| config.product_version_id.clone()),
         product_definition: None,
-        product_config: record.product_config.clone(),
+        product_configuration_id: record.product_configuration_id.clone(),
+        product_config: product_configuration.cloned(),
         firmware_protocol: None,
         pins: Vec::new(),
         runtime_assignment,
@@ -1931,7 +1950,10 @@ fn runtime_profile(
     product_definition: Option<&ProductDefinition>,
 ) -> Option<RuntimeProfileSnapshot> {
     let device = workspace.settings.devices.get(id)?;
-    if let (Some(config), Some(definition)) = (&device.product_config, product_definition) {
+    if let (Some(config), Some(definition)) = (
+        workspace.settings.product_configuration_for_device(device),
+        product_definition,
+    ) {
         if config.product_version_id != definition.product.product_version_id {
             return None;
         }
@@ -3052,8 +3074,15 @@ mod tests {
             .cloned()
             .unwrap();
         assert!(record.runtime_assignment.is_none());
+        let configuration_id = record.product_configuration_id.unwrap();
         assert_eq!(
-            record.product_config.unwrap().product_version_id,
+            coordinator
+                .workspace
+                .read()
+                .unwrap()
+                .settings
+                .product_configurations[&configuration_id]
+                .product_version_id,
             "key-rp-k1-r01"
         );
         assert!(matches!(

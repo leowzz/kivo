@@ -188,10 +188,10 @@ picker. Categories are Common, Function Keys (F1-F24), Letters, Numbers,
 Symbols, Navigation, and Numeric Keypad. Standard USB HID cannot transmit a
 physical laptop Fn key; the UI must not present Fn itself as a selectable key.
 
-Modifier selection is multi-select. The compact default choices are Cmd/Ctrl,
-Cmd, Ctrl, Option/Alt, and Shift. A **Distinguish left and right** disclosure
-shows explicit left and right variants for Ctrl, Shift, Alt/Option, and GUI
-(Command on macOS, Win on Windows).
+Modifier selection is multi-select. The compact default choices are Cmd, Ctrl,
+Option/Alt, and Shift. A **More modifier keys** disclosure shows the portable
+Cmd/Ctrl choice and explicit left and right variants for Ctrl, Shift,
+Alt/Option, and GUI (Command on macOS, Win on Windows).
 
 The canonical modifier mask uses all eight USB HID bits:
 

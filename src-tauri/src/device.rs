@@ -2608,6 +2608,10 @@ fn read_embedded_product_definition<T: Read + Write>(
                 let text =
                     std::str::from_utf8(&line).map_err(|_| "invalid_product_info".to_owned())?;
                 match parse_device(text) {
+                    Some(DeviceMessage::Hello(repeated)) if repeated == *hello => {
+                        // Firmware emits HELLO both when USB becomes ready and in response to
+                        // the host probe. Consume the second line before PRODUCT_INFO.
+                    }
                     Some(DeviceMessage::ProductInfo {
                         product_version_id: Some(product_version_id),
                         schema_version,
@@ -2617,6 +2621,9 @@ fn read_embedded_product_definition<T: Read + Write>(
                         && schema_version == PRODUCT_DEFINITION_SCHEMA_VERSION =>
                     {
                         break (length, sha256);
+                    }
+                    Some(DeviceMessage::Hello(_)) => {
+                        return Err("product_info_hello_mismatch".into());
                     }
                     Some(DeviceMessage::ProductError { code }) => {
                         return Err(format!("product_info_failed:{code}"));
@@ -2983,6 +2990,43 @@ mod tests {
         cache.store(&normalized).unwrap();
         let response = format!(
             "PRODUCT_INFO key-rp-k1-r01 1 {} {}\n",
+            normalized.byte_length, normalized.sha256
+        );
+        let mut device = BufReader::new(MemoryTransport {
+            input: Cursor::new(response.into_bytes()),
+            output: Vec::new(),
+        });
+        let hello = HelloCapabilities {
+            protocol: 9,
+            controller_family_id: "rp2040".into(),
+            board_profile_id: crate::hardware::YD_RP2040_BOARD_ID.into(),
+            firmware_build_id: "test".into(),
+            product_version_id: Some("key-rp-k1-r01".into()),
+            pins: vec![0],
+        };
+
+        let loaded = read_embedded_product_definition(
+            &mut device,
+            &hello,
+            crate::hardware::board_by_id(crate::hardware::YD_RP2040_BOARD_ID).unwrap(),
+            &SystemClock::default(),
+            &AtomicBool::new(false),
+            Some(&cache),
+        )
+        .unwrap();
+
+        assert_eq!(loaded, Some(normalized.definition));
+        assert_eq!(device.into_inner().output, b"PRODUCT_INFO\n");
+    }
+
+    #[test]
+    fn embedded_product_read_ignores_duplicate_hello_before_product_info() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = ProductDefinitionCache::new(directory.path().into());
+        let normalized = embedded_product_definition().normalize().unwrap();
+        cache.store(&normalized).unwrap();
+        let response = format!(
+            "HELLO 9 rp2040 yd-rp2040 test key-rp-k1-r01 1 0\nPRODUCT_INFO key-rp-k1-r01 1 {} {}\n",
             normalized.byte_length, normalized.sha256
         );
         let mut device = BufReader::new(MemoryTransport {

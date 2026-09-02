@@ -18,11 +18,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const SETTINGS_SCHEMA_VERSION: u16 = 3;
-pub const BACKUP_SCHEMA_VERSION: u16 = 2;
-pub const USER_BACKUP_SCHEMA_VERSION: u16 = 1;
+pub const SETTINGS_SCHEMA_VERSION: u16 = 4;
+pub const BACKUP_SCHEMA_VERSION: u16 = 3;
+pub const USER_BACKUP_SCHEMA_VERSION: u16 = 2;
 const LEGACY_SCHEMA_VERSION: u16 = 1;
-const PREVIOUS_SETTINGS_SCHEMA_VERSION: u16 = 2;
+const PREVIOUS_SETTINGS_SCHEMA_VERSION: u16 = 3;
+const SCHEMA_V2_SETTINGS_VERSION: u16 = 2;
+const PREVIOUS_BACKUP_SCHEMA_VERSION: u16 = 2;
+const PREVIOUS_USER_BACKUP_SCHEMA_VERSION: u16 = 1;
 const PREVIOUS_PROFILE_SCHEMA_VERSION: u16 = 2;
 const MAX_IMPORT_BYTES: u64 = 10 * 1024 * 1024;
 
@@ -89,18 +92,28 @@ pub struct DuplicateProfileForDeviceRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct CreateProductConfigurationRequest {
+    pub device_id: DeviceId,
+    pub name: String,
+    #[serde(default)]
+    pub copy_current: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct DeviceRecord {
     pub device_id: DeviceId,
     pub name: String,
     pub board_profile_id: String,
     pub runtime_assignment: Option<RuntimeAssignment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub product_config: Option<ProductDeviceConfig>,
+    pub product_configuration_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProductDeviceConfig {
+pub struct ProductConfigurationProfile {
+    pub id: String,
+    pub name: String,
     pub product_version_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot_metadata: Option<SnapshotMetadata>,
@@ -117,6 +130,8 @@ pub struct SettingsDocument {
     pub language: Language,
     #[serde(default)]
     pub devices: BTreeMap<DeviceId, DeviceRecord>,
+    #[serde(default)]
+    pub product_configurations: BTreeMap<String, ProductConfigurationProfile>,
 }
 
 impl Default for SettingsDocument {
@@ -126,8 +141,51 @@ impl Default for SettingsDocument {
             editor_profile: None,
             language: Language::ZhCn,
             devices: BTreeMap::new(),
+            product_configurations: BTreeMap::new(),
         }
     }
+}
+
+impl SettingsDocument {
+    pub fn product_configuration_for_device(
+        &self,
+        device: &DeviceRecord,
+    ) -> Option<&ProductConfigurationProfile> {
+        device
+            .product_configuration_id
+            .as_ref()
+            .and_then(|id| self.product_configurations.get(id))
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+struct SchemaV3SettingsDocument {
+    schema_version: u16,
+    editor_profile: Option<String>,
+    language: Language,
+    #[serde(default)]
+    devices: BTreeMap<DeviceId, SchemaV3DeviceRecord>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct SchemaV3DeviceRecord {
+    device_id: DeviceId,
+    name: String,
+    board_profile_id: String,
+    runtime_assignment: Option<RuntimeAssignment>,
+    #[serde(default)]
+    product_config: Option<SchemaV3ProductDeviceConfig>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct SchemaV3ProductDeviceConfig {
+    product_version_id: String,
+    #[serde(default)]
+    snapshot_metadata: Option<SnapshotMetadata>,
+    #[serde(default)]
+    trigger_settings: TriggerSettings,
+    #[serde(default)]
+    actions: BTreeMap<String, TriggerActions>,
 }
 
 #[derive(Deserialize)]
@@ -195,6 +253,14 @@ pub struct BackupDocument {
     pub metrics: MetricsBackup,
 }
 
+#[derive(Deserialize)]
+struct SchemaV2BackupDocument {
+    schema_version: u16,
+    settings: SchemaV3SettingsDocument,
+    profiles: Vec<DeviceProfile>,
+    metrics: MetricsBackup,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BackupKind {
@@ -207,12 +273,7 @@ pub enum BackupKind {
 pub struct UserBackupDevice {
     pub device_id: DeviceId,
     pub product_version_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub snapshot_metadata: Option<SnapshotMetadata>,
-    #[serde(default)]
-    pub trigger_settings: TriggerSettings,
-    #[serde(default)]
-    pub actions: BTreeMap<String, TriggerActions>,
+    pub product_configuration_id: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -222,6 +283,28 @@ pub struct UserBackupDocument {
     pub kind: BackupKind,
     #[serde(default)]
     pub devices: Vec<UserBackupDevice>,
+    #[serde(default)]
+    pub product_configurations: Vec<ProductConfigurationProfile>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct SchemaV1UserBackupDocument {
+    schema_version: u16,
+    kind: BackupKind,
+    #[serde(default)]
+    devices: Vec<SchemaV1UserBackupDevice>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct SchemaV1UserBackupDevice {
+    device_id: DeviceId,
+    product_version_id: String,
+    #[serde(default)]
+    snapshot_metadata: Option<SnapshotMetadata>,
+    #[serde(default)]
+    trigger_settings: TriggerSettings,
+    #[serde(default)]
+    actions: BTreeMap<String, TriggerActions>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -441,6 +524,7 @@ impl Workspace {
             editor_profile: legacy_settings.active_model,
             language: legacy_settings.language,
             devices: BTreeMap::new(),
+            product_configurations: BTreeMap::new(),
         };
         validate_settings(&settings, &profiles)?;
         activate_schema_v1_migration(config_directory, &settings, &profiles)?;
@@ -483,19 +567,18 @@ impl Workspace {
                 "unsupported_settings_schema",
                 false,
             )?,
-            PREVIOUS_SETTINGS_SCHEMA_VERSION => {
+            PREVIOUS_SETTINGS_SCHEMA_VERSION | SCHEMA_V2_SETTINGS_VERSION => {
                 let contents = read_yaml_contents(&settings_path, false)?;
-                let mut migrated: SettingsDocument =
+                let legacy: SchemaV3SettingsDocument =
                     serde_yaml_ng::from_str(&contents).map_err(|error| {
                         AppError::new("invalid_yaml").with_detail(error.to_string())
                     })?;
-                migrated.schema_version = SETTINGS_SCHEMA_VERSION;
-                migrated
+                migrate_schema_v3_settings(legacy)
             }
             _ => return Err(AppError::new("unsupported_settings_schema")),
         };
         let settings_migrated = canonicalize_settings_board_ids(&mut settings)
-            || settings_schema_version == PREVIOUS_SETTINGS_SCHEMA_VERSION;
+            || settings_schema_version != SETTINGS_SCHEMA_VERSION;
         let mut profiles = BTreeMap::new();
         let mut migrated_profiles = Vec::new();
         let profile_directory = data_directory.join("profiles");
@@ -607,6 +690,7 @@ impl Workspace {
             editor_profile: patch.editor_profile,
             language: patch.language,
             devices: self.settings.devices.clone(),
+            product_configurations: self.settings.product_configurations.clone(),
         };
         self.persist_settings(&settings)?;
         self.settings = settings;
@@ -684,7 +768,7 @@ impl Workspace {
                 name: format!("{} · {suffix}", board.display_name),
                 board_profile_id: board.id.into(),
                 runtime_assignment: None,
-                product_config: None,
+                product_configuration_id: None,
             };
             let mut settings = self.settings.clone();
             settings.devices.insert(id.clone(), record);
@@ -707,7 +791,9 @@ impl Workspace {
             return Err(AppError::new("product_board_profile_mismatch"));
         }
         self.enroll_device_with_registry(registry, id.clone())?;
-        let current_config = self.settings.devices[&id].product_config.as_ref();
+        let current_config = self
+            .settings
+            .product_configuration_for_device(&self.settings.devices[&id]);
         if let Some(config) = current_config {
             if config.product_version_id != definition.product.product_version_id {
                 return Err(AppError::new("product_version_id_mismatch"));
@@ -717,60 +803,168 @@ impl Workspace {
                 .validate()?;
         } else {
             let mut settings = self.settings.clone();
+            let product_version_id = &definition.product.product_version_id;
+            let configuration_id = settings
+                .product_configurations
+                .values()
+                .filter(|configuration| configuration.product_version_id == *product_version_id)
+                .min_by_key(|configuration| {
+                    (
+                        configuration
+                            .snapshot_metadata
+                            .as_ref()
+                            .map(|metadata| metadata.created_at)
+                            .unwrap_or(u64::MAX),
+                        configuration.id.as_str(),
+                    )
+                })
+                .map(|configuration| configuration.id.clone())
+                .unwrap_or_else(|| {
+                    let name = format!("{} Default", definition.product.display_name);
+                    let configuration_id = next_product_configuration_id(
+                        &settings.product_configurations,
+                        &name,
+                        product_version_id,
+                    );
+                    settings.product_configurations.insert(
+                        configuration_id.clone(),
+                        ProductConfigurationProfile {
+                            id: configuration_id.clone(),
+                            name,
+                            product_version_id: product_version_id.clone(),
+                            snapshot_metadata: Some(SnapshotMetadata::new()),
+                            trigger_settings: TriggerSettings::default(),
+                            actions: BTreeMap::new(),
+                        },
+                    );
+                    configuration_id
+                });
             settings
                 .devices
                 .get_mut(&id)
                 .expect("device was enrolled")
-                .product_config = Some(ProductDeviceConfig {
-                product_version_id: definition.product.product_version_id.clone(),
-                snapshot_metadata: Some(SnapshotMetadata::new()),
-                trigger_settings: TriggerSettings::default(),
-                actions: BTreeMap::new(),
-            });
+                .product_configuration_id = Some(configuration_id);
             self.persist_settings(&settings)?;
             self.settings = settings;
         }
         Ok(&self.settings.devices[&id])
     }
 
-    pub fn save_product_device_config(
+    pub fn save_product_configuration(
         &mut self,
         id: &DeviceId,
         definition: &ProductDefinition,
-        mut config: ProductDeviceConfig,
+        mut config: ProductConfigurationProfile,
     ) -> Result<(), AppError> {
         if config.product_version_id != definition.product.product_version_id {
             return Err(AppError::new("product_version_id_mismatch"));
         }
+        let active_id = self
+            .device(id)?
+            .product_configuration_id
+            .as_deref()
+            .ok_or_else(|| AppError::new("product_configuration_missing"))?;
+        if active_id != config.id {
+            return Err(AppError::new("product_configuration_mismatch"));
+        }
+        if config.name.trim().is_empty() {
+            return Err(AppError::new("invalid_product_configuration_name"));
+        }
         if config.snapshot_metadata.is_none() {
             config.snapshot_metadata = self
-                .device(id)?
-                .product_config
-                .as_ref()
+                .settings
+                .product_configurations
+                .get(active_id)
                 .and_then(|current| current.snapshot_metadata.clone());
         }
         definition
             .as_runtime_profile(config.trigger_settings.clone(), config.actions.clone())
             .validate()?;
-        self.update_device(id, |record| record.product_config = Some(config))
+        let mut settings = self.settings.clone();
+        settings
+            .product_configurations
+            .insert(config.id.clone(), config);
+        self.persist_settings(&settings)?;
+        self.settings = settings;
+        Ok(())
     }
 
-    pub fn copy_product_device_config(
+    pub fn select_product_configuration(
         &mut self,
-        source_id: &DeviceId,
-        target_id: &DeviceId,
-        definition: &ProductDefinition,
+        device_id: &DeviceId,
+        configuration_id: &str,
+        definition: Option<&ProductDefinition>,
     ) -> Result<(), AppError> {
-        let source = self.device(source_id)?.clone();
-        let mut config = source
-            .product_config
-            .clone()
-            .ok_or_else(|| AppError::new("source_product_config_missing"))?;
-        config.snapshot_metadata = Some(SnapshotMetadata::from_device(
-            source.device_id.as_str(),
-            source.name,
-        ));
-        self.save_product_device_config(target_id, definition, config)
+        let device = self.device(device_id)?;
+        let current = self
+            .settings
+            .product_configuration_for_device(device)
+            .ok_or_else(|| AppError::new("product_configuration_missing"))?;
+        let target = self
+            .settings
+            .product_configurations
+            .get(configuration_id)
+            .ok_or_else(|| AppError::new("unknown_product_configuration"))?;
+        if current.product_version_id != target.product_version_id {
+            return Err(AppError::new("product_version_id_mismatch"));
+        }
+        if let Some(definition) = definition {
+            if target.product_version_id != definition.product.product_version_id {
+                return Err(AppError::new("product_version_id_mismatch"));
+            }
+            definition
+                .as_runtime_profile(target.trigger_settings.clone(), target.actions.clone())
+                .validate()?;
+        }
+        self.update_device(device_id, |record| {
+            record.product_configuration_id = Some(configuration_id.to_owned())
+        })
+    }
+
+    pub fn create_product_configuration(
+        &mut self,
+        request: CreateProductConfigurationRequest,
+    ) -> Result<(), AppError> {
+        let name = request.name.trim().to_owned();
+        if name.is_empty() {
+            return Err(AppError::new("invalid_product_configuration_name"));
+        }
+        let current = self
+            .settings
+            .product_configuration_for_device(self.device(&request.device_id)?)
+            .cloned()
+            .ok_or_else(|| AppError::new("product_configuration_missing"))?;
+        let id = next_product_configuration_id(
+            &self.settings.product_configurations,
+            &name,
+            &current.product_version_id,
+        );
+        let configuration = ProductConfigurationProfile {
+            id: id.clone(),
+            name,
+            product_version_id: current.product_version_id,
+            snapshot_metadata: Some(SnapshotMetadata::new()),
+            trigger_settings: request
+                .copy_current
+                .then_some(current.trigger_settings)
+                .unwrap_or_default(),
+            actions: request
+                .copy_current
+                .then_some(current.actions)
+                .unwrap_or_default(),
+        };
+        let mut settings = self.settings.clone();
+        settings
+            .product_configurations
+            .insert(id.clone(), configuration);
+        settings
+            .devices
+            .get_mut(&request.device_id)
+            .expect("device was checked")
+            .product_configuration_id = Some(id);
+        self.persist_settings(&settings)?;
+        self.settings = settings;
+        Ok(())
     }
 
     pub fn rename_device(&mut self, id: &DeviceId, name: String) -> Result<(), AppError> {
@@ -977,9 +1171,9 @@ impl Workspace {
                 button_count: 0,
                 hardware_binding_count: 0,
                 action_count: backup
-                    .devices
+                    .product_configurations
                     .iter()
-                    .flat_map(|device| device.actions.values())
+                    .flat_map(|configuration| configuration.actions.values())
                     .map(TriggerActions::action_count)
                     .sum(),
                 device_count: backup.devices.len(),
@@ -1018,14 +1212,17 @@ impl Workspace {
             .values()
             .filter_map(|device| {
                 device
-                    .product_config
+                    .product_configuration_id
                     .as_ref()
-                    .map(|config| UserBackupDevice {
-                        device_id: device.device_id.clone(),
-                        product_version_id: config.product_version_id.clone(),
-                        snapshot_metadata: config.snapshot_metadata.clone(),
-                        trigger_settings: config.trigger_settings.clone(),
-                        actions: config.actions.clone(),
+                    .and_then(|configuration_id| {
+                        self.settings
+                            .product_configurations
+                            .get(configuration_id)
+                            .map(|config| UserBackupDevice {
+                                device_id: device.device_id.clone(),
+                                product_version_id: config.product_version_id.clone(),
+                                product_configuration_id: configuration_id.clone(),
+                            })
                     })
             })
             .collect();
@@ -1035,6 +1232,12 @@ impl Workspace {
                 schema_version: USER_BACKUP_SCHEMA_VERSION,
                 kind: BackupKind::ProductDevices,
                 devices,
+                product_configurations: self
+                    .settings
+                    .product_configurations
+                    .values()
+                    .cloned()
+                    .collect(),
             },
         )
     }
@@ -1074,22 +1277,41 @@ impl Workspace {
 
     fn restore_user_backup(&mut self, backup: UserBackupDocument) -> Result<(), AppError> {
         let mut settings = self.settings.clone();
-        for backup_device in backup.devices {
-            let config = ProductDeviceConfig {
-                product_version_id: backup_device.product_version_id,
-                snapshot_metadata: backup_device.snapshot_metadata,
-                trigger_settings: backup_device.trigger_settings,
-                actions: backup_device.actions,
+        let mut restored_ids = BTreeMap::new();
+        for mut configuration in backup.product_configurations {
+            let source_id = configuration.id.clone();
+            let target_id = match settings.product_configurations.get(&source_id) {
+                Some(existing) if existing == &configuration => source_id.clone(),
+                Some(_) => next_product_configuration_id(
+                    &settings.product_configurations,
+                    &configuration.name,
+                    &configuration.product_version_id,
+                ),
+                None => source_id.clone(),
             };
+            configuration.id = target_id.clone();
+            settings
+                .product_configurations
+                .insert(target_id.clone(), configuration);
+            restored_ids.insert(source_id, target_id);
+        }
+        for backup_device in backup.devices {
+            let configuration_id = restored_ids
+                .get(&backup_device.product_configuration_id)
+                .cloned()
+                .ok_or_else(|| AppError::new("unknown_product_configuration"))?;
             if let Some(device) = settings.devices.get_mut(&backup_device.device_id) {
-                if device
-                    .product_config
+                let current_version = device
+                    .product_configuration_id
                     .as_ref()
-                    .is_some_and(|current| current.product_version_id != config.product_version_id)
+                    .and_then(|id| self.settings.product_configurations.get(id))
+                    .map(|configuration| configuration.product_version_id.as_str());
+                if current_version
+                    .is_some_and(|current| current != backup_device.product_version_id)
                 {
                     continue;
                 }
-                device.product_config = Some(config);
+                device.product_configuration_id = Some(configuration_id);
                 continue;
             }
 
@@ -1103,7 +1325,7 @@ impl Workspace {
                     name: format!("{} · {suffix}", board.display_name),
                     board_profile_id: board.id.into(),
                     runtime_assignment: None,
-                    product_config: Some(config),
+                    product_configuration_id: Some(configuration_id),
                 },
             );
         }
@@ -1386,6 +1608,75 @@ fn next_profile_id(
         .expect("profile ID suffix exhausted")
 }
 
+fn next_product_configuration_id(
+    configurations: &BTreeMap<String, ProductConfigurationProfile>,
+    name: &str,
+    product_version_id: &str,
+) -> String {
+    let base = [
+        ascii_slug(name),
+        ascii_slug(product_version_id),
+        "configuration".into(),
+    ]
+    .into_iter()
+    .find(|value| !value.is_empty())
+    .unwrap();
+    if !configurations.contains_key(&base) {
+        return base;
+    }
+    (2..)
+        .map(|suffix| format!("{base}-{suffix}"))
+        .find(|candidate| !configurations.contains_key(candidate))
+        .expect("product configuration ID suffix exhausted")
+}
+
+fn migrate_schema_v3_settings(legacy: SchemaV3SettingsDocument) -> SettingsDocument {
+    debug_assert!(matches!(
+        legacy.schema_version,
+        PREVIOUS_SETTINGS_SCHEMA_VERSION | SCHEMA_V2_SETTINGS_VERSION
+    ));
+    let mut settings = SettingsDocument {
+        schema_version: SETTINGS_SCHEMA_VERSION,
+        editor_profile: legacy.editor_profile,
+        language: legacy.language,
+        devices: BTreeMap::new(),
+        product_configurations: BTreeMap::new(),
+    };
+    for (device_id, legacy_device) in legacy.devices {
+        let product_configuration_id = legacy_device.product_config.map(|config| {
+            let name = legacy_device.name.clone();
+            let id = next_product_configuration_id(
+                &settings.product_configurations,
+                &name,
+                &config.product_version_id,
+            );
+            settings.product_configurations.insert(
+                id.clone(),
+                ProductConfigurationProfile {
+                    id: id.clone(),
+                    name,
+                    product_version_id: config.product_version_id,
+                    snapshot_metadata: config.snapshot_metadata,
+                    trigger_settings: config.trigger_settings,
+                    actions: config.actions,
+                },
+            );
+            id
+        });
+        settings.devices.insert(
+            device_id,
+            DeviceRecord {
+                device_id: legacy_device.device_id,
+                name: legacy_device.name,
+                board_profile_id: legacy_device.board_profile_id,
+                runtime_assignment: legacy_device.runtime_assignment,
+                product_configuration_id,
+            },
+        );
+    }
+    settings
+}
+
 fn next_hardware_id(used: &BTreeSet<String>, original: &str) -> String {
     let base = format!("{}-copy", ascii_slug(original));
     let base = if base == "-copy" {
@@ -1481,11 +1772,30 @@ fn validate_settings_with_registry(
         if device.name.trim().is_empty() {
             return Err(AppError::new("invalid_device_name").with_param("device_id", id.as_str()));
         }
-        if let Some(config) = &device.product_config
-            && !crate::product::valid_product_version_id(&config.product_version_id)
-        {
+        if let Some(configuration_id) = &device.product_configuration_id {
+            let configuration = settings
+                .product_configurations
+                .get(configuration_id)
+                .ok_or_else(|| {
+                    AppError::new("unknown_product_configuration")
+                        .with_param("device_id", id.as_str())
+                })?;
+            if !crate::product::valid_product_version_id(&configuration.product_version_id) {
+                return Err(AppError::new("invalid_product_version_id")
+                    .with_param("device_id", id.as_str()));
+            }
+        }
+    }
+    for (id, configuration) in &settings.product_configurations {
+        if id != &configuration.id {
+            return Err(AppError::new("product_configuration_id_mismatch"));
+        }
+        if configuration.name.trim().is_empty() {
+            return Err(AppError::new("invalid_product_configuration_name"));
+        }
+        if !crate::product::valid_product_version_id(&configuration.product_version_id) {
             return Err(
-                AppError::new("invalid_product_version_id").with_param("device_id", id.as_str())
+                AppError::new("invalid_product_version_id").with_param("product_configuration", id)
             );
         }
     }
@@ -1519,15 +1829,25 @@ fn validate_editor_settings_patch(
 }
 
 fn read_backup(path: &Path) -> Result<WorkspaceSnapshot, AppError> {
-    let mut backup: BackupDocument = read_versioned_yaml(
-        path,
-        BACKUP_SCHEMA_VERSION,
-        "unsupported_backup_schema",
-        false,
-    )?;
-    if backup.settings.schema_version == PREVIOUS_SETTINGS_SCHEMA_VERSION {
-        backup.settings.schema_version = SETTINGS_SCHEMA_VERSION;
-    }
+    let contents = read_yaml_contents(path, false)?;
+    let header: BackupHeader = serde_yaml_ng::from_str(&contents)
+        .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?;
+    let mut backup = match header.schema_version {
+        BACKUP_SCHEMA_VERSION => serde_yaml_ng::from_str::<BackupDocument>(&contents)
+            .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?,
+        PREVIOUS_BACKUP_SCHEMA_VERSION => {
+            let legacy = serde_yaml_ng::from_str::<SchemaV2BackupDocument>(&contents)
+                .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?;
+            debug_assert_eq!(legacy.schema_version, PREVIOUS_BACKUP_SCHEMA_VERSION);
+            BackupDocument {
+                schema_version: BACKUP_SCHEMA_VERSION,
+                settings: migrate_schema_v3_settings(legacy.settings),
+                profiles: legacy.profiles,
+                metrics: legacy.metrics,
+            }
+        }
+        _ => return Err(AppError::new("unsupported_backup_schema")),
+    };
     canonicalize_settings_board_ids(&mut backup.settings);
     let profiles = collect_profiles(backup.profiles)?;
     validate_settings(&backup.settings, &profiles)?;
@@ -1559,11 +1879,18 @@ fn read_compatible_backup(path: &Path) -> Result<CompatibleBackup, AppError> {
     let header: BackupHeader = serde_yaml_ng::from_str(&contents)
         .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?;
     if header.kind == Some(BackupKind::ProductDevices) {
-        if header.schema_version != USER_BACKUP_SCHEMA_VERSION {
-            return Err(AppError::new("unsupported_backup_schema"));
-        }
-        let backup: UserBackupDocument = serde_yaml_ng::from_str(&contents)
-            .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?;
+        let backup = match header.schema_version {
+            USER_BACKUP_SCHEMA_VERSION => serde_yaml_ng::from_str(&contents)
+                .map_err(|error| AppError::new("invalid_yaml").with_detail(error.to_string()))?,
+            PREVIOUS_USER_BACKUP_SCHEMA_VERSION => {
+                let legacy: SchemaV1UserBackupDocument = serde_yaml_ng::from_str(&contents)
+                    .map_err(|error| {
+                        AppError::new("invalid_yaml").with_detail(error.to_string())
+                    })?;
+                migrate_schema_v1_user_backup(legacy)
+            }
+            _ => return Err(AppError::new("unsupported_backup_schema")),
+        };
         validate_user_backup(&backup)?;
         Ok(CompatibleBackup::ProductDevices(backup))
     } else {
@@ -1578,6 +1905,23 @@ fn validate_user_backup(backup: &UserBackupDocument) -> Result<(), AppError> {
         return Err(AppError::new("unsupported_backup_schema"));
     }
     let mut ids = BTreeSet::new();
+    let configurations = backup
+        .product_configurations
+        .iter()
+        .map(|configuration| (configuration.id.as_str(), configuration))
+        .collect::<BTreeMap<_, _>>();
+    if configurations.len() != backup.product_configurations.len() {
+        return Err(AppError::new("duplicate_product_configuration"));
+    }
+    for configuration in &backup.product_configurations {
+        if configuration.name.trim().is_empty() {
+            return Err(AppError::new("invalid_product_configuration_name"));
+        }
+        if !crate::product::valid_product_version_id(&configuration.product_version_id) {
+            return Err(AppError::new("invalid_product_version_id")
+                .with_param("product_configuration", &configuration.id));
+        }
+    }
     for device in &backup.devices {
         if !ids.insert(&device.device_id) {
             return Err(AppError::new("duplicate_backup_device")
@@ -1587,8 +1931,46 @@ fn validate_user_backup(backup: &UserBackupDocument) -> Result<(), AppError> {
             return Err(AppError::new("invalid_product_version_id")
                 .with_param("device_id", device.device_id.as_str()));
         }
+        let configuration = configurations
+            .get(device.product_configuration_id.as_str())
+            .ok_or_else(|| AppError::new("unknown_product_configuration"))?;
+        if configuration.product_version_id != device.product_version_id {
+            return Err(AppError::new("product_version_id_mismatch"));
+        }
     }
     Ok(())
+}
+
+fn migrate_schema_v1_user_backup(legacy: SchemaV1UserBackupDocument) -> UserBackupDocument {
+    debug_assert_eq!(legacy.schema_version, PREVIOUS_USER_BACKUP_SCHEMA_VERSION);
+    let mut configurations = BTreeMap::new();
+    let mut devices = Vec::new();
+    for device in legacy.devices {
+        let name = format!("Device {}", device_serial_suffix(&device.device_id));
+        let id = next_product_configuration_id(&configurations, &name, &device.product_version_id);
+        configurations.insert(
+            id.clone(),
+            ProductConfigurationProfile {
+                id: id.clone(),
+                name,
+                product_version_id: device.product_version_id.clone(),
+                snapshot_metadata: device.snapshot_metadata,
+                trigger_settings: device.trigger_settings,
+                actions: device.actions,
+            },
+        );
+        devices.push(UserBackupDevice {
+            device_id: device.device_id,
+            product_version_id: device.product_version_id,
+            product_configuration_id: id,
+        });
+    }
+    UserBackupDocument {
+        schema_version: USER_BACKUP_SCHEMA_VERSION,
+        kind: legacy.kind,
+        devices,
+        product_configurations: configurations.into_values().collect(),
+    }
 }
 
 fn button_count(profile: &DeviceProfile) -> usize {
@@ -3244,7 +3626,7 @@ actions: {}
                     name: "Desk".into(),
                     board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
                     runtime_assignment: None,
-                    product_config: None,
+                    product_configuration_id: None,
                 },
             )]),
             ..SettingsDocument::default()
@@ -3264,7 +3646,7 @@ actions: {}
                 name: "Desk".into(),
                 board_profile_id: "unknown-board".into(),
                 runtime_assignment: None,
-                product_config: None,
+                product_configuration_id: None,
             },
         );
         assert_eq!(
@@ -3368,7 +3750,7 @@ actions: {}
                 name: "Stale addition".into(),
                 board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
                 runtime_assignment: Some(assignment),
-                product_config: None,
+                product_configuration_id: None,
             },
         );
         let patch: EditorSettingsPatch =
@@ -4032,23 +4414,23 @@ actions: {}
         source
             .enroll_product_device_with_registry(compiled_registry(), device.clone(), &definition)
             .unwrap();
+        let configuration_id = source
+            .device(&device)
+            .unwrap()
+            .product_configuration_id
+            .clone()
+            .unwrap();
+        let mut configuration = source.settings.product_configurations[&configuration_id].clone();
+        configuration.trigger_settings = TriggerSettings {
+            long_press_ms: 725,
+            double_press_ms: 260,
+        };
+        configuration.actions = BTreeMap::from([(
+            "A".into(),
+            TriggerActions::press(vec![ButtonAction::Delay { duration_ms: 25 }]),
+        )]);
         source
-            .save_product_device_config(
-                &device,
-                &definition,
-                ProductDeviceConfig {
-                    product_version_id: "key-rp-k3-r01".into(),
-                    snapshot_metadata: None,
-                    trigger_settings: TriggerSettings {
-                        long_press_ms: 725,
-                        double_press_ms: 260,
-                    },
-                    actions: BTreeMap::from([(
-                        "A".into(),
-                        TriggerActions::press(vec![ButtonAction::Delay { duration_ms: 25 }]),
-                    )]),
-                },
-            )
+            .save_product_configuration(&device, &definition, configuration)
             .unwrap();
         let backup_path = source_directory.path("user-backup.yaml");
         source.export_user_backup(&backup_path).unwrap();
@@ -4062,11 +4444,10 @@ actions: {}
         target
             .restore_compatible_backup(&backup_path, None)
             .unwrap();
+        let restored_device = target.device(&device).unwrap();
         let restored = target
-            .device(&device)
-            .unwrap()
-            .product_config
-            .as_ref()
+            .settings
+            .product_configuration_for_device(restored_device)
             .unwrap();
         assert_eq!(restored.product_version_id, "key-rp-k3-r01");
         assert_eq!(restored.trigger_settings.long_press_ms, 725);
@@ -4086,14 +4467,50 @@ actions: {}
             .unwrap();
         assert_eq!(
             mismatch
-                .device(&device)
-                .unwrap()
-                .product_config
-                .as_ref()
+                .settings
+                .product_configuration_for_device(mismatch.device(&device).unwrap())
                 .unwrap()
                 .product_version_id,
             "alt-rp-k3-r01"
         );
+    }
+
+    #[test]
+    fn user_backup_v1_migrates_each_device_config_to_a_profile() {
+        let directory = TestDirectory::new();
+        let mut workspace = workspace(&directory);
+        let device = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "ABCDEF123456").unwrap();
+        let backup_path = directory.path("v1-user-backup.yaml");
+        write_yaml(
+            &backup_path,
+            &SchemaV1UserBackupDocument {
+                schema_version: PREVIOUS_USER_BACKUP_SCHEMA_VERSION,
+                kind: BackupKind::ProductDevices,
+                devices: vec![SchemaV1UserBackupDevice {
+                    device_id: device.clone(),
+                    product_version_id: "key-rp-k3-r01".into(),
+                    snapshot_metadata: None,
+                    trigger_settings: TriggerSettings::default(),
+                    actions: BTreeMap::from([(
+                        "A".into(),
+                        TriggerActions::press(vec![ButtonAction::Delay { duration_ms: 10 }]),
+                    )]),
+                }],
+            },
+        )
+        .unwrap();
+
+        workspace
+            .restore_compatible_backup(&backup_path, None)
+            .unwrap();
+
+        let record = workspace.device(&device).unwrap();
+        let configuration = workspace
+            .settings
+            .product_configuration_for_device(record)
+            .unwrap();
+        assert_eq!(configuration.product_version_id, "key-rp-k3-r01");
+        assert_eq!(configuration.actions["A"].action_count(), 1);
     }
 
     #[test]
@@ -4109,6 +4526,12 @@ actions: {}
                 kind: BackupKind::ProductDevices,
                 devices: vec![UserBackupDevice {
                     device_id: device.clone(),
+                    product_version_id: "key-rp-k3-r01".into(),
+                    product_configuration_id: "broken".into(),
+                }],
+                product_configurations: vec![ProductConfigurationProfile {
+                    id: "broken".into(),
+                    name: "Broken".into(),
                     product_version_id: "key-rp-k3-r01".into(),
                     snapshot_metadata: None,
                     trigger_settings: TriggerSettings::default(),
@@ -4138,26 +4561,60 @@ actions: {}
     }
 
     #[test]
-    fn settings_schema_v2_is_migrated_to_v3() {
+    fn settings_schema_v3_is_migrated_to_v4() {
         let directory = TestDirectory::new();
         let workspace = workspace(&directory);
         drop(workspace);
         let settings_path = directory.path("data/settings.yaml");
-        let mut settings = fs::read_to_string(&settings_path).unwrap();
-        settings = settings.replacen("schema_version: 3", "schema_version: 2", 1);
-        fs::write(&settings_path, settings).unwrap();
+        let device = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "ABCDEF123456").unwrap();
+        write_yaml(
+            &settings_path,
+            &SchemaV3SettingsDocument {
+                schema_version: 3,
+                editor_profile: Some("red-phone-v1".into()),
+                language: Language::ZhCn,
+                devices: BTreeMap::from([(
+                    device.clone(),
+                    SchemaV3DeviceRecord {
+                        device_id: device.clone(),
+                        name: "Meeting pad".into(),
+                        board_profile_id: crate::hardware::YD_RP2040_BOARD_ID.into(),
+                        runtime_assignment: None,
+                        product_config: Some(SchemaV3ProductDeviceConfig {
+                            product_version_id: "key-rp-k3-r01".into(),
+                            snapshot_metadata: None,
+                            trigger_settings: TriggerSettings::default(),
+                            actions: BTreeMap::from([(
+                                "A".into(),
+                                TriggerActions::press(vec![ButtonAction::Delay {
+                                    duration_ms: 15,
+                                }]),
+                            )]),
+                        }),
+                    },
+                )]),
+            },
+        )
+        .unwrap();
 
         let migrated = Workspace::load_existing(&directory.0).unwrap();
         assert_eq!(migrated.settings.schema_version, SETTINGS_SCHEMA_VERSION);
+        let record = migrated.device(&device).unwrap();
+        let configuration = migrated
+            .settings
+            .product_configuration_for_device(record)
+            .unwrap();
+        assert_eq!(configuration.name, "Meeting pad");
+        assert_eq!(configuration.actions["A"].action_count(), 1);
         assert!(
             fs::read_to_string(settings_path)
                 .unwrap()
-                .starts_with("schema_version: 3\n")
+                .starts_with("schema_version: 4\n")
         );
     }
 
     #[test]
-    fn same_product_devices_keep_independent_actions_until_explicit_copy() {
+    fn same_product_devices_share_a_configuration_until_one_selects_a_new_one() {
         let directory = TestDirectory::new();
         let mut workspace = workspace(&directory);
         let definition = product_definition("key");
@@ -4172,47 +4629,83 @@ actions: {}
                 )
                 .unwrap();
         }
-        let first_config = ProductDeviceConfig {
-            product_version_id: "key-rp-k3-r01".into(),
-            snapshot_metadata: None,
-            trigger_settings: TriggerSettings::default(),
-            actions: BTreeMap::from([(
-                "A".into(),
-                TriggerActions::press(vec![ButtonAction::Delay { duration_ms: 25 }]),
-            )]),
-        };
-        workspace
-            .save_product_device_config(&first, &definition, first_config.clone())
+        let shared_id = workspace
+            .device(&first)
+            .unwrap()
+            .product_configuration_id
+            .clone()
             .unwrap();
-        assert!(
+        assert_eq!(
             workspace
                 .device(&second)
                 .unwrap()
-                .product_config
-                .as_ref()
+                .product_configuration_id
+                .as_deref(),
+            Some(shared_id.as_str())
+        );
+        let mut shared = workspace.settings.product_configurations[&shared_id].clone();
+        shared.actions = BTreeMap::from([(
+            "A".into(),
+            TriggerActions::press(vec![ButtonAction::Delay { duration_ms: 25 }]),
+        )]);
+        workspace
+            .save_product_configuration(&first, &definition, shared.clone())
+            .unwrap();
+        assert_eq!(
+            workspace
+                .settings
+                .product_configuration_for_device(workspace.device(&second).unwrap())
                 .unwrap()
-                .actions
-                .is_empty()
+                .actions,
+            shared.actions,
         );
 
         workspace
-            .copy_product_device_config(&first, &second, &definition)
+            .create_product_configuration(CreateProductConfigurationRequest {
+                device_id: second.clone(),
+                name: "Second".into(),
+                copy_current: false,
+            })
             .unwrap();
-        let copied = workspace
-            .device(&second)
-            .unwrap()
-            .product_config
-            .as_ref()
+        let second_configuration = workspace
+            .settings
+            .product_configuration_for_device(workspace.device(&second).unwrap())
             .unwrap();
-        assert_eq!(copied.product_version_id, first_config.product_version_id);
-        assert_eq!(copied.trigger_settings, first_config.trigger_settings);
-        assert_eq!(copied.actions, first_config.actions);
-        let metadata = copied.snapshot_metadata.as_ref().unwrap();
-        assert_eq!(metadata.source_device_id.as_deref(), Some(first.as_str()));
+        let second_configuration_id = second_configuration.id.clone();
+        assert_ne!(second_configuration.id, shared_id);
+        assert!(second_configuration.actions.is_empty());
         assert_eq!(
-            metadata.source_device_name.as_deref(),
-            Some("YD-RP2040 · 123456")
+            workspace
+                .settings
+                .product_configuration_for_device(workspace.device(&first).unwrap())
+                .unwrap()
+                .actions,
+            shared.actions
         );
-        assert!(metadata.created_at > 0);
+
+        workspace
+            .settings
+            .product_configurations
+            .get_mut(&second_configuration_id)
+            .unwrap()
+            .actions = BTreeMap::from([(
+            "UNKNOWN".into(),
+            TriggerActions::press(vec![ButtonAction::Delay { duration_ms: 10 }]),
+        )]);
+        assert_eq!(
+            workspace
+                .select_product_configuration(&first, &second_configuration_id, Some(&definition),)
+                .unwrap_err()
+                .code,
+            "unknown_action_button"
+        );
+        assert_eq!(
+            workspace
+                .device(&first)
+                .unwrap()
+                .product_configuration_id
+                .as_deref(),
+            Some(shared_id.as_str())
+        );
     }
 }

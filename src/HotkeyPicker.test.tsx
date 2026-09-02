@@ -44,6 +44,42 @@ test("supports modifier-only and distinct physical modifier sides", async () => 
   expect(onChange).toHaveBeenLastCalledWith(["cmd", "right_cmd"]);
 });
 
+test("keeps the portable primary modifier out of the compact choices", async () => {
+  const user = userEvent.setup();
+  render(<HotkeyPicker value={[]} onChange={vi.fn()} language="zh-CN" />);
+
+  expect(screen.queryByRole("checkbox", { name: "cmd/ctrl" })).not.toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "cmd" })).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "ctrl" })).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "option/alt" })).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "shift" })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "更多修饰键" }));
+  expect(screen.getByRole("checkbox", { name: "cmd/ctrl" })).toBeInTheDocument();
+});
+
+test("shows only the stored modifier representation as selected", async () => {
+  const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+  const user = userEvent.setup();
+  const onChange = vi.fn();
+  try {
+    render(<HotkeyPicker value={["cmd", "shift"]} onChange={onChange} language="zh-CN" />);
+
+    await user.click(screen.getByRole("button", { name: "更多修饰键" }));
+
+    expect(screen.getByRole("checkbox", { name: "cmd" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "shift" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "cmd/ctrl" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "左cmd" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "左shift" })).not.toBeChecked();
+
+    await user.click(screen.getByRole("checkbox", { name: "cmd/ctrl" }));
+    expect(onChange).toHaveBeenLastCalledWith(["primary", "shift"]);
+  } finally {
+    platform.mockRestore();
+  }
+});
+
 test("records sided keys only after every captured key is released, including Escape", async () => {
   const user = userEvent.setup();
   const onChange = vi.fn();

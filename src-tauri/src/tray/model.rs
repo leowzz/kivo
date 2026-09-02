@@ -375,6 +375,7 @@ mod tests {
             firmware_build_id: Some("test".into()),
             product_version_id: None,
             product_definition: None,
+            product_configuration_id: None,
             product_config: None,
             firmware_protocol: Some(6),
             pins: vec![1],

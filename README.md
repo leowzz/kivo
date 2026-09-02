@@ -182,6 +182,21 @@ make upload-esp32s3
 make upload-rp2040
 ```
 
+Product Studio 生成的生产固件会写入 `output/products/<product-version-id>/<build-id>/`，其中包含固件、产品定义和 `manifest.json`。批量刷写时使用：
+
+```bash
+make upload-prod
+```
+
+命令会先选择已连接的设备，再扫描与板卡匹配的产品固件；确认后完成刷写，并用固件内嵌的 Product Version ID 和 Build ID 校验启动协议。需要固定设备或固件时可以直接指定：
+
+```bash
+make upload-prod SERIAL=E0C9125B0D9B \
+  FIRMWARE=output/products/<product-version-id>/<build-id>/firmware.uf2
+```
+
+`FIRMWARE` 只能指向 `output/products/` 下与目标板卡匹配的 `.uf2`（RP2040）或 `.bin`（ESP32-S3）产品产物；未指定时会在终端选择器中列出全部可用版本。
+
 当同时连接多块同型号板卡时，用稳定硬件序列号指定目标：
 
 ```bash

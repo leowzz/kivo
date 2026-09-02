@@ -1,7 +1,7 @@
 {
   "name": "kivo",
   "private": true,
-  "version": "0.7.13",
+  "version": "0.7.15",
   "packageManager": "npm@11.16.0",
   "engines": {
     "node": ">=24.12.0 <25",
@@ -31,7 +31,8 @@
     "@tauri-apps/plugin-dialog": "^2.7.2",
     "lucide-react": "^1.27.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "reicon-react": "^1.2.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",

@@ -952,6 +952,7 @@ mod tests {
             firmware_build_id: None,
             product_version_id: None,
             product_definition: None,
+            product_configuration_id: None,
             product_config: None,
             firmware_protocol: None,
             pins: Vec::new(),

@@ -8,13 +8,13 @@ import {
   FileInput,
   Keyboard,
   Plus,
-  Redo2,
   Settings2,
   Trash2,
-  Undo2,
   Upload,
   X,
 } from "lucide-react";
+import { RedoCircle } from "reicon-react/icons/RedoCircle";
+import { UndoCircle } from "reicon-react/icons/UndoCircle";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import brandIcon from "../src-tauri/icons/128x128.png";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -44,13 +44,12 @@ import type {
   CreateDeviceProfileRequest,
   DeviceProfile,
   HardwareProfile,
-  HomeMetricsSnapshot,
   ImportPreview,
   InputSource,
   Language,
   LearningTarget,
   PhysicalInput,
-  ProductDeviceConfig,
+  ProductConfigurationProfile,
   RuntimeAssignment,
   RuntimeEvent,
   StartupFailure,
@@ -74,12 +73,16 @@ type Confirmation =
 
 type RegistryState = Pick<
   AppSnapshot,
-  "deviceProfiles" | "editorProfile" | "boardProfiles" | "devices" | "candidates"
+  "deviceProfiles" | "productConfigurations" | "editorProfile" | "boardProfiles" | "devices" | "candidates"
 >;
 type PressedOwner = {
   deviceProfileId: string;
   hardwareProfileId: string;
   buttonIds: Set<string>;
+};
+type RuntimeFeedbackIdentity = Omit<PressedOwner, "buttonIds">;
+type RuntimeFeedbackTarget = RuntimeFeedbackIdentity & {
+  profile: DeviceProfile;
 };
 type HardwareEditorTarget = {
   deviceProfileId: string;
@@ -94,7 +97,7 @@ type PersistedProfileSave = {
   snapshot: AppSnapshot;
 };
 type HistoryTarget =
-  | { kind: "product"; deviceId: string }
+  | { kind: "product"; deviceId: string; configurationId: string }
   | { kind: "profile"; profileId: string }
   | null;
 
@@ -113,11 +116,12 @@ function defaultBackupFilename(now = new Date()) {
 }
 
 function productConfigHistoryEntries(
-  devices: readonly AppSnapshot["devices"][number][],
+  configurations: readonly ProductConfigurationProfile[],
 ): ProductConfigHistoryEntry[] {
-  return devices.flatMap((device) => device.productConfig
-    ? [{ deviceId: device.deviceId, config: device.productConfig }]
-    : []);
+  return configurations.map((config) => ({
+    configurationId: config.id,
+    config,
+  }));
 }
 
 function formatSnapshotDate(language: Language, timestamp: number | undefined) {
@@ -256,6 +260,48 @@ function pressedButtons(owners: Map<string, PressedOwner>) {
   return new Set([...owners.values()].flatMap((owner) => [...owner.buttonIds]));
 }
 
+function productRuntimeFeedbackTarget(
+  device: AppSnapshot["devices"][number],
+): RuntimeFeedbackTarget | null {
+  const definition = device.productDefinition;
+  const config = device.productConfig;
+  const productVersionId = device.productVersionId;
+  if (!definition || !config || !productVersionId ||
+    definition.product.product_version_id !== productVersionId ||
+    config.product_version_id !== productVersionId) {
+    return null;
+  }
+  return {
+    deviceProfileId: productVersionId,
+    hardwareProfileId: definition.hardware_profile.id,
+    profile: {
+      schema_version: 3,
+      profile: definition.layout,
+      snapshot_metadata: config.snapshot_metadata,
+      trigger_settings: config.trigger_settings,
+      hardware_profiles: [definition.hardware_profile],
+      actions: config.actions,
+    },
+  };
+}
+
+function runtimeFeedbackIdentity(
+  device: AppSnapshot["devices"][number],
+): RuntimeFeedbackIdentity | null {
+  const productTarget = productRuntimeFeedbackTarget(device);
+  if (productTarget) {
+    return {
+      deviceProfileId: productTarget.deviceProfileId,
+      hardwareProfileId: productTarget.hardwareProfileId,
+    };
+  }
+  if (device.productVersionId || !device.runtimeAssignment) return null;
+  return {
+    deviceProfileId: device.runtimeAssignment.device_profile_id,
+    hardwareProfileId: device.runtimeAssignment.hardware_profile_id,
+  };
+}
+
 function learningTargetsMatch(left: LearningTarget, right: LearningTarget) {
   return left.deviceId === right.deviceId &&
     left.deviceProfileId === right.deviceProfileId &&
@@ -276,6 +322,7 @@ export default function App({
   const queue = useRef(new SerializedSaveQueue()).current;
   const [registry, setRegistry] = useState<RegistryState>({
     deviceProfiles: [],
+    productConfigurations: [],
     editorProfile: null,
     boardProfiles: [],
     devices: [],
@@ -286,7 +333,6 @@ export default function App({
   const [view, setView] = useState<View>("devices");
   const [homeMetrics, setHomeMetrics] = useState<AppSnapshot["homeMetrics"]>(null);
   const [usage, setUsage] = useState<UsageView | null>(null);
-  const [deviceMetrics, setDeviceMetrics] = useState<{ deviceId: string; snapshot: HomeMetricsSnapshot } | null>(null);
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
   const [selectedManagedDeviceId, setSelectedManagedDeviceId] = useState<string | null>(null);
   const [hardwareEditorTarget, setHardwareEditorTarget] = useState<HardwareEditorTarget | null>(null);
@@ -318,9 +364,7 @@ export default function App({
   const fullSnapshotRequiredRef = useRef(true);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const loadErrorMessageRef = useRef<string | null>(null);
-  const selectedManagedDeviceIdRef = useRef<string | null>(null);
   const homeMetricsRef = useRef(homeMetrics);
-  const managedMetricsGenerationRef = useRef(0);
   const hardwareEditorTargetRef = useRef<HardwareEditorTarget | null>(null);
   const learningEditingRevisionRef = useRef(0);
   const profileDraftsRef = useRef<Map<string, DeviceProfile>>(new Map());
@@ -335,7 +379,7 @@ export default function App({
     buttonLabel: string;
   } | null>(null);
 
-  const { deviceProfiles, editorProfile, boardProfiles, devices, candidates } = registry;
+  const { deviceProfiles, productConfigurations, editorProfile, boardProfiles, devices, candidates } = registry;
   const profileById = useCallback((profileId: string | null) => {
     if (!profileId) return undefined;
     return profileDraftsRef.current.get(profileId) ??
@@ -405,15 +449,26 @@ export default function App({
 
   const replaceRegistrySnapshot = useCallback((snapshot: AppSnapshot, preserveProductDrafts = false) => {
     registryEpochRef.current += 1;
+    const visibleProductConfigurations = preserveProductDrafts
+      ? snapshot.productConfigurations.map((config) =>
+          productConfigHistory.get(config.id) ?? config
+        )
+      : snapshot.productConfigurations;
+    const visibleProductConfigurationsById = new Map(
+      visibleProductConfigurations.map((config) => [config.id, config]),
+    );
     const visibleDevices = preserveProductDrafts
       ? snapshot.devices.map((device) => {
-          const draft = productConfigHistory.get(device.deviceId);
-          return draft ? { ...device, productConfig: draft } : device;
+          const config = device.productConfigurationId
+            ? visibleProductConfigurationsById.get(device.productConfigurationId)
+            : undefined;
+          return config ? { ...device, productConfig: config } : device;
         })
       : snapshot.devices;
-    productConfigHistory.sync(productConfigHistoryEntries(visibleDevices));
+    productConfigHistory.sync(productConfigHistoryEntries(visibleProductConfigurations));
     setRegistry((current) => ({
       ...current,
+      productConfigurations: visibleProductConfigurations,
       boardProfiles: snapshot.boardProfiles,
       devices: visibleDevices,
       candidates: snapshot.candidates,
@@ -423,9 +478,12 @@ export default function App({
     const nextOwners = new Map(pressedOwnersRef.current);
     for (const [deviceId, owner] of nextOwners) {
       const currentDevice = currentDevices.get(deviceId);
+      const currentIdentity = currentDevice
+        ? runtimeFeedbackIdentity(currentDevice)
+        : null;
       if (currentDevice?.connection !== "online" ||
-        currentDevice.runtimeAssignment?.device_profile_id !== owner.deviceProfileId ||
-        currentDevice.runtimeAssignment.hardware_profile_id !== owner.hardwareProfileId) {
+        currentIdentity?.deviceProfileId !== owner.deviceProfileId ||
+        currentIdentity.hardwareProfileId !== owner.hardwareProfileId) {
         nextOwners.delete(deviceId);
       }
     }
@@ -440,10 +498,20 @@ export default function App({
   ) => {
     registryEpochRef.current += 1;
     const serverProfiles = snapshot.deviceProfiles.map(normalizeDeviceProfile);
+    const visibleProductConfigurations = preserveHistory
+      ? snapshot.productConfigurations.map((config) =>
+          productConfigHistory.get(config.id) ?? config
+        )
+      : snapshot.productConfigurations;
+    const visibleProductConfigurationsById = new Map(
+      visibleProductConfigurations.map((config) => [config.id, config]),
+    );
     const visibleDevices = preserveHistory
       ? snapshot.devices.map((device) => {
-          const draft = productConfigHistory.get(device.deviceId);
-          return draft ? { ...device, productConfig: draft } : device;
+          const config = device.productConfigurationId
+            ? visibleProductConfigurationsById.get(device.productConfigurationId)
+            : undefined;
+          return config ? { ...device, productConfig: config } : device;
         })
       : snapshot.devices;
     const snapshotProfileIds = new Set(serverProfiles.map((profile) => profile.profile.id));
@@ -473,13 +541,14 @@ export default function App({
       );
     if (preserveHistory) {
       profileHistory.sync(visibleProfiles);
-      productConfigHistory.sync(productConfigHistoryEntries(visibleDevices));
+      productConfigHistory.sync(productConfigHistoryEntries(visibleProductConfigurations));
     } else {
       profileHistory.reset(visibleProfiles);
-      productConfigHistory.reset(productConfigHistoryEntries(snapshot.devices));
+      productConfigHistory.reset(productConfigHistoryEntries(snapshot.productConfigurations));
     }
     setRegistry({
       deviceProfiles: visibleProfiles,
+      productConfigurations: visibleProductConfigurations,
       editorProfile: snapshot.editorProfile,
       boardProfiles: snapshot.boardProfiles,
       devices: visibleDevices,
@@ -641,50 +710,41 @@ export default function App({
     setConfirmation({ kind: "forget", device });
   }, [devices]);
 
-  const copyManagedProductConfig = useCallback(async (
-    sourceDeviceId: string,
-    targetDeviceId: string,
+  const selectManagedProductConfiguration = useCallback(async (
+    deviceId: string,
+    configurationId: string,
   ) => {
     try {
-      const snapshot = await queue.enqueue(() => invoke<AppSnapshot>("copy_product_device_config", {
-        sourceDeviceId,
-        targetDeviceId,
+      const snapshot = await queue.enqueue(() => invoke<AppSnapshot>("select_product_configuration", {
+        deviceId,
+        configurationId,
       }));
-      const copiedConfig = snapshot.devices.find((device) => device.deviceId === targetDeviceId)?.productConfig;
-      if (copiedConfig) productConfigHistory.record(targetDeviceId, copiedConfig);
       if (mountedRef.current) applySnapshot(snapshot, true);
     } catch (operationError) {
       setError(`${t(language, "error.save")}: ${errorMessage(operationError)}`);
       throw operationError;
     }
-  }, [applySnapshot, language, productConfigHistory.record, queue]);
+  }, [applySnapshot, language, queue]);
 
-  const refreshManagedDeviceMetrics = useCallback(async (deviceId: string | null) => {
-    selectedManagedDeviceIdRef.current = deviceId;
-    const generation = ++managedMetricsGenerationRef.current;
-    if (!deviceId) {
-      setDeviceMetrics(null);
-      return;
-    }
-    if (PREVIEW_MODE) {
-      const previewMetrics = homeMetricsRef.current;
-      setDeviceMetrics(previewMetrics ? { deviceId, snapshot: previewMetrics } : null);
-      return;
-    }
-    setDeviceMetrics(null);
+  const createManagedProductConfiguration = useCallback(async (request: {
+    deviceId: string;
+    name: string;
+    copyCurrent: boolean;
+  }) => {
     try {
-      const metrics = await invoke<AppSnapshot["homeMetrics"]>("get_device_metrics", { deviceId });
-      if (mountedRef.current && selectedManagedDeviceIdRef.current === deviceId && generation === managedMetricsGenerationRef.current) {
-        setDeviceMetrics(metrics && "logs" in metrics ? { deviceId, snapshot: metrics } : null);
-      }
-    } catch {
-      if (mountedRef.current && selectedManagedDeviceIdRef.current === deviceId && generation === managedMetricsGenerationRef.current) setDeviceMetrics(null);
+      const snapshot = await queue.enqueue(() => invoke<AppSnapshot>("create_product_configuration", {
+        request: {
+          device_id: request.deviceId,
+          name: request.name,
+          copy_current: request.copyCurrent,
+        },
+      }));
+      if (mountedRef.current) applySnapshot(snapshot);
+    } catch (operationError) {
+      setError(`${t(language, "error.save")}: ${errorMessage(operationError)}`);
+      throw operationError;
     }
-  }, []);
-
-  const handleManagedMetricsChange = useCallback((deviceId: string | null) => {
-    void refreshManagedDeviceMetrics(deviceId);
-  }, [refreshManagedDeviceMetrics]);
+  }, [applySnapshot, language, queue]);
 
   const handleHardwareEditorSelection = useCallback((
     hardwareProfileId: string | null,
@@ -923,7 +983,6 @@ export default function App({
           if (payload.homeUpdate && payload.deviceProfileId === profileRef.current?.profile.id) {
             setHomeMetrics(payload.homeUpdate);
           }
-          if (payload.deviceId === selectedManagedDeviceIdRef.current) void refreshManagedDeviceMetrics(payload.deviceId);
           if (payload.input && payload.pressed !== null) {
             const currentEditorTarget = hardwareEditorTargetRef.current;
             const activeLearningTarget = devicesRef.current.find(
@@ -960,14 +1019,19 @@ export default function App({
               }));
             }
             const emittingDevice = devicesRef.current.find((device) => device.deviceId === payload.deviceId);
-            const assignment = emittingDevice?.runtimeAssignment;
-            const eventProfile = assignment
-              ? profileDraftsRef.current.get(assignment.device_profile_id) ?? profilesRef.current.find((profile) => profile.profile.id === assignment.device_profile_id)
-              : undefined;
+            const productTarget = emittingDevice
+              ? productRuntimeFeedbackTarget(emittingDevice)
+              : null;
+            const eventIdentity = emittingDevice
+              ? runtimeFeedbackIdentity(emittingDevice)
+              : null;
+            const eventProfile = productTarget?.profile ?? (eventIdentity
+              ? profileDraftsRef.current.get(eventIdentity.deviceProfileId) ?? profilesRef.current.find((profile) => profile.profile.id === eventIdentity.deviceProfileId)
+              : undefined);
             if (payload.code === "input_state" && eventProfile
               && payload.hardwareProfileId
-              && assignment?.device_profile_id === payload.deviceProfileId
-              && assignment.hardware_profile_id === payload.hardwareProfileId) {
+              && eventIdentity?.deviceProfileId === payload.deviceProfileId
+              && eventIdentity.hardwareProfileId === payload.hardwareProfileId) {
               const eventHardware = eventProfile.hardware_profiles.find((hardware) =>
                 hardware.id === payload.hardwareProfileId
               );
@@ -1106,7 +1170,7 @@ export default function App({
       if (setupVerificationTimerRef.current) clearTimeout(setupVerificationTimerRef.current);
       unlisten?.();
     };
-  }, [applySnapshot, profileHistory.record, refreshManagedDeviceMetrics, refreshRegistry]);
+  }, [applySnapshot, profileHistory.record, refreshRegistry]);
 
   const updateProfile = useCallback((profileId: string, update: (profile: DeviceProfile) => DeviceProfile) => {
     if (!editorLearningActive || profileId !== editorProfileConfig?.profile.id) {
@@ -1150,23 +1214,26 @@ export default function App({
 
   const saveProductConfig = useCallback((
     deviceId: string,
-    config: ProductDeviceConfig,
+    config: ProductConfigurationProfile,
     recordHistory = true,
   ) => {
     const existingMetadata = devices.find((device) => device.deviceId === deviceId)?.productConfig?.snapshot_metadata;
     const nextConfig = config.snapshot_metadata === undefined
       ? { ...config, snapshot_metadata: existingMetadata }
       : config;
-    if (recordHistory) productConfigHistory.record(deviceId, nextConfig);
+    if (recordHistory) productConfigHistory.record(nextConfig.id, nextConfig);
     setRegistry((current) => ({
       ...current,
+      productConfigurations: current.productConfigurations.map((configuration) =>
+        configuration.id === nextConfig.id ? nextConfig : configuration
+      ),
       devices: current.devices.map((device) =>
-        device.deviceId === deviceId
+        device.productConfigurationId === nextConfig.id
           ? { ...device, productConfig: nextConfig }
           : device,
       ),
     }));
-    void queue.enqueue(() => invoke<AppSnapshot>("save_product_device_config", {
+    void queue.enqueue(() => invoke<AppSnapshot>("save_product_configuration", {
       deviceId,
       config: nextConfig,
     })).then((snapshot) => {
@@ -1181,9 +1248,10 @@ export default function App({
       (device) => device.deviceId === selectedManagedDeviceId && device.productVersionId,
     );
     if (productDevice?.productVersionId) {
-      const config = {
-        product_version_id: productDevice.productVersionId,
-        snapshot_metadata: productDevice.productConfig?.snapshot_metadata,
+      const current = productDevice.productConfig;
+      if (!current) return;
+      const config: ProductConfigurationProfile = {
+        ...current,
         trigger_settings: profile.trigger_settings,
         actions: profile.actions,
       };
@@ -1241,7 +1309,7 @@ export default function App({
       return;
     }
     const snapshot = await queue.enqueue(() => invoke<AppSnapshot>("save_settings", {
-      settings: { schema_version: 3, editor_profile: nextEditorProfile, language: nextLanguage },
+      settings: { schema_version: 4, editor_profile: nextEditorProfile, language: nextLanguage },
     }));
     applySnapshot(snapshot, true);
   };
@@ -1273,6 +1341,7 @@ export default function App({
                   ? [profileDraftsRef.current.get(assignment.device_profile_id)!]
                   : []),
               ],
+          productConfigurations,
           editorProfile: registry.editorProfile,
           boardProfiles,
           devices: devices.map((device) => device.deviceId === deviceId
@@ -1459,8 +1528,12 @@ export default function App({
   const selectedHistoryDevice = devices.find(
     (device) => device.deviceId === selectedManagedDeviceId,
   );
-  const historyTarget: HistoryTarget = selectedHistoryDevice?.productVersionId
-    ? { kind: "product", deviceId: selectedHistoryDevice.deviceId }
+  const historyTarget: HistoryTarget = selectedHistoryDevice?.productVersionId && selectedHistoryDevice.productConfigurationId
+    ? {
+        kind: "product",
+        deviceId: selectedHistoryDevice.deviceId,
+        configurationId: selectedHistoryDevice.productConfigurationId,
+      }
     : historyProfileId
       ? { kind: "profile", profileId: historyProfileId }
       : null;
@@ -1479,10 +1552,10 @@ export default function App({
     historyTarget?.kind === "profile" && profileHistory.canRedo(historyTarget.profileId),
   );
   const canUndoProduct = Boolean(
-    historyTarget?.kind === "product" && productConfigHistory.canUndo(historyTarget.deviceId),
+    historyTarget?.kind === "product" && productConfigHistory.canUndo(historyTarget.configurationId),
   );
   const canRedoProduct = Boolean(
-    historyTarget?.kind === "product" && productConfigHistory.canRedo(historyTarget.deviceId),
+    historyTarget?.kind === "product" && productConfigHistory.canRedo(historyTarget.configurationId),
   );
   const canUndoHistory = canUndoProfile || canUndoProduct;
   const canRedoHistory = canRedoProfile || canRedoProduct;
@@ -1576,7 +1649,7 @@ export default function App({
   }
 
   return (
-    <main className={`product-shell${embedded ? " is-embedded" : ""}${client ? " is-client" : ""}`}>
+    <main className={`product-shell${embedded ? " is-embedded" : ""}${client ? " is-client" : ""}${!embedded && !client ? " is-main-app" : ""}`}>
       <header className={`topbar${embedded ? " is-embedded" : ""}${client ? " is-client" : ""}`}>
         {!embedded ? <div className="brand"><img src={brandIcon} alt="" /><h1>Kivo</h1></div> : null}
         <div className="device-summary" aria-label={t(language, "device.summary")}>
@@ -1636,14 +1709,14 @@ export default function App({
               title={t(language, "common.undo")}
               onClick={() => {
                 if (historyTarget?.kind === "product") {
-                  const config = productConfigHistory.undo(historyTarget.deviceId);
+                  const config = productConfigHistory.undo(historyTarget.configurationId);
                   if (config) saveProductConfig(historyTarget.deviceId, config, false);
                 } else if (historyTarget?.kind === "profile") {
                   applyHistoryProfile(profileHistory.undo(historyTarget.profileId));
                 }
               }}
             >
-              <Undo2 size={16} />
+              <UndoCircle size={18} weight="Outline" aria-hidden="true" />
             </button>
             <button
               className="icon-button"
@@ -1653,14 +1726,14 @@ export default function App({
               title={t(language, "common.redo")}
               onClick={() => {
                 if (historyTarget?.kind === "product") {
-                  const config = productConfigHistory.redo(historyTarget.deviceId);
+                  const config = productConfigHistory.redo(historyTarget.configurationId);
                   if (config) saveProductConfig(historyTarget.deviceId, config, false);
                 } else if (historyTarget?.kind === "profile") {
                   applyHistoryProfile(profileHistory.redo(historyTarget.profileId));
                 }
               }}
             >
-              <Redo2 size={16} />
+              <RedoCircle size={18} weight="Outline" aria-hidden="true" />
             </button>
           </div>
         )}
@@ -1753,17 +1826,18 @@ export default function App({
           ) : (
             <DeviceManagement
               client={client}
+              studioMode={embedded}
               language={language}
               devices={devices}
               candidates={candidates}
               boardProfiles={boardProfiles}
               deviceProfiles={deviceProfiles}
-              metrics={deviceMetrics}
+              productConfigurations={productConfigurations}
               onRename={renameManagedDevice}
               onSaveRuntimeAssignment={saveManagedRuntimeAssignment}
-              onCopyProductConfig={copyManagedProductConfig}
+              onSelectProductConfiguration={selectManagedProductConfiguration}
+              onCreateProductConfiguration={createManagedProductConfiguration}
               onForgetDevice={requestForgetManagedDevice}
-              onMetricsChange={handleManagedMetricsChange}
               onOpenSetup={openSetup}
               onCreateFromTemplate={openProfileCreator}
               onRetryCandidate={retrySetupCandidate}

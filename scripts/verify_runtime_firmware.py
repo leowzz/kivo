@@ -56,11 +56,16 @@ def wait_for_expected_hello(
 
 
 def verify_runtime_firmware(
-    serial_number: str, usb_id: tuple[int, int], family: str, board: str, build: str
+    serial_number: str,
+    usb_id: tuple[int, int],
+    family: str,
+    board: str,
+    build: str,
+    product_version_id: str = "-",
 ) -> None:
     serial_number = require_serial(serial_number)
     port = wait_for_runtime_port(serial_number, usb_id)
-    expected = ["HELLO", "13", family, board, build, "-"]
+    expected = ["HELLO", "13", family, board, build, product_version_id]
     wait_for_expected_hello(port.device, expected)
 
 
@@ -72,10 +77,16 @@ def main() -> None:
     parser.add_argument("--family", required=True)
     parser.add_argument("--board", required=True)
     parser.add_argument("--build", required=True)
+    parser.add_argument("--product-version-id", default="-")
     args = parser.parse_args()
     try:
         verify_runtime_firmware(
-            args.serial, (args.vid, args.pid), args.family, args.board, args.build
+            args.serial,
+            (args.vid, args.pid),
+            args.family,
+            args.board,
+            args.build,
+            args.product_version_id,
         )
     except TargetError as error:
         print(error, file=sys.stderr)
