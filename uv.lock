@@ -148,7 +148,7 @@ wheels = [
 
 [[package]]
 name = "kivo"
-version = "0.7.14"
+version = "0.7.15"
 source = { virtual = "." }
 
 [package.dev-dependencies]
