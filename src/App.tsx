@@ -49,7 +49,7 @@ import type {
   Language,
   LearningTarget,
   PhysicalInput,
-  ProductDeviceConfig,
+  ProductConfigurationProfile,
   RuntimeAssignment,
   RuntimeEvent,
   StartupFailure,
@@ -73,7 +73,7 @@ type Confirmation =
 
 type RegistryState = Pick<
   AppSnapshot,
-  "deviceProfiles" | "editorProfile" | "boardProfiles" | "devices" | "candidates"
+  "deviceProfiles" | "productConfigurations" | "editorProfile" | "boardProfiles" | "devices" | "candidates"
 >;
 type PressedOwner = {
   deviceProfileId: string;
@@ -97,7 +97,7 @@ type PersistedProfileSave = {
   snapshot: AppSnapshot;
 };
 type HistoryTarget =
-  | { kind: "product"; deviceId: string }
+  | { kind: "product"; deviceId: string; configurationId: string }
   | { kind: "profile"; profileId: string }
   | null;
 
@@ -116,11 +116,12 @@ function defaultBackupFilename(now = new Date()) {
 }
 
 function productConfigHistoryEntries(
-  devices: readonly AppSnapshot["devices"][number][],
+  configurations: readonly ProductConfigurationProfile[],
 ): ProductConfigHistoryEntry[] {
-  return devices.flatMap((device) => device.productConfig
-    ? [{ deviceId: device.deviceId, config: device.productConfig }]
-    : []);
+  return configurations.map((config) => ({
+    configurationId: config.id,
+    config,
+  }));
 }
 
 function formatSnapshotDate(language: Language, timestamp: number | undefined) {
@@ -321,6 +322,7 @@ export default function App({
   const queue = useRef(new SerializedSaveQueue()).current;
   const [registry, setRegistry] = useState<RegistryState>({
     deviceProfiles: [],
+    productConfigurations: [],
     editorProfile: null,
     boardProfiles: [],
     devices: [],
@@ -377,7 +379,7 @@ export default function App({
     buttonLabel: string;
   } | null>(null);
 
-  const { deviceProfiles, editorProfile, boardProfiles, devices, candidates } = registry;
+  const { deviceProfiles, productConfigurations, editorProfile, boardProfiles, devices, candidates } = registry;
   const profileById = useCallback((profileId: string | null) => {
     if (!profileId) return undefined;
     return profileDraftsRef.current.get(profileId) ??
@@ -447,15 +449,26 @@ export default function App({
 
   const replaceRegistrySnapshot = useCallback((snapshot: AppSnapshot, preserveProductDrafts = false) => {
     registryEpochRef.current += 1;
+    const visibleProductConfigurations = preserveProductDrafts
+      ? snapshot.productConfigurations.map((config) =>
+          productConfigHistory.get(config.id) ?? config
+        )
+      : snapshot.productConfigurations;
+    const visibleProductConfigurationsById = new Map(
+      visibleProductConfigurations.map((config) => [config.id, config]),
+    );
     const visibleDevices = preserveProductDrafts
       ? snapshot.devices.map((device) => {
-          const draft = productConfigHistory.get(device.deviceId);
-          return draft ? { ...device, productConfig: draft } : device;
+          const config = device.productConfigurationId
+            ? visibleProductConfigurationsById.get(device.productConfigurationId)
+            : undefined;
+          return config ? { ...device, productConfig: config } : device;
         })
       : snapshot.devices;
-    productConfigHistory.sync(productConfigHistoryEntries(visibleDevices));
+    productConfigHistory.sync(productConfigHistoryEntries(visibleProductConfigurations));
     setRegistry((current) => ({
       ...current,
+      productConfigurations: visibleProductConfigurations,
       boardProfiles: snapshot.boardProfiles,
       devices: visibleDevices,
       candidates: snapshot.candidates,
@@ -485,10 +498,20 @@ export default function App({
   ) => {
     registryEpochRef.current += 1;
     const serverProfiles = snapshot.deviceProfiles.map(normalizeDeviceProfile);
+    const visibleProductConfigurations = preserveHistory
+      ? snapshot.productConfigurations.map((config) =>
+          productConfigHistory.get(config.id) ?? config
+        )
+      : snapshot.productConfigurations;
+    const visibleProductConfigurationsById = new Map(
+      visibleProductConfigurations.map((config) => [config.id, config]),
+    );
     const visibleDevices = preserveHistory
       ? snapshot.devices.map((device) => {
-          const draft = productConfigHistory.get(device.deviceId);
-          return draft ? { ...device, productConfig: draft } : device;
+          const config = device.productConfigurationId
+            ? visibleProductConfigurationsById.get(device.productConfigurationId)
+            : undefined;
+          return config ? { ...device, productConfig: config } : device;
         })
       : snapshot.devices;
     const snapshotProfileIds = new Set(serverProfiles.map((profile) => profile.profile.id));
@@ -518,13 +541,14 @@ export default function App({
       );
     if (preserveHistory) {
       profileHistory.sync(visibleProfiles);
-      productConfigHistory.sync(productConfigHistoryEntries(visibleDevices));
+      productConfigHistory.sync(productConfigHistoryEntries(visibleProductConfigurations));
     } else {
       profileHistory.reset(visibleProfiles);
-      productConfigHistory.reset(productConfigHistoryEntries(snapshot.devices));
+      productConfigHistory.reset(productConfigHistoryEntries(snapshot.productConfigurations));
     }
     setRegistry({
       deviceProfiles: visibleProfiles,
+      productConfigurations: visibleProductConfigurations,
       editorProfile: snapshot.editorProfile,
       boardProfiles: snapshot.boardProfiles,
       devices: visibleDevices,
@@ -686,23 +710,41 @@ export default function App({
     setConfirmation({ kind: "forget", device });
   }, [devices]);
 
-  const copyManagedProductConfig = useCallback(async (
-    sourceDeviceId: string,
-    targetDeviceId: string,
+  const selectManagedProductConfiguration = useCallback(async (
+    deviceId: string,
+    configurationId: string,
   ) => {
     try {
-      const snapshot = await queue.enqueue(() => invoke<AppSnapshot>("copy_product_device_config", {
-        sourceDeviceId,
-        targetDeviceId,
+      const snapshot = await queue.enqueue(() => invoke<AppSnapshot>("select_product_configuration", {
+        deviceId,
+        configurationId,
       }));
-      const copiedConfig = snapshot.devices.find((device) => device.deviceId === targetDeviceId)?.productConfig;
-      if (copiedConfig) productConfigHistory.record(targetDeviceId, copiedConfig);
       if (mountedRef.current) applySnapshot(snapshot, true);
     } catch (operationError) {
       setError(`${t(language, "error.save")}: ${errorMessage(operationError)}`);
       throw operationError;
     }
-  }, [applySnapshot, language, productConfigHistory.record, queue]);
+  }, [applySnapshot, language, queue]);
+
+  const createManagedProductConfiguration = useCallback(async (request: {
+    deviceId: string;
+    name: string;
+    copyCurrent: boolean;
+  }) => {
+    try {
+      const snapshot = await queue.enqueue(() => invoke<AppSnapshot>("create_product_configuration", {
+        request: {
+          device_id: request.deviceId,
+          name: request.name,
+          copy_current: request.copyCurrent,
+        },
+      }));
+      if (mountedRef.current) applySnapshot(snapshot);
+    } catch (operationError) {
+      setError(`${t(language, "error.save")}: ${errorMessage(operationError)}`);
+      throw operationError;
+    }
+  }, [applySnapshot, language, queue]);
 
   const handleHardwareEditorSelection = useCallback((
     hardwareProfileId: string | null,
@@ -1172,23 +1214,26 @@ export default function App({
 
   const saveProductConfig = useCallback((
     deviceId: string,
-    config: ProductDeviceConfig,
+    config: ProductConfigurationProfile,
     recordHistory = true,
   ) => {
     const existingMetadata = devices.find((device) => device.deviceId === deviceId)?.productConfig?.snapshot_metadata;
     const nextConfig = config.snapshot_metadata === undefined
       ? { ...config, snapshot_metadata: existingMetadata }
       : config;
-    if (recordHistory) productConfigHistory.record(deviceId, nextConfig);
+    if (recordHistory) productConfigHistory.record(nextConfig.id, nextConfig);
     setRegistry((current) => ({
       ...current,
+      productConfigurations: current.productConfigurations.map((configuration) =>
+        configuration.id === nextConfig.id ? nextConfig : configuration
+      ),
       devices: current.devices.map((device) =>
-        device.deviceId === deviceId
+        device.productConfigurationId === nextConfig.id
           ? { ...device, productConfig: nextConfig }
           : device,
       ),
     }));
-    void queue.enqueue(() => invoke<AppSnapshot>("save_product_device_config", {
+    void queue.enqueue(() => invoke<AppSnapshot>("save_product_configuration", {
       deviceId,
       config: nextConfig,
     })).then((snapshot) => {
@@ -1203,9 +1248,10 @@ export default function App({
       (device) => device.deviceId === selectedManagedDeviceId && device.productVersionId,
     );
     if (productDevice?.productVersionId) {
-      const config = {
-        product_version_id: productDevice.productVersionId,
-        snapshot_metadata: productDevice.productConfig?.snapshot_metadata,
+      const current = productDevice.productConfig;
+      if (!current) return;
+      const config: ProductConfigurationProfile = {
+        ...current,
         trigger_settings: profile.trigger_settings,
         actions: profile.actions,
       };
@@ -1263,7 +1309,7 @@ export default function App({
       return;
     }
     const snapshot = await queue.enqueue(() => invoke<AppSnapshot>("save_settings", {
-      settings: { schema_version: 3, editor_profile: nextEditorProfile, language: nextLanguage },
+      settings: { schema_version: 4, editor_profile: nextEditorProfile, language: nextLanguage },
     }));
     applySnapshot(snapshot, true);
   };
@@ -1295,6 +1341,7 @@ export default function App({
                   ? [profileDraftsRef.current.get(assignment.device_profile_id)!]
                   : []),
               ],
+          productConfigurations,
           editorProfile: registry.editorProfile,
           boardProfiles,
           devices: devices.map((device) => device.deviceId === deviceId
@@ -1481,8 +1528,12 @@ export default function App({
   const selectedHistoryDevice = devices.find(
     (device) => device.deviceId === selectedManagedDeviceId,
   );
-  const historyTarget: HistoryTarget = selectedHistoryDevice?.productVersionId
-    ? { kind: "product", deviceId: selectedHistoryDevice.deviceId }
+  const historyTarget: HistoryTarget = selectedHistoryDevice?.productVersionId && selectedHistoryDevice.productConfigurationId
+    ? {
+        kind: "product",
+        deviceId: selectedHistoryDevice.deviceId,
+        configurationId: selectedHistoryDevice.productConfigurationId,
+      }
     : historyProfileId
       ? { kind: "profile", profileId: historyProfileId }
       : null;
@@ -1501,10 +1552,10 @@ export default function App({
     historyTarget?.kind === "profile" && profileHistory.canRedo(historyTarget.profileId),
   );
   const canUndoProduct = Boolean(
-    historyTarget?.kind === "product" && productConfigHistory.canUndo(historyTarget.deviceId),
+    historyTarget?.kind === "product" && productConfigHistory.canUndo(historyTarget.configurationId),
   );
   const canRedoProduct = Boolean(
-    historyTarget?.kind === "product" && productConfigHistory.canRedo(historyTarget.deviceId),
+    historyTarget?.kind === "product" && productConfigHistory.canRedo(historyTarget.configurationId),
   );
   const canUndoHistory = canUndoProfile || canUndoProduct;
   const canRedoHistory = canRedoProfile || canRedoProduct;
@@ -1658,7 +1709,7 @@ export default function App({
               title={t(language, "common.undo")}
               onClick={() => {
                 if (historyTarget?.kind === "product") {
-                  const config = productConfigHistory.undo(historyTarget.deviceId);
+                  const config = productConfigHistory.undo(historyTarget.configurationId);
                   if (config) saveProductConfig(historyTarget.deviceId, config, false);
                 } else if (historyTarget?.kind === "profile") {
                   applyHistoryProfile(profileHistory.undo(historyTarget.profileId));
@@ -1675,7 +1726,7 @@ export default function App({
               title={t(language, "common.redo")}
               onClick={() => {
                 if (historyTarget?.kind === "product") {
-                  const config = productConfigHistory.redo(historyTarget.deviceId);
+                  const config = productConfigHistory.redo(historyTarget.configurationId);
                   if (config) saveProductConfig(historyTarget.deviceId, config, false);
                 } else if (historyTarget?.kind === "profile") {
                   applyHistoryProfile(profileHistory.redo(historyTarget.profileId));
@@ -1781,9 +1832,11 @@ export default function App({
               candidates={candidates}
               boardProfiles={boardProfiles}
               deviceProfiles={deviceProfiles}
+              productConfigurations={productConfigurations}
               onRename={renameManagedDevice}
               onSaveRuntimeAssignment={saveManagedRuntimeAssignment}
-              onCopyProductConfig={copyManagedProductConfig}
+              onSelectProductConfiguration={selectManagedProductConfiguration}
+              onCreateProductConfiguration={createManagedProductConfiguration}
               onForgetDevice={requestForgetManagedDevice}
               onOpenSetup={openSetup}
               onCreateFromTemplate={openProfileCreator}

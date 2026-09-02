@@ -120,10 +120,12 @@ export interface DeviceRecord {
   name: string;
   board_profile_id: string;
   runtime_assignment: RuntimeAssignment | null;
-  product_config?: ProductDeviceConfig | null;
+  product_configuration_id?: string | null;
 }
 
-export interface ProductDeviceConfig {
+export interface ProductConfigurationProfile {
+  id: string;
+  name: string;
   product_version_id: string;
   snapshot_metadata?: SnapshotMetadata | null;
   trigger_settings: TriggerSettings;
@@ -137,14 +139,15 @@ export interface SnapshotMetadata {
 }
 
 export interface SettingsDocument {
-  schema_version: 3;
+  schema_version: 4;
   editor_profile: string | null;
   language: Language;
   devices: Record<string, DeviceRecord>;
+  product_configurations: Record<string, ProductConfigurationProfile>;
 }
 
 export interface EditorSettingsPatch {
-  schema_version: 3;
+  schema_version: 4;
   editor_profile: string | null;
   language: Language;
 }
@@ -236,7 +239,8 @@ export interface DeviceStatus {
     layout: ModelLayout;
     hardware_profile: HardwareProfile;
   } | null;
-  productConfig?: ProductDeviceConfig | null;
+  productConfigurationId?: string | null;
+  productConfig?: ProductConfigurationProfile | null;
   firmwareProtocol?: number | null;
   capabilities: number[];
   runtimeAssignment: RuntimeAssignment | null;
@@ -306,6 +310,7 @@ export interface HomeMetricsSnapshot {
 
 export interface AppSnapshot {
   deviceProfiles: DeviceProfile[];
+  productConfigurations: ProductConfigurationProfile[];
   editorProfile: string | null;
   boardProfiles: BoardProfileSummary[];
   devices: DeviceStatus[];

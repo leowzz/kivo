@@ -21,6 +21,7 @@ import type {
   DeviceProfile,
   DeviceStatus,
   Language,
+  ProductConfigurationProfile,
   RuntimeAssignment,
   TriggerActions,
   TriggerSettings,
@@ -49,18 +50,6 @@ function errorMessage(error: unknown) {
     return String(error.code);
   }
   return String(error);
-}
-
-function formatSnapshotDate(language: Language, timestamp: number | undefined) {
-  if (!timestamp) return null;
-  try {
-    return new Intl.DateTimeFormat(language, {
-      dateStyle: "medium",
-      timeStyle: "short",
-    }).format(new Date(timestamp));
-  } catch {
-    return null;
-  }
 }
 
 const candidateMessages: Record<
@@ -109,12 +98,14 @@ interface DeviceManagementProps {
   candidates: CandidateStatus[];
   boardProfiles: BoardProfileSummary[];
   deviceProfiles: DeviceProfile[];
+  productConfigurations?: ProductConfigurationProfile[];
   onRename(deviceId: string, name: string): void | Promise<void>;
   onSaveRuntimeAssignment(
     deviceId: string,
     assignment: RuntimeAssignment,
   ): void | Promise<void>;
-  onCopyProductConfig?(sourceDeviceId: string, targetDeviceId: string): Promise<void>;
+  onSelectProductConfiguration?(deviceId: string, configurationId: string): Promise<void>;
+  onCreateProductConfiguration?(request: { deviceId: string; name: string; copyCurrent: boolean }): Promise<void>;
   onForgetDevice?(deviceId: string): void;
   onOpenSetup(targetId: string | null): void;
   onCreateFromTemplate?(profileId: string): void;
@@ -189,9 +180,11 @@ export function DeviceManagement({
   candidates,
   boardProfiles,
   deviceProfiles,
+  productConfigurations = [],
   onRename,
   onSaveRuntimeAssignment,
-  onCopyProductConfig,
+  onSelectProductConfiguration,
+  onCreateProductConfiguration,
   onForgetDevice,
   onOpenSetup,
   onCreateFromTemplate,
@@ -224,8 +217,10 @@ export function DeviceManagement({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [localSelectedButtonId, setLocalSelectedButtonId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [copySourceDeviceId, setCopySourceDeviceId] = useState("");
-  const [copyingProductConfig, setCopyingProductConfig] = useState(false);
+  const [productConfigurationCreating, setProductConfigurationCreating] = useState(false);
+  const [productConfigurationName, setProductConfigurationName] = useState("");
+  const [copyCurrentProductConfiguration, setCopyCurrentProductConfiguration] = useState(true);
+  const [productConfigurationSaving, setProductConfigurationSaving] = useState(false);
   const previous = useRef<Row[]>([]);
   const candidateRetryInFlight = useRef(false);
   const pendingAssignment = useRef<RuntimeAssignment | null>(null);
@@ -339,6 +334,7 @@ export function DeviceManagement({
     setLocalSelectedButtonId(null);
     setAdvancedTab("io");
     setAdvancedOpen(false);
+    setProductConfigurationCreating(false);
   }, [selectedDevice?.deviceId]);
   useEffect(() => {
     if (!learningDeviceId) return;
@@ -411,23 +407,14 @@ export function DeviceManagement({
     : undefined;
   const editingProfile = productEditingProfile ?? deviceProfiles.find((item) => item.profile.id === (assignmentDraft.deviceProfileId || selectedDevice?.runtimeAssignment?.device_profile_id));
   const isProductDevice = Boolean(productEditingProfile);
-  const productCopySources = useMemo(
+  const compatibleProductConfigurations = useMemo(
     () => selectedDevice?.productVersionId
-      ? devices.filter((device) =>
-          device.deviceId !== selectedDevice.deviceId &&
-          device.productVersionId === selectedDevice.productVersionId &&
-          device.productConfig,
+      ? productConfigurations.filter((configuration) =>
+          configuration.product_version_id === selectedDevice.productVersionId
         )
       : [],
-    [devices, selectedDevice?.deviceId, selectedDevice?.productVersionId],
+    [productConfigurations, selectedDevice?.productVersionId],
   );
-  useEffect(() => {
-    setCopySourceDeviceId((current) =>
-      productCopySources.some((device) => device.deviceId === current)
-        ? current
-        : (productCopySources[0]?.deviceId ?? ""),
-    );
-  }, [productCopySources]);
   const buttons = useMemo(
     () => editingProfile?.profile.groups.flatMap((group) => group.buttons) ?? [],
     [editingProfile?.profile.groups],
@@ -464,7 +451,11 @@ export function DeviceManagement({
       }
     : { press: [], release: [], long_press: [], double_press: [] };
   const sharedDeviceCount = editingProfile
-    ? devices.filter((device) => device.runtimeAssignment?.device_profile_id === editingProfile.profile.id).length
+    ? isProductDevice
+      ? devices.filter((device) =>
+          device.productConfigurationId === selectedDevice?.productConfigurationId
+        ).length
+      : devices.filter((device) => device.runtimeAssignment?.device_profile_id === editingProfile.profile.id).length
     : 0;
   const updateEditingProfile = useCallback(
     (next: DeviceProfile) => isProductDevice
@@ -551,19 +542,37 @@ export function DeviceManagement({
       setCandidateRetrying(false);
     }
   };
-  const copyProductConfig = async () => {
-    if (!selectedDevice || !copySourceDeviceId || !onCopyProductConfig) return;
-    setCopyingProductConfig(true);
+  const selectProductConfiguration = async (configurationId: string) => {
+    if (!selectedDevice || !onSelectProductConfiguration) return;
     setError(null);
     try {
-      await onCopyProductConfig(copySourceDeviceId, selectedDevice.deviceId);
+      await onSelectProductConfiguration(selectedDevice.deviceId, configurationId);
+    } catch (reason) {
+      setError({
+        owner: { kind: "device", id: selectedDevice.deviceId },
+        message: errorMessage(reason),
+      });
+    }
+  };
+  const createProductConfiguration = async () => {
+    if (!selectedDevice || !productConfigurationName.trim() || !onCreateProductConfiguration) return;
+    setProductConfigurationSaving(true);
+    setError(null);
+    try {
+      await onCreateProductConfiguration({
+        deviceId: selectedDevice.deviceId,
+        name: productConfigurationName.trim(),
+        copyCurrent: copyCurrentProductConfiguration,
+      });
+      setProductConfigurationCreating(false);
+      setProductConfigurationName("");
     } catch (reason) {
       setError({
         owner: { kind: "device", id: selectedDevice.deviceId },
         message: errorMessage(reason),
       });
     } finally {
-      setCopyingProductConfig(false);
+      setProductConfigurationSaving(false);
     }
   };
   const selectAssignment = async (deviceProfileId: string) => {
@@ -634,6 +643,23 @@ export function DeviceManagement({
     } finally {
       assignmentMutationInFlight.current = false;
       setAssignmentSaving(false);
+    }
+  };
+  const selectTitleConfiguration = (value: string) => {
+    if (value === "__create__") {
+      if (selectedDevice?.productVersionId) {
+        setProductConfigurationName("");
+        setCopyCurrentProductConfiguration(true);
+        setProductConfigurationCreating(true);
+      } else {
+        onCreateFromTemplate?.(editingProfile?.profile.id ?? "");
+      }
+      return;
+    }
+    if (selectedDevice?.productVersionId) {
+      void selectProductConfiguration(value);
+    } else {
+      void selectAssignment(value);
     }
   };
   return (
@@ -859,30 +885,52 @@ export function DeviceManagement({
             <div className="device-detail-title">
               <div className="device-detail-heading-copy">
                 {!client && !studioMode && <span>{t(language, "nav.layout")}</span>}
-                <h2>
-                  {renaming ? t(language, "devices.rename") : selectedDevice.name}
-                </h2>
+                <div className="device-detail-name-row">
+                  <h2>
+                    {renaming ? t(language, "devices.rename") : selectedDevice.name}
+                  </h2>
+                  {!client && !renaming && (
+                    <button
+                      className="icon-button"
+                      type="button"
+                      aria-label={t(language, "devices.rename")}
+                      title={t(language, "devices.rename")}
+                      onClick={() => setRenaming(true)}
+                    >
+                      <Pencil size={16} />
+                    </button>
+                  )}
+                </div>
               </div>
-              {!client && !studioMode && editingProfile && (
-                <span className="device-layout-summary">
-                  {t(language, "devices.keyCount", {
-                    count: editingProfile.profile.groups.reduce(
-                      (total, group) => total + group.buttons.length,
-                      0,
-                    ),
-                  })}
-                </span>
-              )}
-              {!client && !renaming && (
-                <button
-                  className="icon-button"
-                  type="button"
-                  aria-label={t(language, "devices.rename")}
-                  title={t(language, "devices.rename")}
-                  onClick={() => setRenaming(true)}
-                >
-                  <Pencil size={16} />
-                </button>
+              {!client && !studioMode && (
+                <label className="device-configuration-selector">
+                  <span>{t(language, "devices.useConfiguration")}</span>
+                  <select
+                    aria-label={t(language, "devices.useConfiguration")}
+                    value={selectedDevice.productVersionId
+                      ? selectedDevice.productConfigurationId ?? ""
+                      : assignmentDraft.deviceProfileId}
+                    disabled={Boolean(learningDeviceId) || assignmentSaving || productConfigurationSaving}
+                    onChange={(event) => selectTitleConfiguration(event.target.value)}
+                  >
+                    {!selectedDevice.productVersionId && <option value="">{t(language, "model.select")}</option>}
+                    {(selectedDevice.productVersionId
+                      ? compatibleProductConfigurations.map((configuration) => ({ id: configuration.id, name: configuration.name }))
+                      : deviceProfiles
+                          .filter((profile) => compatibleHardwareProfiles(
+                            profile.hardware_profiles,
+                            selectedDevice.boardProfileId,
+                          ).length > 0)
+                          .map((profile) => ({ id: profile.profile.id, name: profile.profile.name })))
+                      .map((configuration) => (
+                        <option key={configuration.id} value={configuration.id}>{configuration.name}</option>
+                      ))}
+                    <option value="__create__">+ {t(language, "profile.create")}</option>
+                  </select>
+                  {sharedDeviceCount > 1 && selectedDevice.productVersionId && (
+                    <small>{t(language, "devices.sharedByDevices", { count: sharedDeviceCount })}</small>
+                  )}
+                </label>
               )}
             </div>
             {renaming && (
@@ -983,47 +1031,6 @@ export function DeviceManagement({
                   <span>{t(language, "devices.advancedDisclosure")}</span>
                 </summary>
                 <div className="device-advanced-body">
-                  {editingProfile && isProductDevice && (
-                    <section className="device-assignment" aria-label={t(language, "devices.copyProductConfig")}>
-                      {editingProfile.snapshot_metadata?.created_at && (
-                        <p>
-                          {t(language, "data.createdAt", {
-                            time: formatSnapshotDate(language, editingProfile.snapshot_metadata.created_at) ?? "",
-                          })}
-                        </p>
-                      )}
-                      {editingProfile.snapshot_metadata?.source_device_name && (
-                        <p>
-                          {t(language, "data.sourceDevice", {
-                            name: editingProfile.snapshot_metadata.source_device_name,
-                          })}
-                        </p>
-                      )}
-                      <label>
-                        {t(language, "devices.copyProductConfig")}
-                        <select
-                          aria-label={t(language, "devices.copySource")}
-                          value={copySourceDeviceId}
-                          disabled={Boolean(learningDeviceId) || copyingProductConfig || productCopySources.length === 0}
-                          onChange={(event) => setCopySourceDeviceId(event.target.value)}
-                        >
-                          {productCopySources.length === 0 ? (
-                            <option value="">{t(language, "devices.copySourceEmpty")}</option>
-                          ) : productCopySources.map((device) => (
-                            <option key={device.deviceId} value={device.deviceId}>{device.name}</option>
-                          ))}
-                        </select>
-                      </label>
-                      <button
-                        className="secondary-button"
-                        type="button"
-                        disabled={Boolean(learningDeviceId) || !copySourceDeviceId || copyingProductConfig || !onCopyProductConfig}
-                        onClick={() => void copyProductConfig()}
-                      >
-                        {t(language, copyingProductConfig ? "devices.copyingProductConfig" : "devices.copyProductConfigAction")}
-                      </button>
-                    </section>
-                  )}
                   {!isProductDevice && (
                     <section className="device-assignment" aria-label={t(language, "devices.assignment")}>
                       <label>
@@ -1200,6 +1207,59 @@ export function DeviceManagement({
         />
       )}
       {!client && studioMode && editingProfile && <ConfigurationSettingsDialog open={settingsOpen} language={language} profile={editingProfile} sharedDeviceCount={sharedDeviceCount} allowDuplicate={!isProductDevice} onCancel={() => setSettingsOpen(false)} onSave={(settings: TriggerSettings) => { updateEditingProfile({ ...editingProfile, trigger_settings: settings }); setSettingsOpen(false); if (!isProductDevice) void onSaveSharedProfile?.({ ...editingProfile, trigger_settings: settings }); }} onDraftChange={isProductDevice ? undefined : (settings) => updateEditingProfile({ ...editingProfile, trigger_settings: settings })} onDuplicate={async (name) => { if (selectedDevice) await onDuplicateProfileForDevice?.({ deviceId: selectedDevice.deviceId, sourceProfile: { ...editingProfile }, name }); setSettingsOpen(false); }} />}
+      {productConfigurationCreating && selectedDevice && (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="product-configuration-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="product-configuration-create-title"
+          >
+            <header>
+              <h2 id="product-configuration-create-title">{t(language, "productConfiguration.create")}</h2>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label={t(language, "common.close")}
+                title={t(language, "common.close")}
+                disabled={productConfigurationSaving}
+                onClick={() => setProductConfigurationCreating(false)}
+              >
+                <X size={16} />
+              </button>
+            </header>
+            <form onSubmit={(event) => { event.preventDefault(); void createProductConfiguration(); }}>
+              <label>
+                {t(language, "productConfiguration.name")}
+                <input
+                  autoFocus
+                  value={productConfigurationName}
+                  disabled={productConfigurationSaving}
+                  onChange={(event) => setProductConfigurationName(event.target.value)}
+                />
+              </label>
+              <label className="product-configuration-copy-option">
+                <input
+                  type="checkbox"
+                  checked={copyCurrentProductConfiguration}
+                  disabled={productConfigurationSaving}
+                  onChange={(event) => setCopyCurrentProductConfiguration(event.target.checked)}
+                />
+                <span>{t(language, "productConfiguration.copyCurrent")}</span>
+              </label>
+              <p>{t(language, "productConfiguration.scope")}</p>
+              <footer>
+                <button type="button" disabled={productConfigurationSaving} onClick={() => setProductConfigurationCreating(false)}>
+                  {t(language, "common.cancel")}
+                </button>
+                <button className="primary-button" type="submit" disabled={productConfigurationSaving || !productConfigurationName.trim()}>
+                  {t(language, productConfigurationSaving ? "save.saving" : "profile.createAction")}
+                </button>
+              </footer>
+            </form>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

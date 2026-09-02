@@ -49,9 +49,9 @@ use std::{
 use tauri::{Emitter, Manager};
 use usage::{UsageService, UsageSettingsPatch, UsageSnapshot, UsageView};
 use workspace::{
-    AppError, AssignmentResolution, BackupPreview, DuplicateProfileForDeviceRequest,
-    EditorSettingsPatch, ImportPreview, Language, ProductDeviceConfig, RuntimeAssignment,
-    Workspace,
+    AppError, AssignmentResolution, BackupPreview, CreateProductConfigurationRequest,
+    DuplicateProfileForDeviceRequest, EditorSettingsPatch, ImportPreview, Language,
+    ProductConfigurationProfile, RuntimeAssignment, Workspace,
 };
 
 const DEVICE_SCAN_INTERVAL: Duration = Duration::from_millis(500);
@@ -221,6 +221,7 @@ struct AppState {
 #[serde(rename_all = "camelCase")]
 struct AppSnapshot {
     device_profiles: Vec<DeviceProfile>,
+    product_configurations: Vec<ProductConfigurationProfile>,
     editor_profile: Option<String>,
     board_profiles: Vec<BoardProfileSummary>,
     devices: Vec<DeviceStatus>,
@@ -318,6 +319,13 @@ fn snapshot(state: &AppState) -> Result<AppSnapshot, AppError> {
         .map_err(|_| state_error("workspace_unavailable"))?;
     let mut device_profiles = workspace.profiles.values().cloned().collect::<Vec<_>>();
     device_profiles.sort_by(|left, right| left.profile.name.cmp(&right.profile.name));
+    let mut product_configurations = workspace
+        .settings
+        .product_configurations
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    product_configurations.sort_by(|left, right| left.name.cmp(&right.name));
     let editor_profile = workspace.settings.editor_profile.clone();
     let language = workspace.settings.language;
     drop(workspace);
@@ -330,6 +338,7 @@ fn snapshot(state: &AppState) -> Result<AppSnapshot, AppError> {
     let usage = state.usage.as_ref().map(|usage| usage.view());
     Ok(AppSnapshot {
         device_profiles,
+        product_configurations,
         editor_profile,
         board_profiles: BOARD_PROFILES
             .iter()
@@ -500,31 +509,39 @@ fn rename_device_inner(
     })
 }
 
-fn save_product_device_config_inner(
+fn save_product_configuration_inner(
     state: &AppState,
     device_id: &hardware::DeviceId,
-    config: ProductDeviceConfig,
+    config: ProductConfigurationProfile,
 ) -> Result<AppSnapshot, AppError> {
     mutate_workspace(state, |workspace, coordinator| {
         let definition = coordinator
             .and_then(|coordinator| coordinator.product_definition(device_id))
             .cloned()
             .ok_or_else(|| AppError::new("product_definition_unavailable"))?;
-        workspace.save_product_device_config(device_id, &definition, config)
+        workspace.save_product_configuration(device_id, &definition, config)
     })
 }
 
-fn copy_product_device_config_inner(
+fn select_product_configuration_inner(
     state: &AppState,
-    source_device_id: &hardware::DeviceId,
-    target_device_id: &hardware::DeviceId,
+    device_id: &hardware::DeviceId,
+    configuration_id: &str,
 ) -> Result<AppSnapshot, AppError> {
     mutate_workspace(state, |workspace, coordinator| {
         let definition = coordinator
-            .and_then(|coordinator| coordinator.product_definition(target_device_id))
-            .cloned()
-            .ok_or_else(|| AppError::new("product_definition_unavailable"))?;
-        workspace.copy_product_device_config(source_device_id, target_device_id, &definition)
+            .and_then(|coordinator| coordinator.product_definition(device_id))
+            .cloned();
+        workspace.select_product_configuration(device_id, configuration_id, definition.as_ref())
+    })
+}
+
+fn create_product_configuration_inner(
+    state: &AppState,
+    request: CreateProductConfigurationRequest,
+) -> Result<AppSnapshot, AppError> {
+    mutate_workspace(state, move |workspace, _| {
+        workspace.create_product_configuration(request)
     })
 }
 
@@ -931,21 +948,29 @@ fn rename_device(
 }
 
 #[tauri::command]
-fn save_product_device_config(
+fn save_product_configuration(
     state: tauri::State<'_, AppState>,
     device_id: hardware::DeviceId,
-    config: ProductDeviceConfig,
+    config: ProductConfigurationProfile,
 ) -> Result<AppSnapshot, AppError> {
-    save_product_device_config_inner(&state, &device_id, config)
+    save_product_configuration_inner(&state, &device_id, config)
 }
 
 #[tauri::command]
-fn copy_product_device_config(
+fn select_product_configuration(
     state: tauri::State<'_, AppState>,
-    source_device_id: hardware::DeviceId,
-    target_device_id: hardware::DeviceId,
+    device_id: hardware::DeviceId,
+    configuration_id: String,
 ) -> Result<AppSnapshot, AppError> {
-    copy_product_device_config_inner(&state, &source_device_id, &target_device_id)
+    select_product_configuration_inner(&state, &device_id, &configuration_id)
+}
+
+#[tauri::command]
+fn create_product_configuration(
+    state: tauri::State<'_, AppState>,
+    request: CreateProductConfigurationRequest,
+) -> Result<AppSnapshot, AppError> {
+    create_product_configuration_inner(&state, request)
 }
 
 #[tauri::command]
@@ -1405,8 +1430,9 @@ pub fn run() {
         save_settings,
         save_usage_settings,
         rename_device,
-        save_product_device_config,
-        copy_product_device_config,
+        save_product_configuration,
+        select_product_configuration,
+        create_product_configuration,
         save_runtime_assignment,
         complete_device_setup,
         clear_runtime_assignment,
@@ -1434,8 +1460,9 @@ pub fn run() {
         save_settings,
         save_usage_settings,
         rename_device,
-        save_product_device_config,
-        copy_product_device_config,
+        save_product_configuration,
+        select_product_configuration,
+        create_product_configuration,
         save_runtime_assignment,
         complete_device_setup,
         clear_runtime_assignment,

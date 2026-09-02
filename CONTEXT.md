@@ -33,9 +33,26 @@ rules and current Workbench One assignment are documented in
 `docs/product-version-id-naming.md`.
 _Avoid_: Device ID, Board Profile ID, Device Profile ID, firmware build ID
 
+**Product Definition**:
+The immutable layout, button set, hardware topology, and product identity
+embedded in a product firmware build. Kivo reads it from the Device at runtime;
+only Product Studio may change it, and changing layout or hardware produces a
+new product firmware rather than a user configuration edit.
+_Avoid_: Product Configuration Profile, Device Profile, Runtime Assignment
+
+**Product Configuration Profile**:
+A named, mutable set of Trigger Settings and button Actions scoped to exactly
+one Product Version ID. Devices reporting that Product Version ID may select
+and share the same Product Configuration Profile; editing it affects every
+Device that currently selects it. It never contains layout, button definitions,
+hardware topology, or GPIO mappings.
+_Avoid_: Device Profile, Product Definition, per-device config, Runtime Assignment
+
 **Device Profile**:
 An assignable keypad or telephone configuration containing its visible layout,
 button definitions, button actions, and one or more Hardware Profiles.
+Device Profiles are the legacy/general-purpose path and are not assigned to a
+Device that reports a Product Definition.
 _Avoid_: Model, Device, Controller Profile, configuration file
 
 **Editor Profile**:
@@ -45,8 +62,15 @@ _Avoid_: Active model, Editor Model, selected device
 
 **Device**:
 One individually identifiable physical controller unit. Multiple Devices may
-use the same Board Profile and keep different Runtime Assignments.
+use the same Board Profile. General-purpose Devices keep Runtime Assignments;
+Product Devices select Product Configuration Profiles.
 _Avoid_: Controller, port
+
+**Product Device**:
+A Device whose firmware reports a valid Product Version ID and Product
+Definition. Its layout and hardware come only from that firmware, while its
+selected Product Configuration Profile supplies Trigger Settings and Actions.
+_Avoid_: Device Profile, product model, firmware build
 
 **Device ID**:
 The stable identity of one **Device**, composed from its Board Profile and unique
@@ -67,7 +91,9 @@ _Avoid_: Connection status, controller state
 **Enrollment**:
 The first successful recognition of a valid **Device**, which adds it to Device
 Management without a Runtime Assignment. Enrollment is automatic after identity
-and protocol validation.
+and protocol validation. A Product Device selects the existing configuration
+for its Product Version ID, or creates that version's default configuration
+when none exists.
 _Avoid_: Pairing, connection
 
 **Forget Device**:
@@ -82,6 +108,8 @@ Profile** with one **Device** for live input and action execution. Every Device
 keeps its own Runtime Assignment, and Kivo never silently retargets it to a
 different Hardware Profile. A valid Runtime Assignment activates automatically
 when its Device connects.
+Product Devices do not use Runtime Assignments while Product Definition
+firmware is active.
 _Avoid_: Active model, current configuration
 
 **Controller Family**:
@@ -151,3 +179,10 @@ capabilities. Use Controller Family or Board Profile explicitly.
 >
 > **Domain expert:** Yes. Its Runtime Assignment selects the Hardware Profile
 > whose Board Profile and wiring match that Device.
+
+> **Developer:** Can two production keyboards share one configuration?
+>
+> **Domain expert:** Yes, when they report the same Product Version ID. They
+> select the same Product Configuration Profile, so action edits apply to both.
+> Their layout and hardware still come from the Product Definition in firmware
+> and can only be changed in Product Studio.

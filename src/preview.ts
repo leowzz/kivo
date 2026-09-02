@@ -202,6 +202,7 @@ export function createPreviewDeviceProfile(
 
 export const previewSnapshot: AppSnapshot = {
   deviceProfiles: [phoneProfile, operatorProfile],
+  productConfigurations: [],
   editorProfile: phoneProfile.profile.id,
   boardProfiles: [
     {

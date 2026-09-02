@@ -17,7 +17,7 @@ import type {
   CreateDeviceProfileRequest,
   DeviceProfile,
   DeviceStatus,
-  ProductDeviceConfig,
+  ProductConfigurationProfile,
   RuntimeAssignment,
   RuntimeEvent,
 } from "./types";
@@ -186,6 +186,7 @@ function rpUnassignedDevice(
 
 const baseSnapshot: AppSnapshot = {
   deviceProfiles: [deviceProfile],
+  productConfigurations: [],
   editorProfile: deviceProfile.profile.id,
   boardProfiles: [
     {
@@ -617,14 +618,18 @@ test("undoes and redoes an action edit through the autosave queue", async () => 
 });
 
 test("undoes and redoes Product Device actions through its independent save path", async () => {
-  const productConfig: ProductDeviceConfig = {
+  const productConfig: ProductConfigurationProfile = {
+    id: "front-desk",
+    name: "前台配置",
     product_version_id: "key-esp-k1-r01",
     trigger_settings: { long_press_ms: 500, double_press_ms: 300 },
     actions: {},
   };
+  currentSnapshot.productConfigurations = [productConfig];
   currentSnapshot.devices = [device({
     deviceId: "product-front-desk",
     productVersionId: productConfig.product_version_id,
+    productConfigurationId: productConfig.id,
     productDefinition: {
       schema_version: 1,
       product: {
@@ -651,11 +656,14 @@ test("undoes and redoes Product Device actions through its independent save path
     productConfig,
   })];
   vi.mocked(invoke).mockImplementation(async (command, args) => {
-    if (command === "save_product_device_config") {
+    if (command === "save_product_configuration") {
       const { deviceId, config } = args as {
         deviceId: string;
-        config: ProductDeviceConfig;
+        config: ProductConfigurationProfile;
       };
+      currentSnapshot.productConfigurations = currentSnapshot.productConfigurations.map((item) =>
+        item.id === config.id ? structuredClone(config) : item,
+      );
       currentSnapshot.devices = currentSnapshot.devices.map((item) =>
         item.deviceId === deviceId ? { ...item, productConfig: structuredClone(config) } : item,
       );
@@ -667,7 +675,7 @@ test("undoes and redoes Product Device actions through its independent save path
 
   await user.click(await screen.findByRole("button", { name: "K1，0 项行为" }));
   await addPasteAction(user, "产品设备动作");
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_product_device_config", {
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_product_configuration", {
     deviceId: "product-front-desk",
     config: expect.objectContaining({
       actions: {
@@ -681,25 +689,29 @@ test("undoes and redoes Product Device actions through its independent save path
   await user.click(screen.getByRole("button", { name: "撤销" }));
   expect(screen.getByRole("button", { name: "K1，0 项行为" })).toBeInTheDocument();
   await waitFor(() => expect(vi.mocked(invoke).mock.calls.filter(
-    ([command]) => command === "save_product_device_config",
+    ([command]) => command === "save_product_configuration",
   )).toHaveLength(2));
 
   await user.click(screen.getByRole("button", { name: "重做" }));
   expect(screen.getByRole("button", { name: "K1，1 项行为" })).toBeInTheDocument();
   await waitFor(() => expect(vi.mocked(invoke).mock.calls.filter(
-    ([command]) => command === "save_product_device_config",
+    ([command]) => command === "save_product_configuration",
   )).toHaveLength(3));
 });
 
 test("keeps Product Device pressed feedback through a registry refresh", async () => {
-  const productConfig: ProductDeviceConfig = {
+  const productConfig: ProductConfigurationProfile = {
+    id: "front-desk",
+    name: "前台配置",
     product_version_id: "key-esp-k1-r01",
     trigger_settings: { long_press_ms: 500, double_press_ms: 300 },
     actions: {},
   };
+  currentSnapshot.productConfigurations = [productConfig];
   currentSnapshot.devices = [device({
     deviceId: "product-front-desk",
     productVersionId: productConfig.product_version_id,
+    productConfigurationId: productConfig.id,
     productDefinition: {
       schema_version: 1,
       product: {

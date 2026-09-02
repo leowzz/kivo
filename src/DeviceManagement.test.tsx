@@ -189,9 +189,10 @@ test("Escape from the keypad returns focus to the selected device row", async ()
   expect(rowByIdentifier("RP-A-001")).toHaveFocus();
 });
 
-test("copies Product Device actions only from the same Product Version", async () => {
+test("switches Product Device configurations by Product Version and creates from the dropdown", async () => {
   const user = userEvent.setup();
-  const onCopyProductConfig = vi.fn().mockResolvedValue(undefined);
+  const onSelectProductConfiguration = vi.fn().mockResolvedValue(undefined);
+  const onCreateProductConfiguration = vi.fn().mockResolvedValue(undefined);
   const productDefinition = {
     schema_version: 1 as const,
     product: {
@@ -216,18 +217,27 @@ test("copies Product Device actions only from the same Product Version", async (
     },
   };
   const productConfig = {
+    id: "default",
+    name: "默认配置",
     product_version_id: "key-rp-k1-r01",
     trigger_settings: { long_press_ms: 500, double_press_ms: 300 },
     actions: {},
   };
   const { props, rerender } = renderManagement({
+    studioMode: false,
+    productConfigurations: [
+      productConfig,
+      { ...productConfig, id: "gaming", name: "游戏配置" },
+      { ...productConfig, id: "other", name: "其他版本", product_version_id: "other-rp-k1-r01" },
+    ],
     devices: [
-      device({ productVersionId: "key-rp-k1-r01", productDefinition, productConfig }),
+      device({ productVersionId: "key-rp-k1-r01", productConfigurationId: "default", productDefinition, productConfig }),
       device({
         deviceId: "rp-b",
         name: "RP2040 B",
         hardwareSerial: "RP-B-002",
         productVersionId: "key-rp-k1-r01",
+        productConfigurationId: "default",
         productDefinition,
         productConfig,
       }),
@@ -236,6 +246,7 @@ test("copies Product Device actions only from the same Product Version", async (
         name: "Other product",
         hardwareSerial: "RP-C-003",
         productVersionId: "other-rp-k1-r01",
+        productConfigurationId: "other",
         productDefinition: {
           ...productDefinition,
           product: { ...productDefinition.product, product_version_id: "other-rp-k1-r01" },
@@ -243,16 +254,24 @@ test("copies Product Device actions only from the same Product Version", async (
         productConfig: { ...productConfig, product_version_id: "other-rp-k1-r01" },
       }),
     ],
-    onCopyProductConfig,
+    onSelectProductConfiguration,
+    onCreateProductConfiguration,
   });
 
-  await openAdvanced(user);
-  const source = screen.getByRole("combobox", { name: "来源设备" });
-  expect(within(source).getByRole("option", { name: "RP2040 B" })).toBeInTheDocument();
-  expect(within(source).queryByRole("option", { name: "Other product" })).toBeNull();
-  await user.click(screen.getByRole("button", { name: "复制行为与触发设置" }));
+  const selector = screen.getByRole("combobox", { name: "使用配置" });
+  expect(within(selector).getByRole("option", { name: "游戏配置" })).toBeInTheDocument();
+  expect(within(selector).queryByRole("option", { name: "其他版本" })).toBeNull();
+  await user.selectOptions(selector, "gaming");
+  expect(onSelectProductConfiguration).toHaveBeenCalledWith("rp-a", "gaming");
 
-  expect(onCopyProductConfig).toHaveBeenCalledWith("rp-b", "rp-a");
+  await user.selectOptions(selector, "__create__");
+  await user.type(screen.getByLabelText("配置名称"), "会议配置");
+  await user.click(screen.getByRole("button", { name: "创建配置" }));
+  expect(onCreateProductConfiguration).toHaveBeenCalledWith({
+    deviceId: "rp-a",
+    name: "会议配置",
+    copyCurrent: true,
+  });
 });
 
 test("keeps assignment details out of compact rows and inside technical details", async () => {

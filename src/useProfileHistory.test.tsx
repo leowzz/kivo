@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { expect, test } from "vitest";
 import { useProductConfigHistory, useProfileHistory } from "./useProfileHistory";
-import type { DeviceProfile, ProductDeviceConfig } from "./types";
+import type { DeviceProfile, ProductConfigurationProfile } from "./types";
 
 function profile(id: string, name: string): DeviceProfile {
   return {
@@ -17,8 +17,10 @@ function nameOf(result: { current: ReturnType<typeof useProfileHistory> }, id: s
   return result.current.get(id)?.profile.name;
 }
 
-function config(version: string, text: string): ProductDeviceConfig {
+function config(version: string, text: string): ProductConfigurationProfile {
   return {
+    id: `configuration-${text}`,
+    name: text,
     product_version_id: version,
     trigger_settings: { long_press_ms: 500, double_press_ms: 300 },
     actions: {
@@ -181,12 +183,12 @@ test("rejects a non-positive snapshot bound", () => {
   );
 });
 
-test("keeps product config histories isolated by device and preserves immutable snapshots", () => {
+test("keeps product config histories isolated by configuration and preserves immutable snapshots", () => {
   const initialA = config("product", "A0");
   const initialB = config("product", "B0");
   const { result } = renderHook(() => useProductConfigHistory([
-    { deviceId: "device-a", config: initialA },
-    { deviceId: "device-b", config: initialB },
+    { configurationId: "device-a", config: initialA },
+    { configurationId: "device-b", config: initialB },
   ]));
 
   act(() => { result.current.record("device-a", config("product", "A1")); });
@@ -204,18 +206,18 @@ test("keeps product config histories isolated by device and preserves immutable 
   expect(result.current.canRedo("device-a")).toBe(true);
 });
 
-test("sync preserves unchanged product timelines while resetting changed or removed devices", () => {
+test("sync preserves unchanged product timelines while resetting changed or removed configurations", () => {
   const { result } = renderHook(() => useProductConfigHistory([
-    { deviceId: "device-a", config: config("product", "A0") },
-    { deviceId: "device-b", config: config("product", "B0") },
+    { configurationId: "device-a", config: config("product", "A0") },
+    { configurationId: "device-b", config: config("product", "B0") },
   ]));
 
   act(() => { result.current.record("device-a", config("product", "A1")); });
   act(() => {
     result.current.sync([
-      { deviceId: "device-a", config: config("product", "A1") },
-      { deviceId: "device-b", config: config("product", "B1") },
-      { deviceId: "device-c", config: config("product", "C0") },
+      { configurationId: "device-a", config: config("product", "A1") },
+      { configurationId: "device-b", config: config("product", "B1") },
+      { configurationId: "device-c", config: config("product", "C0") },
     ]);
   });
 
@@ -223,7 +225,7 @@ test("sync preserves unchanged product timelines while resetting changed or remo
   expect(result.current.canUndo("device-b")).toBe(false);
   expect(result.current.canUndo("device-c")).toBe(false);
 
-  act(() => { result.current.sync([{ deviceId: "device-b", config: config("product", "B1") }]); });
+  act(() => { result.current.sync([{ configurationId: "device-b", config: config("product", "B1") }]); });
   expect(result.current.get("device-a")).toBeUndefined();
   expect(result.current.get("device-b")?.actions.ONE.press[0]).toEqual({ type: "paste", text: "B1" });
 });
