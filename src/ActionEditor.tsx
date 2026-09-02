@@ -521,6 +521,22 @@ export function ActionEditor({
               ) : null}
             </div>
           )}
+          <label className="button-note-field">
+            <span className="sr-only">{t(language, "behavior.buttonNote")}</span>
+            <input
+              aria-label={t(language, "behavior.buttonNote")}
+              placeholder={t(language, "behavior.buttonNotePlaceholder")}
+              value={groups.note ?? ""}
+              onChange={(event) => onChange({
+                ...groups,
+                note: event.target.value || undefined,
+              })}
+              onBlur={() => onChange({
+                ...groups,
+                note: groups.note?.trim() || undefined,
+              })}
+            />
+          </label>
         </div>
         <strong>{totalCount}</strong>
       </div>

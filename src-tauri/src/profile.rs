@@ -152,6 +152,8 @@ fn default_double_press_ms() -> u32 {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TriggerActions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub press: Vec<ButtonAction>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1143,6 +1145,20 @@ mod tests {
             control_panel.minimum_protocol_version(),
             OLED_CONTROL_PANEL_PROTOCOL_VERSION
         );
+    }
+
+    #[test]
+    fn button_action_notes_are_optional_and_round_trip() {
+        let legacy: TriggerActions = serde_yaml_ng::from_str("press: []\n").unwrap();
+        assert_eq!(legacy.note, None);
+
+        let actions = TriggerActions {
+            note: Some("Current contact".into()),
+            ..TriggerActions::default()
+        };
+        let yaml = serde_yaml_ng::to_string(&actions).unwrap();
+        assert!(yaml.contains("note: Current contact"));
+        assert_eq!(serde_yaml_ng::from_str::<TriggerActions>(&yaml).unwrap(), actions);
     }
 
     #[test]

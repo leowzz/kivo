@@ -27,7 +27,7 @@ export interface TriggerSettings {
   double_press_ms: number;
 }
 
-export type TriggerActions = Record<ActionTrigger, ButtonAction[]>;
+export type TriggerActions = Record<ActionTrigger, ButtonAction[]> & { note?: string };
 
 export interface ModelButton {
   id: string;

@@ -181,6 +181,7 @@ export function Keypad({
                 (triggerActions.double_press?.length ?? 0)
               : 0;
             const actionSummary = actionCountLabel(count);
+            const note = triggerActions?.note?.trim();
             const isSelected = selectedButtonId === button.id;
             const isPressed = pressedButtonIds.has(button.id);
             const isFailed = failedButtonIds.has(button.id);
@@ -202,10 +203,11 @@ export function Keypad({
                   isPressed ? "is-pressed" : "",
                   isFailed ? "is-failed" : "",
                   count > 0 ? "has-action-count" : "",
+                  note ? "has-note" : "",
                 ].filter(Boolean).join(" ")}
                 type="button"
-                title={button.label}
-                aria-label={`${button.label}，${actionSummary}${isFailed ? `，${failureLabel}` : ""}`}
+                title={note ? `${button.label}\n${note}` : button.label}
+                aria-label={`${button.label}${note ? `，${note}` : ""}，${actionSummary}${isFailed ? `，${failureLabel}` : ""}`}
                 aria-describedby={summaryId}
                 aria-current={isSelected ? "true" : undefined}
                 aria-selected={isSelected}
@@ -217,6 +219,7 @@ export function Keypad({
                 onClick={() => onSelect(button.id)}
               >
                 <span className={`key-button-label ${labelSizeClass}`.trim()}>{button.label}</span>
+                {note ? <span className="key-button-note">{note}</span> : null}
                 <span className="key-action-summary" id={summaryId}>{actionSummary}</span>
                 {isFailed ? <CircleAlert className="key-error-indicator" size={14} aria-hidden="true" /> : null}
                 <span className="key-button-count" aria-hidden="true">

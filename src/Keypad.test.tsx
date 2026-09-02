@@ -92,6 +92,31 @@ test("keeps the full key label available as a tooltip", () => {
   expect(screen.getByText("Open calendar", { selector: ".key-button-label" })).toHaveClass("is-medium");
 });
 
+test("shows a configured note in the lower key area", () => {
+  const layout: ModelLayout = {
+    id: "note-test",
+    name: "Note test",
+    groups: [{ id: "keys", columns: 1, buttons: [
+      { id: "A", label: "发送" },
+    ]}],
+  };
+  render(
+    <Keypad
+      layout={layout}
+      actions={{ A: { note: "发给当前联系人", press: [], release: [], long_press: [], double_press: [] } }}
+      selectedButtonId={null}
+      pressedButtonIds={new Set()}
+      actionCountLabel={(count) => `${count} actions`}
+      onSelect={vi.fn()}
+    />,
+  );
+
+  const button = screen.getByRole("button", { name: "发送，发给当前联系人，0 actions" });
+  expect(button).toHaveClass("has-note");
+  expect(button).toHaveAttribute("title", "发送\n发给当前联系人");
+  expect(button.querySelector(".key-button-note")).toHaveTextContent("发给当前联系人");
+});
+
 test("separates selected, physical pressed, and action summary semantics", () => {
   const layout: ModelLayout = {
     id: "semantic-test",
