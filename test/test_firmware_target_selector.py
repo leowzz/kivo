@@ -150,6 +150,25 @@ def test_filters_out_other_board_profiles() -> None:
     assert [row.serial_number for row in tracker.rows] == ["RP"]
 
 
+def test_all_board_tracker_keeps_supported_runtime_targets_and_rejects_esp_bootloader() -> None:
+    tracker = TargetTracker(None, {"runtime", "bootloader"})
+    esp_bootloader = (
+        "bootloader",
+        (0x303A, 0x1001),
+        "yd-esp32-s3",
+        "ESP-BOOT",
+        "/dev/esp",
+    )
+
+    tracker.update(
+        [esp_bootloader, rp_row("RP", "/dev/rp")],
+        datetime(2026, 8, 2, 12, 0, 0),
+    )
+
+    assert tracker.rows[0].disabled_reason == "bootloader mode cannot use this upload flow"
+    assert tracker.selected().serial_number == "RP"
+
+
 def test_formats_target_details_connection_times_and_disabled_reasons() -> None:
     tracker = TargetTracker(RP_BOARD, {"runtime"})
     tracker.update(
@@ -288,6 +307,40 @@ def test_cli_prints_only_selected_serial_to_stdout() -> None:
     assert result == 0
     assert stdout.getvalue() == "SERIAL-A\n"
     assert stderr.getvalue() == ""
+
+
+def test_cli_selects_explicit_serial_and_can_print_board_target(
+    monkeypatch,
+) -> None:
+    async def inventory() -> list[tuple[str, tuple[int, int], str, str | None, str | None]]:
+        return [
+            rp_row("RP", "/dev/rp"),
+            ("runtime", (0x303A, 0x4002), "yd-esp32-s3", "ESP", "/dev/esp"),
+        ]
+
+    monkeypatch.setattr(target_selector, "scan_inventory", inventory)
+    stdout = StringIO()
+
+    result = main(
+        [
+            "--board",
+            "all",
+            "--mode",
+            "runtime",
+            "--mode",
+            "bootloader",
+            "--output",
+            "target",
+            "--serial",
+            "ESP",
+        ],
+        stdin=FakeTerminal(is_tty=False),
+        stdout=stdout,
+        stderr=FakeTerminal(is_tty=False),
+    )
+
+    assert result == 0
+    assert stdout.getvalue() == "yd-esp32-s3 ESP\n"
 
 
 def test_cli_cancellation_prints_no_serial() -> None:

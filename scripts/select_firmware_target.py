@@ -46,7 +46,7 @@ class TargetRow:
 
 
 class TargetTracker:
-    def __init__(self, board: str, allowed_modes: set[str]) -> None:
+    def __init__(self, board: str | None, allowed_modes: set[str]) -> None:
         self.board = board
         self.allowed_modes = frozenset(allowed_modes)
         self.rows: list[TargetRow] = []
@@ -63,7 +63,11 @@ class TargetTracker:
             ),
             None,
         )
-        candidates = [row for row in observations if row[2] == self.board]
+        candidates = [
+            row
+            for row in observations
+            if self.board is None or row[2] == self.board
+        ]
         serial_counts = Counter(row[3] for row in candidates if row[3])
         active_seen: dict[TargetKey, datetime | None] = {}
         rows = []
@@ -79,6 +83,12 @@ class TargetTracker:
                 disabled_reason = "missing hardware serial"
             elif mode not in self.allowed_modes:
                 disabled_reason = f"{mode} mode cannot use this upload flow"
+            elif (
+                self.board is None
+                and board == "yd-esp32-s3"
+                and mode == "bootloader"
+            ):
+                disabled_reason = "bootloader mode cannot use this upload flow"
             elif serial_counts[serial_number] > 1:
                 disabled_reason = "duplicate hardware serial"
             else:
@@ -153,7 +163,7 @@ def format_target_rows(
 ) -> str:
     lines = [
         "Kivo firmware target selector",
-        f"Board: {tracker.board}",
+        f"Board: {tracker.board or 'all supported'}",
         "",
     ]
 
@@ -261,6 +271,16 @@ def confirmation_serial(
     return selected.serial_number if selected else None
 
 
+def confirmation_target(
+    tracker: TargetTracker,
+    *,
+    inventory_error: str | None,
+) -> TargetRow | None:
+    if inventory_error:
+        return None
+    return tracker.selected()
+
+
 def create_picker_output(stderr: TextIO) -> Output:
     term = os.environ.get("TERM")
     # Win32Output inspects STDOUT even when rendering to stderr; make captures
@@ -280,7 +300,8 @@ async def run_picker_async(
     refresh_interval: float = 1.0,
     prompt_input: Input | None = None,
     prompt_output: Output | None = None,
-) -> str | None:
+    return_target: bool = False,
+) -> str | TargetRow | None:
     view_state = PickerViewState()
     refresh_requested = asyncio.Event()
     bindings = KeyBindings()
@@ -306,12 +327,14 @@ async def run_picker_async(
 
     @bindings.add("enter")
     def confirm(event: object) -> None:
-        selected_serial = confirmation_serial(
+        selected_target = confirmation_target(
             tracker,
             inventory_error=view_state.inventory_error,
         )
-        if selected_serial:
-            event.app.exit(result=selected_serial)
+        if selected_target:
+            event.app.exit(
+                result=selected_target if return_target else selected_target.serial_number
+            )
 
     @bindings.add("r")
     def refresh(event: object) -> None:
@@ -329,7 +352,7 @@ async def run_picker_async(
     application_output = (
         create_picker_output(stderr) if prompt_output is None else prompt_output
     )
-    application: Application[str | None] = Application(
+    application: Application[str | TargetRow | None] = Application(
         layout=Layout(
             Window(
                 content=FormattedTextControl(render),
@@ -385,7 +408,8 @@ def run_picker(
     clock: Clock,
     stdin: TextIO,
     stderr: TextIO,
-) -> str | None:
+    return_target: bool = False,
+) -> str | TargetRow | None:
     return asyncio.run(
         run_picker_async(
             tracker=tracker,
@@ -393,6 +417,7 @@ def run_picker(
             clock=clock,
             stdin=stdin,
             stderr=stderr,
+            return_target=return_target,
         )
     )
 
@@ -408,6 +433,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         choices=("runtime", "bootloader"),
         required=True,
         dest="modes",
+    )
+    parser.add_argument(
+        "--output",
+        choices=("serial", "target"),
+        default="serial",
+        help="print only the serial (default) or BOARD SERIAL",
+    )
+    parser.add_argument(
+        "--serial", help="select a known serial without opening a picker"
     )
     return parser.parse_args(argv)
 
@@ -425,6 +459,35 @@ def main(
     stdout = sys.stdout if stdout is None else stdout
     stderr = sys.stderr if stderr is None else stderr
 
+    board = None if args.board == "all" else args.board
+    tracker = TargetTracker(board, set(args.modes))
+
+    if args.serial:
+        try:
+            tracker.update(asyncio.run(scan_inventory()), datetime.now())
+        except Exception as error:
+            print(f"USB inventory failed: {error}", file=stderr)
+            return 1
+        matching = [
+            row
+            for row in tracker.rows
+            if row.serial_number == args.serial and row.selectable
+        ]
+        if len(matching) != 1:
+            print(
+                f"No unique selectable firmware target found for serial {args.serial}.",
+                file=stderr,
+            )
+            return 1
+        selected = matching[0]
+        print(
+            f"{selected.board} {selected.serial_number}"
+            if args.output == "target"
+            else selected.serial_number,
+            file=stdout,
+        )
+        return 0
+
     if not stdin.isatty() or not stderr.isatty():
         print(
             "Interactive target selection requires a terminal; "
@@ -433,23 +496,37 @@ def main(
         )
         return 2
 
-    tracker = TargetTracker(args.board, set(args.modes))
     try:
-        selected_serial = picker(
-            tracker=tracker,
-            inventory=scan_inventory,
-            clock=datetime.now,
-            stdin=stdin,
-            stderr=stderr,
-        )
+        if args.output == "target":
+            selected_target = run_picker(
+                tracker=tracker,
+                inventory=scan_inventory,
+                clock=datetime.now,
+                stdin=stdin,
+                stderr=stderr,
+                return_target=True,
+            )
+        else:
+            selected_target = picker(
+                tracker=tracker,
+                inventory=scan_inventory,
+                clock=datetime.now,
+                stdin=stdin,
+                stderr=stderr,
+            )
     except KeyboardInterrupt:
-        selected_serial = None
+        selected_target = None
 
-    if selected_serial is None:
+    if selected_target is None:
         print("Firmware upload cancelled.", file=stderr)
         return 130
 
-    print(selected_serial, file=stdout)
+    if args.output == "target":
+        assert isinstance(selected_target, TargetRow)
+        print(f"{selected_target.board} {selected_target.serial_number}", file=stdout)
+    else:
+        assert isinstance(selected_target, str)
+        print(selected_target, file=stdout)
     return 0
 
 

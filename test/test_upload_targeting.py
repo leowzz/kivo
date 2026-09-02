@@ -148,6 +148,29 @@ def test_runtime_verifier_requires_generic_protocol_v13(monkeypatch: pytest.Monk
     ]
 
 
+def test_runtime_verifier_can_require_embedded_product_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: list[list[str]] = []
+    monkeypatch.setattr(
+        "scripts.verify_runtime_firmware.wait_for_runtime_port",
+        lambda *_args: SimpleNamespace(device="/dev/target"),
+    )
+    monkeypatch.setattr(
+        "scripts.verify_runtime_firmware.wait_for_expected_hello",
+        lambda _port, expected: observed.append(expected),
+    )
+
+    verify_runtime_firmware(
+        "TARGET",
+        (0x2E8A, 0x102E),
+        "rp2040",
+        "yd-rp2040",
+        "dev",
+        "product-a",
+    )
+
+    assert observed == [["HELLO", "13", "rp2040", "yd-rp2040", "dev", "product-a"]]
+
+
 def test_runtime_verifier_bounds_timeout_and_reports_expected_and_observed() -> None:
     runtime = FakeRuntimeSerial([b"", b"WRONG 3 response\n"])
     times = iter([0.0, 0.0, 0.5, 1.0])

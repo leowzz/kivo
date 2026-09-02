@@ -152,13 +152,13 @@ target_body() {
   ' "$MAKEFILE"
 }
 
-for target in build-esp32s3 build-rp2040 upload-esp32s3 upload-rp2040 require-serial; do
+for target in build-esp32s3 build-rp2040 upload-esp32s3 upload-rp2040 upload-prod require-serial; do
   grep -Eq "^${target}:" "$MAKEFILE"
 done
 
 require_serial_body="$(target_body require-serial)"
 grep -Fq 'test -n "$(SERIAL)"' <<<"$require_serial_body"
-grep -Fq 'expected = ["HELLO", "13", family, board, build, "-"]' "$ROOT/scripts/verify_runtime_firmware.py"
+grep -Fq 'expected = ["HELLO", "13", family, board, build, product_version_id]' "$ROOT/scripts/verify_runtime_firmware.py"
 
 for target in upload-esp32s3 upload-rp2040; do
   ! grep -Eq "^${target}:[[:space:]].*require-serial([[:space:]]|$)" "$MAKEFILE"
@@ -174,6 +174,7 @@ done
 
 esp32_upload_body="$(target_body upload-esp32s3)"
 rp2040_upload_body="$(target_body upload-rp2040)"
+upload_prod_body="$(target_body upload-prod)"
 test "$(grep -n -- '-t upload' <<<"$esp32_upload_body" | cut -d: -f1)" -lt "$(grep -n 'verify_runtime_firmware.py' <<<"$esp32_upload_body" | cut -d: -f1)"
 grep -Fq -- 'esptool.py --chip esp32s3' <<<"$esp32_upload_body"
 grep -Fq -- '--after hard_reset run' <<<"$esp32_upload_body"
@@ -189,6 +190,15 @@ grep -Fq -- '--firmware .pio/build/rp2040/firmware.uf2' <<<"$rp2040_upload_body"
 grep -Fq 'runtime_serial=' <<<"$rp2040_upload_body"
 test "$(grep -n -- 'scripts/upload_rp2040.py' <<<"$rp2040_upload_body" | cut -d: -f1)" -lt "$(grep -n 'verify_runtime_firmware.py' <<<"$rp2040_upload_body" | cut -d: -f1)"
 
+grep -Fq 'scripts/select_firmware_target.py' <<<"$upload_prod_body"
+grep -Fq -- '--board all --mode runtime --mode bootloader --output target' <<<"$upload_prod_body"
+grep -Fq 'scripts/select_product_firmware.py' <<<"$upload_prod_body"
+grep -Fq 'scripts/upload_rp2040.py' <<<"$upload_prod_body"
+grep -Fq -- '--product-version-id' <<<"$upload_prod_body"
+grep -Fq -- 'esptool.py --chip esp32s3' <<<"$upload_prod_body"
+test "$(grep -n 'select_firmware_target.py' <<<"$upload_prod_body" | head -n1 | cut -d: -f1)" -lt "$(grep -n 'select_product_firmware.py' <<<"$upload_prod_body" | head -n1 | cut -d: -f1)"
+test "$(grep -n 'select_product_firmware.py' <<<"$upload_prod_body" | head -n1 | cut -d: -f1)" -lt "$(grep -n 'verify_runtime_firmware.py' <<<"$upload_prod_body" | head -n1 | cut -d: -f1)"
+
 grep -Eq '^upload:[[:space:]]+upload-rp2040[[:space:]]*$' "$MAKEFILE"
 upload_body="$(target_body upload)"
 test -z "$upload_body"
@@ -201,7 +211,7 @@ expected_test_commands=(
   'bash test/test_studio_bundle.sh'
   '$(UV_CMD) run pytest test/test_repo_version.py test/test_release_transaction.py test/test_platformio_build_id.py'
   '$(UV_CMD) run pytest test/test_upload_targeting.py test/test_rp2040_upload.py'
-  '$(UV_CMD) run pytest test/test_firmware_target_selector.py test/test_make_upload_selection.py'
+  '$(UV_CMD) run pytest test/test_firmware_target_selector.py test/test_product_firmware_selector.py test/test_make_upload_selection.py'
   '$(UV_CMD) run pio test -e native'
   'cargo test --manifest-path src-tauri/Cargo.toml'
   'cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings'
