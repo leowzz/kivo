@@ -102,7 +102,7 @@ const candidateMessages: Record<
 
 interface DeviceManagementProps {
   client?: boolean;
-  showAdvancedTools?: boolean;
+  studioMode?: boolean;
   language: Language;
   devices: DeviceStatus[];
   candidates: CandidateStatus[];
@@ -182,7 +182,7 @@ function TechnicalDetail({ label, value, valueClassName }: { label: string; valu
 
 export function DeviceManagement({
   client = false,
-  showAdvancedTools = false,
+  studioMode = false,
   language,
   devices,
   candidates,
@@ -889,23 +889,25 @@ export function DeviceManagement({
                 </button>
               </div>
             )}
-            <div className="device-context-summary">
-              <Detail
-                label={t(language, "devices.board")}
-                value={
-                  boards.get(selectedDevice.boardProfileId)?.displayName ??
-                  selectedDevice.boardProfileId
-                }
-              />
-              <Detail
-                label={t(language, "devices.status")}
-                value={status(selectedDevice, language)}
-              />
-              <Detail
-                label={t(language, "devices.assignment")}
-                value={selectedDevice.productVersionId ?? assignmentLabel(selectedDevice, deviceProfiles)}
-              />
-            </div>
+            {studioMode && (
+              <div className="device-context-summary">
+                <Detail
+                  label={t(language, "devices.board")}
+                  value={
+                    boards.get(selectedDevice.boardProfileId)?.displayName ??
+                    selectedDevice.boardProfileId
+                  }
+                />
+                <Detail
+                  label={t(language, "devices.status")}
+                  value={status(selectedDevice, language)}
+                />
+                <Detail
+                  label={t(language, "devices.assignment")}
+                  value={selectedDevice.productVersionId ?? assignmentLabel(selectedDevice, deviceProfiles)}
+                />
+              </div>
+            )}
             {selectedDevice.connection === "online" &&
               selectedDevice.mode === "runtime" &&
               selectedDevice.identity === "valid" &&
@@ -941,7 +943,7 @@ export function DeviceManagement({
                 />
               </div>
             )}
-            {!client && showAdvancedTools && (
+            {!client && studioMode && (
               <details
                 className="device-advanced-disclosure"
                 open={advancedOpen}
@@ -1174,7 +1176,7 @@ export function DeviceManagement({
           }}
         />
       )}
-      {!client && showAdvancedTools && editingProfile && <ConfigurationSettingsDialog open={settingsOpen} language={language} profile={editingProfile} sharedDeviceCount={sharedDeviceCount} allowDuplicate={!isProductDevice} onCancel={() => setSettingsOpen(false)} onSave={(settings: TriggerSettings) => { updateEditingProfile({ ...editingProfile, trigger_settings: settings }); setSettingsOpen(false); if (!isProductDevice) void onSaveSharedProfile?.({ ...editingProfile, trigger_settings: settings }); }} onDraftChange={isProductDevice ? undefined : (settings) => updateEditingProfile({ ...editingProfile, trigger_settings: settings })} onDuplicate={async (name) => { if (selectedDevice) await onDuplicateProfileForDevice?.({ deviceId: selectedDevice.deviceId, sourceProfile: { ...editingProfile }, name }); setSettingsOpen(false); }} />}
+      {!client && studioMode && editingProfile && <ConfigurationSettingsDialog open={settingsOpen} language={language} profile={editingProfile} sharedDeviceCount={sharedDeviceCount} allowDuplicate={!isProductDevice} onCancel={() => setSettingsOpen(false)} onSave={(settings: TriggerSettings) => { updateEditingProfile({ ...editingProfile, trigger_settings: settings }); setSettingsOpen(false); if (!isProductDevice) void onSaveSharedProfile?.({ ...editingProfile, trigger_settings: settings }); }} onDraftChange={isProductDevice ? undefined : (settings) => updateEditingProfile({ ...editingProfile, trigger_settings: settings })} onDuplicate={async (name) => { if (selectedDevice) await onDuplicateProfileForDevice?.({ deviceId: selectedDevice.deviceId, sourceProfile: { ...editingProfile }, name }); setSettingsOpen(false); }} />}
     </div>
   );
 }

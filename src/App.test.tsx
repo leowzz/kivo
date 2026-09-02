@@ -1464,6 +1464,9 @@ test("renders buttons in model order without mode, test, activity, or advanced e
   expect(screen.queryByText("高级设置")).not.toBeInTheDocument();
   expect(screen.queryByRole("tab", { name: "高级 I/O" })).not.toBeInTheDocument();
   expect(screen.queryByRole("tab", { name: "按键布局" })).not.toBeInTheDocument();
+  expect(screen.queryByText("板型")).not.toBeInTheDocument();
+  expect(screen.queryByText("状态")).not.toBeInTheDocument();
+  expect(screen.queryByText("正在使用")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("当前编辑配置")).toBeNull();
   expect(screen.queryByLabelText("语言")).toBeNull();
 });

@@ -60,7 +60,7 @@ const profiles: DeviceProfile[] = [
 
 function renderManagement(overrides: Partial<React.ComponentProps<typeof DeviceManagement>> = {}) {
   const props: React.ComponentProps<typeof DeviceManagement> = {
-    showAdvancedTools: true,
+    studioMode: true,
     language: "zh-CN",
     devices: [
       device(),
@@ -829,12 +829,15 @@ test("omits mode and task navigation while keeping advanced settings available",
   expect(technical).not.toHaveAttribute("open");
 });
 
-test("hides advanced settings without removing the device workspace", () => {
-  renderManagement({ showAdvancedTools: false });
+test("hides Studio diagnostics and tools without removing the device workspace", () => {
+  renderManagement({ studioMode: false });
 
   expect(screen.queryByText("高级设置")).not.toBeInTheDocument();
   expect(screen.queryByRole("tab", { name: "高级 I/O" })).not.toBeInTheDocument();
   expect(screen.queryByRole("tab", { name: "按键布局" })).not.toBeInTheDocument();
+  expect(screen.queryByText("板型")).not.toBeInTheDocument();
+  expect(screen.queryByText("状态")).not.toBeInTheDocument();
+  expect(screen.queryByText("正在使用")).not.toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "RP2040 A" })).toBeInTheDocument();
 });
 
