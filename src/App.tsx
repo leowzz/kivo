@@ -13,8 +13,8 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { Redo } from "reicon-react/icons/redo";
-import { Undo } from "reicon-react/icons/undo";
+import { RedoCircle } from "reicon-react/icons/RedoCircle";
+import { UndoCircle } from "reicon-react/icons/UndoCircle";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import brandIcon from "../src-tauri/icons/128x128.png";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -1665,7 +1665,7 @@ export default function App({
                 }
               }}
             >
-              <Undo size={18} weight="Outline" aria-hidden="true" />
+              <UndoCircle size={18} weight="Outline" aria-hidden="true" />
             </button>
             <button
               className="icon-button"
@@ -1682,7 +1682,7 @@ export default function App({
                 }
               }}
             >
-              <Redo size={18} weight="Outline" aria-hidden="true" />
+              <RedoCircle size={18} weight="Outline" aria-hidden="true" />
             </button>
           </div>
         )}
