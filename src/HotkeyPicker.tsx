@@ -31,11 +31,11 @@ export function hotkeyValidationMessage(language: Language, error: string | null
 }
 
 const COMPACT_MODIFIERS = [
-  { token: "primary" }, { token: "cmd" }, { token: "ctrl" }, { token: "alt" }, { token: "shift" },
+  { token: "cmd" }, { token: "ctrl" }, { token: "alt" }, { token: "shift" },
 ] as const;
 
-const PHYSICAL_MODIFIERS = [
-  "left_cmd", "right_cmd", "left_ctrl", "right_ctrl", "left_alt", "right_alt", "left_shift", "right_shift",
+const ADVANCED_MODIFIERS = [
+  "primary", "left_cmd", "right_cmd", "left_ctrl", "right_ctrl", "left_alt", "right_alt", "left_shift", "right_shift",
 ] as const;
 
 const CATEGORY_LABELS: Record<string, MessageKey> = {
@@ -48,9 +48,17 @@ const CATEGORY_LABELS: Record<string, MessageKey> = {
   "Numeric Keypad": "behavior.keyCategory.numpad",
 };
 
-function hasUsage(value: string[], token: string) {
-  const usage = canonicalHotkeyToken(token);
-  return value.some((item) => canonicalHotkeyToken(item) === usage);
+function selectionIdentity(token: string) {
+  const normalized = token.toLowerCase();
+  if (normalized === "option") return "alt";
+  if (normalized === "pageup") return "page_up";
+  if (normalized === "pagedown") return "page_down";
+  return normalized;
+}
+
+function hasSelection(value: string[], token: string) {
+  const identity = selectionIdentity(token);
+  return value.some((item) => selectionIdentity(item) === identity);
 }
 
 function ordinaryCount(value: string[]) {
@@ -60,7 +68,7 @@ function ordinaryCount(value: string[]) {
 export function HotkeyPicker({ value, onChange, language, error, onRecordingChange }: HotkeyPickerProps) {
   const [search, setSearch] = useState("");
   const [activeCategoryName, setActiveCategoryName] = useState<(typeof HOTKEY_CATEGORIES)[number]["name"]>(HOTKEY_CATEGORIES[0].name);
-  const [showPhysicalModifiers, setShowPhysicalModifiers] = useState(false);
+  const [showAdvancedModifiers, setShowAdvancedModifiers] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recordingError, setRecordingError] = useState<string | null>(null);
   const onChangeRef = useRef(onChange);
@@ -133,10 +141,10 @@ export function HotkeyPicker({ value, onChange, language, error, onRecordingChan
     !isModifierToken(token) &&
     (!normalizedSearch || hotkeyDisplayLabel(language, token).toLowerCase().includes(normalizedSearch))
   ), [activeCategory, language, normalizedSearch]);
-  const matchingPhysicalModifiers = useMemo(() => normalizedSearch
-    ? PHYSICAL_MODIFIERS.filter((token) => hotkeyDisplayLabel(language, token).toLowerCase().includes(normalizedSearch))
+  const matchingAdvancedModifiers = useMemo(() => normalizedSearch
+    ? ADVANCED_MODIFIERS.filter((token) => hotkeyDisplayLabel(language, token).toLowerCase().includes(normalizedSearch))
     : [], [language, normalizedSearch]);
-  const visiblePhysicalModifiers = showPhysicalModifiers ? PHYSICAL_MODIFIERS : matchingPhysicalModifiers;
+  const visibleAdvancedModifiers = showAdvancedModifiers ? ADVANCED_MODIFIERS : matchingAdvancedModifiers;
 
   const handleCategoryKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => {
     let nextIndex: number | null = null;
@@ -151,9 +159,14 @@ export function HotkeyPicker({ value, onChange, language, error, onRecordingChan
   };
 
   const toggle = (token: string) => {
-    const index = value.findIndex((item) => canonicalHotkeyToken(item) === canonicalHotkeyToken(token));
-    if (index >= 0) {
-      onChange(value.filter((_, itemIndex) => itemIndex !== index));
+    const selectedIndex = value.findIndex((item) => selectionIdentity(item) === selectionIdentity(token));
+    if (selectedIndex >= 0) {
+      onChange(value.filter((_, itemIndex) => itemIndex !== selectedIndex));
+      return;
+    }
+    const conflictingIndex = value.findIndex((item) => canonicalHotkeyToken(item) === canonicalHotkeyToken(token));
+    if (conflictingIndex >= 0) {
+      onChange(value.map((item, itemIndex) => itemIndex === conflictingIndex ? token : item));
       return;
     }
     if (!isModifierToken(token) && ordinaryCount(value) >= 6) return;
@@ -185,19 +198,19 @@ export function HotkeyPicker({ value, onChange, language, error, onRecordingChan
       <div className="hotkey-modifier-row">
         {COMPACT_MODIFIERS.map(({ token }) => (
           <label key={token}>
-            <input type="checkbox" checked={hasUsage(value, token)} onChange={() => toggle(token)} aria-label={hotkeyDisplayLabel(language, token)} />
+            <input type="checkbox" checked={hasSelection(value, token)} onChange={() => toggle(token)} aria-label={hotkeyDisplayLabel(language, token)} />
             <span>{hotkeyDisplayLabel(language, token)}</span>
           </label>
         ))}
-        <button type="button" className="hotkey-disclosure" aria-expanded={showPhysicalModifiers} onClick={() => setShowPhysicalModifiers((open) => !open)}>
+        <button type="button" className="hotkey-disclosure" aria-expanded={showAdvancedModifiers} onClick={() => setShowAdvancedModifiers((open) => !open)}>
           <ChevronDown size={14} aria-hidden="true" />{t(language, "behavior.moreModifiers")}
         </button>
       </div>
-      {(showPhysicalModifiers || matchingPhysicalModifiers.length > 0) && (
+      {(showAdvancedModifiers || matchingAdvancedModifiers.length > 0) && (
         <div className="hotkey-physical-modifiers">
-          {visiblePhysicalModifiers.map((token) => (
+          {visibleAdvancedModifiers.map((token) => (
             <label key={token}>
-              <input type="checkbox" checked={hasUsage(value, token)} onChange={() => toggle(token)} aria-label={hotkeyDisplayLabel(language, token)} />
+              <input type="checkbox" checked={hasSelection(value, token)} onChange={() => toggle(token)} aria-label={hotkeyDisplayLabel(language, token)} />
               <span>{hotkeyDisplayLabel(language, token)}</span>
             </label>
           ))}
@@ -232,7 +245,7 @@ export function HotkeyPicker({ value, onChange, language, error, onRecordingChan
       >
         <div className="hotkey-key-grid">
           {filteredTokens.map((token) => {
-            const selected = hasUsage(value, token);
+            const selected = hasSelection(value, token);
             const disabled = !selected && ordinaryCount(value) >= 6;
             return (
               <label key={token} className={disabled ? "is-disabled" : undefined}>

@@ -1,18 +1,18 @@
 schema_version: 1
 product:
-  display_name: WBAS-K18
+  display_name: WBSEN-K18
   family_id: kivo-workbench
-  variant_id: kivo-workbench-rp-k18-mic-spk-disp-encp
-  hardware_revision: 1
-  product_version_id: kivo-workbench-rp-k18-mic-spk-disp-encp-r01
+  variant_id: kivo-workbench-rp-k18-disp-encp
+  hardware_revision: 2
+  product_version_id: kivo-workbench-rp-k18-disp-encp-r02
   capabilities:
   - mic
   - spk
   - disp
   - encp
 layout:
-  id: kivo-workbench-rp-k18-mic-spk-disp-encp
-  name: WBAS-K18
+  id: kivo-workbench-rp-k18-disp-encp
+  name: WBSEN-K18
   groups:
   - id: keys
     columns: 6

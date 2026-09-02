@@ -1,4 +1,4 @@
-import { Activity, Check, Keyboard, Pencil, Plus, RefreshCw, Settings2, Trash2, X } from "lucide-react";
+import { Check, Keyboard, Pencil, Plus, RefreshCw, Settings2, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ActionEditor } from "./ActionEditor";
 import { ConfigurationSettingsDialog } from "./ConfigurationSettingsDialog";
@@ -19,7 +19,6 @@ import type {
   CandidateStatus,
   DeviceProfile,
   DeviceStatus,
-  HomeMetricsSnapshot,
   Language,
   RuntimeAssignment,
   TriggerActions,
@@ -30,37 +29,13 @@ type Selection = { kind: "device" | "candidate"; id: string };
 type Row = { selection: Selection };
 type AssignmentDraft = { deviceProfileId: string; hardwareProfileId: string };
 type OperationError = { owner: Selection; message: string };
-type WorkspaceTab = "buttons" | "test" | "activity";
 type AdvancedTab = "layout" | "io";
-type InterfaceMode = "product" | "maker";
 export type DeviceExecutionFeedback = {
   buttonId: string | null;
   status: "success" | "error";
   detail: string | null;
 };
-type ActionFailureInsight = {
-  buttonId: string | null;
-  actionKind: string | null;
-  detail: string | null;
-  count: number;
-  timestampMs: number;
-};
-
-const WORKSPACE_TABS: readonly WorkspaceTab[] = ["buttons", "test", "activity"];
 const ADVANCED_TABS: readonly AdvancedTab[] = ["layout", "io"];
-const ACTION_KIND_MESSAGES: Record<string, MessageKey> = {
-  paste: "behavior.summary.paste",
-  hotkey: "behavior.summary.hotkey",
-  delay: "behavior.summary.delay",
-  media: "behavior.summary.media",
-  open: "behavior.summary.open",
-};
-const ACTION_FAILURE_CODES = new Set([
-  "action_step_failed",
-  "action_timeout",
-  "action_ack_timeout",
-  "action_cancelled",
-]);
 const STARTER_PROFILE_IDS = new Set([
   "daily-shortcuts",
   "creator-workspace",
@@ -132,7 +107,6 @@ interface DeviceManagementProps {
   candidates: CandidateStatus[];
   boardProfiles: BoardProfileSummary[];
   deviceProfiles: DeviceProfile[];
-  metrics: { deviceId: string; snapshot: HomeMetricsSnapshot } | null;
   onRename(deviceId: string, name: string): void | Promise<void>;
   onSaveRuntimeAssignment(
     deviceId: string,
@@ -140,7 +114,6 @@ interface DeviceManagementProps {
   ): void | Promise<void>;
   onCopyProductConfig?(sourceDeviceId: string, targetDeviceId: string): Promise<void>;
   onForgetDevice?(deviceId: string): void;
-  onMetricsChange(deviceId: string | null): void;
   onOpenSetup(targetId: string | null): void;
   onCreateFromTemplate?(profileId: string): void;
   onRetryCandidate(deviceId: string): void | Promise<void>;
@@ -213,12 +186,10 @@ export function DeviceManagement({
   candidates,
   boardProfiles,
   deviceProfiles,
-  metrics,
   onRename,
   onSaveRuntimeAssignment,
   onCopyProductConfig,
   onForgetDevice,
-  onMetricsChange,
   onOpenSetup,
   onCreateFromTemplate,
   onRetryCandidate,
@@ -246,15 +217,12 @@ export function DeviceManagement({
     hardwareProfileId: "",
   });
   const [assignmentSaving, setAssignmentSaving] = useState(false);
-  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("buttons");
   const [advancedTab, setAdvancedTab] = useState<AdvancedTab>("io");
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [interfaceMode, setInterfaceMode] = useState<InterfaceMode>("product");
   const [localSelectedButtonId, setLocalSelectedButtonId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [copySourceDeviceId, setCopySourceDeviceId] = useState("");
   const [copyingProductConfig, setCopyingProductConfig] = useState(false);
-  const [pendingTestDeviceId, setPendingTestDeviceId] = useState<string | null>(null);
   const previous = useRef<Row[]>([]);
   const candidateRetryInFlight = useRef(false);
   const pendingAssignment = useRef<RuntimeAssignment | null>(null);
@@ -352,10 +320,6 @@ export function DeviceManagement({
     activeSelection.id === error.owner.id
       ? error.message
       : null;
-  const selectedMetrics =
-    selectedDevice && metrics?.deviceId === selectedDevice.deviceId
-      ? metrics.snapshot
-      : null;
   const handleKeypadEscape = useCallback(() => {
     const deviceId = selectedDevice?.deviceId ?? activeDeviceId;
     const target = deviceId
@@ -366,31 +330,17 @@ export function DeviceManagement({
     target?.focus();
   }, [activeDeviceId, rows, selectedDevice?.deviceId]);
   useEffect(() => {
-    onMetricsChange(selectedDevice?.deviceId ?? null);
-  }, [onMetricsChange, selectedDevice?.deviceId]);
-  useEffect(() => {
     setRenaming(false);
     setName(selectedDevice?.name ?? "");
     setLocalSelectedButtonId(null);
-    setWorkspaceTab("buttons");
     setAdvancedTab("io");
     setAdvancedOpen(false);
   }, [selectedDevice?.deviceId]);
   useEffect(() => {
     if (!learningDeviceId) return;
-    setInterfaceMode("maker");
     setAdvancedTab("io");
     setAdvancedOpen(true);
-    setWorkspaceTab("buttons");
   }, [learningDeviceId]);
-  useEffect(() => {
-    if (!pendingTestDeviceId) return;
-    const pendingDevice = devices.find(({ deviceId }) => deviceId === pendingTestDeviceId);
-    if (pendingDevice?.learning) return;
-    setPendingTestDeviceId(null);
-    setAdvancedOpen(false);
-    setWorkspaceTab("test");
-  }, [devices, pendingTestDeviceId]);
   useEffect(() => {
     const assignment = selectedDevice?.runtimeAssignment;
     const profile = deviceProfiles.find(
@@ -541,32 +491,8 @@ export function DeviceManagement({
   const handleEndLearning = useCallback((deviceId: string) => {
     onEndLearning?.(deviceId);
   }, [onEndLearning]);
-  const handleFinishLearning = useCallback((deviceId: string) => {
-    setPendingTestDeviceId(deviceId);
-  }, []);
-  const selectWorkspaceTab = useCallback((tab: WorkspaceTab) => {
-    if (learningDeviceId && tab === "test") return;
-    setWorkspaceTab(tab);
-  }, [learningDeviceId]);
-  const handleWorkspaceTabKeyDown = useCallback((event: KeyboardEvent<HTMLButtonElement>) => {
-    const currentIndex = WORKSPACE_TABS.indexOf(workspaceTab);
-    let nextIndex = -1;
-    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-      nextIndex = (currentIndex + 1) % WORKSPACE_TABS.length;
-    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-      nextIndex = (currentIndex - 1 + WORKSPACE_TABS.length) % WORKSPACE_TABS.length;
-    } else if (event.key === "Home") {
-      nextIndex = 0;
-    } else if (event.key === "End") {
-      nextIndex = WORKSPACE_TABS.length - 1;
-    }
-    if (nextIndex < 0) return;
-    event.preventDefault();
-    selectWorkspaceTab(WORKSPACE_TABS[nextIndex]);
-  }, [selectWorkspaceTab, workspaceTab]);
   const selectAdvancedTab = useCallback((tab: AdvancedTab) => {
     if (learningDeviceId && tab !== "io") return;
-    setInterfaceMode("maker");
     setAdvancedOpen(true);
     setAdvancedTab(tab);
   }, [learningDeviceId]);
@@ -589,121 +515,11 @@ export function DeviceManagement({
   const selectedCandidateMessages = selectedCandidate
     ? candidateMessages[selectedCandidate.issue]
     : null;
-  const pressedButtonLabels = buttons
-    .filter((button) => pressedButtonIds.has(button.id))
-    .map((button) => button.label);
-  const selectedExecutionFeedback = executionFeedback && (
-    !executionFeedback.buttonId || executionFeedback.buttonId === effectiveSelectedButtonId
-  )
-    ? executionFeedback
-    : null;
   const failedButtonIds = new Set(
     executionFeedback?.status === "error" && executionFeedback.buttonId
       ? [executionFeedback.buttonId]
       : [],
   );
-  const usageByButton = useMemo(() => {
-    const usage = new Map<string, number>();
-    if (selectedMetrics?.heatmap.length) {
-      for (const entry of selectedMetrics.heatmap) {
-        usage.set(entry.buttonId, (usage.get(entry.buttonId) ?? 0) + entry.presses);
-      }
-    } else {
-      for (const log of selectedMetrics?.logs ?? []) {
-        if (log.kind !== "button" || !log.buttonId) continue;
-        usage.set(log.buttonId, (usage.get(log.buttonId) ?? 0) + 1);
-      }
-    }
-    return usage;
-  }, [selectedMetrics]);
-  const popularButtons = useMemo(
-    () => [...usageByButton.entries()]
-      .sort(([leftId, leftCount], [rightId, rightCount]) =>
-        rightCount - leftCount || leftId.localeCompare(rightId),
-      )
-      .slice(0, 5),
-    [usageByButton],
-  );
-  const unusedButtons = useMemo(
-    () => buttons.filter((button) => !usageByButton.has(button.id)),
-    [buttons, usageByButton],
-  );
-  const activityDays = useMemo(() => {
-    const byDay = new Map<string, { total: number; buttons: Map<string, number> }>();
-    for (const entry of selectedMetrics?.heatmap ?? []) {
-      const day = byDay.get(entry.day) ?? { total: 0, buttons: new Map<string, number>() };
-      day.total += entry.presses;
-      day.buttons.set(entry.buttonId, (day.buttons.get(entry.buttonId) ?? 0) + entry.presses);
-      byDay.set(entry.day, day);
-    }
-    return [...byDay.entries()].sort(([left], [right]) => left.localeCompare(right));
-  }, [selectedMetrics]);
-  const maxActivityDay = Math.max(1, ...activityDays.map(([, day]) => day.total));
-  const latestActionFailure = useMemo(() => {
-    const runtimeError = selectedDevice?.latestError;
-    const runtimeFailure = runtimeError && ACTION_FAILURE_CODES.has(runtimeError.code)
-      ? runtimeError
-      : null;
-    const feedbackFailure = executionFeedback?.status === "error"
-      ? executionFeedback
-      : null;
-    if (!runtimeFailure && !feedbackFailure) return null;
-    const buttonId = runtimeFailure?.params.button ?? feedbackFailure?.buttonId ?? null;
-    const step = runtimeFailure?.params.step ? Number(runtimeFailure.params.step) : NaN;
-    const action = buttonId && Number.isInteger(step) && step > 0
-      ? editingProfile?.actions[buttonId]?.press[step - 1]
-      : undefined;
-    return {
-      buttonId,
-      detail: runtimeFailure?.detail ?? feedbackFailure?.detail ?? null,
-      actionKind: runtimeFailure?.params.actionKind ?? action?.type ?? null,
-    };
-  }, [editingProfile, executionFeedback, selectedDevice?.latestError]);
-  const persistedActionFailures = useMemo<ActionFailureInsight[]>(() => {
-    const grouped = new Map<string, ActionFailureInsight>();
-    for (const log of selectedMetrics?.logs ?? []) {
-      if (log.kind !== "action_failed") continue;
-      const buttonId = log.buttonId ?? null;
-      const actionKind = log.actionKind ?? null;
-      if (!buttonId && !actionKind) continue;
-      const key = `${buttonId ?? ""}\u0000${actionKind ?? ""}`;
-      const current = grouped.get(key);
-      if (!current) {
-        grouped.set(key, {
-          buttonId,
-          actionKind,
-          detail: log.detail ?? null,
-          count: 1,
-          timestampMs: log.timestampMs,
-        });
-        continue;
-      }
-      current.count += 1;
-      if (log.timestampMs >= current.timestampMs) {
-        current.detail = log.detail ?? null;
-        current.timestampMs = log.timestampMs;
-      }
-    }
-    return [...grouped.values()]
-      .sort((left, right) => right.count - left.count || right.timestampMs - left.timestampMs)
-      .slice(0, 5);
-  }, [selectedMetrics]);
-  const actionFailureInsights = useMemo<ActionFailureInsight[]>(() => {
-    if (!latestActionFailure) return persistedActionFailures;
-    const key = `${latestActionFailure.buttonId ?? ""}\u0000${latestActionFailure.actionKind ?? ""}`;
-    const alreadyPersisted = persistedActionFailures.some((failure) =>
-      `${failure.buttonId ?? ""}\u0000${failure.actionKind ?? ""}` === key,
-    );
-    if (alreadyPersisted) return persistedActionFailures;
-    return [
-      {
-        ...latestActionFailure,
-        count: 1,
-        timestampMs: Date.now(),
-      },
-      ...persistedActionFailures,
-    ].slice(0, 5);
-  }, [latestActionFailure, persistedActionFailures]);
   const canRetryCandidate = Boolean(
     selectedCandidate?.deviceId &&
     [
@@ -817,7 +633,7 @@ export function DeviceManagement({
     }
   };
   return (
-    <div className={`device-management${client ? " is-client" : ""}${editingProfile && (client || workspaceTab === "buttons") ? " is-workspace" : ""}`}>
+    <div className={`device-management${client ? " is-client" : ""}${editingProfile ? " is-workspace" : ""}`}>
       <section
         className="device-list-region"
         aria-label={t(language, "devices.list")}
@@ -1043,32 +859,6 @@ export function DeviceManagement({
                   <Pencil size={16} />
                 </button>
               )}
-              {!client && !renaming && (
-                <div
-                  className="device-mode-switch"
-                  role="group"
-                  aria-label={t(language, "devices.interfaceMode")}
-                >
-                  <button
-                    type="button"
-                    aria-pressed={interfaceMode === "product"}
-                    disabled={Boolean(learningDeviceId)}
-                    onClick={() => {
-                      setInterfaceMode("product");
-                      setAdvancedOpen(false);
-                    }}
-                  >
-                    {t(language, "devices.productMode")}
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={interfaceMode === "maker"}
-                    onClick={() => setInterfaceMode("maker")}
-                  >
-                    {t(language, "devices.makerMode")}
-                  </button>
-                </div>
-              )}
             </div>
             {renaming && (
               <div className="device-rename">
@@ -1095,50 +885,6 @@ export function DeviceManagement({
                 >
                   <X size={16} />
                 </button>
-              </div>
-            )}
-            {editingProfile && !client && (
-              <div className="device-workspace-toolbar is-primary">
-                <div className="device-workspace-tabs" role="tablist" aria-label={t(language, "devices.workspaceNavigation")}>
-                  <button
-                    id="device-workspace-tab-buttons"
-                    type="button"
-                    role="tab"
-                    aria-controls="device-workspace-panel-buttons"
-                    aria-selected={workspaceTab === "buttons"}
-                    tabIndex={workspaceTab === "buttons" ? 0 : -1}
-                    onClick={() => selectWorkspaceTab("buttons")}
-                    onKeyDown={handleWorkspaceTabKeyDown}
-                  >
-                    {t(language, "devices.workspaceButtons")}
-                  </button>
-                  <button
-                    id="device-workspace-tab-test"
-                    type="button"
-                    role="tab"
-                    aria-controls="device-workspace-panel-test"
-                    aria-selected={workspaceTab === "test"}
-                    tabIndex={workspaceTab === "test" ? 0 : -1}
-                    disabled={Boolean(learningDeviceId)}
-                    onClick={() => selectWorkspaceTab("test")}
-                    onKeyDown={handleWorkspaceTabKeyDown}
-                  >
-                    {t(language, "devices.workspaceTest")}
-                  </button>
-                  <button
-                    id="device-workspace-tab-activity"
-                    type="button"
-                    role="tab"
-                    aria-controls="device-workspace-panel-activity"
-                    aria-selected={workspaceTab === "activity"}
-                    tabIndex={workspaceTab === "activity" ? 0 : -1}
-                    onClick={() => selectWorkspaceTab("activity")}
-                    onKeyDown={handleWorkspaceTabKeyDown}
-                  >
-                    <Activity size={14} aria-hidden="true" />
-                    {t(language, "devices.workspaceActivity")}
-                  </button>
-                </div>
               </div>
             )}
             <div className="device-context-summary">
@@ -1178,8 +924,8 @@ export function DeviceManagement({
                       <button className="secondary-button" type="button" disabled={Boolean(learningDeviceId)} onClick={() => void onDuplicateProfileForDevice?.({ deviceId: selectedDevice.deviceId, sourceProfile: editingProfile, name: `${editingProfile.profile.name} (${selectedDevice.name})` })}>{t(language, "devices.duplicateForDevice")}</button>
               </div>
             )}
-            {editingProfile && (client || workspaceTab === "buttons") && (
-              <div id="device-workspace-panel-buttons" className="keypad-stage device-keypad-stage" role="tabpanel" aria-labelledby="device-workspace-tab-buttons">
+            {editingProfile && (
+              <div className="keypad-stage device-keypad-stage">
                 <Keypad
                   layout={editingProfile.profile}
                   actions={editingProfile.actions}
@@ -1193,181 +939,7 @@ export function DeviceManagement({
                 />
               </div>
             )}
-            {!client && editingProfile && workspaceTab === "test" && (
-              <div id="device-workspace-panel-test" className="device-test-panel" role="tabpanel" aria-labelledby="device-workspace-tab-test">
-                <div className="device-test-heading">
-                  <div>
-                    <h3>{t(language, "devices.testTitle")}</h3>
-                    <p>{t(language, "devices.testHint")}</p>
-                  </div>
-                  <div className="device-test-actions">
-                    <button className="secondary-button" type="button" onClick={() => selectAdvancedTab("io")}>
-                      <RefreshCw size={14} aria-hidden="true" />
-                      {t(language, "devices.testRelearn")}
-                    </button>
-                    <span className="device-test-live"><i aria-hidden="true" />{t(language, "devices.testLive")}</span>
-                  </div>
-                </div>
-                <div
-                  className={`device-test-status${selectedExecutionFeedback?.status === "error" ? " is-error" : ""}`}
-                  role={selectedExecutionFeedback?.status === "error" ? "alert" : "status"}
-                  aria-live="polite"
-                >
-                  {pressedButtonLabels.length > 0
-                    ? t(language, "devices.testPressed", { buttons: pressedButtonLabels.join(", ") })
-                    : selectedExecutionFeedback?.status === "success"
-                      ? t(language, "devices.actionSent")
-                      : selectedExecutionFeedback?.status === "error"
-                        ? `${t(language, "devices.actionFailed")}${selectedExecutionFeedback.detail ? `: ${selectedExecutionFeedback.detail}` : ""}`
-                        : t(language, "devices.testWaiting")}
-                </div>
-                <div className="keypad-stage device-keypad-stage">
-                  <Keypad
-                    layout={editingProfile.profile}
-                    actions={editingProfile.actions}
-                    selectedButtonId={effectiveSelectedButtonId}
-                    pressedButtonIds={pressedButtonIds}
-                    failedButtonIds={failedButtonIds}
-                    failureLabel={t(language, "devices.actionFailed")}
-                    actionCountLabel={(count) => t(language, "model.actionCount", { count })}
-                    onSelect={selectButton}
-                    onEscape={handleKeypadEscape}
-                  />
-                </div>
-              </div>
-            )}
-            {!client && (!editingProfile || workspaceTab === "activity") && (
-              <div
-                id={editingProfile ? "device-workspace-panel-activity" : undefined}
-                className="device-activity-panel"
-                role={editingProfile ? "tabpanel" : undefined}
-                aria-labelledby={editingProfile ? "device-workspace-tab-activity" : undefined}
-              >
-                <div className="device-activity-heading">
-                  <div>
-                    <h3>{t(language, "devices.activity")}</h3>
-                    <p>{t(language, "devices.activityHint")}</p>
-                  </div>
-                </div>
-                {selectedMetrics ? (
-                  <>
-                    <section className="device-metrics" aria-label={t(language, "devices.metricsSummary")}>
-                      <div><span>{t(language, "home.todayPresses")}</span><strong>{selectedMetrics.todayPresses}</strong></div>
-                      <div><span>{t(language, "home.totalPresses")}</span><strong>{selectedMetrics.totalPresses}</strong></div>
-                      <div><span>{t(language, "home.activeButtons")}</span><strong>{selectedMetrics.activeButtonCount}</strong></div>
-                      <div><span>{t(language, "home.topButton")}</span><strong>{buttons.find((button) => button.id === selectedMetrics.topButton?.buttonId)?.label ?? selectedMetrics.topButton?.buttonId ?? "-"}</strong></div>
-                    </section>
-                    <section className="device-activity-insight" aria-label={t(language, "devices.activityHeatmap")}>
-                      <h4>{t(language, "devices.activityHeatmap")}</h4>
-                      {activityDays.length > 0 ? (
-                        <div className="heatmap" aria-label={t(language, "devices.activityHeatmap")}>
-                          {activityDays.map(([day, summary]) => {
-                            const level = Math.min(4, Math.max(1, Math.ceil((summary.total / maxActivityDay) * 4)));
-                            const labels = [...summary.buttons.entries()]
-                              .sort(([, left], [, right]) => right - left)
-                              .slice(0, 3)
-                              .map(([buttonId]) => buttons.find((button) => button.id === buttonId)?.label ?? buttonId)
-                              .join("、");
-                            return (
-                              <div className={`heat-cell heat-${level}`} key={day}>
-                                <span>{day}</span>
-                                <strong>{summary.total}</strong>
-                                <small>{labels}</small>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : <p className="panel-empty">{t(language, "activity.empty")}</p>}
-                    </section>
-                    <section className="device-activity-insight" aria-label={t(language, "devices.popularButtons")}>
-                      <h4>{t(language, "devices.popularButtons")}</h4>
-                      {popularButtons.length > 0 ? (
-                        <ul>
-                          {popularButtons.map(([buttonId, count]) => (
-                            <li key={buttonId}>
-                              <button className="secondary-button" type="button" onClick={() => {
-                                selectButton(buttonId);
-                                setWorkspaceTab("buttons");
-                              }}>
-                                {buttons.find((button) => button.id === buttonId)?.label ?? buttonId}
-                              </button>
-                              <span>{count}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : <p className="panel-empty">{t(language, "activity.empty")}</p>}
-                    </section>
-                    {editingProfile && (
-                      <section className="device-activity-insight" aria-label={t(language, "devices.unusedButtons")}>
-                        <h4>{t(language, "devices.unusedButtons")}</h4>
-                        {unusedButtons.length > 0 ? (
-                          <ul>
-                            {unusedButtons.map((button) => (
-                              <li key={button.id}>
-                                <button className="secondary-button" type="button" onClick={() => {
-                                  selectButton(button.id);
-                                  setWorkspaceTab("buttons");
-                                }}>
-                                  {button.label}
-                                </button>
-                                <span>{button.id}</span>
-                              </li>
-                            ))}
-                          </ul>
-                        ) : <p className="panel-empty">{t(language, "devices.noUnusedButtons")}</p>}
-                      </section>
-                    )}
-                    {actionFailureInsights.length > 0 && (
-                      <section className="device-activity-insight" aria-label={t(language, "devices.failedActions")} role="alert">
-                        <h4>{t(language, "devices.failedActions")}</h4>
-                        <ul>
-                          {actionFailureInsights.map((failure) => {
-                            const button = buttons.find((candidate) => candidate.id === failure.buttonId);
-                            return (
-                              <li key={`${failure.buttonId ?? "unknown"}:${failure.actionKind ?? "unknown"}`}>
-                                {button ? (
-                                  <button className="secondary-button" type="button" onClick={() => {
-                                    selectButton(button.id);
-                                    setWorkspaceTab("buttons");
-                                  }}>
-                                    <span className="sr-only">{t(language, "devices.editButton")}: </span>
-                                    {button.label}
-                                  </button>
-                                ) : <span>{failure.buttonId ?? "-"}</span>}
-                                <span>
-                                  {" · "}
-                                  {failure.actionKind && ACTION_KIND_MESSAGES[failure.actionKind]
-                                    ? t(language, ACTION_KIND_MESSAGES[failure.actionKind])
-                                    : t(language, "devices.actionKindUnknown")}
-                                  {failure.count > 1 && ` · ${t(language, "devices.failureCount", { count: failure.count })}`}
-                                  {failure.detail ? `: ${failure.detail}` : ""}
-                                </span>
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      </section>
-                    )}
-                    <div className="device-activity-wrap">
-                      <table className="device-activity" aria-label={t(language, "devices.activity")}>
-                        <tbody>
-                          {selectedMetrics.logs.map((log) => (
-                            <tr key={`${log.timestampMs}:${log.deviceId}:${log.deviceProfileId}:${log.hardwareProfileId}:${log.message}`}>
-                              <td><time>{new Date(log.timestampMs).toLocaleTimeString()}</time></td>
-                              <td>{log.deviceName}</td>
-                              <td>{log.deviceProfileId}</td>
-                              <td>{log.hardwareProfileId}</td>
-                              <td>{log.actionKind ? `${log.message}${log.detail ? `: ${log.detail}` : ""}` : log.message}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </>
-                ) : <p className="panel-empty">{t(language, "activity.empty")}</p>}
-              </div>
-            )}
-            {!client && interfaceMode === "maker" && (
+            {!client && (
               <details
                 className="device-advanced-disclosure"
                 open={advancedOpen}
@@ -1490,7 +1062,7 @@ export function DeviceManagement({
                   {editingProfile && !isProductDevice && advancedTab === "io" && (
                     <div id="device-advanced-panel-io" role="tabpanel" aria-labelledby="device-advanced-tab-io">
                       <h3>{t(language, "hardware.title")}</h3>
-                      <HardwareMapping language={language} layout={editingProfile.profile} hardwareProfiles={editingProfile.hardware_profiles} boardProfiles={boardProfiles} devices={devices} learning={selectedDevice.learning} initialHardwareProfileId={assignmentDraft.hardwareProfileId || selectedDevice.runtimeAssignment?.hardware_profile_id} initialDeviceId={selectedDevice.deviceId} selectedButtonId={effectiveSelectedButtonId} onSelectButton={selectButton} onChange={(hardwareProfiles) => updateEditingProfile({ ...editingProfile, hardware_profiles: hardwareProfiles })} onSelectionChange={handleWorkspaceSelection} onBeginLearning={handleBeginLearning} onEndLearning={handleEndLearning} onFinishLearning={handleFinishLearning} />
+                      <HardwareMapping language={language} layout={editingProfile.profile} hardwareProfiles={editingProfile.hardware_profiles} boardProfiles={boardProfiles} devices={devices} learning={selectedDevice.learning} initialHardwareProfileId={assignmentDraft.hardwareProfileId || selectedDevice.runtimeAssignment?.hardware_profile_id} initialDeviceId={selectedDevice.deviceId} selectedButtonId={effectiveSelectedButtonId} onSelectButton={selectButton} onChange={(hardwareProfiles) => updateEditingProfile({ ...editingProfile, hardware_profiles: hardwareProfiles })} onSelectionChange={handleWorkspaceSelection} onBeginLearning={handleBeginLearning} onEndLearning={handleEndLearning} />
                     </div>
                   )}
                   {editingProfile && !isProductDevice && advancedTab === "layout" && (
@@ -1555,7 +1127,7 @@ export function DeviceManagement({
           </>
         )}
       </aside>
-      {editingProfile && (client || workspaceTab === "buttons") && (
+      {editingProfile && (
         <ActionEditor
           language={language}
           button={selectedButton}

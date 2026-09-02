@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
 import { expect, test, vi } from "vitest";
 import { DeviceManagement } from "./DeviceManagement";
-import type { BoardProfileSummary, CandidateStatus, DeviceProfile, DeviceStatus, HomeMetricsSnapshot, LearningTarget } from "./types";
+import type { BoardProfileSummary, CandidateStatus, DeviceProfile, DeviceStatus, LearningTarget } from "./types";
 
 const viewCss = readFileSync("src/styles/views.css", "utf8");
 
@@ -52,15 +52,6 @@ function candidate(overrides: Partial<CandidateStatus> = {}): CandidateStatus {
   };
 }
 
-const metrics: HomeMetricsSnapshot = {
-  totalPresses: 8,
-  todayPresses: 2,
-  activeButtonCount: 1,
-  topButton: { buttonId: "A", presses: 8 },
-  heatmap: [],
-  logs: [{ timestampMs: 1, kind: "button", message: "A pressed", deviceId: "rp-a", deviceName: "RP2040 A", deviceProfileId: "profile-a", hardwareProfileId: "hardware-a", buttonId: "A" }],
-};
-
 const profiles: DeviceProfile[] = [
   { schema_version: 3, profile: { id: "profile-a", name: "Counter Profile", groups: [] }, trigger_settings: { long_press_ms: 500, double_press_ms: 300 }, hardware_profiles: [{ id: "hardware-a", name: "Counter Hardware", board_profile_id: "rp2040-pad", debounce_ms: 20, inputs: [] }], actions: {} },
   { schema_version: 3, profile: { id: "profile-b", name: "Timer Profile", groups: [] }, trigger_settings: { long_press_ms: 500, double_press_ms: 300 }, hardware_profiles: [{ id: "hardware-b", name: "Timer Hardware", board_profile_id: "rp2040-pad", debounce_ms: 20, inputs: [] }, { id: "hardware-b-alt", name: "Timer Hardware Alt", board_profile_id: "rp2040-pad", debounce_ms: 20, inputs: [] }, { id: "hardware-esp", name: "ESP Hardware", board_profile_id: "esp32-pad", debounce_ms: 20, inputs: [] }], actions: {} },
@@ -79,10 +70,8 @@ function renderManagement(overrides: Partial<React.ComponentProps<typeof DeviceM
     candidates: [candidate()],
     boardProfiles: boards,
     deviceProfiles: profiles,
-    metrics: { deviceId: "rp-a", snapshot: metrics },
     onRename: vi.fn(),
     onSaveRuntimeAssignment: vi.fn(),
-    onMetricsChange: vi.fn(),
     onOpenSetup: vi.fn(),
     onRetryCandidate: vi.fn(),
     selectedButtonId: null,
@@ -98,10 +87,6 @@ function rowByIdentifier(identifier: string) {
 }
 
 async function openAdvanced(user: ReturnType<typeof userEvent.setup>) {
-  const makerMode = screen.getByRole("button", { name: "创客模式" });
-  if (makerMode.getAttribute("aria-pressed") !== "true") {
-    await user.click(makerMode);
-  }
   const summary = screen.getByText("高级设置", { selector: "summary span" }).closest("summary");
   if (!summary) throw new Error("Advanced settings disclosure is missing");
   await user.click(summary);
@@ -159,12 +144,6 @@ test("shows connected devices before offline devices while preserving source ord
     "OFFLINE-B",
     "AD-001",
   ]);
-});
-
-test("never renders metrics owned by another Device", () => {
-  renderManagement({ metrics: { deviceId: "rp-b", snapshot: metrics } });
-  expect(screen.queryByText("A pressed")).toBeNull();
-  expect(screen.queryByText("2 / 8")).toBeNull();
 });
 
 test("marks the selected Device ID for constrained wrapping", async () => {
@@ -275,13 +254,10 @@ test("copies Product Device actions only from the same Product Version", async (
   expect(onCopyProductConfig).toHaveBeenCalledWith("rp-b", "rp-a");
 });
 
-test("keeps assignment details out of the compact rows while retaining selected activity", async () => {
+test("keeps assignment details out of compact rows and inside technical details", async () => {
   const user = userEvent.setup();
   const firstRender = renderManagement();
   expect(rowByIdentifier("RP-A-001")).not.toHaveTextContent("Counter Profile");
-  expect(screen.queryByText("A pressed")).not.toBeInTheDocument();
-  await user.click(screen.getByRole("tab", { name: "活动" }));
-  expect(screen.getByText("A pressed")).toBeInTheDocument();
   await user.click(rowByIdentifier("ESP-A-003"));
   expect(screen.getByRole("heading", { name: "ESP32 A" })).toBeInTheDocument();
   firstRender.unmount();
@@ -289,146 +265,6 @@ test("keeps assignment details out of the compact rows while retaining selected 
   await openAdvanced(user);
   await user.click(screen.getByText("查看技术详情"));
   expect(screen.getByText("gone", { selector: "dd" })).toBeInTheDocument();
-});
-
-test("shows compact selected-Device metrics with event-time activity attribution", async () => {
-  renderManagement({
-    devices: [device({
-      name: "Current Device Name",
-      runtimeAssignment: {
-        device_profile_id: "profile-b",
-        hardware_profile_id: "hardware-b",
-      },
-    })],
-    metrics: {
-      deviceId: "rp-a",
-      snapshot: {
-        ...metrics,
-        activeButtonCount: 3,
-        topButton: { buttonId: "A", presses: 8 },
-        logs: [{
-          ...metrics.logs[0],
-          deviceName: "Event-time Device Name",
-          deviceProfileId: "profile-a",
-          hardwareProfileId: "hardware-a",
-          message: "A pressed before rename",
-        }],
-      },
-    },
-  });
-
-  await userEvent.setup().click(screen.getByRole("tab", { name: "活动" }));
-  const summary = screen.getByLabelText("设备指标");
-  expect(summary).toHaveTextContent("今日按下2");
-  expect(summary).toHaveTextContent("累计按下8");
-  expect(summary).toHaveTextContent("活跃按键3");
-  expect(summary).toHaveTextContent("最常用A");
-  const activity = screen.getByText("A pressed before rename").closest("tr");
-  expect(activity).toHaveTextContent("Event-time Device Name");
-  expect(activity).toHaveTextContent("profile-a");
-  expect(activity).toHaveTextContent("hardware-a");
-  expect(activity).not.toHaveTextContent("Current Device Name");
-  expect(activity).not.toHaveTextContent("profile-b");
-  expect(activity).not.toHaveTextContent("hardware-b");
-});
-
-test("shows activity insights for the selected Device and links keys back to editing", async () => {
-  const user = userEvent.setup();
-  const onSelectedButtonChange = vi.fn();
-  const activityProfile = structuredClone(profiles[0]);
-  activityProfile.profile.groups = [{
-    id: "main",
-    columns: 2,
-    buttons: [{ id: "A", label: "Alpha" }, { id: "B", label: "Beta" }],
-  }];
-  activityProfile.actions = {
-    A: { press: [{ type: "paste", text: "hello" }], release: [], long_press: [], double_press: [] },
-  };
-  renderManagement({
-    deviceProfiles: [activityProfile, profiles[1], profiles[2]],
-    selectedButtonId: "A",
-    onSelectedButtonChange,
-    metrics: {
-      deviceId: "rp-a",
-      snapshot: {
-        ...metrics,
-        heatmap: [
-          { buttonId: "A", day: "2026-08-20", presses: 2 },
-          { buttonId: "A", day: "2026-08-21", presses: 3 },
-        ],
-      },
-    },
-    devices: [device({
-      runtimeAssignment: { device_profile_id: "profile-a", hardware_profile_id: "hardware-a" },
-      latestError: {
-        code: "action_step_failed",
-        params: { button: "A", step: "1" },
-        detail: "paste denied",
-        input: null,
-        pressed: null,
-        learningTarget: null,
-      },
-    })],
-  });
-
-  await user.click(screen.getByRole("tab", { name: "活动" }));
-  expect(screen.getByRole("region", { name: "最近 7 天热力图" })).toHaveTextContent("2026-08-20");
-  expect(screen.getByRole("region", { name: "最近 7 天热力图" })).toHaveTextContent("2026-08-21");
-  expect(screen.getByRole("region", { name: "常用按键" })).toHaveTextContent("Alpha");
-  expect(screen.getByRole("region", { name: "最近 7 天未使用" })).toHaveTextContent("Beta");
-  expect(screen.getByRole("alert", { name: "最近动作失败" })).toHaveTextContent("Alpha · 粘贴: paste denied");
-
-  await user.click(within(screen.getByRole("region", { name: "最近 7 天未使用" })).getByRole("button", { name: "Beta" }));
-  expect(screen.getByRole("tab", { name: "按键" })).toHaveAttribute("aria-selected", "true");
-  expect(onSelectedButtonChange).toHaveBeenLastCalledWith("B");
-});
-
-test("aggregates persisted action failures by key and action type", async () => {
-  const user = userEvent.setup();
-  const activityProfile = structuredClone(profiles[0]);
-  activityProfile.profile.groups = [{
-    id: "main",
-    columns: 2,
-    buttons: [{ id: "A", label: "Alpha" }, { id: "B", label: "Beta" }],
-  }];
-  renderManagement({
-    deviceProfiles: [activityProfile, profiles[1], profiles[2]],
-    metrics: {
-      deviceId: "rp-a",
-      snapshot: {
-        ...metrics,
-        logs: [
-          {
-            ...metrics.logs[0],
-            kind: "action_failed",
-            message: "paste failed",
-            buttonId: "A",
-            actionKind: "paste",
-            detail: "clipboard unavailable",
-            timestampMs: 3,
-          },
-          {
-            ...metrics.logs[0],
-            kind: "action_failed",
-            message: "paste failed",
-            buttonId: "A",
-            actionKind: "paste",
-            detail: "clipboard unavailable",
-            timestampMs: 2,
-          },
-        ],
-      },
-    },
-    devices: [device({
-      runtimeAssignment: { device_profile_id: "profile-a", hardware_profile_id: "hardware-a" },
-      latestError: null,
-    })],
-  });
-
-  await user.click(screen.getByRole("tab", { name: "活动" }));
-  const failures = screen.getByRole("alert", { name: "最近动作失败" });
-  expect(failures).toHaveTextContent("Alpha · 粘贴 · 2 次: clipboard unavailable");
-  await user.click(within(failures).getByRole("button", { name: /编辑按键:Alpha/ }));
 });
 
 test("preserves selected device identity across live replacements", () => {
@@ -495,7 +331,7 @@ test("removes communication ports from rows and reveals them only in technical d
   expect(
     screen.queryByText("端口", { selector: ".device-table-head span" }),
   ).toBeNull();
-  expect(screen.queryByText("/dev/cu.rp-a")).not.toBeInTheDocument();
+  expect(screen.getByText("/dev/cu.rp-a")).not.toBeVisible();
   await openAdvanced(user);
   await user.click(screen.getByText("查看技术详情"));
   expect(screen.getByText("/dev/cu.rp-a")).toBeVisible();
@@ -686,7 +522,6 @@ test("shows starter profiles directly on the no-device workspace", async () => {
     devices: [],
     candidates: [],
     deviceProfiles: [starter],
-    metrics: null,
     onCreateFromTemplate,
   });
 
@@ -879,7 +714,7 @@ test("restores the current assignment when an automatic save fails", async () =>
   expect(select).toHaveValue("profile-a");
 });
 
-test("embeds I/O Mapping and Key Layout as device workspace tabs", async () => {
+test("keeps I/O Mapping and Key Layout in advanced settings", async () => {
   const user = userEvent.setup();
   const onSelectedDeviceChange = vi.fn();
   renderManagement({
@@ -887,11 +722,7 @@ test("embeds I/O Mapping and Key Layout as device workspace tabs", async () => {
     onSelectedDeviceChange,
   });
 
-  expect(
-    within(screen.getByRole("tablist", { name: "设备工作区" }))
-      .getAllByRole("tab")
-      .map((tab) => tab.textContent),
-  ).toEqual(["按键", "测试", "活动"]);
+  expect(screen.queryByRole("tablist", { name: "设备工作区" })).not.toBeInTheDocument();
   await openAdvanced(user);
   await user.click(screen.getByRole("tab", { name: "高级 I/O" }));
   expect(screen.getByRole("tabpanel", { name: "高级 I/O" })).toHaveTextContent("硬件配置");
@@ -928,7 +759,6 @@ test("keeps device selection, keypad, and actions in one workspace", async () =>
     onChangeProfile: vi.fn(),
   });
 
-  expect(screen.getByRole("tab", { name: "按键" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByRole("button", { name: "A，1 项行为" })).toHaveClass("is-pressed");
   expect(screen.getByRole("complementary", { name: "A" })).toHaveTextContent("粘贴 - hello");
 
@@ -936,29 +766,7 @@ test("keeps device selection, keypad, and actions in one workspace", async () =>
   expect(onSelectedButtonChange).toHaveBeenCalledWith("B");
 });
 
-test("offers a live physical-key test without changing the action editor contract", async () => {
-  const user = userEvent.setup();
-  const profile = structuredClone(profiles[0]);
-  profile.profile.groups = [{ id: "main", columns: 1, buttons: [{ id: "A", label: "A" }] }];
-  renderManagement({
-    deviceProfiles: [profile, profiles[1], profiles[2]],
-    selectedButtonId: "A",
-    pressedButtonIds: new Set(["A"]),
-  });
-
-  await user.click(screen.getByRole("tab", { name: "测试" }));
-  const panel = screen.getByRole("tabpanel", { name: "测试" });
-  expect(panel).toHaveTextContent("按键测试");
-  expect(within(panel).getByRole("status")).toHaveTextContent("已识别：A");
-  expect(within(panel).getByRole("button", { name: "A，0 项行为" })).toHaveClass("is-pressed");
-
-  await user.click(within(panel).getByRole("button", { name: "重新识别按键" }));
-  expect(screen.getByText("高级设置", { selector: "summary span" }).closest("details")).toHaveAttribute("open");
-  expect(screen.getByRole("tab", { name: "高级 I/O" })).toHaveAttribute("aria-selected", "true");
-});
-
-test("associates an action failure with its key in test mode", async () => {
-  const user = userEvent.setup();
+test("associates an action failure with its key in the main workspace", () => {
   const profile = structuredClone(profiles[0]);
   profile.profile.groups = [{ id: "main", columns: 1, buttons: [{ id: "A", label: "A" }] }];
   renderManagement({
@@ -971,14 +779,12 @@ test("associates an action failure with its key in test mode", async () => {
     },
   });
 
-  await user.click(screen.getByRole("tab", { name: "测试" }));
-  expect(screen.getByRole("alert")).toHaveTextContent("动作执行失败: paste denied");
   expect(
     screen.getByRole("button", { name: "A，0 项行为，动作执行失败" }),
   ).toHaveClass("is-failed");
 });
 
-test("locks the learning Device and keeps test mode unavailable until learning ends", async () => {
+test("locks the learning Device and completes without opening another workspace", async () => {
   const user = userEvent.setup();
   const target: LearningTarget = {
     deviceId: "rp-a",
@@ -989,7 +795,7 @@ test("locks the learning Device and keeps test mode unavailable until learning e
     pins: [1, 2],
   };
   const onSelectedDeviceChange = vi.fn();
-  const { props, rerender } = renderManagement({
+  renderManagement({
     selectedDeviceId: "rp-a",
     onSelectedDeviceChange,
     devices: [
@@ -998,75 +804,28 @@ test("locks the learning Device and keeps test mode unavailable until learning e
     ],
   });
 
-  const testTab = screen.getByRole("tab", { name: "测试" });
-  expect(testTab).toBeDisabled();
+  expect(screen.queryByRole("tab", { name: "测试" })).not.toBeInTheDocument();
   expect(rowByIdentifier("RP-A-001")).toHaveAttribute("aria-pressed", "true");
   expect(rowByIdentifier("RP-B-002")).toBeDisabled();
   await user.click(rowByIdentifier("RP-B-002"));
   expect(onSelectedDeviceChange).not.toHaveBeenCalledWith("rp-b");
   const advanced = screen.getByText("高级设置", { selector: "summary span" }).closest("details");
   await waitFor(() => expect(advanced).toHaveAttribute("open", ""));
-  await user.click(screen.getByRole("button", { name: "完成学习并进入测试" }));
-  expect(testTab).not.toHaveAttribute("aria-selected", "true");
-
-  rerender(<DeviceManagement {...props} devices={[
-    device({ learning: null }),
-    device({ deviceId: "rp-b", name: "RP2040 B", hardwareSerial: "RP-B-002" }),
-  ]} />);
-  await waitFor(() => expect(testTab).toHaveAttribute("aria-selected", "true"));
+  await user.click(screen.getByRole("button", { name: "完成学习" }));
 });
 
-test("clears a prior action result when testing a different key", async () => {
-  const user = userEvent.setup();
-  const profile = structuredClone(profiles[0]);
-  profile.profile.groups = [{
-    id: "main",
-    columns: 2,
-    buttons: [{ id: "A", label: "A" }, { id: "B", label: "B" }],
-  }];
-  const { props, rerender } = renderManagement({
-    deviceProfiles: [profile, profiles[1], profiles[2]],
-    selectedButtonId: "A",
-    executionFeedback: { buttonId: "A", status: "success", detail: null },
-  });
-
-  await user.click(screen.getByRole("tab", { name: "测试" }));
-  const panel = screen.getByRole("tabpanel", { name: "测试" });
-  expect(within(panel).getByRole("status")).toHaveTextContent("动作已发送");
-  await user.click(screen.getByRole("button", { name: "B，0 项行为" }));
-  rerender(<DeviceManagement {...props} selectedButtonId="B" />);
-  expect(within(panel).getByRole("status")).toHaveTextContent("等待实体按键输入");
-});
-
-test("supports arrow-key navigation across task tabs", async () => {
+test("omits mode and task navigation while keeping advanced settings available", async () => {
   const user = userEvent.setup();
   renderManagement();
 
-  const buttonsTab = screen.getByRole("tab", { name: "按键" });
-  buttonsTab.focus();
-  await user.keyboard("{ArrowRight}");
-  expect(screen.getByRole("tab", { name: "测试" })).toHaveAttribute("aria-selected", "true");
-  await user.keyboard("{End}");
-  expect(screen.getByRole("tab", { name: "活动" })).toHaveAttribute("aria-selected", "true");
-});
-
-test("keeps task tabs focused while advanced technical details stay disclosed", async () => {
-  const user = userEvent.setup();
-  renderManagement();
-
-  expect(screen.getByRole("tab", { name: "按键" })).toHaveAttribute("aria-selected", "true");
-  expect(screen.queryByText("A pressed")).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "成品模式" })).toHaveAttribute("aria-pressed", "true");
-  expect(screen.queryByText("高级设置", { selector: "summary span" })).not.toBeInTheDocument();
-
-  await user.click(screen.getByRole("tab", { name: "活动" }));
-  expect(screen.getByLabelText("设备指标")).toBeInTheDocument();
-  expect(screen.getByRole("table", { name: "设备动态" })).toHaveTextContent("A pressed");
+  expect(screen.queryByRole("button", { name: "成品模式" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "创客模式" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "测试" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "活动" })).not.toBeInTheDocument();
 
   await openAdvanced(user);
   const technical = screen.getByText("查看技术详情", { selector: "summary" }).closest("details");
   expect(technical).not.toHaveAttribute("open");
-  expect(screen.getByRole("tab", { name: "活动" })).toHaveAttribute("aria-selected", "true");
 });
 
 test("keeps overview diagnostics for a device without an editing profile", () => {
@@ -1075,9 +834,8 @@ test("keeps overview diagnostics for a device without an editing profile", () =>
   });
 
   expect(screen.queryByRole("tablist", { name: "设备工作区" })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "成品模式" })).toHaveAttribute("aria-pressed", "true");
-  expect(screen.queryByText("高级设置", { selector: "summary span" })).not.toBeInTheDocument();
-  expect(screen.queryByText("查看技术详情")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "创客模式" })).not.toBeInTheDocument();
+  expect(screen.getByText("高级设置", { selector: "summary span" })).toBeInTheDocument();
 });
 
 test("lets the embedded Key Layout grow inside the device detail scroller", () => {
@@ -1091,7 +849,7 @@ test("uses shared button primitives for device workspace commands", async () => 
 
   expect(screen.queryByRole("button", { name: "保存运行分配" })).toBeNull();
   expect(screen.queryByRole("button", { name: "清除运行分配" })).toBeNull();
-  expect(screen.queryByRole("button", { name: "配置设置" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "配置设置" })).not.toBeVisible();
 
   await openAdvanced(user);
   expect(screen.getByRole("button", { name: "配置设置" })).toHaveClass("secondary-button");

@@ -28,7 +28,6 @@ interface HardwareMappingProps {
   onSelectionChange(hardwareProfileId: string | null, deviceId: string | null): void;
   onBeginLearning(hardwareProfileId: string, deviceId: string, pins: number[]): void;
   onEndLearning(deviceId: string): void;
-  onFinishLearning?(deviceId: string): void;
 }
 
 interface ButtonBinding {
@@ -401,7 +400,6 @@ export function HardwareMapping({
   onSelectionChange,
   onBeginLearning,
   onEndLearning,
-  onFinishLearning,
 }: HardwareMappingProps) {
   const initialHardware = hardwareProfiles.find(
     ({ id }) => id === initialHardwareProfileId,
@@ -778,7 +776,6 @@ export function HardwareMapping({
     if (!activeLearning || finishRequested) return;
     setFinishRequested(true);
     onEndLearning(activeLearning.deviceId);
-    onFinishLearning?.(activeLearning.deviceId);
   };
 
   return (

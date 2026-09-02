@@ -383,10 +383,9 @@ test("offers learning only for online identity-valid runtime Devices on the exac
   expect(screen.getByLabelText("消抖")).toBeEnabled();
 });
 
-test("shows a locked learning session with target, mapped progress, navigation, and finish callback", async () => {
+test("shows a locked learning session with target, mapped progress, navigation, and finish action", async () => {
   const user = userEvent.setup();
   const onEndLearning = vi.fn();
-  const onFinishLearning = vi.fn();
   const onSelectButton = vi.fn();
   const target: LearningTarget = {
     deviceId: "device-front",
@@ -414,7 +413,6 @@ test("shows a locked learning session with target, mapped progress, navigation, 
       onSelectionChange={vi.fn()}
       onBeginLearning={vi.fn()}
       onEndLearning={onEndLearning}
-      onFinishLearning={onFinishLearning}
     />,
   );
 
@@ -430,9 +428,8 @@ test("shows a locked learning session with target, mapped progress, navigation, 
   expect(screen.getByLabelText("在线设备")).toHaveValue("device-front");
   expect(screen.getByRole("button", { name: "上一个按键" })).toBeEnabled();
 
-  await user.click(screen.getByRole("button", { name: "完成学习并进入测试" }));
+  await user.click(screen.getByRole("button", { name: "完成学习" }));
   expect(onEndLearning).toHaveBeenCalledWith("device-front");
-  expect(onFinishLearning).toHaveBeenCalledWith("device-front");
   expect(screen.getByRole("button", { name: "正在结束学习..." })).toBeDisabled();
 });
 

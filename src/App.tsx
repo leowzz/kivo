@@ -44,7 +44,6 @@ import type {
   CreateDeviceProfileRequest,
   DeviceProfile,
   HardwareProfile,
-  HomeMetricsSnapshot,
   ImportPreview,
   InputSource,
   Language,
@@ -286,7 +285,6 @@ export default function App({
   const [view, setView] = useState<View>("devices");
   const [homeMetrics, setHomeMetrics] = useState<AppSnapshot["homeMetrics"]>(null);
   const [usage, setUsage] = useState<UsageView | null>(null);
-  const [deviceMetrics, setDeviceMetrics] = useState<{ deviceId: string; snapshot: HomeMetricsSnapshot } | null>(null);
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
   const [selectedManagedDeviceId, setSelectedManagedDeviceId] = useState<string | null>(null);
   const [hardwareEditorTarget, setHardwareEditorTarget] = useState<HardwareEditorTarget | null>(null);
@@ -318,9 +316,7 @@ export default function App({
   const fullSnapshotRequiredRef = useRef(true);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const loadErrorMessageRef = useRef<string | null>(null);
-  const selectedManagedDeviceIdRef = useRef<string | null>(null);
   const homeMetricsRef = useRef(homeMetrics);
-  const managedMetricsGenerationRef = useRef(0);
   const hardwareEditorTargetRef = useRef<HardwareEditorTarget | null>(null);
   const learningEditingRevisionRef = useRef(0);
   const profileDraftsRef = useRef<Map<string, DeviceProfile>>(new Map());
@@ -659,33 +655,6 @@ export default function App({
     }
   }, [applySnapshot, language, productConfigHistory.record, queue]);
 
-  const refreshManagedDeviceMetrics = useCallback(async (deviceId: string | null) => {
-    selectedManagedDeviceIdRef.current = deviceId;
-    const generation = ++managedMetricsGenerationRef.current;
-    if (!deviceId) {
-      setDeviceMetrics(null);
-      return;
-    }
-    if (PREVIEW_MODE) {
-      const previewMetrics = homeMetricsRef.current;
-      setDeviceMetrics(previewMetrics ? { deviceId, snapshot: previewMetrics } : null);
-      return;
-    }
-    setDeviceMetrics(null);
-    try {
-      const metrics = await invoke<AppSnapshot["homeMetrics"]>("get_device_metrics", { deviceId });
-      if (mountedRef.current && selectedManagedDeviceIdRef.current === deviceId && generation === managedMetricsGenerationRef.current) {
-        setDeviceMetrics(metrics && "logs" in metrics ? { deviceId, snapshot: metrics } : null);
-      }
-    } catch {
-      if (mountedRef.current && selectedManagedDeviceIdRef.current === deviceId && generation === managedMetricsGenerationRef.current) setDeviceMetrics(null);
-    }
-  }, []);
-
-  const handleManagedMetricsChange = useCallback((deviceId: string | null) => {
-    void refreshManagedDeviceMetrics(deviceId);
-  }, [refreshManagedDeviceMetrics]);
-
   const handleHardwareEditorSelection = useCallback((
     hardwareProfileId: string | null,
     deviceId: string | null,
@@ -923,7 +892,6 @@ export default function App({
           if (payload.homeUpdate && payload.deviceProfileId === profileRef.current?.profile.id) {
             setHomeMetrics(payload.homeUpdate);
           }
-          if (payload.deviceId === selectedManagedDeviceIdRef.current) void refreshManagedDeviceMetrics(payload.deviceId);
           if (payload.input && payload.pressed !== null) {
             const currentEditorTarget = hardwareEditorTargetRef.current;
             const activeLearningTarget = devicesRef.current.find(
@@ -1106,7 +1074,7 @@ export default function App({
       if (setupVerificationTimerRef.current) clearTimeout(setupVerificationTimerRef.current);
       unlisten?.();
     };
-  }, [applySnapshot, profileHistory.record, refreshManagedDeviceMetrics, refreshRegistry]);
+  }, [applySnapshot, profileHistory.record, refreshRegistry]);
 
   const updateProfile = useCallback((profileId: string, update: (profile: DeviceProfile) => DeviceProfile) => {
     if (!editorLearningActive || profileId !== editorProfileConfig?.profile.id) {
@@ -1758,12 +1726,10 @@ export default function App({
               candidates={candidates}
               boardProfiles={boardProfiles}
               deviceProfiles={deviceProfiles}
-              metrics={deviceMetrics}
               onRename={renameManagedDevice}
               onSaveRuntimeAssignment={saveManagedRuntimeAssignment}
               onCopyProductConfig={copyManagedProductConfig}
               onForgetDevice={requestForgetManagedDevice}
-              onMetricsChange={handleManagedMetricsChange}
               onOpenSetup={openSetup}
               onCreateFromTemplate={openProfileCreator}
               onRetryCandidate={retrySetupCandidate}
