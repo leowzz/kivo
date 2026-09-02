@@ -1210,7 +1210,7 @@ test("shows an action error during setup verification", async () => {
 
 test("times out setup verification after fifteen seconds", async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
-  const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+  const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTimeAsync });
   const profile = physicalVerificationProfile();
   currentSnapshot.devices = [rpUnassignedDevice()];
   currentSnapshot.candidates = [];
