@@ -172,3 +172,129 @@
   .key-button,
   .metric-card { transition: none; }
 }
+
+/* ===== Main app: focus canvas ===== */
+.product-shell.is-main-app {
+  --main-accent: #326da8;
+  --main-accent-hover: #28598c;
+  --main-accent-soft: #e7eff8;
+  --main-canvas: #f4f5f2;
+  --main-panel: #fbfbf9;
+  --main-ink: #252826;
+  grid-template-rows: 56px minmax(0, 1fr);
+  color: var(--main-ink);
+  background: var(--main-canvas);
+  font-family: "Avenir Next", Avenir, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.is-main-app .topbar {
+  grid-template-columns: 176px minmax(220px, 1fr) auto auto;
+  border-bottom-color: #dedfdd;
+  background: #fff;
+}
+.is-main-app .brand {
+  grid-column: 1;
+  grid-row: 1;
+  height: 56px;
+  gap: 10px;
+  padding: 0 16px;
+}
+.is-main-app .brand img { width: 27px; height: 27px; border-radius: 6px; }
+.is-main-app .brand h1 { font-size: 15px; }
+.is-main-app .device-summary { display: none; }
+.is-main-app .topbar-nav {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: center;
+  align-self: stretch;
+  gap: 18px;
+  padding: 0;
+}
+.is-main-app .topbar-nav button {
+  position: relative;
+  min-height: 56px;
+  border-radius: 0;
+  padding: 0 2px;
+  color: #898f8b;
+  background: transparent;
+  font-size: var(--text-12);
+  transition: color .16s ease, transform .12s ease;
+}
+.is-main-app .topbar-nav button:hover { color: var(--main-ink); background: transparent; }
+.is-main-app .topbar-nav button.is-active { color: var(--main-ink); background: transparent; font-weight: var(--weight-semibold); }
+.is-main-app .topbar-nav button.is-active::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  background: var(--main-accent);
+}
+.is-main-app .topbar-nav button:active { transform: translateY(1px); }
+.is-main-app .save-state {
+  grid-column: 3;
+  grid-row: 1;
+  min-width: 72px;
+  padding: 0 7px;
+  color: #8a908c;
+  font-size: var(--text-11);
+}
+.is-main-app .save-state.is-error { color: var(--red-text); }
+.is-main-app .edit-history-actions {
+  grid-column: 4;
+  grid-row: 1;
+  gap: 2px;
+  padding: 0 12px 0 3px;
+}
+.is-main-app .edit-history-actions .icon-button { color: #8a908c; }
+.is-main-app .edit-history-actions .icon-button:hover:not(:disabled) { color: var(--main-ink); background: #f0f1ee; }
+
+.is-main-app .primary-button,
+.is-main-app .add-actions button.primary-button,
+.is-main-app .candidate-actions .primary-button,
+.is-main-app .device-setup-actions .primary-button,
+.is-main-app .profile-create-actions .primary-button {
+  border-color: var(--main-accent) !important;
+  color: #fff !important;
+  background: var(--main-accent) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .2), 0 2px 5px rgba(29, 65, 102, .12);
+}
+.is-main-app .primary-button:hover,
+.is-main-app .add-actions button.primary-button:hover,
+.is-main-app .candidate-actions .primary-button:hover,
+.is-main-app .device-setup-actions .primary-button:hover,
+.is-main-app .profile-create-actions .primary-button:hover { background: var(--main-accent-hover) !important; }
+.is-main-app .primary-button:active,
+.is-main-app .secondary-button:active { transform: translateY(1px); }
+
+.is-main-app select:focus,
+.is-main-app input:focus,
+.is-main-app textarea:focus,
+.is-main-app button:focus-visible,
+.is-main-app summary:focus-visible {
+  border-color: var(--main-accent);
+  box-shadow: 0 0 0 2px var(--main-accent-soft);
+}
+
+.is-main-app .data-page { background: var(--main-canvas); }
+.is-main-app .content-heading { min-height: 82px; padding: 14px 28px; background: var(--main-panel); }
+.is-main-app .content-heading h2 { font-size: var(--text-20); }
+.is-main-app .content-subtitle { margin-top: 6px; font-size: var(--text-13); }
+.is-main-app .data-page-body { width: min(100%, 980px); gap: 20px; padding: 28px; }
+.is-main-app .profile-row,
+.is-main-app .data-card { border-radius: var(--radius-6); box-shadow: none; }
+.is-main-app .profile-row { border-left: 3px solid #d7dad7; padding: 16px 18px; }
+.is-main-app .profile-row:hover { border-color: #b9bfba; border-left-color: var(--main-accent); box-shadow: 0 3px 12px rgba(38, 42, 39, .06); }
+.is-main-app .profile-badge { border-color: #9bb6d1; color: #244f7c; background: var(--main-accent-soft); }
+.is-main-app .error-toast { top: 66px; }
+
+@media (max-width: 680px) {
+  .is-main-app .topbar { grid-template-columns: 116px minmax(0, 1fr) auto; }
+  .is-main-app .brand { padding-inline: 12px; }
+  .is-main-app .topbar-nav { grid-column: 2; grid-row: 1; justify-content: flex-start; gap: 10px; border-top: 0; }
+  .is-main-app .topbar-nav button { min-height: 56px; padding-inline: 2px; }
+  .is-main-app .save-state { display: none; }
+  .is-main-app .edit-history-actions { grid-column: 3; grid-row: 1; border-top: 0; padding: 0 8px 0 0; }
+  .is-main-app .content-heading { padding: 16px; }
+}

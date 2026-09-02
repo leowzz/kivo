@@ -1259,6 +1259,7 @@ test("preserves a dirty Device Profile draft across a registry refresh", async (
 test("keeps the keyboard workspace and backup tools as separate topbar destinations", async () => {
   render(<App />);
 
+  expect(document.querySelector(".product-shell")).toHaveClass("is-main-app");
   expect(
     await screen.findByRole("heading", { name: "我的键盘" }),
   ).toBeInTheDocument();
@@ -1267,6 +1268,7 @@ test("keeps the keyboard workspace and backup tools as separate topbar destinati
   expect(screen.getByRole("button", { name: "我的键盘" })).toHaveClass("is-active");
   const devicesButton = screen.getByRole("button", { name: "我的键盘" });
   expect(devicesButton.querySelector(".lucide-keyboard")).not.toBeNull();
+  expect(screen.getByLabelText("编辑历史").querySelectorAll(".reicon")).toHaveLength(2);
   expect(screen.getByRole("heading", { name: "我的键盘" })).toBeInTheDocument();
   expect(screen.queryByLabelText("当前编辑配置")).toBeNull();
   await userEvent

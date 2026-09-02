@@ -819,6 +819,8 @@ test("omits mode and task navigation while keeping advanced settings available",
   const user = userEvent.setup();
   renderManagement();
 
+  expect(document.querySelector(".device-management")).toHaveClass("is-studio-mode");
+  expect(document.querySelector(".device-management")).not.toHaveClass("is-main-mode");
   expect(screen.queryByRole("button", { name: "成品模式" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "创客模式" })).not.toBeInTheDocument();
   expect(screen.queryByRole("tab", { name: "测试" })).not.toBeInTheDocument();
@@ -832,6 +834,9 @@ test("omits mode and task navigation while keeping advanced settings available",
 test("hides Studio diagnostics and tools without removing the device workspace", () => {
   renderManagement({ studioMode: false });
 
+  expect(document.querySelector(".device-management")).toHaveClass("is-main-mode");
+  expect(document.querySelector(".device-management")).not.toHaveClass("is-studio-mode");
+  expect(screen.getByText("4 台设备 · 1 项待处理")).toBeInTheDocument();
   expect(screen.queryByText("高级设置")).not.toBeInTheDocument();
   expect(screen.queryByRole("tab", { name: "高级 I/O" })).not.toBeInTheDocument();
   expect(screen.queryByRole("tab", { name: "按键布局" })).not.toBeInTheDocument();

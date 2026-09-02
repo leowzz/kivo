@@ -9,6 +9,7 @@ import { reconcileProfileLayout } from "./profileEditing";
 import {
   candidateDisplayLabel,
   compatibleHardwareProfiles,
+  deviceSummary,
   primaryDeviceLabel,
 } from "./deviceStatus";
 import { candidateSetupId } from "./deviceSetupSession";
@@ -252,6 +253,7 @@ export function DeviceManagement({
     [devices],
   );
   const visibleCandidates = candidates;
+  const summary = deviceSummary(devices);
   const rows = useMemo<Row[]>(
     () => [
       ...visibleDevices.map((device) => ({
@@ -635,13 +637,21 @@ export function DeviceManagement({
     }
   };
   return (
-    <div className={`device-management${client ? " is-client" : ""}${editingProfile ? " is-workspace" : ""}`}>
+    <div className={`device-management${client ? " is-client" : ""}${studioMode ? " is-studio-mode" : ""}${!client && !studioMode ? " is-main-mode" : ""}${editingProfile ? " is-workspace" : ""}`}>
       <section
         className="device-list-region"
         aria-label={t(language, "devices.list")}
       >
         <header className="device-list-header">
-          <h2>{t(language, "nav.devices")}</h2>
+          <div className="device-list-heading">
+            <h2>{t(language, "nav.devices")}</h2>
+            {!client && !studioMode && (
+              <span>{t(language, "devices.deckSummary", {
+                total: visibleDevices.length,
+                attention: summary.attention + visibleCandidates.length,
+              })}</span>
+            )}
+          </div>
           {!client && (
             <button
               className="primary-button"
@@ -847,9 +857,22 @@ export function DeviceManagement({
         {selectedDevice && (
           <>
             <div className="device-detail-title">
-              <h2>
-                {renaming ? t(language, "devices.rename") : selectedDevice.name}
-              </h2>
+              <div className="device-detail-heading-copy">
+                {!client && !studioMode && <span>{t(language, "nav.layout")}</span>}
+                <h2>
+                  {renaming ? t(language, "devices.rename") : selectedDevice.name}
+                </h2>
+              </div>
+              {!client && !studioMode && editingProfile && (
+                <span className="device-layout-summary">
+                  {t(language, "devices.keyCount", {
+                    count: editingProfile.profile.groups.reduce(
+                      (total, group) => total + group.buttons.length,
+                      0,
+                    ),
+                  })}
+                </span>
+              )}
               {!client && !renaming && (
                 <button
                   className="icon-button"

@@ -8,13 +8,13 @@ import {
   FileInput,
   Keyboard,
   Plus,
-  Redo2,
   Settings2,
   Trash2,
-  Undo2,
   Upload,
   X,
 } from "lucide-react";
+import { Redo } from "reicon-react/icons/redo";
+import { Undo } from "reicon-react/icons/undo";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import brandIcon from "../src-tauri/icons/128x128.png";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -1544,7 +1544,7 @@ export default function App({
   }
 
   return (
-    <main className={`product-shell${embedded ? " is-embedded" : ""}${client ? " is-client" : ""}`}>
+    <main className={`product-shell${embedded ? " is-embedded" : ""}${client ? " is-client" : ""}${!embedded && !client ? " is-main-app" : ""}`}>
       <header className={`topbar${embedded ? " is-embedded" : ""}${client ? " is-client" : ""}`}>
         {!embedded ? <div className="brand"><img src={brandIcon} alt="" /><h1>Kivo</h1></div> : null}
         <div className="device-summary" aria-label={t(language, "device.summary")}>
@@ -1611,7 +1611,7 @@ export default function App({
                 }
               }}
             >
-              <Undo2 size={16} />
+              <Undo size={18} weight="Outline" aria-hidden="true" />
             </button>
             <button
               className="icon-button"
@@ -1628,7 +1628,7 @@ export default function App({
                 }
               }}
             >
-              <Redo2 size={16} />
+              <Redo size={18} weight="Outline" aria-hidden="true" />
             </button>
           </div>
         )}
