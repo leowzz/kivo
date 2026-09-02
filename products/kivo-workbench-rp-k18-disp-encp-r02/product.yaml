@@ -6,8 +6,6 @@ product:
   hardware_revision: 2
   product_version_id: kivo-workbench-rp-k18-disp-encp-r02
   capabilities:
-  - mic
-  - spk
   - disp
   - encp
 layout:
@@ -60,20 +58,20 @@ layout:
     - id: K18
       label: K18
 hardware_profile:
-  id: hardware
+  id: WBSEN-K18
   name: Default hardware
   board_profile_id: yd-rp2040
   debounce_ms: 30
   sh1106:
-    sda: 28
-    scl: 29
+    sda: 26
+    scl: 27
     control_panel:
       type: ec11_confirm_back
-      confirm: 19
-      encoder_press: 20
+      confirm: 22
+      encoder_press: 28
       encoder_a: 21
-      encoder_b: 22
-      back: 26
+      encoder_b: 20
+      back: 19
   inputs:
   - type: direct
     id: direct-1

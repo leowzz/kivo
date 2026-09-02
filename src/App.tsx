@@ -1721,6 +1721,7 @@ export default function App({
           ) : (
             <DeviceManagement
               client={client}
+              showAdvancedTools={embedded}
               language={language}
               devices={devices}
               candidates={candidates}

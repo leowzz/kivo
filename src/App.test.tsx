@@ -783,7 +783,7 @@ test("shows the selected keyboard without exposing its system port in the button
   render(<App />);
   await screen.findByRole("heading", { name: "我的键盘" });
   expect(screen.getByRole("heading", { name: "前台键盘" })).toBeInTheDocument();
-  expect(screen.getByText("/dev/cu.test")).not.toBeVisible();
+  expect(screen.queryByText("/dev/cu.test")).toBeNull();
 });
 
 test("summarizes an empty device registry", async () => {
@@ -1034,7 +1034,7 @@ test("clones a template for one exact Device and waits for physical verification
   await user.click(within(dialog).getByRole("button", { name: "稍后验证" }));
   expect(screen.queryByRole("dialog", { name: "添加键盘" })).toBeNull();
   expect(await screen.findByRole("heading", { name: "我的键盘" })).toBeInTheDocument();
-  expect(screen.getByRole("combobox", { name: "硬件配置" })).not.toBeVisible();
+  expect(screen.queryByRole("combobox", { name: "硬件配置" })).toBeNull();
 });
 
 test("keeps completed setup successful when saving the Editor Profile fails", async () => {
@@ -1062,7 +1062,7 @@ test("keeps completed setup successful when saving the Editor Profile fails", as
   ).toHaveClass("error-banner");
   expect(screen.getByRole("dialog", { name: "添加键盘" })).toHaveTextContent("按一下实体按键");
   expect(screen.getByRole("heading", { name: "我的键盘" })).toBeInTheDocument();
-  expect(screen.getByRole("combobox", { name: "硬件配置" })).not.toBeVisible();
+  expect(screen.queryByRole("combobox", { name: "硬件配置" })).toBeNull();
 });
 
 test("finishes setup only after the pressed key action succeeds", async () => {
@@ -1352,7 +1352,7 @@ test("saves one runtime assignment through the authoritative snapshot without ch
     return structuredClone(currentSnapshot);
   });
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
   await user.click(await screen.findByRole("button", { name: "我的键盘" }));
   await openDeviceIo(user);
   await user.selectOptions(screen.getByRole("combobox", { name: "使用配置" }), "call-center");
@@ -1381,7 +1381,7 @@ test("keeps the existing assignment visible after runtime assignment rejection",
     return structuredClone(currentSnapshot);
   });
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
   await user.click(await screen.findByRole("button", { name: "我的键盘" }));
   await openDeviceIo(user);
   await user.selectOptions(screen.getByRole("combobox", { name: "使用配置" }), "rejected");
@@ -1440,7 +1440,7 @@ test("keeps the interface in Simplified Chinese without a language selector", as
   expect(screen.queryByLabelText("语言")).toBeNull();
 });
 
-test("renders buttons in model order without mode, test, or activity entries", async () => {
+test("renders buttons in model order without mode, test, activity, or advanced entries", async () => {
   currentSnapshot.deviceProfiles[0].profile.groups = [
     {
       id: "digits",
@@ -1461,6 +1461,9 @@ test("renders buttons in model order without mode, test, or activity entries", a
   expect(screen.queryByRole("button", { name: "创客模式" })).not.toBeInTheDocument();
   expect(screen.queryByRole("tab", { name: "测试" })).not.toBeInTheDocument();
   expect(screen.queryByRole("tab", { name: "活动" })).not.toBeInTheDocument();
+  expect(screen.queryByText("高级设置")).not.toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "高级 I/O" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "按键布局" })).not.toBeInTheDocument();
   expect(screen.queryByLabelText("当前编辑配置")).toBeNull();
   expect(screen.queryByLabelText("语言")).toBeNull();
 });
@@ -1496,7 +1499,7 @@ test("opens the assigned profile of an online Device without a global editor sel
 
   expect(await screen.findByLabelText("接线员控制台")).toBeInTheDocument();
   expect(screen.queryByLabelText("当前编辑配置")).toBeNull();
-  expect(screen.getByText("/dev/cu.unrelated")).not.toBeVisible();
+  expect(screen.queryByText("/dev/cu.unrelated")).toBeNull();
 });
 
 test("keeps an offline Device visible and opens the connected Device directly", async () => {
@@ -1523,7 +1526,7 @@ test("keeps an offline Device visible and opens the connected Device directly", 
   expect(screen.getAllByText("离线键盘").length).toBeGreaterThan(0);
   expect(screen.getByRole("heading", { name: "在线键盘" })).toBeInTheDocument();
   expect(screen.getByLabelText("碳膜电话键盘")).toBeInTheDocument();
-  expect(screen.getByText("/dev/cu.online")).not.toBeVisible();
+  expect(screen.queryByText("/dev/cu.online")).toBeNull();
 });
 
 test("isolates a shared pressed button by emitting Device", async () => {
@@ -1751,7 +1754,7 @@ test("learns input only for the exact selected Device Profile and Hardware Profi
   };
   currentSnapshot.devices[0].learning = activeLearningTarget;
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
   await openDeviceIo(user);
   await user.click(screen.getByText("适配新设备"));
   await user.selectOptions(screen.getByLabelText("在线设备"), "device-front-desk");
@@ -1846,7 +1849,7 @@ test("autosaves Button Behavior after Device Management enables shared-profile c
     port: "/dev/cu.second",
   }));
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
 
   await openDeviceIo(user);
   expect(screen.getByRole("status")).toHaveTextContent("2 个设备");
@@ -1880,7 +1883,7 @@ test("autosaves a uniquely assigned managed profile that is not the Editor Profi
     hardware_profile_id: "front-desk",
   };
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
 
   await openDeviceIo(user);
   await user.selectOptions(screen.getByRole("combobox", { name: "2 A" }), "2");
@@ -1932,7 +1935,7 @@ test("keeps a multi-profile autosave failure visible and retryable", async () =>
     return structuredClone(currentSnapshot);
   });
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
 
   await openDeviceIo(user);
   vi.useFakeTimers();
@@ -1968,7 +1971,7 @@ test("keeps a shared Device Management draft gated after navigating away", async
     port: "/dev/cu.second",
   }));
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
 
   await openDeviceIo(user);
   await user.selectOptions(screen.getByRole("combobox", { name: "2 A" }), "2");
@@ -2006,7 +2009,7 @@ test("reports a failed explicit shared save while keeping the draft available", 
     return structuredClone(currentSnapshot);
   });
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
 
   await openDeviceIo(user);
   await user.selectOptions(screen.getByRole("combobox", { name: "2 A" }), "2");
@@ -2052,7 +2055,7 @@ test("releases a shared draft for autosave after the last other device is reassi
     return structuredClone(currentSnapshot);
   });
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
 
   await openDeviceIo(user);
   await user.selectOptions(screen.getByRole("combobox", { name: "2 A" }), "2");
@@ -2104,7 +2107,7 @@ test("keeps a newer shared draft gated while an older explicit save completes", 
     return structuredClone(currentSnapshot);
   });
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
 
   await openDeviceIo(user);
   await user.selectOptions(screen.getByRole("combobox", { name: "2 A" }), "2");
@@ -2404,7 +2407,7 @@ test("deletes the last device profile and keeps configuration-file actions avail
 
 test("keeps key learning secondary and collapsed by default", async () => {
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
   await screen.findByRole("button", { name: "设置" });
 
   await openDeviceIo(user);
@@ -2418,7 +2421,7 @@ test("keeps key learning secondary and collapsed by default", async () => {
 
 test("autosaves a newly added Hardware Profile with its compiled Board Profile", async () => {
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
   await openDeviceIo(user);
 
   await user.click(screen.getByRole("button", { name: "添加硬件配置" }));
@@ -2449,7 +2452,7 @@ test("blocks autosave while a Board Profile change leaves invalid mappings and p
     safePins: [0, 1, 2],
   });
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
   await openDeviceIo(user);
   vi.mocked(invoke).mockClear();
 
@@ -2474,7 +2477,7 @@ test("deletes a Hardware Profile without repairing its Device assignment", async
   });
   const assignment = structuredClone(currentSnapshot.devices[0].runtimeAssignment);
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
   await openDeviceIo(user);
 
   await user.click(screen.getByRole("button", { name: "删除硬件配置" }));
@@ -2493,7 +2496,7 @@ test("deletes a Hardware Profile without repairing its Device assignment", async
 
 test("preserves an unsaved Device Profile draft when learning begins", async () => {
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
   await openDeviceIo(user);
 
   fireEvent.change(screen.getByLabelText("消抖"), { target: { value: "31" } });
@@ -2556,7 +2559,7 @@ test("isolates learning lifecycle and defers the captured draft until a later or
     return structuredClone(currentSnapshot);
   });
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
   await openDeviceIo(user);
   await user.click(screen.getByText("适配新设备"));
   await user.selectOptions(screen.getByLabelText("在线设备"), "device-second");
@@ -2638,7 +2641,7 @@ test("keeps a captured draft when only its learning Device disconnects", async (
     learning: target,
   }));
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
   await openDeviceIo(user);
   await user.click(screen.getByText("适配新设备"));
   await user.selectOptions(screen.getByLabelText("在线设备"), "device-second");
@@ -2684,7 +2687,7 @@ test("preserves a captured mapping when learning ends before autosave", async ()
   };
   currentSnapshot.devices[0].learning = activeLearningTarget;
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
   await openDeviceIo(user);
   await user.click(screen.getByText("适配新设备"));
   await user.selectOptions(screen.getByLabelText("在线设备"), "device-front-desk");
@@ -2735,7 +2738,7 @@ test("keeps a captured draft through Device switches until an ordinary edit", as
   }));
   currentSnapshot.devices[0].learning = activeLearningTarget;
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
   await openDeviceIo(user);
   await user.click(screen.getByText("适配新设备"));
   await user.selectOptions(screen.getByLabelText("在线设备"), "device-front-desk");
@@ -2791,7 +2794,7 @@ test("keeps an older captured draft suppressed when a second begin fails", async
     return structuredClone(currentSnapshot);
   });
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
   await openDeviceIo(user);
   await user.click(screen.getByText("适配新设备"));
   await user.selectOptions(screen.getByLabelText("在线设备"), "device-front-desk");
@@ -2844,7 +2847,7 @@ test("targets learning and captured input to the explicitly selected non-first H
     },
   }));
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
   await openDeviceIo(user);
   await user.selectOptions(
     within(screen.getByRole("tabpanel", { name: "高级 I/O" })).getByRole("combobox", { name: "硬件配置" }),
@@ -2910,7 +2913,7 @@ test("blocks autosave for a matrix pair endpoint missing from source pins until 
     keys: { DIGIT_2: [1, 13] },
   };
   const user = userEvent.setup();
-  render(<App />);
+  render(<App embedded />);
   await openDeviceIo(user);
   vi.mocked(invoke).mockClear();
 
