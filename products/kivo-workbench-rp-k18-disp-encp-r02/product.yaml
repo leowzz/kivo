@@ -15,51 +15,51 @@ layout:
   - id: keys
     columns: 6
     buttons:
-    - id: K1
+    - id: KEY_1
       label: K1
-    - id: K2
+    - id: KEY_2
       label: K2
-    - id: K3
+    - id: KEY_3
       label: K3
-    - id: K4
+    - id: KEY_4
       label: K4
-    - id: K5
+    - id: KEY_5
       label: K5
-    - id: K6
+    - id: KEY_6
       label: K6
   - id: group-2
     columns: 6
     buttons:
-    - id: K7
+    - id: KEY_7
       label: K7
-    - id: K8
+    - id: KEY_8
       label: K8
-    - id: K9
+    - id: KEY_9
       label: K9
-    - id: K10
+    - id: KEY_10
       label: K10
-    - id: K11
+    - id: KEY_11
       label: K11
-    - id: K12
+    - id: KEY_12
       label: K12
   - id: group-3
     columns: 6
     buttons:
-    - id: K13
+    - id: KEY_13
       label: K13
-    - id: K14
+    - id: KEY_14
       label: K14
-    - id: K15
+    - id: KEY_15
       label: K15
-    - id: K16
+    - id: KEY_16
       label: K16
-    - id: K17
+    - id: KEY_17
       label: K17
-    - id: K18
+    - id: KEY_18
       label: K18
 hardware_profile:
   id: WBSEN-K18
-  name: Default hardware
+  name: 工作站v1
   board_profile_id: yd-rp2040
   debounce_ms: 30
   sh1106:
@@ -76,21 +76,21 @@ hardware_profile:
   - type: direct
     id: direct-1
     keys:
-      K1: 1
-      K10: 10
-      K11: 11
-      K12: 12
-      K13: 13
-      K14: 14
-      K15: 15
-      K16: 16
-      K17: 17
-      K18: 18
-      K2: 2
-      K3: 3
-      K4: 4
-      K5: 5
-      K6: 6
-      K7: 7
-      K8: 8
-      K9: 9
+      KEY_1: 1
+      KEY_10: 10
+      KEY_11: 11
+      KEY_12: 12
+      KEY_13: 13
+      KEY_14: 14
+      KEY_15: 15
+      KEY_16: 16
+      KEY_17: 17
+      KEY_18: 18
+      KEY_2: 2
+      KEY_3: 3
+      KEY_4: 4
+      KEY_5: 5
+      KEY_6: 6
+      KEY_7: 7
+      KEY_8: 8
+      KEY_9: 9
