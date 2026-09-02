@@ -80,6 +80,10 @@ type PressedOwner = {
   hardwareProfileId: string;
   buttonIds: Set<string>;
 };
+type RuntimeFeedbackIdentity = Omit<PressedOwner, "buttonIds">;
+type RuntimeFeedbackTarget = RuntimeFeedbackIdentity & {
+  profile: DeviceProfile;
+};
 type HardwareEditorTarget = {
   deviceProfileId: string;
   hardwareProfileId: string;
@@ -255,6 +259,48 @@ function pressedButtons(owners: Map<string, PressedOwner>) {
   return new Set([...owners.values()].flatMap((owner) => [...owner.buttonIds]));
 }
 
+function productRuntimeFeedbackTarget(
+  device: AppSnapshot["devices"][number],
+): RuntimeFeedbackTarget | null {
+  const definition = device.productDefinition;
+  const config = device.productConfig;
+  const productVersionId = device.productVersionId;
+  if (!definition || !config || !productVersionId ||
+    definition.product.product_version_id !== productVersionId ||
+    config.product_version_id !== productVersionId) {
+    return null;
+  }
+  return {
+    deviceProfileId: productVersionId,
+    hardwareProfileId: definition.hardware_profile.id,
+    profile: {
+      schema_version: 3,
+      profile: definition.layout,
+      snapshot_metadata: config.snapshot_metadata,
+      trigger_settings: config.trigger_settings,
+      hardware_profiles: [definition.hardware_profile],
+      actions: config.actions,
+    },
+  };
+}
+
+function runtimeFeedbackIdentity(
+  device: AppSnapshot["devices"][number],
+): RuntimeFeedbackIdentity | null {
+  const productTarget = productRuntimeFeedbackTarget(device);
+  if (productTarget) {
+    return {
+      deviceProfileId: productTarget.deviceProfileId,
+      hardwareProfileId: productTarget.hardwareProfileId,
+    };
+  }
+  if (device.productVersionId || !device.runtimeAssignment) return null;
+  return {
+    deviceProfileId: device.runtimeAssignment.device_profile_id,
+    hardwareProfileId: device.runtimeAssignment.hardware_profile_id,
+  };
+}
+
 function learningTargetsMatch(left: LearningTarget, right: LearningTarget) {
   return left.deviceId === right.deviceId &&
     left.deviceProfileId === right.deviceProfileId &&
@@ -419,9 +465,12 @@ export default function App({
     const nextOwners = new Map(pressedOwnersRef.current);
     for (const [deviceId, owner] of nextOwners) {
       const currentDevice = currentDevices.get(deviceId);
+      const currentIdentity = currentDevice
+        ? runtimeFeedbackIdentity(currentDevice)
+        : null;
       if (currentDevice?.connection !== "online" ||
-        currentDevice.runtimeAssignment?.device_profile_id !== owner.deviceProfileId ||
-        currentDevice.runtimeAssignment.hardware_profile_id !== owner.hardwareProfileId) {
+        currentIdentity?.deviceProfileId !== owner.deviceProfileId ||
+        currentIdentity.hardwareProfileId !== owner.hardwareProfileId) {
         nextOwners.delete(deviceId);
       }
     }
@@ -928,14 +977,19 @@ export default function App({
               }));
             }
             const emittingDevice = devicesRef.current.find((device) => device.deviceId === payload.deviceId);
-            const assignment = emittingDevice?.runtimeAssignment;
-            const eventProfile = assignment
-              ? profileDraftsRef.current.get(assignment.device_profile_id) ?? profilesRef.current.find((profile) => profile.profile.id === assignment.device_profile_id)
-              : undefined;
+            const productTarget = emittingDevice
+              ? productRuntimeFeedbackTarget(emittingDevice)
+              : null;
+            const eventIdentity = emittingDevice
+              ? runtimeFeedbackIdentity(emittingDevice)
+              : null;
+            const eventProfile = productTarget?.profile ?? (eventIdentity
+              ? profileDraftsRef.current.get(eventIdentity.deviceProfileId) ?? profilesRef.current.find((profile) => profile.profile.id === eventIdentity.deviceProfileId)
+              : undefined);
             if (payload.code === "input_state" && eventProfile
               && payload.hardwareProfileId
-              && assignment?.device_profile_id === payload.deviceProfileId
-              && assignment.hardware_profile_id === payload.hardwareProfileId) {
+              && eventIdentity?.deviceProfileId === payload.deviceProfileId
+              && eventIdentity.hardwareProfileId === payload.hardwareProfileId) {
               const eventHardware = eventProfile.hardware_profiles.find((hardware) =>
                 hardware.id === payload.hardwareProfileId
               );

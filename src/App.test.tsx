@@ -691,6 +691,66 @@ test("undoes and redoes Product Device actions through its independent save path
   )).toHaveLength(3));
 });
 
+test("keeps Product Device pressed feedback through a registry refresh", async () => {
+  const productConfig: ProductDeviceConfig = {
+    product_version_id: "key-esp-k1-r01",
+    trigger_settings: { long_press_ms: 500, double_press_ms: 300 },
+    actions: {},
+  };
+  currentSnapshot.devices = [device({
+    deviceId: "product-front-desk",
+    productVersionId: productConfig.product_version_id,
+    productDefinition: {
+      schema_version: 1,
+      product: {
+        display_name: "Kivo Key 1",
+        family_id: "key",
+        variant_id: "key-esp-k1",
+        hardware_revision: 1,
+        product_version_id: productConfig.product_version_id,
+        capabilities: [],
+      },
+      layout: {
+        id: "key-esp-k1",
+        name: "Kivo Key 1",
+        groups: [{ id: "keys", columns: 1, buttons: [{ id: "K1", label: "K1" }] }],
+      },
+      hardware_profile: {
+        id: "product-hardware",
+        name: "Product hardware",
+        board_profile_id: "yd-esp32-s3",
+        debounce_ms: 30,
+        inputs: [{ type: "direct", id: "key", keys: { K1: 6 } }],
+      },
+    },
+    productConfig,
+  })];
+
+  render(<App />);
+  const key = await screen.findByRole("button", { name: "K1，0 项行为" });
+  currentSnapshot.devices[0] = {
+    ...currentSnapshot.devices[0],
+    name: "Refreshed product",
+  };
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    deviceId: "product-front-desk",
+    deviceProfileId: productConfig.product_version_id,
+    hardwareProfileId: "product-hardware",
+  })));
+
+  await screen.findByRole("heading", { name: "Refreshed product" });
+  expect(key).toHaveClass("is-pressed");
+
+  await act(async () => emitRuntimeEvent(runtimeEvent({
+    deviceId: "product-front-desk",
+    deviceProfileId: productConfig.product_version_id,
+    hardwareProfileId: "product-hardware",
+    pressed: false,
+  })));
+  await waitFor(() => expect(key).not.toHaveClass("is-pressed"));
+});
+
 test("forgets one offline device after explicit confirmation", async () => {
   const offline = device({
     deviceId: "device-unused",
