@@ -944,14 +944,16 @@ impl Workspace {
             name,
             product_version_id: current.product_version_id,
             snapshot_metadata: Some(SnapshotMetadata::new()),
-            trigger_settings: request
-                .copy_current
-                .then_some(current.trigger_settings)
-                .unwrap_or_default(),
-            actions: request
-                .copy_current
-                .then_some(current.actions)
-                .unwrap_or_default(),
+            trigger_settings: if request.copy_current {
+                current.trigger_settings
+            } else {
+                Default::default()
+            },
+            actions: if request.copy_current {
+                current.actions
+            } else {
+                Default::default()
+            },
         };
         let mut settings = self.settings.clone();
         settings
