@@ -52,7 +52,7 @@ def verify_board(path, data, expected, view):
     # Independent pad-coordinate checks catch underside mirroring and panel rotation.
     for ref, count, x, y, dx, dy in [
         ("J1",22,111.7,55.25,0,-2.54), ("J7",22,86.3,55.25,0,-2.54),
-        ("J4",10,10,3,2.54,0), ("J5",2,65,4,2.54,0), ("J6",2,74,4,2.54,0),
+        ("J4",24,10,3,2.54,0), ("J5",2,73,4,2.54,0), ("J6",2,80,4,2.54,0),
     ]:
         if ref not in parts:
             continue
@@ -67,24 +67,32 @@ def verify_board(path, data, expected, view):
             target = panel_point(x+(i-1)*dx, y+(i-1)*dy, "lower", view)
             for coordinate, value in zip(xy(pad), target):
                 near(coordinate, value)
-    for ref, section, origin, direction in [
-        ("J8","lower",(47,25),1), ("J9","upper",(112,15),-1),
+    for ref, section, origin in [
+        ("J8","lower",(47,25)), ("J9","upper",(83,8)),
     ]:
         if ref not in parts:
             continue
         pads = {pad.GetNumber(): pad for pad in footprints[ref].Pads()}
-        assert len(pads) == 20
-        assert str(footprints[ref].GetFPID().GetLibItemName()) == "IDC-Header_2x10_P2.54mm_Vertical"
-        for i in range(1, 21):
+        assert len(pads) == 4
+        assert str(footprints[ref].GetFPID().GetLibItemName()) == "JST_XH_B4B-XH-A_1x04_P2.50mm_Vertical"
+        for i in range(1, 5):
             pad = pads[str(i)]
             assert pad.GetAttribute() == pcb.PAD_ATTRIB_PTH
-            near(pcb.ToMM(pad.GetDrillSize().x), 1)
-            target = panel_point(origin[0]+direction*((i-1)//2)*2.54,
-                                 origin[1]-((i-1)%2)*2.54, section, view)
+            near(pcb.ToMM(pad.GetDrillSize().x), 0.95)
+            near(pcb.ToMM(pad.GetDrillSize().y), 0.95)
+            target = panel_point(origin[0]+(i-1)*2.50, origin[1], section, view)
             for coordinate, value in zip(xy(pad), target):
                 near(coordinate, value)
 
     if view in ("panel", "upper"):
+        io_pads = {pad.GetNumber(): pad for pad in footprints["U1"].Pads()}
+        assert len(io_pads) == 28
+        assert str(footprints["U1"].GetFPID().GetLibItemName()) == "SOIC-28W_7.5x17.9mm_P1.27mm"
+        for i in range(1,29):
+            pad = io_pads[str(i)]
+            assert pad.GetAttribute() == pcb.PAD_ATTRIB_SMD
+            near(xy(pad)[0], 99+(-4.65 if i <= 14 else 4.65))
+            near(xy(pad)[1], 22+(-8.255+(i-1)*1.27 if i <= 14 else 8.255-(i-15)*1.27))
         pads = {pad.GetNumber(): pad for pad in footprints["J2"].Pads()}
         assert len(pads) == 9
         for i in range(1,10):
@@ -175,7 +183,7 @@ def verify(directory, netlist, individual_boards=None):
                 if not pin.attrib["ref"].startswith("#"):
                     expected[(pin.attrib["ref"],pin.attrib["pin"])] = name
     parts = {p["ref"]: p for p in data["parts"]}
-    assert len(parts) == 49 and {key[0] for key in expected} == set(parts)
+    assert len(parts) == 52 and {key[0] for key in expected} == set(parts)
     section_nets = {section: {net for (ref,_),net in expected.items() if parts[ref]["section"] == section}
                     for section in ["upper","lower"]}
     assert not section_nets["upper"] & section_nets["lower"], "No electrical net may span the tabs"
@@ -188,29 +196,44 @@ def verify(directory, netlist, individual_boards=None):
         for i, net in enumerate(pinout, 1):
             assert expected.get((ref,str(i))) == ("/"+net if net else None)
         assert "PinSocket_1x22_P2.54mm_Vertical" in parts[ref]["footprint"]
-    rows, columns = [4,5,6], [7,8,9,10,11,12]
+    rows, columns = ["GPA5","GPA6","GPA7"], [f"GPB{i}" for i in range(6)]
+    assert data["matrix_rows"] == rows and data["matrix_columns"] == columns
     for i in range(1,19):
         row, column = divmod(i-1, 6)
-        assert expected[(f"SW{i}","1")] == f"/UP_GPIO{columns[column]}"
+        assert expected[(f"SW{i}","1")] == f"/UP_{columns[column]}"
         assert expected[(f"SW{i}","2")] == expected[(f"D{i}","2")] == f"/UP_KEY_{i}_A"
-        assert expected[(f"D{i}","1")] == f"/UP_GPIO{rows[row]}"
+        assert expected[(f"D{i}","1")] == f"/UP_{rows[row]}"
         assert parts[f"SW{i}"]["side"] == parts[f"D{i}"]["side"] == "B"
         assert parts[f"D{i}"]["footprint"] == "Diode_SMD:D_SOD-123"
-    display = ["UP_3V3","UP_GND","UP_GPIO21","UP_GPIO18","UP_GPIO17","UP_GPIO16","UP_GPIO14","UP_GPIO13","UP_GPIO15"]
+    display = ["UP_3V3","UP_GND","UP_GPA4","UP_GPA3","UP_GPA2","UP_GPA1","UP_GPIO14","UP_GPIO13","UP_GPA0"]
     assert [expected[("J2",str(i))] for i in range(1,10)] == ["/"+s for s in display]
-    spare = [1,2,38,39,40,41,42,47]
-    assert [expected[("J4",str(i))] for i in range(1,11)] == ["/GND","/+3V3"]+[f"/GPIO{i}" for i in spare]
+    spare = [1,2,4,5,6,7,8,9,10,11,12,15,16,17,18,21,38,39,40,41,42,47]
+    assert data["expansion_gpios"] == spare
+    assert [expected[("J4",str(i))] for i in range(1,25)] == ["/GND","/+3V3"]+[f"/GPIO{i}" for i in spare]
     assert expected[("J5","1")] == expected[("J7","14")] == expected[("R3","2")] == "/GPIO0"
     assert expected[("J6","1")] == expected[("J1","3")] == "/EN"
     assert expected[("J5","2")] == expected[("J6","2")] == "/GND"
-    assert parts["R1"]["dnp"] and parts["R2"]["dnp"]
-    for ref in ["C1","C2","R1","R2","R3"]:
+    for ref, signal in [("R1","GPIO13"),("R2","GPIO14"),("R4","IO_RESET")]:
+        assert not parts[ref]["dnp"]
+        assert expected[(ref,"1")] == "/UP_3V3" and expected[(ref,"2")] == "/UP_"+signal
+        assert parts[ref]["value"].startswith("10k" if ref == "R4" else "2.2k")
+    for ref in ["C1","C2","C3"]:
+        assert expected[(ref,"1")] == "/UP_3V3" and expected[(ref,"2")] == "/UP_GND"
+    assert parts["C3"]["value"].startswith("100n")
+    for ref in ["C1","C2","C3","R1","R2","R3","R4"]:
         assert "0805" in parts[ref]["footprint"] and "HandSolder" in parts[ref]["footprint"]
-    signals = ["GND","+3V3","GPIO4","GPIO5","GPIO6","GPIO7","GPIO8","GPIO9","GPIO10","GPIO11",
-               "GPIO12","GND","GPIO13","GPIO14","GPIO15","GPIO16","GPIO17","GPIO18","GPIO21","+3V3"]
+    io = [f"GPB{i}" for i in range(6)]+[None,None,"3V3","GND",None,"GPIO14","GPIO13",None,
+          "GND","GND","GND","IO_RESET",None,None]+[f"GPA{i}" for i in range(8)]
+    assert parts["U1"]["mpn"] == "MCP23017-E/SO"
+    assert data["expander"]["address"] == 0x20
+    for i, net in enumerate(io,1):
+        assert expected.get(("U1",str(i))) == ("/UP_"+net if net else None), (i,net)
+    inputs = columns+[f"GPA{i}" for i in range(5)]
+    assert not set(inputs) & {"GPA7","GPB7"}, "MCP23017 GPA7/GPB7 cannot serve as inputs"
+    signals = ["GND","+3V3","GPIO13","GPIO14"]
     with (directory / "interconnect.csv").open() as stream:
         cable = list(csv.DictReader(stream))
-    assert len(cable) == 20
+    assert len(cable) == 4
     for i, signal in enumerate(signals, 1):
         upper = "UP_"+signal.lstrip("+")
         assert expected[("J8",str(i))] == "/"+signal and expected[("J9",str(i))] == "/"+upper
@@ -221,6 +244,7 @@ def verify(directory, netlist, individual_boards=None):
     assert len(centers) == 18
     for i, key in enumerate(centers):
         row, col = divmod(i, 6)
+        assert key["row_pin"] == rows[row] and key["column_pin"] == columns[col]
         near(float(key["pcb_x"]), 16.875+col*19.05)
         near(float(key["pcb_y"]), 48+row*19.05)
         for coordinate, target in zip(parts[f"SW{i+1}"]["local_pcb"], [float(key["pcb_x"]),float(key["pcb_y"])]):
@@ -229,8 +253,9 @@ def verify(directory, netlist, individual_boards=None):
     if individual_boards:
         for view in ["upper","lower"]:
             reports.append(verify_board(individual_boards / f"{view}.kicad_pcb",data,expected,view))
-    print(json.dumps(dict(result="PASS", boards=reports, matrix_gpios=9, independent_circuits=True,
-                          cable_pins=20, status="UNROUTED DRAFT; not fabrication validation"), indent=2))
+    print(json.dumps(dict(result="PASS", boards=reports, mcu_application_gpios=2, expander_matrix_pins=9,
+                          spare_gpios=22, independent_circuits=True, cable_pins=4,
+                          status="UNROUTED DRAFT; firmware support pending; not fabrication validation"), indent=2))
 
 
 if __name__ == "__main__":

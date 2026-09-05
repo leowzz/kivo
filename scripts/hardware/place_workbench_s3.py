@@ -178,13 +178,18 @@ def generate(manifest, output, libraries, view="panel"):
             hole.Reference().SetVisible(False)
             hole.SetBoardOnly(True)
             board.Add(hole)
-        text("UPPER / 3x6 MATRIX", 96, 4, "upper", size=1.2)
-        text("S3 r01 / UNROUTED", 96, 7, "upper")
+        text("UPPER / I2C4", 109, 4, "upper", size=1.2)
+        text("S3 r01 / UNROUTED", 109, 7, "upper")
         text("J2", mx+7, my+1.93, "upper", size=0.8)
-        text("J9 IDC20 / TO LOWER J8", 101, 24, "upper", pcb.B_SilkS, size=0.8)
-        for ref, x in [("C1",89), ("C2",94), ("R1",101), ("R2",106)]:
-            text(ref, x, 31, "upper", size=0.8)
-        text("R1/R2 DNP", 103.5, 34, "upper", size=0.8)
+        text("J9 I2C4 / TO J8", 86.75, 17, "upper", pcb.B_SilkS, size=0.8)
+        for i, label in enumerate(["GND", "3V3", "SDA", "SCL"]):
+            text(label, 83+i*2.5, 13.5, "upper", pcb.B_SilkS, size=0.8)
+        for part in parts:
+            if part["section"] == "upper" and part["ref"].startswith(("C", "R")):
+                x, y = part["local_pcb"]
+                text(part["ref"], x, y+3, "upper", size=0.8)
+        text("R1/R2 2.2k", 80.5, 34, "upper", size=0.8)
+        text("MCP23017 / 0x20", 101, 35, "upper", size=0.8)
         connector = module["connector"]
         for index, label in enumerate(connector["signals"]):
             text(label, mx+connector["pin1"][0]-index*connector["pitch"], my+5.5, "upper", size=0.8)
@@ -195,12 +200,14 @@ def generate(manifest, output, libraries, view="panel"):
     if view in ("panel", "lower"):
         text("LOWER / YD ESP32-S3", 34, 45, "lower", size=1.2)
         text("HORIZONTAL / UNROUTED", 34, 49, "lower")
-        text("J8 IDC20 / TO UPPER J9", 58, 33, "lower", size=0.8)
+        text("J8 I2C4 / TO UPPER J9", 50.75, 36, "lower", size=0.8)
+        for i, label in enumerate(["GND", "3V3", "SDA", "SCL"]):
+            text(label, 47+i*2.5, 32, "lower", size=0.8)
         for column, label in enumerate(["GND", "3V3"] + [f"GP{pin}" for pin in data["expansion_gpios"]]):
             text(label, 10+column*2.54, 7, "lower", size=0.8, angle=90)
-        text("J4 / 3V3 IO", 21.43, 12, "lower", size=0.8)
-        text("BOOT", 66.27, 1, "lower", size=0.8)
-        text("RESET", 75.27, 1, "lower", size=0.8)
+        text("J4 / 22 GPIO / 3V3 IO", 39.21, 13, "lower", size=0.8)
+        text("BOOT", 74.27, 1, "lower", size=0.8)
+        text("RESET", 81.27, 1, "lower", size=0.8)
         text("R3", 72, 15, "lower", size=0.8)
         text("J7 / P2", 82, 26, "lower", size=0.8, angle=90)
         text("J1 / P1", 116, 26, "lower", size=0.8, angle=90)

@@ -1,84 +1,103 @@
-# Electrical mapping only: current ESP32-S3 firmware lacks display support.
-# Diode-aware rollover support is also pending. Not a released product profile.
-id: workbench-s3-matrix-draft
-name: Workbench S3 matrix draft
+# Hardware contract only, NOT a loadable Kivo product/profile schema.
+# MCP23017 scanning, encoder polling, display scheduling and rollover support are pending.
+schema: workbench-s3-i2c-hardware-draft
+status: requires-new-firmware-support
 board_profile_id: yd-esp32-s3
-debounce_ms: 30
-sh1106:
-  sda: 13
-  scl: 14
-  control_panel:
+i2c:
+  sda_gpio: 13
+  scl_gpio: 14
+  target_hz: 400000
+expander:
+  part: MCP23017-E/SO
+  address: 32
+  rows: &id001
+  - GPA5
+  - GPA6
+  - GPA7
+  columns: &id002
+  - GPB0
+  - GPB1
+  - GPB2
+  - GPB3
+  - GPB4
+  - GPB5
+  controls:
     type: ec11_confirm_back
-    confirm: 15
-    encoder_press: 16
-    encoder_a: 17
-    encoder_b: 18
-    back: 21
-inputs:
-- type: contact_matrix
-  id: matrix-1
-  pins:
-  - 4
-  - 5
-  - 6
-  - 7
-  - 8
-  - 9
-  - 10
-  - 11
-  - 12
+    confirm: GPA0
+    encoder_press: GPA1
+    encoder_a: GPA2
+    encoder_b: GPA3
+    back: GPA4
+  output_only_pins:
+  - GPA7
+  - GPB7
+  unused_pins:
+  - GPB6
+  - GPB7
+  i2c_target_hz: 400000
+  scan_target_hz: 1000
+  oled_chunk_bytes: 8
+display:
+  controller: SH1106
+  address_candidates:
+  - 60
+  - 61
+matrix:
+  rows: *id001
+  columns: *id002
+  diode_direction: COL2ROW
   keys:
     KEY_1:
-    - 4
-    - 7
+    - GPA5
+    - GPB0
     KEY_2:
-    - 4
-    - 8
+    - GPA5
+    - GPB1
     KEY_3:
-    - 4
-    - 9
+    - GPA5
+    - GPB2
     KEY_4:
-    - 4
-    - 10
+    - GPA5
+    - GPB3
     KEY_5:
-    - 4
-    - 11
+    - GPA5
+    - GPB4
     KEY_6:
-    - 4
-    - 12
+    - GPA5
+    - GPB5
     KEY_7:
-    - 5
-    - 7
+    - GPA6
+    - GPB0
     KEY_8:
-    - 5
-    - 8
+    - GPA6
+    - GPB1
     KEY_9:
-    - 5
-    - 9
+    - GPA6
+    - GPB2
     KEY_10:
-    - 5
-    - 10
+    - GPA6
+    - GPB3
     KEY_11:
-    - 5
-    - 11
+    - GPA6
+    - GPB4
     KEY_12:
-    - 5
-    - 12
+    - GPA6
+    - GPB5
     KEY_13:
-    - 6
-    - 7
+    - GPA7
+    - GPB0
     KEY_14:
-    - 6
-    - 8
+    - GPA7
+    - GPB1
     KEY_15:
-    - 6
-    - 9
+    - GPA7
+    - GPB2
     KEY_16:
-    - 6
-    - 10
+    - GPA7
+    - GPB3
     KEY_17:
-    - 6
-    - 11
+    - GPA7
+    - GPB4
     KEY_18:
-    - 6
-    - 12
+    - GPA7
+    - GPB5

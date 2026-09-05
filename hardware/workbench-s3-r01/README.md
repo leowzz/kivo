@@ -12,16 +12,18 @@ for fabrication and is not a released product definition.
 - Assemble the 126 x 86 mm lower board horizontally and the 126 x 98 mm upper
   board rear-high at a nominal 30 degrees. The PCB projection fits in 86 mm
   depth, compared with 135 mm for the previous single-board draft.
-- J8 on the lower board and J9 on the upper underside connect by one IDC20
-  ribbon cable. There are no electrical connections through the tabs.
+- J8 on the lower board and J9 on the upper underside connect by one **four-wire
+  harness: GND, 3V3, SDA, SCL**. No electrical connection crosses the tabs.
 - Preassembled YD ESP32-S3 plugs into two 1x22 female sockets, J1 and J7.
 - Reuse the core board's native USB Type-C for HID/data and power.
 - 18 MX hot-swap keys use a 3x6 matrix with one 1N4148W diode per key.
+- An upper-board MCP23017 scans the matrix and five control inputs; it shares
+  the display's I2C bus. The application uses just **two ESP32 GPIOs**, 13/14.
 - SH1106/EC11/confirm/back module connects by the J2 harness.
-- J4 exposes eight general-purpose spare GPIOs, GND and 3.3 V.
+- J4 exposes 22 general-purpose spare GPIOs, GND and 3.3 V.
 - J5/J6 provide external BOOT/RESET button connections.
-- Main-board parts are through-hole connectors, SOD-123 diodes, and 0805
-  resistors/capacitors with extended hand-solder pads.
+- Carrier parts are through-hole connectors, SOD-123 diodes, 0805 passives
+  with extended pads, and one SOIC-28 wide chip with 1.27 mm lead pitch.
 - No bare MCU, flash, crystal, regulator or fine-pitch USB connector needs
   soldering on this carrier.
 
@@ -59,36 +61,49 @@ current and thermal budget.
 
 ## Matrix
 
-| Function | GPIOs |
+| Function | MCP23017 Ports |
 | --- | --- |
-| Rows R0-R2, driven low one at a time | 4, 5, 6 |
-| Columns C0-C5, read with pull-ups | 7, 8, 9, 10, 11, 12 |
+| Rows R0-R2, selected LOW, inactive HIGH | GPA5, GPA6, GPA7 |
+| Columns C0-C5, read with internal pull-ups | GPB0, GPB1, GPB2, GPB3, GPB4, GPB5 |
 
 K1-K6 are the rear key row, K7-K12 the middle, and K13-K18 the front.
 For every key: column -> switch -> diode anode A -> diode cathode K -> row.
 **The stripe on each diode goes to the row net.** D1 belongs to K1, and so on.
 Use 1N4148W in SOD-123, not the smaller SOD-323 version.
 
-This reduces key GPIO use from 18 to 9. The display/control module uses 7
-additional GPIOs. Diodes prevent electrical ghost paths; they do not by
-themselves change the firmware's multi-key filtering behavior.
+U1 is **MCP23017-E/SO**, at I2C address **0x20** (A0/A1/A2 tied to ground).
+Its SOIC-28 wide package has accessible 1.27 mm pitch leads and no underside
+thermal pad; assemble with a soldering iron, flux and solder wick. Do not
+substitute MCP23S17 (SPI), SSOP or QFN for this footprint. R4 holds RESET
+high, C3 is U1's local 100 nF decoupler, and C1/C2 decouple the upper supply.
+
+The current Microchip datasheet specifies **GPA7 and GPB7 as output-only**.
+GPA7 is a row output here; GPB7 is unused. GPB6 is also unused. GPA0-GPA4
+read the display module's five control signals. INTA/INTB are unconnected;
+firmware polls the ports so the harness needs no interrupt conductor.
+
+This changes total application use from 16 MCU GPIOs to 2, and the inter-board
+cable from 20 conductors to 4. Diodes prevent electrical ghost paths; firmware
+must still implement matrix debounce and rollover behavior. Configure unused
+ports to defined states and preload all row output latches HIGH before
+enabling row outputs, then select one LOW at a time.
 
 ## Other Interfaces
 
 All pin orders below use each separated board's front/component-side view,
 rear edge at the top. The lower board is rotated 180 degrees in the panel.
 
-| J2 Pin | Signal | GPIO |
+| J2 Pin | Signal | Destination |
 | --- | --- | --- |
 | 1, rightmost square pad | VCC / 3.3 V | - |
 | 2 | GND | - |
-| 3 | BAK / KEY0 / Back | 21 |
-| 4 | TRB / TRIM_B / Encoder B | 18 |
-| 5 | TRA / TRIM_A / Encoder A | 17 |
-| 6 | PSH / PUSH / Encoder press | 16 |
-| 7 | SCL / IIC_SCL | 14 |
-| 8 | SDA / IIC_SDA | 13 |
-| 9, leftmost pad | CON / KEY1 / Confirm | 15 |
+| 3 | BAK / KEY0 / Back | U1 GPA4 |
+| 4 | TRB / TRIM_B / Encoder B | U1 GPA3 |
+| 5 | TRA / TRIM_A / Encoder A | U1 GPA2 |
+| 6 | PSH / PUSH / Encoder press | U1 GPA1 |
+| 7 | SCL / IIC_SCL | ESP32 GPIO14 / U1 SCL |
+| 8 | SDA / IIC_SDA | ESP32 GPIO13 / U1 SDA |
+| 9, leftmost pad | CON / KEY1 / Confirm | U1 GPA0 |
 
 J2 matches the supplied module interface diagram and front photograph in
 `references/display-interface.png`. Looking at the readable display with
@@ -96,8 +111,8 @@ the encoder on the right, the top connector reads **CON, SDA, SCL, PSH,
 TRA, TRB, BAK, GND, VCC from left to right**. This is pin 9 through pin 1.
 VCC is **3.3 V only**. Use a pin-for-pin 9-wire harness and identify the
 square pad rather than inferring pin numbers from a rear or mating-face view.
-The GPIO assignments to display functions are unchanged; J8/J9 also retain
-their existing cable mapping.
+The module-side order is unchanged by this I2C revision; only the five
+control signals' carrier-side destinations move from ESP32 GPIOs to U1.
 
 The dimension source is `references/display-dimensions.png`. The module's
 64.90 x 35.03 mm bounding rectangle is placed at upper-board `(8,3)` mm,
@@ -129,15 +144,25 @@ assembly; this connector is still a harness interface, not a validated
 rigid board-to-board mating stack. Keep underside screw heads within the
 3.5 mm nominal parts envelope or recheck the stack clearances.
 
-R1/R2 are optional 4.7 kohm I2C pull-ups: fit them only if the module does
-not already provide suitable pull-ups.
+R1/R2 are fitted **2.2 kohm I2C pull-ups to 3.3 V**. Include the display's
+parallel pull-ups when calculating the effective resistance. For example,
+2.2k in parallel with 4.7k is about 1.5k. Verify low-level sink current and
+rise time with both harnesses attached; target at most 300 ns rise time at
+400 kHz. Do not connect a module whose I2C pull-ups go to 5 V.
 
-J4 sits at the lower board's rear-left edge. Its 1x10, 2.54 mm pitch plated holes have
+J4 sits at the lower board's rear-left edge. Its 1x24, 2.54 mm pitch plated holes have
 1.0 mm drills. From the left square pad to the right:
 
-| Pin | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Signal | GND | 3V3 | GP1 | GP2 | GP38 | GP39 | GP40 | GP41 | GP42 | GP47 |
+| Pins | Signals In Pin Order |
+| --- | --- |
+| 1-6 | GND, 3V3, GPIO1, GPIO2, GPIO4, GPIO5 |
+| 7-12 | GPIO6, GPIO7, GPIO8, GPIO9, GPIO10, GPIO11 |
+| 13-18 | GPIO12, GPIO15, GPIO16, GPIO17, GPIO18, GPIO21 |
+| 19-24 | GPIO38, GPIO39, GPIO40, GPIO41, GPIO42, GPIO47 |
+
+Pin 1 is at `(10,3)` mm and pin 24 at `(68.42,3)` mm. The two button
+headers move right to leave this longer expansion row clear: BOOT pin 1
+at `(73,4)` and RESET pin 1 at `(80,4)` mm.
 
 J5/J6 sit next to the core board's USB end. Each has two 2.54 mm pitch,
 1.0 mm drilled plated holes for a normally-open momentary button with matching
@@ -155,33 +180,35 @@ press/release RESET, then release BOOT to request the ROM download mode.
 
 ## Board-to-Board Cable
 
-Use two shrouded, keyed **2x10, 2.54 mm pitch, vertical through-hole IDC
-headers** and two matching female IDC cable connectors. The ribbon itself
-has **20 conductors at 1.27 mm pitch**. Start with a 150 mm cable, including
-service slack, and confirm its exit direction, bend radius and strain relief
-against the actual connectors before finalizing the enclosure.
+Use two **JST XH B4B-XH-A, 1x4, 2.50 mm pitch, vertical through-hole
+headers** and matching XHP-4 housings/crimp contacts. Buy a precrimped,
+pin-for-pin four-conductor harness to avoid soldering cable contacts.
+Start with 150 mm including service slack. This is **2.50 mm XH**, not a
+2.54 mm pin-header or IDC footprint; the PCB drills are 0.95 mm. Match the
+actual header and housing dimensions before buying compatible parts.
 
 J8 mounts on the lower board's top; J9 mounts on the upper board's bottom.
 They face into the space between boards. The connection is **pin 1 to pin 1,
-through pin 20 to pin 20**, regardless of how the ribbon is folded. Use the
-square pad, connector triangle and red conductor to identify pin 1. Do not
-infer numbering by looking at the cable mating face; check continuity before
-powering the assembly. Reversed or offset insertion can connect power to GPIO.
+through pin 4 to pin 4**. Use the square PCB pad and the actual connector
+pin numbering, not wire colors or a mirrored mating-face view. Prewired
+cables can reverse the pin order: check continuity before powering the assembly.
+J8 pin 1 is at lower `(47,25)` and J9 pin 1 at upper `(83,8)` mm.
+Viewed through each board from the front, pin numbers increase towards +X;
+the underside mating view is mirrored. The keyed housings face into the stack.
 
 | Pins | Signals In Pin Order |
 | --- | --- |
-| 1-5 | GND, 3V3, GPIO4, GPIO5, GPIO6 |
-| 6-10 | GPIO7, GPIO8, GPIO9, GPIO10, GPIO11 |
-| 11-15 | GPIO12, GND, GPIO13, GPIO14, GPIO15 |
-| 16-20 | GPIO16, GPIO17, GPIO18, GPIO21, 3V3 |
+| 1-4 | GND, 3V3, SDA / GPIO13, SCL / GPIO14 |
 
 `interconnect.csv` is the complete pin-by-pin mapping. Upper-board schematic
 nets use `UP_` prefixes, including `UP_GND` and `UP_3V3`; lower-board nets use
 the original names. The external cable joins these separate circuit domains.
 Never merge the names or route across the breakaway tabs to remove airwires.
-The duplicate power and ground conductors are parallel paths, not separate
-power supplies. Start I2C testing at 100 kHz; verify pull-ups and signal
-integrity with the actual display cable and module.
+Start bring-up at 100 kHz, then validate 400 kHz with the actual harnesses.
+The OLED and MCP23017 share this bus; confirm the OLED's 0x3C/0x3D address
+and the expander's 0x20 address. Four conductors meet the minimum for this
+shared I2C bus plus supply/ground. Further reduction would need a different
+protocol or additional active circuitry and would complicate this assembly.
 
 ## Panel And Separation
 
@@ -236,10 +263,10 @@ not a completed enclosure or a fitted model of the purchased parts.
 - Including 1.6 mm board thickness, upper-board depth projects to 85.67 mm.
   The two boards therefore fit a nominal 126 x 86 mm PCB footprint.
 - Allow a maximum core-board/socket envelope of Z = 20 mm, antenna top
-  Z = 14.5 mm, upper underside parts of 3.5 mm, and mated IDC envelopes
-  of 18 mm. Under these assumptions, core-to-upper-parts clearance is
+  Z = 14.5 mm, upper underside parts of 3.5 mm, and mated XH envelopes
+  of 12 mm. Under these assumptions, core-to-upper-parts clearance is
   14.69 mm normal to the upper plane; antenna clearance is 16.33 mm.
-- The upper IDC envelope clears the core envelope vertically by 29.07 mm.
+- The upper XH envelope clears the core envelope vertically by 38.18 mm.
   J8 is beside the core, not underneath it. Keep the cable loop left of the
   antenna and secure it away from key sockets and screw posts.
 - Fix the upper board to sloped seats or angle brackets. Its four mounting
@@ -251,7 +278,7 @@ the upper copper is included in the nominal study, but RF performance is
 unmeasured. Keep metal, wiring and screws out of the antenna volume.
 
 Measure the purchased core board, female socket height, plug engagement,
-IDC housings, button leads and display assembly before locking these heights.
+XH housings, button leads and display assembly before locking these heights.
 The PCB footprint excludes keycaps, controls, enclosure walls, feet and USB
 plug clearance. Provide a removable top for unplugging the core board and
 support hot-swap sockets with the switch plate. Existing STL/CAD models have
@@ -260,7 +287,9 @@ not been regenerated; the new enclosure must follow this stacked assembly.
 ## Hand Assembly
 
 1. Cut and deburr the bare panel, then clean both boards before fitting parts.
-2. Solder the 0805 parts and 18 SOD-123 diodes first. Check every diode stripe.
+2. Solder U1 on the upper front first: align pin 1 with its marker, tack
+   opposite corners, then solder the visible SOIC leads and inspect for
+   bridges. Fit 0805 parts and 18 SOD-123 diodes; check every diode stripe.
 3. Solder Kailh sockets on the back, keeping the iron and solder off plastic.
    Support each socket flat on the PCB; inspect both contacts for wetting.
 4. Fit the two 1x22 female sockets using the unpowered core board as an
@@ -268,7 +297,7 @@ not been regenerated; the new enclosure must follow this stacked assembly.
 5. Fit J8 on the lower top and J9 on the upper bottom, then the
    display/expansion headers and external buttons or wires.
 6. Inspect bridges and polarity and measure supply-to-ground resistance
-   before plugging in the core board or applying power. Verify all 20 cable
+   before plugging in the core board or applying power. Verify all four cable
    connections pin-for-pin and confirm supply polarity at upper-board J2.
 
 Buy one preassembled YD ESP32-S3 core board and two matching 1x22 male strips
@@ -278,16 +307,28 @@ are separate assemblies. Ordinary soldering-iron assembly is intended.
 
 ## Firmware Status
 
-`firmware-profile-draft.yaml` records the new wiring for future integration;
-it is deliberately outside `products/`. The current r02 product uses RP2040
-and direct keys and cannot be used unchanged.
+`firmware-profile-draft.yaml` is a hardware wiring contract, **not a loadable
+Kivo product/profile schema**. It is deliberately outside `products/`.
+The current direct-GPIO matrix schema cannot represent MCP23017 port names.
+This hardware revision requires new firmware; the r02 product cannot run it.
 
 - `src/platform/esp32s3.cpp` currently has no display implementation, and
   `kYdEsp32S3.supportsOled` is false. SH1106 support must be implemented.
-- Existing matrix scanning drives rows low and reads pulled-up columns,
-  matching the diode direction here. The firmware's contact-cycle filter
-  still suppresses some multi-key combinations; add explicit diode-matrix
-  support before claiming full rollover.
+- Implement an MCP23017 backend with GPA5-GPA7 output rows, GPB0-GPB5
+  pulled-up column inputs and GPA0-GPA4 pulled-up control inputs. Read both
+  encoder channels together from GPIOA; avoid output read-modify-write on
+  that mixed port and maintain an OLATA shadow. Handle I2C faults and
+  expander power-on/reset without issuing false key events.
+- Target about 1 kHz full matrix scans and control polling at 400 kHz I2C.
+  Fragment OLED refreshes (initial target: at most 8 data bytes per transaction)
+  and give input polling priority. A full blocking OLED frame would prevent
+  sampling for tens of milliseconds and can lose encoder transitions.
+  Measure the worst sampling gap and encoder response during refreshes and
+  USB/Wi-Fi load; polling performance is not yet validated. Reading INTCAP
+  alone is not an encoder event queue and cannot recover every missed edge.
+- The contact-cycle filter needs explicit diode-matrix support before
+  claiming full rollover. Add debounce and simultaneous-key tests to the
+  new backend; the current direct-GPIO scanner is not used unchanged.
 - GP39-GP42 are usable core-board pins but excluded from the present firmware
   whitelist. Enable them when assigning expansion functions.
 - Verify the actual flash/PSRAM variant, build target and USB behavior on
@@ -336,3 +377,6 @@ uv run --script scripts/hardware/preview_workbench_s3_stack.py \
 - Standard socket, diode and hand-solder footprints: KiCad 10.0.6 libraries.
 - User-supplied module drawings: `references/display-dimensions.png` and
   `references/display-interface.png`, supplied on 2026-09-05.
+- Microchip [MCP23017 datasheet DS20001952D](https://ww1.microchip.com/downloads/aemDocuments/documents/APID/ProductDocuments/DataSheets/MCP23017-Data-Sheet-DS20001952.pdf),
+  pages 1/11 for SOIC pinout, output-only GPA7/GPB7 and address/reset bias;
+  pages 6-7 for 400 kHz timing. U1 uses the SOIC pinout, not QFN numbering.

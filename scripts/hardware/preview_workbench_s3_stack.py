@@ -39,20 +39,22 @@ def generate(manifest, output):
     parts_height = stack["upper_underside_parts_height"]
     core_gap = normal_gap(57.15, stack["core_top_z"], parts_height)
     antenna_gap = normal_gap(63.39, stack["antenna_top_z"], parts_height)
-    upper_idc = upper_polygon(15-6.22, 15+3.68, -stack["upper_idc_mated_height"], 0)
-    idc_to_core = min(p[1] for p in upper_idc) - stack["core_top_z"]
+    ux1, uy1, ux2, uy2 = stack["upper_connector_bounds"]
+    lx1, ly1, lx2, ly2 = stack["lower_connector_bounds"]
+    upper_connector = upper_polygon(uy1, uy2, -stack["upper_connector_mated_height"], 0)
+    connector_to_core = min(p[1] for p in upper_connector) - stack["core_top_z"]
     projected_depth = length*cosine + thickness*sine
-    lower_idc_top = 18
+    lower_connector_top = stack["lower_connector_mated_height"]
     assert projected_depth <= depth
-    assert core_gap > 5 and idc_to_core > 5
+    assert core_gap > 5 and connector_to_core > 5
     assert antenna_gap >= 15, "Raise the upper board or revise the antenna clearance"
-    assert normal_gap(25+6.22, lower_idc_top, parts_height) > 5
+    assert normal_gap(ly2, lower_connector_top, parts_height) > 5
     # Nominal cable endpoints, including lateral offset; this excludes the service loop.
-    lower_end = [47+11.43, 25+1.27, lower_idc_top]
-    upper_y, upper_z = upper_point(15-1.27, -stack["upper_idc_mated_height"])
-    upper_end = [112-11.43, upper_y, upper_z]
+    lower_end = [(lx1+lx2)/2, (ly1+ly2)/2, lower_connector_top]
+    upper_y, upper_z = upper_point((uy1+uy2)/2, -stack["upper_connector_mated_height"])
+    upper_end = [(ux1+ux2)/2, upper_y, upper_z]
     chord = math.dist(lower_end, upper_end)
-    assert stack["ribbon_length_mm"] > chord+40
+    assert stack["cable_length_mm"] > chord+40
     metrics = dict(
         status="NOMINAL ENVELOPES ONLY; measure actual sockets, controls and cable before enclosure release",
         tilt_deg=stack["tilt_deg"], upper_front_underside_z_mm=front_z,
@@ -60,11 +62,12 @@ def generate(manifest, output):
         lower_depth_mm=depth, reduction_from_135mm_percent=round((135-depth)/135*100,1),
         core_to_upper_parts_normal_gap_mm=round(core_gap,2),
         antenna_to_upper_parts_normal_gap_mm=round(antenna_gap,2),
-        upper_idc_to_core_vertical_gap_mm=round(idc_to_core,2),
-        cable_endpoint_chord_mm=round(chord,2), nominal_ribbon_length_mm=stack["ribbon_length_mm"],
+        upper_connector_to_core_vertical_gap_mm=round(connector_to_core,2),
+        cable_endpoint_chord_mm=round(chord,2), nominal_cable_length_mm=stack["cable_length_mm"],
         envelope_assumptions_mm=dict(core_top_z=stack["core_top_z"],antenna_top_z=stack["antenna_top_z"],
                                      upper_underside_parts=parts_height,
-                                     upper_idc_mated=stack["upper_idc_mated_height"], lower_idc_mated=lower_idc_top))
+                                     upper_connector_mated=stack["upper_connector_mated_height"],
+                                     lower_connector_mated=lower_connector_top))
     output.mkdir(parents=True, exist_ok=True)
     (output / "stack-clearances.json").write_text(json.dumps(metrics,indent=2)+"\n")
     plt.rcParams.update({"font.family":"DejaVu Sans", "font.size":10})
@@ -82,14 +85,14 @@ def generate(manifest, output):
     ax.add_patch(Rectangle((0,10),57.15,1.6,fc=core_color,ec="none"))
     ax.add_patch(Rectangle((57.15,10),6.24,stack["antenna_top_z"]-10,fc=core_color,alpha=0.55,ec="none"))
     ax.add_patch(Rectangle((19,0),12,8.5,fc="#42474d",ec="none"))
-    ax.add_patch(Polygon(upper_idc,fc="#42474d",alpha=0.9))
-    ax.add_patch(Rectangle((25-3.68,0),9.9,lower_idc_top,fc="#596271",alpha=0.50,ls="--",ec="#42474d"))
+    ax.add_patch(Polygon(upper_connector,fc="#42474d",alpha=0.9))
+    ax.add_patch(Rectangle((ly1,0),ly2-ly1,lower_connector_top,fc="#596271",alpha=0.50,ls="--",ec="#42474d"))
     # Cable path is a schematic projection; the lower socket is left of the core in plan view.
     ax.plot([lower_end[1],35,35,upper_y],[lower_end[2],30,40,upper_z],
             color="#ba4d53",lw=3,solid_capstyle="round")
-    ax.annotate("IDC20 ribbon\n150 mm nominal",xy=(35,34),xytext=(44,29),
+    ax.annotate("4-wire I2C harness\n150 mm nominal",xy=(35,34),xytext=(44,29),
                 arrowprops=dict(arrowstyle="-",color="#ba4d53"),color="#92333c",fontsize=9)
-    ax.annotate("J9 underside\nmated envelope: 18 mm",xy=(upper_y,upper_z+4),xytext=(-13,40),
+    ax.annotate("J9 underside / XH4\nmated envelope: 12 mm",xy=(upper_y,upper_z+4),xytext=(-13,43),
                 arrowprops=dict(arrowstyle="-",color="#505050"),fontsize=9)
     ax.annotate("YD ESP32-S3\nremovable core + sockets",xy=(41,14),xytext=(54,21),
                 arrowprops=dict(arrowstyle="-",color=core_color),fontsize=8.5)
@@ -113,13 +116,13 @@ def generate(manifest, output):
     fig.text(0.80,0.81,"PCB SIZES",fontsize=10,fontweight="bold",color="#505b60")
     fig.text(0.80,0.77,"Upper   126 x 98\nLower   126 x 86\nPanel   126 x 187",fontsize=11,linespacing=1.7,va="top")
     fig.text(0.80,0.60,"NOMINAL GAPS",fontsize=10,fontweight="bold",color="#505b60")
-    fig.text(0.80,0.56,f"Core: {core_gap:.1f} mm\nAntenna: {antenna_gap:.1f} mm\nIDC to core: {idc_to_core:.1f} mm",
+    fig.text(0.80,0.56,f"Core: {core_gap:.1f} mm\nAntenna: {antenna_gap:.1f} mm\nJ9 to core: {connector_to_core:.1f} mm",
              fontsize=11,linespacing=1.7,va="top")
     fig.text(0.80,0.39,"DEPTH CHANGE",fontsize=10,fontweight="bold",color="#505b60")
     fig.text(0.80,0.35,"135 -> 86 mm\n36% less PCB depth",fontsize=11,linespacing=1.7,va="top")
     fig.text(0.08,0.14,"Envelope study, not a fitted assembly or enclosure drawing.",fontsize=11,fontweight="bold",color="#913c33")
     fig.text(0.08,0.10,"Controls, keycaps, case walls, feet and USB plugs are excluded. Connector/body heights require physical measurement.\n"
-             "The lower IDC is beside the core in plan view; their overlapping side projections do not imply a collision.\n"
+             "The lower XH connector is beside the core in plan view; their overlapping side projections do not imply a collision.\n"
              "Antenna spacing is nominal geometry only. Keep cable loops and metal outside the antenna region.",
              fontsize=9,color="#505b60",va="top",linespacing=1.5)
     fig.savefig(output / "stack-side.png",dpi=180)
