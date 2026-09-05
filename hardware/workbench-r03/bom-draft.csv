@@ -37,7 +37,9 @@ SW19,BOOTSEL,Button_Switch_SMD:SW_SPST_TL3342,,False
 SW20,RESET,Button_Switch_SMD:SW_SPST_TL3342,,False
 J2,DISPLAY HARNESS - SEE README,Connector_PinHeader_2.54mm:PinHeader_1x09_P2.54mm_Vertical,,False
 J3,SWD 3V3 GND SWDIO SWCLK,Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical,,False
-J4,AUX GND 3V3 GP0 GP23 GP29,Connector_PinHeader_2.54mm:PinHeader_1x05_P2.54mm_Vertical,,False
+J4,EXPANSION / 3V3 IO,Connector_PinHeader_2.54mm:PinHeader_1x07_P2.54mm_Vertical,,False
+J5,EXTERNAL BOOT BUTTON,Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical,,False
+J6,EXTERNAL RESET BUTTON,Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical,,False
 SW1,KEY_1 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
 SW2,KEY_2 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
 SW3,KEY_3 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False

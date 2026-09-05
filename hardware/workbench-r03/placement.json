@@ -44,8 +44,8 @@
         "33": "+3V3",
         "34": "GPIO22",
         "35": "GPIO23",
-        "36": null,
-        "37": null,
+        "36": "GPIO24",
+        "37": "GPIO25",
         "38": "GPIO26",
         "39": "GPIO27",
         "40": "GPIO28",
@@ -938,27 +938,73 @@
     },
     {
       "ref": "J4",
-      "lib": "Connector_Generic:Conn_01x05",
-      "value": "AUX GND 3V3 GP0 GP23 GP29",
+      "lib": "Connector_Generic:Conn_01x07",
+      "value": "EXPANSION / 3V3 IO",
       "nets": {
         "1": "GND",
         "2": "+3V3",
         "3": "GPIO0",
         "4": "GPIO23",
-        "5": "GPIO29"
+        "5": "GPIO24",
+        "6": "GPIO25",
+        "7": "GPIO29"
       },
       "schematic": [
         515,
         75
       ],
       "pcb": [
-        84,
-        43
+        10,
+        3
       ],
-      "footprint": "Connector_PinHeader_2.54mm:PinHeader_1x05_P2.54mm_Vertical",
+      "footprint": "Connector_PinHeader_2.54mm:PinHeader_1x07_P2.54mm_Vertical",
       "angle": 90,
       "side": "F",
       "uuid": "e4e82129-121c-54f8-a7d6-88a14836c620",
+      "mpn": ""
+    },
+    {
+      "ref": "J5",
+      "lib": "Connector_Generic:Conn_01x02",
+      "value": "EXTERNAL BOOT BUTTON",
+      "nets": {
+        "1": "BOOT_BUTTON",
+        "2": "GND"
+      },
+      "schematic": [
+        300,
+        175
+      ],
+      "pcb": [
+        97.5,
+        4
+      ],
+      "footprint": "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical",
+      "angle": 90,
+      "side": "F",
+      "uuid": "085df0f8-4726-53e1-9bed-19e7315eac53",
+      "mpn": ""
+    },
+    {
+      "ref": "J6",
+      "lib": "Connector_Generic:Conn_01x02",
+      "value": "EXTERNAL RESET BUTTON",
+      "nets": {
+        "1": "RUN",
+        "2": "GND"
+      },
+      "schematic": [
+        390,
+        170
+      ],
+      "pcb": [
+        104,
+        4
+      ],
+      "footprint": "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical",
+      "angle": 90,
+      "side": "F",
+      "uuid": "0b224ccf-5c9a-5d89-96d6-d2f0dee6b271",
       "mpn": ""
     },
     {

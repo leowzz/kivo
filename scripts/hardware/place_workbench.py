@@ -42,12 +42,13 @@ def generate(manifest, output, libraries):
         drawing.SetWidth(pcb.FromMM(width))
         board.Add(drawing)
 
-    def text(value, x, y, layer=pcb.F_SilkS, size=1.0):
+    def text(value, x, y, layer=pcb.F_SilkS, size=1.0, angle=0):
         item = pcb.PCB_TEXT(board)
         item.SetText(value)
         item.SetPosition(point(x, y))
         item.SetTextSize(position(size, size))
         item.SetTextThickness(pcb.FromMM(0.15))
+        item.SetTextAngle(pcb.EDA_ANGLE(angle, pcb.DEGREES_T))
         item.SetLayer(layer)
         board.Add(item)
 
@@ -74,6 +75,8 @@ def generate(manifest, output, libraries):
             footprint.Reference().SetVisible(False)
         if part["ref"] == "U1":
             footprint.Reference().SetPosition(point(99, 36))
+        if part["ref"] in ("J4", "J5", "J6"):
+            footprint.Reference().SetVisible(False)
         for pad in footprint.Pads():
             number = pad.GetNumber()
             if not number:
@@ -104,6 +107,11 @@ def generate(manifest, output, libraries):
     text("KIVO WORKBENCH", 38, 10, size=1.5)
     text("r03 DRAFT - UNROUTED", 38, 14)
     text("J2 HARNESS: SEE README", 41, 35)
+    for column, label in enumerate(["GND", "3V3", "GP0", "GP23", "GP24", "GP25", "GP29"]):
+        text(label, 10 + column*2.54, 7, size=0.8, angle=90)
+    text("J4 / 3V3 IO", 17.62, 10, size=0.8)
+    text("BOOT", 98.77, 1, size=0.8)
+    text("RESET", 105.27, 1, size=0.8)
     for row, label in enumerate(["GND", "3V3", "SCL", "SDA", "OK", "PRESS", "A", "B", "BACK"]):
         text(label, 67.0, 16+row*2.54, size=0.8)
     for key in data["keys"]:

@@ -20,7 +20,7 @@ here is a proposed new hardware revision, not a released Product Version ID.
 
 | File | Purpose |
 | --- | --- |
-| `workbench-r03.kicad_sch` | Embedded-symbol schematic, 57 components |
+| `workbench-r03.kicad_sch` | Embedded-symbol schematic, 59 components |
 | `workbench-r03.kicad_pcb` | Four-layer, 1.6 mm placement draft with 18 bottom sockets |
 | `workbench-r03.kicad_pro` | KiCad project and preliminary design rules |
 | `Workbench.pretty/` | Local hot-swap socket and measured-head mounting footprints |
@@ -86,8 +86,43 @@ suitable pull-ups. The guide's "seven GPIO" count excludes power and ground.
 
 J3 pins 1-4 are 3.3 V reference, GND, SWDIO and SWCLK. A debugger should sense
 the target voltage without powering a simultaneously USB-powered board.
-J4 pins 1-5 are GND, 3.3 V, GPIO0, GPIO23 and GPIO29; these are spare connections,
-not new capabilities added to the current product profile.
+
+J4 exposes all five unused RP2040 GPIOs at the **rear-left (upper-left in top
+view)** of the PCB. It is a 1x7 plated through-hole header, 2.54 mm pitch with
+1.0 mm drills. Viewed from the component side with USB at the top, pin 1 is
+the leftmost square pad; the pins run left to right:
+
+| J4 Pin | Signal |
+| --- | --- |
+| 1 (square pad) | GND |
+| 2 | 3.3 V |
+| 3 | GPIO0 |
+| 4 | GPIO23 |
+| 5 | GPIO24 |
+| 6 | GPIO25 |
+| 7 | GPIO29 / ADC3 |
+
+These pins connect directly to the RP2040 and use **3.3 V logic, not 5 V**.
+External loads must fit within the regulator's remaining current and thermal
+budget. GPIO24/25 are free on this bare-chip design, but the current YD-RP2040
+firmware pin whitelist excludes them. Enable them in the future custom-board
+definition before use; this hardware change does not change the product
+profile or assign functions to any expansion pins.
+
+J5 (BOOT) and J6 (RESET) sit immediately to the left of the rear USB-C port.
+Each is a 1x2 plated through-hole footprint, 2.54 mm pitch with 1.0 mm drills,
+for a matching normally-open momentary button or short wires to a button.
+They are not a universal four-leg tactile-switch footprint. Viewed from the
+component side with USB at the top, pin 1 is the left square pad:
+
+| Header | Pin 1 | Pin 2 | Connection |
+| --- | --- | --- | --- |
+| J5 BOOT | BOOT_BUTTON | GND | Parallel to SW19; through R7 (1 kohm) to QSPI_SS |
+| J6 RESET | RUN | GND | Parallel to SW20; R8 (10 kohm) pulls RUN up to 3.3 V |
+
+The onboard SW19/SW20 buttons remain fitted. To enter the USB bootloader,
+hold BOOT, press and release RESET, then release BOOT. Do not short QSPI_SS
+directly to ground; J5 preserves the existing series resistor.
 
 K1-K18 retain GPIO1-GPIO18. Viewed from the key side with USB at the back,
 K1-K6 are the row closest to the display, K7-K12 are the middle row, and K13-K18
@@ -123,7 +158,9 @@ from the current product's electrical configuration.
 The `Dwgs.User` display rectangle is a reserved area, not a validated 3D module
 model. Before final PCB dimensions, verify the switch plate-to-PCB distance,
 socket underside height, display connector height, panel screw access and USB
-plug insertion. The new USB port follows the sloped board and cannot align with
+plug insertion. Include the J4 header/mating connector height near the display
+and the J5/J6 button or wire clearance in the enclosure check. The new USB port
+follows the sloped board and cannot align with
 the old bottom-board USB opening. The existing eight-pin modeling constant is
 inconsistent with the apparent nine contacts in `refer/dsp-encp.png`; keep the
 electrical harness independent of that mechanical assumption.

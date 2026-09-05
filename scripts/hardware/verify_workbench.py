@@ -49,6 +49,25 @@ def verify(directory, netlist):
     assert actual[("U3", "5")] == "/+3V3"
     j2 = ["/GND", "/+3V3", "/GPIO27", "/GPIO26", "/GPIO22", "/GPIO28", "/GPIO21", "/GPIO20", "/GPIO19"]
     assert [actual[("J2", str(i))] for i in range(1, 10)] == j2
+    j4 = ["/GND", "/+3V3", "/GPIO0", "/GPIO23", "/GPIO24", "/GPIO25", "/GPIO29"]
+    assert [actual[("J4", str(i))] for i in range(1, 8)] == j4
+    for connector_pin, chip_pin, gpio in [(3, 2, 0), (4, 35, 23), (5, 36, 24), (6, 37, 25), (7, 41, 29)]:
+        assert actual[("J4", str(connector_pin))] == actual[("U1", str(chip_pin))] == f"/GPIO{gpio}"
+    assert actual[("J5", "1")] == actual[("SW19", "1")] == actual[("R7", "2")] == "/BOOT_BUTTON"
+    assert actual[("R7", "1")] == actual[("U1", "56")] == "/QSPI_SS"
+    assert actual[("J6", "1")] == actual[("SW20", "1")] == actual[("U1", "26")] == "/RUN"
+    assert actual[("J5", "2")] == actual[("J6", "2")] == "/GND"
+    for ref, count, x, y in [("J4", 7, 10, 3), ("J5", 2, 97.5, 4), ("J6", 2, 104, 4)]:
+        pads = {pad.GetNumber(): pad for pad in footprints[ref].Pads()}
+        assert len(pads) == count
+        for i in range(1, count + 1):
+            pad = pads[str(i)]
+            assert pad.GetAttribute() == pcb.PAD_ATTRIB_PTH
+            assert pad.GetLayerSet().Contains(pcb.F_Cu) and pad.GetLayerSet().Contains(pcb.B_Cu)
+            assert abs(pcb.ToMM(pad.GetDrillSize().x) - 1.0) < 0.001
+            assert abs(pcb.ToMM(pad.GetDrillSize().y) - 1.0) < 0.001
+            assert abs(pcb.ToMM(pad.GetPosition().x) - 50 - x - (i-1)*2.54) < 0.001
+            assert abs(pcb.ToMM(pad.GetPosition().y) - 50 - y) < 0.001
     with (directory / "key-coordinates.csv").open() as stream:
         centers = list(csv.DictReader(stream))
     assert len(centers) == 18
@@ -69,6 +88,7 @@ def verify(directory, netlist):
     assert len(board.GetTracks()) == 0
     print(json.dumps(dict(result="PASS", connected_pins=len(actual), connected_nets=len(set(actual.values())),
                           keys=18, pitch_mm=19.05, copper_layers=4, thickness_mm=1.6,
+                          expansion_gpios=[0, 23, 24, 25, 29], external_button_headers=["BOOT", "RESET"],
                           status="UNROUTED DRAFT; not fabrication validation"), indent=2))
 
 

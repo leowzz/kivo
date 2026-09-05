@@ -140,7 +140,7 @@ def generate(library_root, output):
         number, name = child(p, "number")[1], child(p, "name")[1]
         if name.startswith("GPIO"):
             gpio = int(name.removeprefix("GPIO").split("/")[0])
-            rp_nets[number] = f"GPIO{gpio}" if gpio not in (24, 25) else None
+            rp_nets[number] = f"GPIO{gpio}"
         elif name in ("IOVDD", "USB_VDD", "ADC_AVDD", "VREG_VIN"):
             rp_nets[number] = "+3V3"
         elif name in ("DVDD", "VREG_VOUT"):
@@ -212,9 +212,15 @@ def generate(library_root, output):
     add("J3", "Connector_Generic:Conn_01x04", "SWD 3V3 GND SWDIO SWCLK",
         {"1": "+3V3", "2": "GND", "3": "SWDIO", "4": "SWCLK"}, (515, 195), (120, 20),
         "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical")
-    add("J4", "Connector_Generic:Conn_01x05", "AUX GND 3V3 GP0 GP23 GP29",
-        {"1": "GND", "2": "+3V3", "3": "GPIO0", "4": "GPIO23", "5": "GPIO29"}, (515, 75), (84, 43),
-        "Connector_PinHeader_2.54mm:PinHeader_1x05_P2.54mm_Vertical", angle=90)
+    add("J4", "Connector_Generic:Conn_01x07", "EXPANSION / 3V3 IO",
+        {"1": "GND", "2": "+3V3", "3": "GPIO0", "4": "GPIO23", "5": "GPIO24", "6": "GPIO25", "7": "GPIO29"},
+        (515, 75), (10, 3), "Connector_PinHeader_2.54mm:PinHeader_1x07_P2.54mm_Vertical", angle=90)
+    add("J5", "Connector_Generic:Conn_01x02", "EXTERNAL BOOT BUTTON",
+        {"1": "BOOT_BUTTON", "2": "GND"}, (300, 175), (97.5, 4),
+        "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical", angle=90)
+    add("J6", "Connector_Generic:Conn_01x02", "EXTERNAL RESET BUTTON",
+        {"1": "RUN", "2": "GND"}, (390, 170), (104, 4),
+        "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical", angle=90)
     key_centers = []
     for index in range(18):
         row, column = divmod(index, 6)
