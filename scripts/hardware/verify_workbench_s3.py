@@ -1,4 +1,4 @@
-"""Verify the separate circuits and breakaway geometry of the unrouted S3 draft."""
+"""Verify S3 circuits, routed copper, mounting clearances and breakaway geometry."""
 
 import argparse
 import csv
@@ -23,7 +23,7 @@ def panel_point(x, y, section, view):
     return (126-x, 187-y) if section == "lower" and view == "panel" else (x, y)
 
 
-def verify_board(path, data, expected, view):
+def verify_board(path, data, expected, view, routed):
     board = pcb.LoadBoard(str(path))
     footprints = {f.GetReference(): f for f in board.GetFootprints()}
     parts = {p["ref"]: p for p in data["parts"] if view == "panel" or p["section"] == view}
@@ -103,14 +103,23 @@ def verify_board(path, data, expected, view):
             near(xy(pad)[0], 8+11.38+(9-i)*2.54)
             near(xy(pad)[1], 3+1.93)
 
-    keepouts = {zone.GetZoneName(): zone for zone in board.Zones()}
-    assert len(keepouts) == {"panel":2, "upper":0, "lower":1}[view]
+    keepouts = {zone.GetZoneName(): zone for zone in board.Zones() if zone.GetIsRuleArea()}
+    screws = {name for name in keepouts if name.startswith("SCREW / ")}
+    assert len(screws) == ({"panel":12,"upper":8,"lower":4}[view] if routed else 0)
+    assert len(keepouts)-len(screws) == {"panel":2, "upper":0, "lower":1}[view]
     for name, zone in keepouts.items():
         assert zone.GetIsRuleArea()
         assert zone.GetDoNotAllowTracks() and zone.GetDoNotAllowVias() and zone.GetDoNotAllowZoneFills()
         assert zone.GetLayerSet().Contains(pcb.F_Cu) and zone.GetLayerSet().Contains(pcb.B_Cu)
         antenna = name.startswith("ANTENNA")
         assert zone.GetDoNotAllowPads() == zone.GetDoNotAllowFootprints() == antenna
+        if name in screws:
+            center = footprints[name.removeprefix("SCREW / ")].GetPosition()
+            for dx,dy in [(1,0),(-1,0),(0,1),(0,-1)]:
+                for radius,inside in [(2.9,True),(3.1,False)]:
+                    assert zone.Outline().Contains(pcb.VECTOR2I(center.x+pcb.FromMM(radius*dx),
+                        center.y+pcb.FromMM(radius*dy))) == inside
+            continue
         x1, y1, x2, y2 = data["antenna_keepout"] if antenna else data["panel"]["copper_keepout"]
         for x in [x1+0.1, (x1+x2)/2, x2-0.1]:
             for y in [y1+0.1, (y1+y2)/2, y2-0.1]:
@@ -166,13 +175,42 @@ def verify_board(path, data, expected, view):
     assert abs(pcb.ToMM(bounds.GetHeight())-height) < 0.1
     assert board.GetCopperLayerCount() == 2
     near(pcb.ToMM(board.GetDesignSettings().GetBoardThickness()), 1.6)
-    assert len(board.GetTracks()) == 0, "This checker describes the unrouted placement stage"
+    tracks = list(board.GetTracks())
+    pours = [zone for zone in board.Zones() if not zone.GetIsRuleArea()]
+    if not routed:
+        assert not tracks and not pours, "Use --routed and current DRC reports to verify routing"
+    else:
+        assert tracks and len(pours) == (4 if view == "panel" else 2)
+        for item in tracks:
+            assert item.GetNetname() in set(actual.values())
+            if isinstance(item,pcb.PCB_VIA):
+                near(pcb.ToMM(item.GetWidth(pcb.F_Cu)),0.6)
+                near(pcb.ToMM(item.GetWidth(pcb.B_Cu)),0.6)
+                near(pcb.ToMM(item.GetDrillValue()),0.3)
+                assert item.GetViaType() == pcb.VIATYPE_THROUGH
+            else:
+                assert pcb.ToMM(item.GetWidth()) >= 0.2
+            if view == "panel":
+                bounds = item.GetBoundingBox()
+                low,high = pcb.ToMM(bounds.GetTop())-50,pcb.ToMM(bounds.GetBottom())-50
+                assert high < 96 if item.GetNetname().startswith("/UP_") else low > 103
+        for zone in pours:
+            assert zone.GetNetname() in ({"/UP_GND","/GND"} if view == "panel" else
+                                        {"/UP_GND" if view == "upper" else "/GND"})
+            assert zone.GetLayer() in (pcb.F_Cu,pcb.B_Cu)
+            assert zone.GetIslandRemovalMode() == pcb.ISLAND_REMOVAL_MODE_ALWAYS
+            assert zone.HasFilledPolysForLayer(zone.GetLayer())
+            assert zone.GetFilledArea() > 0
+            near(pcb.ToMM(zone.GetLocalClearance()),0.25)
     return dict(view=view, connected_pins=len(actual), connected_nets=len(set(actual.values())),
                 electrical_parts=len(parts), mounts=len(mounts), breakaway_holes=len(holes),
-                outline_holes=outlines.HoleCount(0), size_mm=[width,height])
+                outline_holes=outlines.HoleCount(0), size_mm=[width,height],
+                segments=sum(not isinstance(t,pcb.PCB_VIA) for t in tracks),
+                vias=sum(isinstance(t,pcb.PCB_VIA) for t in tracks),ground_pours=len(pours),
+                screw_keepouts=len(screws))
 
 
-def verify(directory, netlist, individual_boards=None):
+def verify(directory, netlist, individual_boards=None, routed=False, drc_dir=None):
     app = wx.App(False)
     data = json.loads((directory / "placement.json").read_text())
     expected = {}
@@ -249,13 +287,20 @@ def verify(directory, netlist, individual_boards=None):
         near(float(key["pcb_y"]), 48+row*19.05)
         for coordinate, target in zip(parts[f"SW{i+1}"]["local_pcb"], [float(key["pcb_x"]),float(key["pcb_y"])]):
             near(coordinate, target)
-    reports = [verify_board(directory / "workbench-s3-r01.kicad_pcb",data,expected,"panel")]
+    reports = [verify_board(directory / "workbench-s3-r01.kicad_pcb",data,expected,"panel",routed)]
     if individual_boards:
         for view in ["upper","lower"]:
-            reports.append(verify_board(individual_boards / f"{view}.kicad_pcb",data,expected,view))
+            reports.append(verify_board(individual_boards / f"{view}.kicad_pcb",data,expected,view,routed))
+    if routed:
+        assert drc_dir, "Routed validation requires current KiCad DRC reports"
+        for report in reports:
+            name = "drc.json" if report["view"] == "panel" else report["view"]+"-drc.json"
+            drc = json.loads((drc_dir / name).read_text())
+            assert not drc["violations"] and not drc["unconnected_items"], name
     print(json.dumps(dict(result="PASS", boards=reports, mcu_application_gpios=2, expander_matrix_pins=9,
                           spare_gpios=22, independent_circuits=True, cable_pins=4,
-                          status="UNROUTED DRAFT; firmware support pending; not fabrication validation"), indent=2))
+                          status=("ROUTED; zero DRC/unconnected; physical fit and firmware pending" if routed else
+                                  "UNROUTED DRAFT; firmware support pending; not fabrication validation")), indent=2))
 
 
 if __name__ == "__main__":
@@ -263,5 +308,7 @@ if __name__ == "__main__":
     parser.add_argument("directory", type=Path)
     parser.add_argument("netlist", type=Path)
     parser.add_argument("--individual-boards", type=Path)
+    parser.add_argument("--routed", action="store_true")
+    parser.add_argument("--drc-dir",type=Path)
     args = parser.parse_args()
-    verify(args.directory, args.netlist, args.individual_boards)
+    verify(args.directory, args.netlist, args.individual_boards,args.routed,args.drc_dir)

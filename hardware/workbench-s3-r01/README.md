@@ -1,9 +1,10 @@
 # Workbench S3 r01 - Stacked Breakaway Boards
 
-Independent **unrouted review draft**, using the YD ESP32-S3 core board from
+Independent **routed prototype**, using the YD ESP32-S3 core board from
 `refer/YD-ESP32-S3/`. Open `workbench-s3-r01.kicad_pro` in KiCad 10.
-The RP2040 design remains in `../workbench-r03/`. This revision is not ready
-for fabrication and is not a released product definition.
+The RP2040 design remains in `../workbench-r03/`. Physical module fit and
+the fabricator's panel process still require confirmation; this is not a
+released product definition. Firmware support remains pending.
 
 ## Architecture
 
@@ -26,6 +27,27 @@ for fabrication and is not a released product definition.
   with extended pads, and one SOIC-28 wide chip with 1.27 mm lead pitch.
 - No bare MCU, flash, crystal, regulator or fine-pitch USB connector needs
   soldering on this carrier.
+
+## Schematic Pages
+
+Open `workbench-s3-r01.kicad_sch` as the root schematic. Page 1 (A4) contains
+the lower board's core sockets, expansion header, BOOT/RESET and J8 cable
+connector. Its `Upper` sheet opens page 2 (A3), containing the upper board's
+power entry, MCP23017 with local decoupling/reset/I2C pull-ups, display
+connector and directly wired 3x6 key/diode matrix. Both schematic files are
+required when copying the project.
+
+The upper sheet uses absolute global labels such as `/UP_GPA5` to preserve
+the existing routed PCB net names. They do not connect to the lower board;
+the external J8/J9 harness still joins the two independent circuits. The
+layout retains all component values, footprints, reference designators and
+symbol UUIDs. The PCB's upper-component schematic paths are updated for the
+new hierarchy; copper, footprints and board geometry are unchanged.
+
+`layout_workbench_s3_schematic.py` provides the shared page layout used by
+the generator. `placement.json` records the two schematic paths so a fresh
+placement keeps the correct symbol associations. A before/after exported
+netlist can be checked using `verify_workbench_s3_schematic.py`.
 
 ## Core Board Sockets
 
@@ -245,6 +267,10 @@ electrical pads stay out. Each finished board has its own four M3 enclosure
 mounting holes, in addition to the upper board's four display mounts, so the
 tabs carry no load in the finished assembly.
 
+All 12 mounting holes have a 3.0 mm radius keepout on both copper layers,
+covering the specified maximum 5.6 mm screw heads. Use matching small-head
+M3 screws; larger heads or washers need a new clearance check.
+
 Confirm the slot tooling, perforation drill/spacing, tab strength and
 customer-panelization policy with the chosen fabricator before ordering.
 Two circuits connected by tabs may still be charged as two designs; the
@@ -304,6 +330,48 @@ Buy one preassembled YD ESP32-S3 core board and two matching 1x22 male strips
 if the core board is supplied without pins. `bom-draft.csv` lists the carrier
 parts; the purchased core board, switch bodies, keycaps and display module
 are separate assemblies. Ordinary soldering-iron assembly is intended.
+
+## Routing
+
+- Two copper layers, 0.25 mm signal tracks, 0.5 mm power branches and
+  0.4 mm local power connections/socket escape. Minimum clearance is 0.2 mm.
+- Through vias are 0.6 mm diameter with 0.3 mm drills, tented on both sides.
+  Copper stays at least 0.5 mm from finished routed edges.
+- C3 moves to `(90.5,23.905)` mm and rotates 180 degrees so its supply pad
+  faces U1 pin 9. Its supply/ground connections form a short, via-free loop
+  on the front layer; the capacitor value and electrical pin mapping are unchanged.
+- Each finished board has its own front/back ground pours and stitching vias.
+  Pours use 0.25 mm clearance and 0.3 mm thermal spokes for soldering access;
+  floating islands are removed. No copper or electrical net crosses the tabs.
+- The lower antenna aperture/keepout and upper display geometry are retained.
+  BOOT, RESET, all 22 expansion GPIOs and the four-wire harness are routed.
+
+The PCB is the editable routed master. The placement generator deliberately
+still creates an unrouted board; never run it over this master. Recheck DRC
+after every subsequent footprint, outline or copper edit.
+
+## Manufacturing Files
+
+The routed panel and both extracted boards pass KiCad 10.0.6 DRC with
+**0 violations and 0 unconnected items**. The panel contains 664 track
+segments, 102 through vias and four filled ground pours.
+
+Generated files are under `output/hardware/workbench-s3-r01/stacked/`
+from the repository root. `workbench-s3-r01-gerbers.zip` contains only the
+panel's Gerber layers, job file and separate plated/non-plated drill files.
+The individual-board previews are not extra designs in that ZIP.
+
+Specify two-layer, 1.6 mm FR-4, 1 oz copper and tented vias. `Edge.Cuts`
+contains the outline, routed separation slots and antenna aperture;
+the NPTH file contains the mouse bites and other mechanical holes.
+There are 191 plated holes (including 102 vias) and 138 non-plated holes.
+No V-scoring is required. Paste layers are supplied but a stencil is
+optional for the intended soldering-iron assembly.
+
+Before ordering, measure the assumed 2.54 mm display header pitch and
+confirm the actual module/socket fit. Ask the fabricator to review the
+0.5 mm perforation drills, 0.8 mm hole pitch, tab strength and two-design
+panel policy. Firmware and the new stacked enclosure remain separate work.
 
 ## Firmware Status
 
@@ -365,6 +433,36 @@ not separate sources to edit. Generate the nominal stack study with:
 uv run --script scripts/hardware/preview_workbench_s3_stack.py \
   /tmp/workbench-s3-review/placement.json /tmp/workbench-s3-review
 ```
+
+For routed individual-board previews, use the routed master instead of the
+placement generator:
+
+```sh
+/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/3.9/bin/python3.9 \
+  scripts/hardware/route_workbench_s3.py upper \
+  hardware/workbench-s3-r01/workbench-s3-r01.kicad_pcb /tmp/upper.kicad_pcb
+
+/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/3.9/bin/python3.9 \
+  scripts/hardware/route_workbench_s3.py lower \
+  hardware/workbench-s3-r01/workbench-s3-r01.kicad_pcb /tmp/lower.kicad_pcb
+```
+
+`route_workbench_s3.py` also provides `prepare`, `import --session`, and
+`finish` stages for reproducing local Specctra routing from a fresh placement.
+Each stage preserves the matching `.kicad_pro` rules beside its output PCB
+and refuses to overwrite an existing board or project.
+`prepare` configures signal/power net classes, critical supply tracks and
+screw keepouts. Its DSN includes temporary board-edge guards because KiCad
+does not export copper-to-edge clearance. `finish` adds and refills the
+independent ground pours and stitching vias. Always run KiCad DRC on the
+result: the autorouter's completion report is not the final check.
+
+This revision used the local Freerouting 1.9.0 release with
+`-mp 50 -mt 1 -oit 0.2 -da`. The JAR SHA256 is
+`9084a4888937a7f31f857ecc12aa7a37407f51160e4d2892dff9c9bb47ae3102`.
+The exported DSN and resulting SES are retained in the ignored evidence
+directory's `routing/` subdirectory. Java requires an available AWT display
+for this version, even when routing is started from the command line.
 
 ## Sources
 

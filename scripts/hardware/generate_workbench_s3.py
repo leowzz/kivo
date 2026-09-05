@@ -13,8 +13,10 @@ import uuid
 import sexpdata as sx
 import yaml
 
+from layout_workbench_s3_schematic import UPPER_FILE, write_schematic_pages
+
 from generate_workbench import (
-    ROOT, PRODUCT, Symbols, child, children, effects, formatted_sexpr,
+    ROOT, PRODUCT, Symbols, child, children, effects,
     literal_model_constants, node, pins,
 )
 
@@ -101,10 +103,11 @@ def generate(library_root, output):
     for ref, supply, value, sch, pos in [
         ("C1", "+3V3", "10u 10V X7R", (80, 200), (77, 20)),
         ("C2", "+3V3", "100n 16V X7R", (130, 200), (82, 20)),
-        ("C3", "+3V3", "100n 16V X7R / U1", (175, 200), (89, 24)),
+        ("C3", "+3V3", "100n 16V X7R / U1", (175, 200), (90.5, 23.905)),
     ]:
         add(ref, "Device:C", value, {"1": supply, "2": "GND"}, sch, pos,
-            "Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder", section="upper")
+            "Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder", section="upper",
+            angle=180 if ref == "C3" else 0)
     for ref, signal, value, sch, pos, dnp in [
         ("R1", "GPIO13", "2.2k I2C PULLUP", (220, 200), (78, 28), False),
         ("R2", "GPIO14", "2.2k I2C PULLUP", (285, 200), (83, 28), False),
@@ -208,9 +211,10 @@ def generate(library_root, output):
         schematic.append(node("text", text, node("at", *position, 0), effects(1.27, "left"), node("uuid", uid(f"note{index}"))))
     schematic.append(node("embedded_fonts", sx.Symbol("no")))
     output.mkdir(parents=True, exist_ok=True)
-    (output / f"{NAME}.kicad_sch").write_text(formatted_sexpr(schematic) + "\n")
+    schematic_sheets = write_schematic_pages(schematic, parts, output)
     (output / "placement.json").write_text(json.dumps(dict(
         name=NAME, sheet_uuid=root_id, width=panel_size[0], height=panel_size[1],
+        schematic_sheets=schematic_sheets,
         boards=dict(upper=dict(size=upper_size, mounting_holes=[[4,4],[122,4],[4,94],[122,94]]),
                     lower=dict(size=lower_size, mounting_holes=[[4,4],[122,4],[4,82],[122,82]])),
         panel=dict(gap=[98,101], tab_centers=[20,63,106], tab_neck_width=5,
@@ -253,6 +257,6 @@ if __name__ == "__main__":
     parser.add_argument("--symbols", type=Path, default=Path("/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols"))
     parser.add_argument("--output", type=Path, default=ROOT / "hardware/workbench-s3-r01")
     args = parser.parse_args()
-    if (args.output / f"{NAME}.kicad_sch").exists():
+    if any((args.output / name).exists() for name in (f"{NAME}.kicad_sch", UPPER_FILE)):
         parser.error("Schematic exists; choose --output with a new directory to preserve manual edits.")
     generate(args.symbols, args.output)

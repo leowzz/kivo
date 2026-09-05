@@ -13,12 +13,9 @@ src-tauri/target/
 config.yaml
 # Track the Workbench designs while keeping other local hardware folders ignored.
 /hardware/*
+!/hardware/.gitignore
 !/hardware/workbench-r03/
 !/hardware/workbench-s3-r01/
-/hardware/workbench-s3-r01/*.kicad_prl
-/hardware/workbench-s3-r01/*.lck
-/hardware/workbench-s3-r01/*-backups/
-/hardware/workbench-s3-r01/_autosave-*
 .idea
 .superpowers
 refer/YD-ESP32-S3

@@ -1,6 +1,16 @@
 {
   "name": "workbench-s3-r01",
   "sheet_uuid": "e8d74b01-3c82-5ffb-bf15-55a57409f681",
+  "schematic_sheets": {
+    "lower": {
+      "path": "/e8d74b01-3c82-5ffb-bf15-55a57409f681",
+      "file": "workbench-s3-r01.kicad_sch"
+    },
+    "upper": {
+      "path": "/e8d74b01-3c82-5ffb-bf15-55a57409f681/85d36195-0c9b-5662-a76c-9d68639a5d04",
+      "file": "workbench-s3-r01-upper.kicad_sch"
+    }
+  },
   "width": 126,
   "height": 187,
   "boards": {
@@ -622,16 +632,16 @@
         200
       ],
       "pcb": [
-        89,
-        24
+        90.5,
+        23.905
       ],
       "local_pcb": [
-        89,
-        24
+        90.5,
+        23.905
       ],
       "section": "upper",
       "footprint": "Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder",
-      "angle": 0,
+      "angle": 180,
       "side": "F",
       "uuid": "3afdaf82-05a9-53de-9fb6-4d3fa3c9cf73",
       "mpn": "",

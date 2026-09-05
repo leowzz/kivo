@@ -97,8 +97,10 @@ def generate(manifest, output, libraries, view="panel"):
         footprint.SetReference(part["ref"])
         footprint.SetValue(part["value"])
         footprint.SetPosition(point(*part["local_pcb"], part["section"]))
-        footprint.SetPath(pcb.KIID_PATH(f"/{data['sheet_uuid']}/{part['uuid']}"))
-        footprint.SetSheetfile("workbench-s3-r01.kicad_sch")
+        sheet = data.get("schematic_sheets", {}).get(part["section"], {
+            "path": f"/{data['sheet_uuid']}", "file": "workbench-s3-r01.kicad_sch"})
+        footprint.SetPath(pcb.KIID_PATH(f"{sheet['path']}/{part['uuid']}"))
+        footprint.SetSheetfile(sheet["file"])
         board.Add(footprint)
         if part["side"] == "B":
             footprint.Flip(footprint.GetPosition(), False)

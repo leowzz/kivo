@@ -5,6 +5,7 @@ import copy
 import json
 import math
 from pathlib import Path
+import shutil
 
 import pcbnew as pcb
 import wx
@@ -108,7 +109,29 @@ def prepare(board, source, output):
     lower("/+3V3",[(49.5,25),(62.5,12),(71,12)],pcb.F_Cu,0.5)
     lower("/+3V3",[(12.54,3),(12.54,5),(19.54,12),(71,12)],pcb.F_Cu,0.5)
     pcb.SaveBoard(str(output), board)
+    # KiCad DSN omits edge clearance. A 0.3 mm router-only guard plus its
+    # 0.2 mm clearance enforces the project's 0.5 mm copper setback.
+    edge_guards = []
+    for bounds in [(0,0,126,0.3),(0,186.7,126,187),(0,0,0.3,187),(125.7,0,126,187)]:
+        zone = pcb.ZONE(board)
+        zone.SetIsRuleArea(True)
+        zone.SetLayerSet(pcb.LSET.AllCuMask(2))
+        zone.SetDoNotAllowTracks(True)
+        zone.SetDoNotAllowVias(True)
+        zone.SetDoNotAllowZoneFills(True)
+        zone.SetDoNotAllowPads(False)
+        zone.SetDoNotAllowFootprints(False)
+        polygon = zone.Outline()
+        polygon.NewOutline()
+        x1,y1,x2,y2 = bounds
+        for xy in [(x1,y1),(x2,y1),(x2,y2),(x1,y2)]:
+            p = point(*xy)
+            polygon.Append(p.x,p.y)
+        board.Add(zone)
+        edge_guards.append(zone)
     assert pcb.ExportSpecctraDSN(board, str(output.with_suffix(".dsn")))
+    for zone in edge_guards:
+        board.RemoveNative(zone)
 
 
 def finish(board):
@@ -135,7 +158,8 @@ def finish(board):
             board.Add(zone)
     for drawing in board.GetDrawings():
         if isinstance(drawing, pcb.PCB_TEXT):
-            drawing.SetText(drawing.GetText().replace("UNROUTED", "ROUTED"))
+            drawing.SetText(drawing.GetText().replace("UNROUTED", "ROUTED")
+                            .replace("NOT FOR FABRICATION", "FIT CHECK PENDING"))
     board.GetTitleBlock().SetTitle("Workbench S3 r01 - ROUTED BREAKAWAY PANEL")
     board.BuildConnectivity()
     filler = pcb.ZONE_FILLER(board)
@@ -147,27 +171,29 @@ def finish(board):
     for net, ys in [("/UP_GND",range(12,93,15)),("/GND",range(112,184,15))]:
         polygons = [copper[net.lstrip("/")+" / "+board.GetLayerName(layer)].GetFilledPolysList(layer)
                     for layer in (pcb.F_Cu,pcb.B_Cu)]
-        for x in range(8,124,15):
-            for y in ys:
-                center = point(x,y)
-                ring = [point(x+0.7*math.cos(i*math.pi/8),y+0.7*math.sin(i*math.pi/8)) for i in range(16)]
-                if not all(poly.Contains(p) for poly in polygons for p in [center]+ring):
-                    continue
-                if any(math.hypot(center.x-p.GetPosition().x,center.y-p.GetPosition().y)
-                       < max(p.GetDrillSize().x,p.GetDrillSize().y)/2+pcb.FromMM(0.45) for p in holes):
-                    continue
-                if any(isinstance(t,pcb.PCB_VIA) and math.hypot(center.x-t.GetPosition().x,
-                       center.y-t.GetPosition().y) < pcb.FromMM(2) for t in board.GetTracks()):
-                    continue
-                via = pcb.PCB_VIA(board)
-                via.SetPosition(center)
-                via.SetWidth(pcb.FromMM(0.6))
-                via.SetDrill(pcb.FromMM(0.3))
-                via.SetViaType(pcb.VIATYPE_THROUGH)
-                via.SetLayerPair(pcb.F_Cu,pcb.B_Cu)
-                via.SetNet(board.FindNet(net))
-                board.Add(via)
-                stitching += 1
+        # J9 has a small front ground pocket enclosed by the power/signal routes.
+        candidates = ([(81,9.5)] if net == "/UP_GND" else [])
+        candidates += [(x,y) for x in range(8,124,15) for y in ys]
+        for x,y in candidates:
+            center = point(x,y)
+            ring = [point(x+0.7*math.cos(i*math.pi/8),y+0.7*math.sin(i*math.pi/8)) for i in range(16)]
+            if not all(poly.Contains(p) for poly in polygons for p in [center]+ring):
+                continue
+            if any(math.hypot(center.x-p.GetPosition().x,center.y-p.GetPosition().y)
+                   < max(p.GetDrillSize().x,p.GetDrillSize().y)/2+pcb.FromMM(0.45) for p in holes):
+                continue
+            if any(isinstance(t,pcb.PCB_VIA) and math.hypot(center.x-t.GetPosition().x,
+                   center.y-t.GetPosition().y) < pcb.FromMM(2) for t in board.GetTracks()):
+                continue
+            via = pcb.PCB_VIA(board)
+            via.SetPosition(center)
+            via.SetWidth(pcb.FromMM(0.6))
+            via.SetDrill(pcb.FromMM(0.3))
+            via.SetViaType(pcb.VIATYPE_THROUGH)
+            via.SetLayerPair(pcb.F_Cu,pcb.B_Cu)
+            via.SetNet(board.FindNet(net))
+            board.Add(via)
+            stitching += 1
     board.BuildConnectivity()
     assert filler.Fill(board.Zones())
     print(f"Added {stitching} ground stitching vias")
@@ -178,16 +204,16 @@ def extract(board, view):
     for footprint in list(board.GetFootprints()):
         y = pcb.ToMM(footprint.GetPosition().y)-50
         if footprint.GetReference().startswith("MB") or (y < 99.5) != upper:
-            board.Remove(footprint)
+            board.RemoveNative(footprint)
     for item in list(board.GetTracks()):
         if item.GetNetname().startswith("/UP_") != upper:
-            board.Remove(item)
+            board.RemoveNative(item)
     for zone in list(board.Zones()):
         if zone.GetZoneName().startswith("BREAKAWAY") or (pcb.ToMM(zone.GetPosition().y)-50 < 99.5) != upper:
-            board.Remove(zone)
+            board.RemoveNative(zone)
     for item in list(board.GetDrawings()):
         if item.GetLayer() == pcb.Edge_Cuts or (pcb.ToMM(item.GetPosition().y)-50 < 99.5) != upper:
-            board.Remove(item)
+            board.RemoveNative(item)
     if not upper:
         for item in list(board.GetFootprints())+list(board.GetTracks())+list(board.Zones())+list(board.GetDrawings()):
             item.Rotate(pcb.VECTOR2I(pcb.FromMM(113),pcb.FromMM(143.5)),pcb.EDA_ANGLE(180,pcb.DEGREES_T))
@@ -217,8 +243,10 @@ def main():
     parser.add_argument("output",type=Path)
     parser.add_argument("--session",type=Path)
     args = parser.parse_args()
-    if args.output.exists():
-        parser.error("Output exists; choose a new filename")
+    if args.output.exists() or args.output.with_suffix(".kicad_pro").exists():
+        parser.error("Output board or project exists; choose a new filename")
+    if not args.source.with_suffix(".kicad_pro").exists():
+        parser.error("Source project is required to preserve routing and DRC rules")
     app = wx.App(False)
     wx.Log.SetActiveTarget(wx.LogStderr())
     board = pcb.LoadBoard(str(args.source))
@@ -232,6 +260,7 @@ def main():
         else:
             extract(board,args.mode)
         pcb.SaveBoard(str(args.output),board)
+        shutil.copy2(args.source.with_suffix(".kicad_pro"),args.output.with_suffix(".kicad_pro"))
     print(json.dumps(dict(output=str(args.output),tracks=len(board.GetTracks()),zones=len(board.Zones()))))
 
 

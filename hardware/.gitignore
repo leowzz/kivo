@@ -1,0 +1,43 @@
+# KiCad local state, recovery files, and caches.
+*-backups/
+*.kicad_prl
+*.lck
+*.bak
+*.bck
+*.kicad_*-bak
+~*
+_autosave-*
+_saved_*
+fp-info-cache
+
+# Generated fabrication and router exports. Keep KiCad sources and libraries.
+gerber/
+gerbers/
+fabrication/
+plots/
+*.gbr
+*.ger
+*.gbrjob
+*.gtl
+*.gbl
+*.gtp
+*.gbp
+*.gts
+*.gbs
+*.gto
+*.gbo
+*.gm[1-9]
+*.drl
+*.d356
+*.pos
+*.dsn
+*.ses
+
+# Manufacturing bundles and local archives.
+*.zip
+*.rar
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+*.tar.xz

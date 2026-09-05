@@ -2,11 +2,11 @@
   (version 20250114)
   (generator "eeschema")
   (uuid "e8d74b01-3c82-5ffb-bf15-55a57409f681")
-  (paper "A2")
+  (paper "A4")
   (title_block
-    (title "Kivo Workbench")
-    (rev "S3 r01 / SPLIT")
+    (title "Workbench S3 r01 / LOWER")
     (date "2026-09-05")
+    (rev "S3 r01")
   )
   (lib_symbols
     (symbol "Connector_Generic:Conn_01x02"
@@ -3661,16 +3661,80 @@
       (embedded_fonts no)
     )
   )
+  (text "LOWER BOARD / SOCKETED ESP32-S3"
+    (at 15.24 15.24 0)
+    (effects
+      (font
+        (size 2.03 2.03)
+      )
+      (justify left)
+    )
+    (uuid "d1b50ac8-e14f-5b12-b95d-c72d1bce6ac5")
+  )
+  (text "3.3 V IO  |  native core-board USB-C  |  4-wire cable to upper board"
+    (at 15.24 22.86 0)
+    (effects
+      (font
+        (size 1.27 1.27)
+      )
+      (justify left)
+    )
+    (uuid "97327a96-91df-5de0-a877-9bde504a43f5")
+  )
+  (rectangle
+    (start 12.7 30.48)
+    (end 172.72 120.65)
+    (stroke
+      (width 0.254)
+      (type default)
+    )
+    (fill
+      (type none)
+    )
+    (uuid "25771907-0030-561c-bf6c-7ae2e9ba7c12")
+  )
+  (text "YD CORE BOARD / 2 x 22 SOCKETS"
+    (at 16.509999999999998 35.56 0)
+    (effects
+      (font
+        (size 1.52 1.52)
+      )
+      (justify left)
+    )
+    (uuid "2fe1b578-8e9f-5a8a-b0af-06729efda4f0")
+  )
+  (rectangle
+    (start 177.8 30.48)
+    (end 284.48 120.65)
+    (stroke
+      (width 0.254)
+      (type default)
+    )
+    (fill
+      (type none)
+    )
+    (uuid "e48f4c85-56c3-5605-8d61-fa188b986f1b")
+  )
+  (text "EXPANSION / 22 SPARE GPIO"
+    (at 181.61 35.56 0)
+    (effects
+      (font
+        (size 1.52 1.52)
+      )
+      (justify left)
+    )
+    (uuid "7c2596a8-8f26-5336-ba8d-1af104aa0c93")
+  )
   (symbol
     (lib_id "Connector_Generic:Conn_01x22")
-    (at 104.14 104.14 0)
+    (at 76.2 78.74 0)
     (unit 1)
     (in_bom yes)
     (on_board yes)
     (dnp no)
     (uuid "59c3f6da-f9ea-5ecf-aed1-fa84a28dacbc")
     (property "Reference" "J1"
-      (at 104.14 64.74000000000001 0)
+      (at 76.2 46.99 0)
       (effects
         (font
           (size 1.0 1.0)
@@ -3678,15 +3742,16 @@
       )
     )
     (property "Value" "YD P1 / RIGHT SOCKET / 1x22"
-      (at 104.14 66.74000000000001 0)
+      (at 76.2 78.74 0)
       (effects
         (font
           (size 1.0 1.0)
         )
+        (hide yes)
       )
     )
     (property "Footprint" "Connector_PinSocket_2.54mm:PinSocket_1x22_P2.54mm_Vertical"
-      (at 104.14 68.74000000000001 0)
+      (at 76.2 78.74 0)
       (effects
         (font
           (size 1.0 1.0)
@@ -3703,427 +3768,25 @@
       )
     )
   )
-  (wire
-    (pts
-      (xy 99.06 78.74)
-      (xy 93.98 78.74)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "3668646e-8c04-5198-955e-a4e188ced77d")
-  )
-  (label "+3V3"
-    (at 93.98 78.74 0)
+  (text "P1 / right socket"
+    (at 76.2 49.53 0)
     (effects
       (font
-        (size 0.9 0.9)
+        (size 1.0 1.0)
       )
-      (justify right)
     )
-    (uuid "782caa27-8ff4-5144-a433-e3a12b729c08")
-  )
-  (wire
-    (pts
-      (xy 99.06 81.28)
-      (xy 93.98 81.28)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "f5be2f96-3332-5265-9c35-9e268ce62250")
-  )
-  (label "+3V3"
-    (at 93.98 81.28 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "ae2e0498-aa0c-510b-8d8e-131e07f00f30")
-  )
-  (wire
-    (pts
-      (xy 99.06 83.82)
-      (xy 93.98 83.82)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "f7bb65b5-3a84-5028-8cea-18e78202f62d")
-  )
-  (label "EN"
-    (at 93.98 83.82 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "853026a0-32d8-5c58-abb2-e8047ea27361")
-  )
-  (wire
-    (pts
-      (xy 99.06 86.36)
-      (xy 93.98 86.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "58ee1ed4-5ea4-5b7c-89f4-c65e7905f017")
-  )
-  (label "GPIO4"
-    (at 93.98 86.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "5beaec81-6c06-5320-b4f3-6ebe7bf90fa6")
-  )
-  (wire
-    (pts
-      (xy 99.06 88.9)
-      (xy 93.98 88.9)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "26468b8e-06fc-5d64-a649-0e128841152c")
-  )
-  (label "GPIO5"
-    (at 93.98 88.9 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "3e875d26-e40f-5a66-b9f5-2e2f69876f58")
-  )
-  (wire
-    (pts
-      (xy 99.06 91.44)
-      (xy 93.98 91.44)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "db78afbe-1f87-5052-95e3-da699571dc7a")
-  )
-  (label "GPIO6"
-    (at 93.98 91.44 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "e9e1c616-5360-5897-adb0-094c8d46f225")
-  )
-  (wire
-    (pts
-      (xy 99.06 93.98)
-      (xy 93.98 93.98)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "2171f8f3-6e1b-59f3-9e24-e49c754e5151")
-  )
-  (label "GPIO7"
-    (at 93.98 93.98 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "7ad1b11f-e95c-5d77-b95e-2750ac786226")
-  )
-  (wire
-    (pts
-      (xy 99.06 96.52)
-      (xy 93.98 96.52)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "c986d025-b650-5c15-a1e1-b61235c44ec0")
-  )
-  (label "GPIO15"
-    (at 93.98 96.52 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "38b6a5b7-122a-569f-ad45-5279f23dc70d")
-  )
-  (wire
-    (pts
-      (xy 99.06 99.06)
-      (xy 93.98 99.06)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "68086b73-a685-5e82-b467-f24519f91866")
-  )
-  (label "GPIO16"
-    (at 93.98 99.06 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "8d113b80-9306-5b1f-8db9-8cce7a2e8181")
-  )
-  (wire
-    (pts
-      (xy 99.06 101.6)
-      (xy 93.98 101.6)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "1e5624d8-b387-528a-8989-f92849512df5")
-  )
-  (label "GPIO17"
-    (at 93.98 101.6 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "4b935d81-e480-5f2f-a322-a45c9843e023")
-  )
-  (wire
-    (pts
-      (xy 99.06 104.14)
-      (xy 93.98 104.14)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "3d1fe03c-41a5-50a4-882d-1a37c3397e5a")
-  )
-  (label "GPIO18"
-    (at 93.98 104.14 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "563a5cf1-fcfd-5a35-b7a2-d70e8c890fb8")
-  )
-  (wire
-    (pts
-      (xy 99.06 106.68)
-      (xy 93.98 106.68)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "e197c4df-bff7-543f-8cf7-7c01780d886e")
-  )
-  (label "GPIO8"
-    (at 93.98 106.68 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "bb0289ec-1cba-530a-a1e7-d0ab0a54f151")
-  )
-  (no_connect
-    (at 99.06 109.22)
-    (uuid "b1b423bf-0cb4-5832-b7ae-da8a7d7cfadd")
-  )
-  (no_connect
-    (at 99.06 111.76)
-    (uuid "77080d05-3005-5621-bf3a-2790e4e42a6b")
-  )
-  (wire
-    (pts
-      (xy 99.06 114.3)
-      (xy 93.98 114.3)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "0b804e79-d6b3-59c4-9a82-dbb0b62de82f")
-  )
-  (label "GPIO9"
-    (at 93.98 114.3 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "6c30bb9c-3e9d-518e-bd03-00153eb3595c")
-  )
-  (wire
-    (pts
-      (xy 99.06 116.84)
-      (xy 93.98 116.84)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "b4d9a380-0c60-521d-bf6a-d53dd92a8d48")
-  )
-  (label "GPIO10"
-    (at 93.98 116.84 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "ccce8a0e-e7d1-5113-beda-42cd11d7a818")
-  )
-  (wire
-    (pts
-      (xy 99.06 119.38)
-      (xy 93.98 119.38)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "13746884-12c0-5759-b0cd-0f3d71591d7e")
-  )
-  (label "GPIO11"
-    (at 93.98 119.38 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "ce29b357-dc36-58dd-8564-2e40c205a6d8")
-  )
-  (wire
-    (pts
-      (xy 99.06 121.92)
-      (xy 93.98 121.92)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "c64fa168-384a-5492-a044-3c293f2daed6")
-  )
-  (label "GPIO12"
-    (at 93.98 121.92 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "30484745-1955-52be-972f-e28760adcedc")
-  )
-  (wire
-    (pts
-      (xy 99.06 124.46)
-      (xy 93.98 124.46)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "fca91fd5-3774-529d-92e2-655acf94d685")
-  )
-  (label "GPIO13"
-    (at 93.98 124.46 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "31a1b090-e959-5631-a36e-decf20a762e3")
-  )
-  (wire
-    (pts
-      (xy 99.06 127.0)
-      (xy 93.98 127.0)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "3aada487-0a5f-5181-ac04-c62151edd99a")
-  )
-  (label "GPIO14"
-    (at 93.98 127.0 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "283f1966-4113-5bdd-a666-47676f88fea7")
-  )
-  (no_connect
-    (at 99.06 129.54)
-    (uuid "a47102ef-3942-54ed-aaf3-83251d78cf85")
-  )
-  (wire
-    (pts
-      (xy 99.06 132.08)
-      (xy 93.98 132.08)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "f9a94bc0-b14e-543e-8985-735cb8c013fd")
-  )
-  (label "GND"
-    (at 93.98 132.08 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "316bd64e-5bcf-59ee-a5f6-7f8fa240fee0")
+    (uuid "ff6a380e-ad64-5ba2-bc54-3d5cbd684fa7")
   )
   (symbol
     (lib_id "Connector_Generic:Conn_01x22")
-    (at 215.9 104.14 0)
+    (at 147.32 78.74 0)
     (unit 1)
     (in_bom yes)
     (on_board yes)
     (dnp no)
     (uuid "685c7a5e-c806-569c-a45c-ddb4a8b47558")
     (property "Reference" "J7"
-      (at 215.9 64.74000000000001 0)
+      (at 147.32 46.99 0)
       (effects
         (font
           (size 1.0 1.0)
@@ -4131,15 +3794,16 @@
       )
     )
     (property "Value" "YD P2 / LEFT SOCKET / 1x22"
-      (at 215.9 66.74000000000001 0)
+      (at 147.32 78.74 0)
       (effects
         (font
           (size 1.0 1.0)
         )
+        (hide yes)
       )
     )
     (property "Footprint" "Connector_PinSocket_2.54mm:PinSocket_1x22_P2.54mm_Vertical"
-      (at 215.9 68.74000000000001 0)
+      (at 147.32 78.74 0)
       (effects
         (font
           (size 1.0 1.0)
@@ -4156,556 +3820,25 @@
       )
     )
   )
-  (wire
-    (pts
-      (xy 210.82 78.74)
-      (xy 205.74 78.74)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "324d4376-2192-57a2-9cc3-d80bdb4b278e")
-  )
-  (label "GND"
-    (at 205.74 78.74 0)
+  (text "P2 / left socket"
+    (at 147.32 49.53 0)
     (effects
       (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "6dffc049-6820-5e1f-9f99-117ecbaaf850")
-  )
-  (no_connect
-    (at 210.82 81.28)
-    (uuid "444d84b9-fd85-5d0c-ba07-3abd8cb9b21a")
-  )
-  (no_connect
-    (at 210.82 83.82)
-    (uuid "f299af6d-7509-5af9-9f6a-4168468e5723")
-  )
-  (wire
-    (pts
-      (xy 210.82 86.36)
-      (xy 205.74 86.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "afeca385-7374-5c50-bd7d-62a82f8eb90f")
-  )
-  (label "GPIO1"
-    (at 205.74 86.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "52df5270-b800-578c-b26e-7a75e81875db")
-  )
-  (wire
-    (pts
-      (xy 210.82 88.9)
-      (xy 205.74 88.9)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "4a1dc2a2-ed64-5c0d-85dd-b5649cefa274")
-  )
-  (label "GPIO2"
-    (at 205.74 88.9 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "3faec437-f4c4-59d7-be83-8cedb337256d")
-  )
-  (wire
-    (pts
-      (xy 210.82 91.44)
-      (xy 205.74 91.44)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "6b68aede-b361-52e6-a465-e11378c1994b")
-  )
-  (label "GPIO42"
-    (at 205.74 91.44 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "67638e22-683f-56e3-b794-22433726c4f1")
-  )
-  (wire
-    (pts
-      (xy 210.82 93.98)
-      (xy 205.74 93.98)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "2a558577-d3e5-595c-b644-ab99afc6e76e")
-  )
-  (label "GPIO41"
-    (at 205.74 93.98 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "85a86566-0eef-535b-a55d-a9469a18be99")
-  )
-  (wire
-    (pts
-      (xy 210.82 96.52)
-      (xy 205.74 96.52)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "9470382b-f9e3-5248-9e25-57705bb25d3d")
-  )
-  (label "GPIO40"
-    (at 205.74 96.52 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "0b580efd-19da-5a79-8313-51780ddf937a")
-  )
-  (wire
-    (pts
-      (xy 210.82 99.06)
-      (xy 205.74 99.06)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "24520f45-35da-5027-959e-0c6232b2a856")
-  )
-  (label "GPIO39"
-    (at 205.74 99.06 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "d4d0dcb3-990d-599d-9bef-b3061bf912dc")
-  )
-  (wire
-    (pts
-      (xy 210.82 101.6)
-      (xy 205.74 101.6)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "28c61570-3828-5d2f-b296-45ef61f48216")
-  )
-  (label "GPIO38"
-    (at 205.74 101.6 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "cb0953fa-f491-532c-aa7b-73bf62fd049a")
-  )
-  (no_connect
-    (at 210.82 104.14)
-    (uuid "6dd800f1-4d66-553c-bc71-a96bcafa4ad4")
-  )
-  (no_connect
-    (at 210.82 106.68)
-    (uuid "78b5c0ee-a7fd-506d-83d8-964e6d5f8c91")
-  )
-  (no_connect
-    (at 210.82 109.22)
-    (uuid "9816a796-430a-5857-8ecf-683781d4962c")
-  )
-  (wire
-    (pts
-      (xy 210.82 111.76)
-      (xy 205.74 111.76)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "bc3ac740-8164-5f3a-984e-ea0ed632e917")
-  )
-  (label "GPIO0"
-    (at 205.74 111.76 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "0cc3c973-04b8-5503-bbfe-4d6f881696c0")
-  )
-  (no_connect
-    (at 210.82 114.3)
-    (uuid "51d65c4e-95b9-5b5a-bd83-25d43ed47e7e")
-  )
-  (no_connect
-    (at 210.82 116.84)
-    (uuid "3f8475d0-0898-508c-8845-2bd65c661df3")
-  )
-  (wire
-    (pts
-      (xy 210.82 119.38)
-      (xy 205.74 119.38)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "8420a98b-8e74-54a2-9fde-35aa4b9a1553")
-  )
-  (label "GPIO47"
-    (at 205.74 119.38 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "65a16166-a8f2-5098-9df3-60941d7184a5")
-  )
-  (wire
-    (pts
-      (xy 210.82 121.92)
-      (xy 205.74 121.92)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "10516fcf-90eb-52d6-b3a6-bc371a8c0ccd")
-  )
-  (label "GPIO21"
-    (at 205.74 121.92 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "b70a4610-377a-5b39-9ab8-f857c84fd673")
-  )
-  (no_connect
-    (at 210.82 124.46)
-    (uuid "694a3e42-1e27-57c5-a732-39f7a47e68ad")
-  )
-  (no_connect
-    (at 210.82 127.0)
-    (uuid "d8b22f26-96ae-5468-8edf-723f30c4829b")
-  )
-  (wire
-    (pts
-      (xy 210.82 129.54)
-      (xy 205.74 129.54)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "c968cd7c-0ab5-564a-9b27-f033d4d0731b")
-  )
-  (label "GND"
-    (at 205.74 129.54 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "e42e311f-4505-53b8-ac28-a5a565cf642f")
-  )
-  (wire
-    (pts
-      (xy 210.82 132.08)
-      (xy 205.74 132.08)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "472b7589-5d88-5ece-91de-3b1b49f210da")
-  )
-  (label "GND"
-    (at 205.74 132.08 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "f4931bd1-10df-58f9-bbef-dc9cdf867426")
-  )
-  (symbol
-    (lib_id "Connector_Generic:Conn_01x09")
-    (at 330.2 93.98 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "85f0e2d0-f109-56ce-a518-ec56e44bb186")
-    (property "Reference" "J2"
-      (at 330.2 69.82000000000001 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
+        (size 1.0 1.0)
       )
     )
-    (property "Value" "DISPLAY / MODULE PIN 1 = 3V3"
-      (at 330.2 71.82000000000001 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x09_P2.54mm_Vertical"
-      (at 330.2 73.82000000000001 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "J2")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 325.12 83.82)
-      (xy 320.04 83.82)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "11061001-621e-5816-b177-39e43301b364")
-  )
-  (label "UP_3V3"
-    (at 320.04 83.82 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "70e6ec12-9580-51dc-9386-f9f37a51fef8")
-  )
-  (wire
-    (pts
-      (xy 325.12 86.36)
-      (xy 320.04 86.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "03a6b4d2-5e23-5d4c-92ff-32864363608b")
-  )
-  (label "UP_GND"
-    (at 320.04 86.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "a57779c4-9cf9-5ac3-9dea-e34a88e34923")
-  )
-  (wire
-    (pts
-      (xy 325.12 88.9)
-      (xy 320.04 88.9)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "ab6cf378-6c37-50a7-b608-64e011fc4776")
-  )
-  (label "UP_GPA4"
-    (at 320.04 88.9 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "acebd7f9-2865-55a5-abcd-5012133a2814")
-  )
-  (wire
-    (pts
-      (xy 325.12 91.44)
-      (xy 320.04 91.44)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "953a0820-15e5-51e3-bed0-15c9b5125af1")
-  )
-  (label "UP_GPA3"
-    (at 320.04 91.44 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "0b772eaf-5a6a-5bba-a176-40a5e793a7ae")
-  )
-  (wire
-    (pts
-      (xy 325.12 93.98)
-      (xy 320.04 93.98)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "c501fa98-e7e4-51bc-a5cc-5ef98a786736")
-  )
-  (label "UP_GPA2"
-    (at 320.04 93.98 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "f8fc682d-63b3-5b7a-910f-4a541d2db0b6")
-  )
-  (wire
-    (pts
-      (xy 325.12 96.52)
-      (xy 320.04 96.52)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "77051536-e527-581b-b884-87d98dcdac30")
-  )
-  (label "UP_GPA1"
-    (at 320.04 96.52 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "73120df3-c982-59d5-8a87-50170c16c0a1")
-  )
-  (wire
-    (pts
-      (xy 325.12 99.06)
-      (xy 320.04 99.06)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "4d8a0107-78db-5d3e-8b24-10b09bfde418")
-  )
-  (label "UP_GPIO14"
-    (at 320.04 99.06 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "10ac1623-02e1-51bd-9566-951b14ca65f3")
-  )
-  (wire
-    (pts
-      (xy 325.12 101.6)
-      (xy 320.04 101.6)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "217cdbbe-fc88-51ab-95ff-e7ebfc6f7449")
-  )
-  (label "UP_GPIO13"
-    (at 320.04 101.6 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "cf1b1d82-b501-58eb-a05c-a1056803f50d")
-  )
-  (wire
-    (pts
-      (xy 325.12 104.14)
-      (xy 320.04 104.14)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "1b5c809a-4169-5882-ab26-1c5e5e0347e4")
-  )
-  (label "UP_GPA0"
-    (at 320.04 104.14 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "f708e1cd-1881-52cf-b03d-9bd77845d0e7")
+    (uuid "9763d8e1-5e97-5590-9b7e-a74b7388f863")
   )
   (symbol
     (lib_id "Connector_Generic:Conn_01x24")
-    (at 439.42 93.98 0)
+    (at 251.46 78.74 0)
     (unit 1)
     (in_bom yes)
     (on_board yes)
     (dnp no)
     (uuid "e2402ef1-0c92-5277-b989-f5927ed684b2")
     (property "Reference" "J4"
-      (at 439.42 52.040000000000006 0)
+      (at 251.46 44.449999999999996 0)
       (effects
         (font
           (size 1.0 1.0)
@@ -4713,15 +3846,16 @@
       )
     )
     (property "Value" "EXPANSION / 22 SPARE GPIO / 3V3 IO"
-      (at 439.42 54.040000000000006 0)
+      (at 251.46 78.74 0)
       (effects
         (font
           (size 1.0 1.0)
         )
+        (hide yes)
       )
     )
     (property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x24_P2.54mm_Vertical"
-      (at 439.42 56.040000000000006 0)
+      (at 251.46 78.74 0)
       (effects
         (font
           (size 1.0 1.0)
@@ -4738,520 +3872,79 @@
       )
     )
   )
-  (wire
-    (pts
-      (xy 434.34 66.04)
-      (xy 429.26 66.04)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "bf349346-4718-5b62-9e20-cb0a97b87a9a")
-  )
-  (label "GND"
-    (at 429.26 66.04 0)
+  (text "1 x 24 / 2.54 mm"
+    (at 251.46 46.989999999999995 0)
     (effects
       (font
-        (size 0.9 0.9)
+        (size 1.0 1.0)
       )
-      (justify right)
     )
-    (uuid "a736d39c-31f9-5b45-8f3d-904675d8a88e")
+    (uuid "3a490238-4bd4-5ff2-b8e3-0c8d5d04d00c")
   )
-  (wire
-    (pts
-      (xy 434.34 68.58)
-      (xy 429.26 68.58)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "0d22bff3-82fe-544a-ab39-2779a9d480cb")
-  )
-  (label "+3V3"
-    (at 429.26 68.58 0)
+  (text "Pin 1 is at the antenna end. USB/PSRAM/strap pins marked NC stay unused."
+    (at 17.78 114.3 0)
     (effects
       (font
-        (size 0.9 0.9)
+        (size 1.0 1.0)
       )
-      (justify right)
+      (justify left)
     )
-    (uuid "4d844234-b2b8-5fe4-a3ed-3d695641dff5")
+    (uuid "226f5c4e-ad5b-5491-94c2-2a5da145f6c8")
   )
-  (wire
-    (pts
-      (xy 434.34 71.12)
-      (xy 429.26 71.12)
-    )
+  (rectangle
+    (start 12.7 125.73)
+    (end 172.72 170.18)
     (stroke
-      (width 0)
+      (width 0.254)
       (type default)
     )
-    (uuid "9904d271-ed6d-58a8-8a5f-9f81cd7b4042")
+    (fill
+      (type none)
+    )
+    (uuid "f462fa96-6b75-54e0-ab0b-6f07a2357e94")
   )
-  (label "GPIO1"
-    (at 429.26 71.12 0)
+  (text "EXTERNAL BOOT / RESET"
+    (at 16.509999999999998 130.81 0)
     (effects
       (font
-        (size 0.9 0.9)
+        (size 1.52 1.52)
       )
-      (justify right)
+      (justify left)
     )
-    (uuid "78491c34-d39c-5039-8eff-1b7d0215dbdb")
+    (uuid "f78614d4-524b-5b7a-8d17-864c43af7526")
   )
-  (wire
-    (pts
-      (xy 434.34 73.66)
-      (xy 429.26 73.66)
-    )
+  (rectangle
+    (start 177.8 125.73)
+    (end 284.48 163.83)
     (stroke
-      (width 0)
+      (width 0.254)
       (type default)
     )
-    (uuid "30abf85b-0907-5659-94de-f11782e3be45")
+    (fill
+      (type none)
+    )
+    (uuid "081c85e6-466f-5973-bed6-6fd8c17d27d6")
   )
-  (label "GPIO2"
-    (at 429.26 73.66 0)
+  (text "UPPER-BOARD CABLE"
+    (at 181.61 130.81 0)
     (effects
       (font
-        (size 0.9 0.9)
+        (size 1.52 1.52)
       )
-      (justify right)
+      (justify left)
     )
-    (uuid "e91b6ecb-9300-5c05-a818-47be1fdd87e9")
-  )
-  (wire
-    (pts
-      (xy 434.34 76.2)
-      (xy 429.26 76.2)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "cb5e5bd0-f902-5288-9edf-5c16ce690247")
-  )
-  (label "GPIO4"
-    (at 429.26 76.2 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "647beafd-96f3-5b70-befc-0443734f2607")
-  )
-  (wire
-    (pts
-      (xy 434.34 78.74)
-      (xy 429.26 78.74)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "df74b197-1884-5a13-b691-045ab997cc88")
-  )
-  (label "GPIO5"
-    (at 429.26 78.74 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "90ee7b64-6ec6-5a4e-a663-83e2fb0fcf57")
-  )
-  (wire
-    (pts
-      (xy 434.34 81.28)
-      (xy 429.26 81.28)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "83b7afd7-ea94-5653-a782-3339b6538f7f")
-  )
-  (label "GPIO6"
-    (at 429.26 81.28 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "3646676a-d7b7-5024-aaf8-cba9adcc433f")
-  )
-  (wire
-    (pts
-      (xy 434.34 83.82)
-      (xy 429.26 83.82)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "9184def4-8ce9-51d6-ac5a-ca6b5d66eef3")
-  )
-  (label "GPIO7"
-    (at 429.26 83.82 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "47938aeb-0b60-5698-9763-543d595dd232")
-  )
-  (wire
-    (pts
-      (xy 434.34 86.36)
-      (xy 429.26 86.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "0c134943-92f0-5623-b4a0-3745500abc92")
-  )
-  (label "GPIO8"
-    (at 429.26 86.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "ec2288f6-f0ab-57fb-97c2-48c454636dcd")
-  )
-  (wire
-    (pts
-      (xy 434.34 88.9)
-      (xy 429.26 88.9)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "e90cf742-9104-5f91-9961-e7f9b3944801")
-  )
-  (label "GPIO9"
-    (at 429.26 88.9 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "1f5a12d9-9c12-5c6f-97c8-18e66915b4cb")
-  )
-  (wire
-    (pts
-      (xy 434.34 91.44)
-      (xy 429.26 91.44)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "2e8e553b-92bb-5bc3-ac3e-1e493a2ce3c7")
-  )
-  (label "GPIO10"
-    (at 429.26 91.44 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "20e42678-cebf-5044-b97b-2ae8c4d45dff")
-  )
-  (wire
-    (pts
-      (xy 434.34 93.98)
-      (xy 429.26 93.98)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "fe1570ab-c5d5-58c0-8d92-ed853744b905")
-  )
-  (label "GPIO11"
-    (at 429.26 93.98 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "31a287a2-e921-5a07-93cb-c7927b55df58")
-  )
-  (wire
-    (pts
-      (xy 434.34 96.52)
-      (xy 429.26 96.52)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "e0b3743f-2bd8-50a0-8820-b676171d03de")
-  )
-  (label "GPIO12"
-    (at 429.26 96.52 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "5261b3f6-bad3-56cd-8794-3012e1ad77e9")
-  )
-  (wire
-    (pts
-      (xy 434.34 99.06)
-      (xy 429.26 99.06)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "781f8a54-529d-5140-9b2e-3851933113cc")
-  )
-  (label "GPIO15"
-    (at 429.26 99.06 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "78a12c2f-d87b-54a0-b54a-1d12fef86748")
-  )
-  (wire
-    (pts
-      (xy 434.34 101.6)
-      (xy 429.26 101.6)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "f4d0d6ab-419a-5493-a777-f034a303c2d5")
-  )
-  (label "GPIO16"
-    (at 429.26 101.6 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "7fadc888-fb00-59a0-988d-d50b385fd2e5")
-  )
-  (wire
-    (pts
-      (xy 434.34 104.14)
-      (xy 429.26 104.14)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "f27182bd-0e1f-5c9d-97be-1cd946612bb8")
-  )
-  (label "GPIO17"
-    (at 429.26 104.14 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "86b0a99d-8460-50bc-a67a-498a80a42c67")
-  )
-  (wire
-    (pts
-      (xy 434.34 106.68)
-      (xy 429.26 106.68)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "a316c17b-29a6-53e0-a0ba-638460270648")
-  )
-  (label "GPIO18"
-    (at 429.26 106.68 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "6f86ba20-35eb-529c-a4ec-e3e5a83248a0")
-  )
-  (wire
-    (pts
-      (xy 434.34 109.22)
-      (xy 429.26 109.22)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "158184eb-29fb-5f88-86bf-8f881f877d52")
-  )
-  (label "GPIO21"
-    (at 429.26 109.22 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "eb191622-f482-5f06-a670-c242f4f44b2f")
-  )
-  (wire
-    (pts
-      (xy 434.34 111.76)
-      (xy 429.26 111.76)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "a21df811-6afc-58ab-9802-9a76e26b40cf")
-  )
-  (label "GPIO38"
-    (at 429.26 111.76 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "9e1e8534-f21e-50ce-8b32-02f86efd628a")
-  )
-  (wire
-    (pts
-      (xy 434.34 114.3)
-      (xy 429.26 114.3)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "30135696-95de-59fd-9c3d-0f56ae94f3bf")
-  )
-  (label "GPIO39"
-    (at 429.26 114.3 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "f06d6014-1557-5f88-bb54-9f7af6df7349")
-  )
-  (wire
-    (pts
-      (xy 434.34 116.84)
-      (xy 429.26 116.84)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "17b35cba-31aa-5363-8095-4c589307dc11")
-  )
-  (label "GPIO40"
-    (at 429.26 116.84 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "f146f1d6-a5da-5d98-83d3-d7bf6ad5a4d6")
-  )
-  (wire
-    (pts
-      (xy 434.34 119.38)
-      (xy 429.26 119.38)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "93e7d3a8-f421-5c31-9ee4-0045dd85d85c")
-  )
-  (label "GPIO41"
-    (at 429.26 119.38 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "1d845cc5-b731-519a-a666-f407da4521c3")
-  )
-  (wire
-    (pts
-      (xy 434.34 121.92)
-      (xy 429.26 121.92)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "47f4d70b-3534-5b70-8baa-e580f5a83b63")
-  )
-  (label "GPIO42"
-    (at 429.26 121.92 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "bfd12224-a077-5be2-b32c-8770f6a3a912")
-  )
-  (wire
-    (pts
-      (xy 434.34 124.46)
-      (xy 429.26 124.46)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "77984809-ad8e-52c8-a35b-d4a647d45768")
-  )
-  (label "GPIO47"
-    (at 429.26 124.46 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "4351b637-5a24-5f6e-9081-51704d54424b")
+    (uuid "fd11e438-a130-5319-870e-ff3e95e58846")
   )
   (symbol
     (lib_id "Connector_Generic:Conn_01x02")
-    (at 299.72 160.02 0)
+    (at 86.36 149.86 0)
     (unit 1)
     (in_bom yes)
     (on_board yes)
     (dnp no)
     (uuid "ef8c6def-cb33-5d39-ab8e-1ad952a810f8")
     (property "Reference" "J5"
-      (at 299.72 146.02 0)
+      (at 86.36 139.7 0)
       (effects
         (font
           (size 1.0 1.0)
@@ -5259,15 +3952,16 @@
       )
     )
     (property "Value" "EXTERNAL BOOT / GPIO0 TO GND"
-      (at 299.72 148.02 0)
+      (at 86.36 149.86 0)
       (effects
         (font
           (size 1.0 1.0)
         )
+        (hide yes)
       )
     )
     (property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical"
-      (at 299.72 150.02 0)
+      (at 86.36 149.86 0)
       (effects
         (font
           (size 1.0 1.0)
@@ -5284,58 +3978,25 @@
       )
     )
   )
-  (wire
-    (pts
-      (xy 294.64 160.02)
-      (xy 289.56 160.02)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "88735a8b-16b5-5d99-9aff-b1cc08060ff6")
-  )
-  (label "GPIO0"
-    (at 289.56 160.02 0)
+  (text "BOOT"
+    (at 86.36 142.24 0)
     (effects
       (font
-        (size 0.9 0.9)
+        (size 1.0 1.0)
       )
-      (justify right)
     )
-    (uuid "30877c1f-1bd9-5456-bf96-b7b40cedecc0")
-  )
-  (wire
-    (pts
-      (xy 294.64 162.56)
-      (xy 289.56 162.56)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "61a10a69-9214-5ef1-998b-9ca33cdc09ce")
-  )
-  (label "GND"
-    (at 289.56 162.56 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "2ec3a68a-40fa-54ae-af5e-f941415498f1")
+    (uuid "0ba41bbd-d7a1-525f-bec6-fbf0439ee691")
   )
   (symbol
     (lib_id "Connector_Generic:Conn_01x02")
-    (at 429.26 160.02 0)
+    (at 152.4 149.86 0)
     (unit 1)
     (in_bom yes)
     (on_board yes)
     (dnp no)
     (uuid "3e75ad87-3cc6-54d4-8773-ca6f16d6d4ea")
     (property "Reference" "J6"
-      (at 429.26 146.02 0)
+      (at 152.4 139.7 0)
       (effects
         (font
           (size 1.0 1.0)
@@ -5343,15 +4004,16 @@
       )
     )
     (property "Value" "EXTERNAL RESET / EN TO GND"
-      (at 429.26 148.02 0)
+      (at 152.4 149.86 0)
       (effects
         (font
           (size 1.0 1.0)
         )
+        (hide yes)
       )
     )
     (property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical"
-      (at 429.26 150.02 0)
+      (at 152.4 149.86 0)
       (effects
         (font
           (size 1.0 1.0)
@@ -5368,478 +4030,25 @@
       )
     )
   )
-  (wire
-    (pts
-      (xy 424.18 160.02)
-      (xy 419.1 160.02)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "8fdc500b-d6a2-590d-af77-e5fcc5d49b43")
-  )
-  (label "EN"
-    (at 419.1 160.02 0)
+  (text "RESET"
+    (at 152.4 142.24 0)
     (effects
       (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "d9f7f880-e45c-5c88-ab92-3c2255f67976")
-  )
-  (wire
-    (pts
-      (xy 424.18 162.56)
-      (xy 419.1 162.56)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "0610d483-fce1-563c-a8d8-4f2e5e6724bb")
-  )
-  (label "GND"
-    (at 419.1 162.56 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "36e7d3db-9170-517e-9995-3bda915bfc62")
-  )
-  (symbol
-    (lib_id "Device:C")
-    (at 78.74 200.66 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "2ba1261c-74af-58a2-97ff-a63a48f233cc")
-    (property "Reference" "C1"
-      (at 78.74 182.85 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
+        (size 1.0 1.0)
       )
     )
-    (property "Value" "10u 10V X7R"
-      (at 78.74 184.85 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder"
-      (at 78.74 186.85 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "C1")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 78.74 196.85)
-      (xy 78.74 191.77)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "4ab4c04b-5a44-5a8a-8414-653142300b13")
-  )
-  (label "UP_3V3"
-    (at 78.74 191.77 90)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "d17cf4f9-3c34-566a-ba3f-f39028bbb1d6")
-  )
-  (wire
-    (pts
-      (xy 78.74 204.47)
-      (xy 78.74 209.55)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "5d88e716-b320-5af8-9b5e-c8e3a6675beb")
-  )
-  (label "UP_GND"
-    (at 78.74 209.55 90)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "9f776768-7b67-5729-a1b7-1359f131338b")
-  )
-  (symbol
-    (lib_id "Device:C")
-    (at 129.54 200.66 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "5feb28c5-c8f7-5223-833f-ae6e9665f812")
-    (property "Reference" "C2"
-      (at 129.54 182.85 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "100n 16V X7R"
-      (at 129.54 184.85 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder"
-      (at 129.54 186.85 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "C2")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 129.54 196.85)
-      (xy 129.54 191.77)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "9772fd92-2a28-5ac9-98ed-a7820370fe71")
-  )
-  (label "UP_3V3"
-    (at 129.54 191.77 90)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "b3e86aca-3ce5-5edf-b0d1-7e47d36a600d")
-  )
-  (wire
-    (pts
-      (xy 129.54 204.47)
-      (xy 129.54 209.55)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "63ea12f7-5580-56f5-aaea-8408167a3c52")
-  )
-  (label "UP_GND"
-    (at 129.54 209.55 90)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "e06b4e2c-d791-5e67-93e1-5b2454187044")
-  )
-  (symbol
-    (lib_id "Device:C")
-    (at 175.26 200.66 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "3afdaf82-05a9-53de-9fb6-4d3fa3c9cf73")
-    (property "Reference" "C3"
-      (at 175.26 182.85 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "100n 16V X7R / U1"
-      (at 175.26 184.85 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder"
-      (at 175.26 186.85 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "C3")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 175.26 196.85)
-      (xy 175.26 191.77)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "cd6aa3b9-5984-54da-bc66-6a65c54217dd")
-  )
-  (label "UP_3V3"
-    (at 175.26 191.77 90)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "b645aa36-cd59-5948-bae0-d4bef8a03d52")
-  )
-  (wire
-    (pts
-      (xy 175.26 204.47)
-      (xy 175.26 209.55)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "07e12788-420e-5658-98ef-0cbda07d9f29")
-  )
-  (label "UP_GND"
-    (at 175.26 209.55 90)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "652040c5-113f-59fd-b7aa-fb3f54bd64fa")
+    (uuid "fb353b76-32df-574d-b294-9caa80138c62")
   )
   (symbol
     (lib_id "Device:R")
-    (at 220.98 200.66 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "6c7b92a6-e5d0-5189-8100-b3fdb511435d")
-    (property "Reference" "R1"
-      (at 220.98 182.85 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "2.2k I2C PULLUP"
-      (at 220.98 184.85 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
-      (at 220.98 186.85 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "R1")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 220.98 196.85)
-      (xy 220.98 191.77)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "6b6d1566-7b28-5788-be8c-d8e6516068e0")
-  )
-  (label "UP_3V3"
-    (at 220.98 191.77 90)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "813e8d1c-b543-549b-93fb-663e3b34bf0f")
-  )
-  (wire
-    (pts
-      (xy 220.98 204.47)
-      (xy 220.98 209.55)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "7f8d2b48-8311-52fc-9c1f-1fb7a79903c4")
-  )
-  (label "UP_GPIO13"
-    (at 220.98 209.55 90)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "7bf9d80b-164a-5512-b969-d141984e50cd")
-  )
-  (symbol
-    (lib_id "Device:R")
-    (at 284.48 200.66 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "b5388ca7-7e1a-505b-9e6f-c5846f3c5f66")
-    (property "Reference" "R2"
-      (at 284.48 182.85 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "2.2k I2C PULLUP"
-      (at 284.48 184.85 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
-      (at 284.48 186.85 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "R2")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 284.48 196.85)
-      (xy 284.48 191.77)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "8e3cde28-56c6-5296-97d4-f74b355451dd")
-  )
-  (label "UP_3V3"
-    (at 284.48 191.77 90)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "a0439dac-082e-5796-8abd-b3cf67c997d2")
-  )
-  (wire
-    (pts
-      (xy 284.48 204.47)
-      (xy 284.48 209.55)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "4ff20fe9-1548-5367-9a28-782a207864a1")
-  )
-  (label "UP_GPIO14"
-    (at 284.48 209.55 90)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "04bd9668-2d70-5c93-b8e4-d9ff04039792")
-  )
-  (symbol
-    (lib_id "Device:R")
-    (at 381.0 200.66 0)
+    (at 50.8 142.24 0)
     (unit 1)
     (in_bom yes)
     (on_board yes)
     (dnp no)
     (uuid "14db245a-315d-58b8-b7d3-b85aef005c43")
     (property "Reference" "R3"
-      (at 381.0 182.85 0)
+      (at 43.18 139.7 0)
       (effects
         (font
           (size 1.0 1.0)
@@ -5847,15 +4056,16 @@
       )
     )
     (property "Value" "10k"
-      (at 381.0 184.85 0)
+      (at 50.8 142.24 0)
       (effects
         (font
           (size 1.0 1.0)
         )
+        (hide yes)
       )
     )
     (property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
-      (at 381.0 186.85 0)
+      (at 50.8 142.24 0)
       (effects
         (font
           (size 1.0 1.0)
@@ -5872,670 +4082,78 @@
       )
     )
   )
-  (wire
-    (pts
-      (xy 381.0 196.85)
-      (xy 381.0 191.77)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "ef9b0cbb-efbe-588d-bd4d-89715c6d7123")
-  )
-  (label "+3V3"
-    (at 381.0 191.77 90)
+  (text "10k"
+    (at 43.18 143.51 0)
     (effects
       (font
-        (size 0.9 0.9)
+        (size 1.0 1.0)
       )
-      (justify left)
     )
-    (uuid "031b2863-6cc2-58fb-ab5e-ca5dc3205ead")
+    (uuid "3f42bdf9-70e8-5fc8-a02b-eeab3fe17c58")
   )
   (wire
     (pts
-      (xy 381.0 204.47)
-      (xy 381.0 209.55)
+      (xy 50.8 146.05)
+      (xy 50.8 149.86)
     )
     (stroke
       (width 0)
       (type default)
     )
-    (uuid "4b7cdb19-9a3e-5d8a-91b6-40146cfab44f")
+    (uuid "c143e06b-0385-5353-bef8-f560d3a1f4dc")
+  )
+  (wire
+    (pts
+      (xy 50.8 149.86)
+      (xy 81.28 149.86)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "286573b4-4616-5d22-9a3d-73e62250eaaa")
   )
   (label "GPIO0"
-    (at 381.0 209.55 90)
+    (at 60.96 149.86 0)
     (effects
       (font
-        (size 0.9 0.9)
+        (size 1.0 1.0)
       )
       (justify left)
     )
-    (uuid "9c221a33-36c4-5b38-9871-4acf398e02ac")
-  )
-  (symbol
-    (lib_id "Device:R")
-    (at 340.36 200.66 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "f2a201eb-ab71-5b92-8529-2d3a6a1bb451")
-    (property "Reference" "R4"
-      (at 340.36 182.85 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "10k U1 RESET PULLUP"
-      (at 340.36 184.85 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
-      (at 340.36 186.85 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "R4")
-          (unit 1)
-        )
-      )
-    )
+    (uuid "21aa875d-21dc-537f-8c52-d7303f75a906")
   )
   (wire
     (pts
-      (xy 340.36 196.85)
-      (xy 340.36 191.77)
+      (xy 50.8 138.43)
+      (xy 50.8 135.89)
     )
     (stroke
       (width 0)
       (type default)
     )
-    (uuid "1ed50d9f-10e9-5fce-be1e-257c80c7afc2")
+    (uuid "a04266bc-0733-5d17-866c-7bc6f49e8bf0")
   )
-  (label "UP_3V3"
-    (at 340.36 191.77 90)
+  (label "+3V3"
+    (at 50.8 135.89 90)
     (effects
       (font
-        (size 0.9 0.9)
+        (size 1.0 1.0)
       )
       (justify left)
     )
-    (uuid "2c097fd5-e245-5dbb-9357-1926aac729ac")
-  )
-  (wire
-    (pts
-      (xy 340.36 204.47)
-      (xy 340.36 209.55)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "c329f95e-e05d-569c-89a0-00513b7f9204")
-  )
-  (label "UP_IO_RESET"
-    (at 340.36 209.55 90)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "9242dacc-a9b9-5da3-abd0-c8217634ce0b")
-  )
-  (symbol
-    (lib_id "Interface_Expansion:MCP23017x-x-SO")
-    (at 485.14 215.9 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "c8f27e84-7bf3-5ba1-990f-8b213198d49f")
-    (property "Reference" "U1"
-      (at 485.14 176.5 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "MCP23017-E/SO / 0x20"
-      (at 485.14 178.5 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Package_SO:SOIC-28W_7.5x17.9mm_P1.27mm"
-      (at 485.14 180.5 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "U1")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 497.84 218.44)
-      (xy 502.92 218.44)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "6f310ae8-374a-50c3-873a-2389edc21184")
-  )
-  (label "UP_GPB0"
-    (at 502.92 218.44 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "0844cf1f-914e-52c7-adb3-9e65af748590")
-  )
-  (wire
-    (pts
-      (xy 497.84 220.98)
-      (xy 502.92 220.98)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "2627f73e-a7f7-5c03-9b86-cc5119b8163a")
-  )
-  (label "UP_GPB1"
-    (at 502.92 220.98 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "7c198210-67c0-5ad0-a380-2a4ebcc2879c")
-  )
-  (wire
-    (pts
-      (xy 497.84 223.52)
-      (xy 502.92 223.52)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "b9f50fa9-c989-5294-be2f-d84ef6bf619b")
-  )
-  (label "UP_GPB2"
-    (at 502.92 223.52 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "416a9d9c-f0c5-56be-8932-07b0747cac1e")
-  )
-  (wire
-    (pts
-      (xy 497.84 226.06)
-      (xy 502.92 226.06)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "21c4ee82-574f-5439-90ed-66f147a7c90b")
-  )
-  (label "UP_GPB3"
-    (at 502.92 226.06 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "0588e201-39ef-5a81-b520-53aa34c66eb4")
-  )
-  (wire
-    (pts
-      (xy 497.84 228.6)
-      (xy 502.92 228.6)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "5fae83c1-5f23-5432-a875-0c79ec83e02a")
-  )
-  (label "UP_GPB4"
-    (at 502.92 228.6 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "55901fcb-77e8-57bc-9839-22fd5a60248a")
-  )
-  (wire
-    (pts
-      (xy 497.84 231.14)
-      (xy 502.92 231.14)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "fa17f0cb-8525-59b4-8adf-2f11e7543da2")
-  )
-  (label "UP_GPB5"
-    (at 502.92 231.14 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "df77c1ad-b307-57f7-b9cf-c98897dece2c")
-  )
-  (no_connect
-    (at 497.84 233.68)
-    (uuid "adab0c05-047c-5e5e-8f2b-d60250f65f0e")
-  )
-  (no_connect
-    (at 497.84 236.22)
-    (uuid "7f467945-2541-5632-a755-435b310d3c21")
-  )
-  (wire
-    (pts
-      (xy 485.14 190.5)
-      (xy 485.14 185.42)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "2f20af5d-90b3-5bb3-a87a-04387a99f48c")
-  )
-  (label "UP_3V3"
-    (at 485.14 185.42 90)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "3f7fb17b-c069-58bf-b6ad-42a150aeb814")
-  )
-  (wire
-    (pts
-      (xy 485.14 241.3)
-      (xy 485.14 246.38)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "3dd3dc3c-8eed-57ed-9ef2-c3363d34ce53")
-  )
-  (label "UP_GND"
-    (at 485.14 246.38 90)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "4890a819-50aa-5484-83d7-9daa5f046ac5")
-  )
-  (no_connect
-    (at 474.98 200.66)
-    (uuid "91ce8dc7-2f12-56f3-8df6-f117302cd197")
-  )
-  (wire
-    (pts
-      (xy 472.44 195.58)
-      (xy 467.36 195.58)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "d93641db-994c-5b57-b1bf-36ef15773c90")
-  )
-  (label "UP_GPIO14"
-    (at 467.36 195.58 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "e0a7e2e2-6ae6-5ed0-952e-69470a35c75e")
-  )
-  (wire
-    (pts
-      (xy 472.44 198.12)
-      (xy 467.36 198.12)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "d7dfbde5-a94a-567e-b56c-e0c5824368fe")
-  )
-  (label "UP_GPIO13"
-    (at 467.36 198.12 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "9fa8aef0-a851-544e-aa18-3231917a9fa4")
-  )
-  (no_connect
-    (at 474.98 203.2)
-    (uuid "a9bd249c-5e68-5d8f-97ad-29ede4ea1a9c")
-  )
-  (wire
-    (pts
-      (xy 472.44 231.14)
-      (xy 467.36 231.14)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "cb192c81-98bd-5317-b43d-a6c010cb2b6c")
-  )
-  (label "UP_GND"
-    (at 467.36 231.14 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "78ab7a6a-75ee-5eb7-aef3-56d58026f579")
-  )
-  (wire
-    (pts
-      (xy 472.44 233.68)
-      (xy 467.36 233.68)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "0bb3ab86-4976-5a34-b68c-5593af4e246a")
-  )
-  (label "UP_GND"
-    (at 467.36 233.68 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "4e6bac1f-d034-5f8f-b30e-f1bd9a49af69")
-  )
-  (wire
-    (pts
-      (xy 472.44 236.22)
-      (xy 467.36 236.22)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "4302b3e7-f982-5d86-a862-1c5599b6332b")
-  )
-  (label "UP_GND"
-    (at 467.36 236.22 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "38df3b31-f613-5c9a-ac49-094625eee42c")
-  )
-  (wire
-    (pts
-      (xy 472.44 218.44)
-      (xy 467.36 218.44)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "b35a7e01-311e-55b4-877c-28d9f4bdc401")
-  )
-  (label "UP_IO_RESET"
-    (at 467.36 218.44 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "fa61b982-6ec6-5d1e-92d6-88c22e6f6fb6")
-  )
-  (no_connect
-    (at 472.44 213.36)
-    (uuid "19919463-1b7f-52f7-8cd1-f756d8c663bc")
-  )
-  (no_connect
-    (at 472.44 210.82)
-    (uuid "137396a4-33d0-5072-8931-3abef6637cf7")
-  )
-  (wire
-    (pts
-      (xy 497.84 195.58)
-      (xy 502.92 195.58)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "12ee6d02-2796-5be2-9a8e-d3518a2c2516")
-  )
-  (label "UP_GPA0"
-    (at 502.92 195.58 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "c245d7bd-22fb-5234-a072-38648fd5560f")
-  )
-  (wire
-    (pts
-      (xy 497.84 198.12)
-      (xy 502.92 198.12)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "9d14cccd-7601-5a07-ac07-47a45609b247")
-  )
-  (label "UP_GPA1"
-    (at 502.92 198.12 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "957a48dc-7c6c-58b3-9884-c21c0e531f66")
-  )
-  (wire
-    (pts
-      (xy 497.84 200.66)
-      (xy 502.92 200.66)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "eac3cfcf-a77f-507a-9666-5830aec62cc6")
-  )
-  (label "UP_GPA2"
-    (at 502.92 200.66 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "9a2eef51-4cfc-5e80-aa29-a5644f483e01")
-  )
-  (wire
-    (pts
-      (xy 497.84 203.2)
-      (xy 502.92 203.2)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "96f13f06-f539-542e-bddf-785b67cf6939")
-  )
-  (label "UP_GPA3"
-    (at 502.92 203.2 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "5b330cb0-4e2c-5884-b42c-025362e2ebc1")
-  )
-  (wire
-    (pts
-      (xy 497.84 205.74)
-      (xy 502.92 205.74)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "fa0eb07a-c640-5bfb-83d7-70ddfe850f58")
-  )
-  (label "UP_GPA4"
-    (at 502.92 205.74 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "c107a163-ab5e-54ce-8112-6840f0824f54")
-  )
-  (wire
-    (pts
-      (xy 497.84 208.28)
-      (xy 502.92 208.28)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "a75842a9-e8f4-544b-8d4d-2f911e488d4a")
-  )
-  (label "UP_GPA5"
-    (at 502.92 208.28 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "2f8fb632-d852-545a-9d77-d6c4a04ed013")
-  )
-  (wire
-    (pts
-      (xy 497.84 210.82)
-      (xy 502.92 210.82)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "d2afc38a-83e9-55ab-baed-24165fd73ecb")
-  )
-  (label "UP_GPA6"
-    (at 502.92 210.82 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "a3b1bd6c-c8d6-5535-9111-8d1e9e293f9f")
-  )
-  (wire
-    (pts
-      (xy 497.84 213.36)
-      (xy 502.92 213.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "da5353b3-4ca2-573c-92f7-a53edbf63bc0")
-  )
-  (label "UP_GPA7"
-    (at 502.92 213.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "fe7857b7-3b6f-5f05-ab33-9383e61d3152")
+    (uuid "ce539d78-c2b3-57fd-bd58-b8719ad4aeec")
   )
   (symbol
     (lib_id "Connector_Generic:Conn_01x04")
-    (at 114.3 160.02 0)
+    (at 218.44 148.59 0)
     (unit 1)
     (in_bom yes)
     (on_board yes)
     (dnp no)
     (uuid "4edd9100-2a92-5ddb-b8b2-84be3ec341df")
     (property "Reference" "J8"
-      (at 114.3 143.48000000000002 0)
+      (at 218.44 139.70000000000002 0)
       (effects
         (font
           (size 1.0 1.0)
@@ -6543,15 +4161,16 @@
       )
     )
     (property "Value" "LOWER / I2C4 TO J9 / 1:1"
-      (at 114.3 145.48000000000002 0)
+      (at 218.44 148.59 0)
       (effects
         (font
           (size 1.0 1.0)
         )
+        (hide yes)
       )
     )
     (property "Footprint" "Connector_JST:JST_XH_B4B-XH-A_1x04_P2.50mm_Vertical"
-      (at 114.3 147.48000000000002 0)
+      (at 218.44 148.59 0)
       (effects
         (font
           (size 1.0 1.0)
@@ -6568,3249 +4187,84 @@
       )
     )
   )
-  (wire
-    (pts
-      (xy 109.22 157.48)
-      (xy 104.14 157.48)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "d52a587c-4414-58ef-9f1b-13824e743b08")
-  )
-  (label "GND"
-    (at 104.14 157.48 0)
+  (text "JST XH / 4 pins"
+    (at 218.44 142.24 0)
     (effects
       (font
-        (size 0.9 0.9)
+        (size 1.0 1.0)
       )
-      (justify right)
     )
-    (uuid "aec61833-53c6-5f77-be85-32da776ad806")
+    (uuid "1bc9625f-966e-563d-9c36-82b52697a380")
   )
-  (wire
-    (pts
-      (xy 109.22 160.02)
-      (xy 104.14 160.02)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "f2550080-509d-5eeb-9d48-4ee3644cb7b7")
-  )
-  (label "+3V3"
-    (at 104.14 160.02 0)
+  (text "1 GND"
+    (at 229.87 146.05 0)
     (effects
       (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "524a3330-a0c4-53d9-b00a-0e8ef033a43a")
-  )
-  (wire
-    (pts
-      (xy 109.22 162.56)
-      (xy 104.14 162.56)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "afcacfb2-8ebd-556b-8b07-bf2fe1da8ef9")
-  )
-  (label "GPIO13"
-    (at 104.14 162.56 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "c8fc609e-327b-5a08-89c2-022a1e5f0896")
-  )
-  (wire
-    (pts
-      (xy 109.22 165.1)
-      (xy 104.14 165.1)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "3a62681d-2cd1-5495-8754-c40ac0be0e37")
-  )
-  (label "GPIO14"
-    (at 104.14 165.1 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "a1259b40-1dc6-5be4-b7b2-3ef819a5f9e5")
-  )
-  (symbol
-    (lib_id "Connector_Generic:Conn_01x04")
-    (at 515.62 160.02 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "ceb52f79-f859-548d-ba62-578c61fae309")
-    (property "Reference" "J9"
-      (at 515.62 143.48000000000002 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "UPPER / I2C4 TO J8 / 1:1"
-      (at 515.62 145.48000000000002 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Connector_JST:JST_XH_B4B-XH-A_1x04_P2.50mm_Vertical"
-      (at 515.62 147.48000000000002 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "J9")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 510.54 157.48)
-      (xy 505.46 157.48)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "486c0a6a-1e3b-5c06-a0a6-36f057ec44e4")
-  )
-  (label "UP_GND"
-    (at 505.46 157.48 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "e7b37cb9-c685-5511-ad8c-e3805d2672dd")
-  )
-  (wire
-    (pts
-      (xy 510.54 160.02)
-      (xy 505.46 160.02)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "5bec13ca-1c15-59c1-9f63-3fd6b35b5721")
-  )
-  (label "UP_3V3"
-    (at 505.46 160.02 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "ff099d67-7460-5e26-9880-7756ebf9e10a")
-  )
-  (wire
-    (pts
-      (xy 510.54 162.56)
-      (xy 505.46 162.56)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "5dab47a7-61eb-561a-9ba4-c7d50a2d32f7")
-  )
-  (label "UP_GPIO13"
-    (at 505.46 162.56 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "e4be6723-527e-5146-8eb6-0962fc6a9463")
-  )
-  (wire
-    (pts
-      (xy 510.54 165.1)
-      (xy 505.46 165.1)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "e996c731-f88f-5df8-b7e9-cdc19a9b05de")
-  )
-  (label "UP_GPIO14"
-    (at 505.46 165.1 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "ae1ca0d4-42e2-5216-8f2c-93e9c55cc53a")
-  )
-  (symbol
-    (lib_id "Switch:SW_Push")
-    (at 55.88 269.24 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "8eb62b91-b952-5a58-9c61-369141b179f2")
-    (property "Reference" "SW1"
-      (at 55.88 255.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "KEY_1 MX HOTSWAP"
-      (at 55.88 257.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Workbench:keyswitch_cherrymx_hotswap_1u"
-      (at 55.88 259.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "SW1")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 50.8 269.24)
-      (xy 45.72 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "d1b0aa1e-db19-5924-8ff6-7040b01d06a4")
-  )
-  (label "UP_GPB0"
-    (at 45.72 269.24 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "bb5d21ac-af63-5d75-a8f5-057a51f975a6")
-  )
-  (wire
-    (pts
-      (xy 60.96 269.24)
-      (xy 66.04 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "703040e2-540b-5432-aeb8-73595fade991")
-  )
-  (label "UP_KEY_1_A"
-    (at 66.04 269.24 0)
-    (effects
-      (font
-        (size 0.9 0.9)
+        (size 1.0 1.0)
       )
       (justify left)
     )
-    (uuid "dfa95011-7dad-51eb-94c7-6346f90c75dc")
+    (uuid "d5d82ddf-bd21-5dc5-8e78-1c0c1b8531e9")
   )
-  (symbol
-    (lib_id "Device:D")
-    (at 88.9 269.24 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "0a83ff2c-b178-52a5-b642-0b9233c543fd")
-    (property "Reference" "D1"
-      (at 88.9 255.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "1N4148W / K TO ROW"
-      (at 88.9 257.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Diode_SMD:D_SOD-123"
-      (at 88.9 259.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "D1")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 85.09 269.24)
-      (xy 80.01 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "f4fb2427-48f0-504b-8496-a3c90876bb78")
-  )
-  (label "UP_GPA5"
-    (at 80.01 269.24 0)
+  (text "2 3V3"
+    (at 229.87 148.59 0)
     (effects
       (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "838c1ad4-843d-536c-aa01-777a28417161")
-  )
-  (wire
-    (pts
-      (xy 92.71 269.24)
-      (xy 97.79 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "6554e93b-8485-53e4-bdd3-cb4746cb75c5")
-  )
-  (label "UP_KEY_1_A"
-    (at 97.79 269.24 0)
-    (effects
-      (font
-        (size 0.9 0.9)
+        (size 1.0 1.0)
       )
       (justify left)
     )
-    (uuid "eee9c2f0-4577-5490-a2d5-fd1ebdae59a9")
+    (uuid "1d486a4a-a7f0-5dd4-a4d5-eae2459ef7f2")
   )
-  (symbol
-    (lib_id "Switch:SW_Push")
-    (at 144.78 269.24 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "f64b8d0a-c36b-5826-8870-58015369f8dd")
-    (property "Reference" "SW2"
-      (at 144.78 255.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "KEY_2 MX HOTSWAP"
-      (at 144.78 257.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Workbench:keyswitch_cherrymx_hotswap_1u"
-      (at 144.78 259.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "SW2")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 139.7 269.24)
-      (xy 134.62 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "fb8afd8e-ddfc-5190-b4ee-b367b83298f4")
-  )
-  (label "UP_GPB1"
-    (at 134.62 269.24 0)
+  (text "3 SDA / GPIO13"
+    (at 229.87 151.13000000000002 0)
     (effects
       (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "522f413b-2c7c-574b-9c1f-9dc9ccaee9b1")
-  )
-  (wire
-    (pts
-      (xy 149.86 269.24)
-      (xy 154.94 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "0dbe1e80-db1e-595f-811d-ff66cb9163b6")
-  )
-  (label "UP_KEY_2_A"
-    (at 154.94 269.24 0)
-    (effects
-      (font
-        (size 0.9 0.9)
+        (size 1.0 1.0)
       )
       (justify left)
     )
-    (uuid "6023455a-cf2c-5dc2-ad4e-504cfeec07b3")
+    (uuid "3e8e19fb-1dcd-5435-92b9-4110e03d88e4")
   )
-  (symbol
-    (lib_id "Device:D")
-    (at 180.34 269.24 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "e6b8742c-a156-57b9-a3bb-e76e401d2da5")
-    (property "Reference" "D2"
-      (at 180.34 255.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "1N4148W / K TO ROW"
-      (at 180.34 257.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Diode_SMD:D_SOD-123"
-      (at 180.34 259.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "D2")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 176.53 269.24)
-      (xy 171.45 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "447cff3d-3560-57a6-95b9-f91e5f70789e")
-  )
-  (label "UP_GPA5"
-    (at 171.45 269.24 0)
+  (text "4 SCL / GPIO14"
+    (at 229.87 153.67000000000002 0)
     (effects
       (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "3fa3f257-23bc-5f10-987b-e4d6d8294bf4")
-  )
-  (wire
-    (pts
-      (xy 184.15 269.24)
-      (xy 189.23 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "f7ae89ab-e43b-5c37-9cf4-c209ae097076")
-  )
-  (label "UP_KEY_2_A"
-    (at 189.23 269.24 0)
-    (effects
-      (font
-        (size 0.9 0.9)
+        (size 1.0 1.0)
       )
       (justify left)
     )
-    (uuid "c4b3346c-06bc-5c33-8d5e-ac7e9ea21266")
+    (uuid "9c9b1d4f-9a6d-5598-9f42-8cba69bdb671")
   )
-  (symbol
-    (lib_id "Switch:SW_Push")
-    (at 236.22 269.24 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "7594520f-8254-59a7-b128-f477c53a9801")
-    (property "Reference" "SW3"
-      (at 236.22 255.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "KEY_3 MX HOTSWAP"
-      (at 236.22 257.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Workbench:keyswitch_cherrymx_hotswap_1u"
-      (at 236.22 259.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "SW3")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 231.14 269.24)
-      (xy 226.06 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "c52e1d2d-0259-56ab-80c2-f58dbce12a79")
-  )
-  (label "UP_GPB2"
-    (at 226.06 269.24 0)
+  (text "Normally-open buttons to GND; EN bias is on the core board."
+    (at 17.78 165.1 0)
     (effects
       (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "38a337c3-4dce-52b4-a61e-516e0138ac40")
-  )
-  (wire
-    (pts
-      (xy 241.3 269.24)
-      (xy 246.38 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "a3b0f036-4f7a-50b5-b6b7-637f38de8f4a")
-  )
-  (label "UP_KEY_3_A"
-    (at 246.38 269.24 0)
-    (effects
-      (font
-        (size 0.9 0.9)
+        (size 1.0 1.0)
       )
       (justify left)
     )
-    (uuid "9f1087f2-c77b-5e44-b93b-6e3c2940be2a")
+    (uuid "f01df93d-2e92-5cde-8163-4ba9d5ac2f48")
   )
-  (symbol
-    (lib_id "Device:D")
-    (at 269.24 269.24 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "1d24a5c8-118e-599e-a1d1-948c2fd10709")
-    (property "Reference" "D3"
-      (at 269.24 255.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "1N4148W / K TO ROW"
-      (at 269.24 257.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Diode_SMD:D_SOD-123"
-      (at 269.24 259.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "D3")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 265.43 269.24)
-      (xy 260.35 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "5d250090-a57e-5abf-8884-7c69e983454c")
-  )
-  (label "UP_GPA5"
-    (at 260.35 269.24 0)
+  (text "J8 pins 1-4 -> J9 pins 1-4 (1:1)"
+    (at 182.88 160.02 0)
     (effects
       (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "7a21e0f2-6b1c-52ee-9d3f-bfbce5625455")
-  )
-  (wire
-    (pts
-      (xy 273.05 269.24)
-      (xy 278.13 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "876cecd5-904a-5c6b-a818-70a25e535937")
-  )
-  (label "UP_KEY_3_A"
-    (at 278.13 269.24 0)
-    (effects
-      (font
-        (size 0.9 0.9)
+        (size 1.0 1.0)
       )
       (justify left)
     )
-    (uuid "38b3a6f0-1b97-5e0b-89e2-19ee06ef220b")
-  )
-  (symbol
-    (lib_id "Switch:SW_Push")
-    (at 325.12 269.24 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "9d62149b-b584-5cd2-9f72-5fc9a8b51bae")
-    (property "Reference" "SW4"
-      (at 325.12 255.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "KEY_4 MX HOTSWAP"
-      (at 325.12 257.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Workbench:keyswitch_cherrymx_hotswap_1u"
-      (at 325.12 259.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "SW4")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 320.04 269.24)
-      (xy 314.96 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "6b075996-e686-5524-991d-947cbb67f790")
-  )
-  (label "UP_GPB3"
-    (at 314.96 269.24 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "cc230c6a-db85-5891-b427-0428a4b8c9a9")
-  )
-  (wire
-    (pts
-      (xy 330.2 269.24)
-      (xy 335.28 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "a984ec6e-bdbe-55e1-a768-dd144ba805c2")
-  )
-  (label "UP_KEY_4_A"
-    (at 335.28 269.24 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "ffeeb558-c12e-5413-a5c8-776b34ed739b")
-  )
-  (symbol
-    (lib_id "Device:D")
-    (at 360.68 269.24 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "5e890763-39ea-578b-af46-57f6264ed3e8")
-    (property "Reference" "D4"
-      (at 360.68 255.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "1N4148W / K TO ROW"
-      (at 360.68 257.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Diode_SMD:D_SOD-123"
-      (at 360.68 259.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "D4")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 356.87 269.24)
-      (xy 351.79 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "55062ff4-f55b-5971-9f82-edd312d9f059")
-  )
-  (label "UP_GPA5"
-    (at 351.79 269.24 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "302e7413-c76e-5771-b1fe-1361d7103897")
-  )
-  (wire
-    (pts
-      (xy 364.49 269.24)
-      (xy 369.57 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "bcd32e36-f7c1-54be-8dc0-adabb8f84872")
-  )
-  (label "UP_KEY_4_A"
-    (at 369.57 269.24 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "2c39c76a-baa5-57df-8dbf-015106a0334d")
-  )
-  (symbol
-    (lib_id "Switch:SW_Push")
-    (at 414.02 269.24 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "431beb8c-f2cb-5d3e-86f6-9d1c16d2ea94")
-    (property "Reference" "SW5"
-      (at 414.02 255.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "KEY_5 MX HOTSWAP"
-      (at 414.02 257.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Workbench:keyswitch_cherrymx_hotswap_1u"
-      (at 414.02 259.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "SW5")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 408.94 269.24)
-      (xy 403.86 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "6b539d9e-8a27-57f3-ad1b-7e307384bba6")
-  )
-  (label "UP_GPB4"
-    (at 403.86 269.24 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "3f199a67-1246-559d-be50-e5bd461a25b1")
-  )
-  (wire
-    (pts
-      (xy 419.1 269.24)
-      (xy 424.18 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "1bc19189-8bca-5225-8125-62dcb51adc75")
-  )
-  (label "UP_KEY_5_A"
-    (at 424.18 269.24 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "29172c09-d8f4-5e10-a32a-4d30ae34512b")
-  )
-  (symbol
-    (lib_id "Device:D")
-    (at 449.58 269.24 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "65c44875-5c1f-5523-a02c-685a2d20d7ce")
-    (property "Reference" "D5"
-      (at 449.58 255.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "1N4148W / K TO ROW"
-      (at 449.58 257.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Diode_SMD:D_SOD-123"
-      (at 449.58 259.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "D5")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 445.77 269.24)
-      (xy 440.69 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "e0c10dbc-a1cc-5641-9ac3-6ca3d1c17f9f")
-  )
-  (label "UP_GPA5"
-    (at 440.69 269.24 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "7822c4a9-756e-5a9f-b8f0-42902245b4c5")
-  )
-  (wire
-    (pts
-      (xy 453.39 269.24)
-      (xy 458.47 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "e1dacbed-52dc-53b1-97e1-72a0b7094670")
-  )
-  (label "UP_KEY_5_A"
-    (at 458.47 269.24 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "6175f194-7cd1-5f2e-89fb-6b0eeaf342ed")
-  )
-  (symbol
-    (lib_id "Switch:SW_Push")
-    (at 505.46 269.24 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "4db95f27-e983-5e39-b95d-06e9ee11f5cc")
-    (property "Reference" "SW6"
-      (at 505.46 255.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "KEY_6 MX HOTSWAP"
-      (at 505.46 257.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Workbench:keyswitch_cherrymx_hotswap_1u"
-      (at 505.46 259.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "SW6")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 500.38 269.24)
-      (xy 495.3 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "cec7df65-521c-5940-929e-43f87c41159b")
-  )
-  (label "UP_GPB5"
-    (at 495.3 269.24 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "240832d2-cb38-51d9-9b33-fe72c9cb7d06")
-  )
-  (wire
-    (pts
-      (xy 510.54 269.24)
-      (xy 515.62 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "74893cfd-2660-589c-9c19-849794db043e")
-  )
-  (label "UP_KEY_6_A"
-    (at 515.62 269.24 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "61e11912-2911-5d31-aa79-3be5c2c3831a")
-  )
-  (symbol
-    (lib_id "Device:D")
-    (at 541.02 269.24 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "73059762-4ba4-58a2-a997-78c101fbc8fb")
-    (property "Reference" "D6"
-      (at 541.02 255.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "1N4148W / K TO ROW"
-      (at 541.02 257.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Diode_SMD:D_SOD-123"
-      (at 541.02 259.24 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "D6")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 537.21 269.24)
-      (xy 532.13 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "e7cd8ac2-2d95-5855-b617-54dcf871b626")
-  )
-  (label "UP_GPA5"
-    (at 532.13 269.24 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "ed4e1110-6fc4-5431-a013-1d49537b7b4f")
-  )
-  (wire
-    (pts
-      (xy 544.83 269.24)
-      (xy 549.91 269.24)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "75e6bca2-1b4f-5618-ab96-28f6e66951e8")
-  )
-  (label "UP_KEY_6_A"
-    (at 549.91 269.24 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "b0262a3e-9297-561b-8cc0-22cfb791bff0")
-  )
-  (symbol
-    (lib_id "Switch:SW_Push")
-    (at 55.88 304.8 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "20998021-0b27-5770-8ec6-5409f4d74b4b")
-    (property "Reference" "SW7"
-      (at 55.88 290.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "KEY_7 MX HOTSWAP"
-      (at 55.88 292.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Workbench:keyswitch_cherrymx_hotswap_1u"
-      (at 55.88 294.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "SW7")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 50.8 304.8)
-      (xy 45.72 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "ee1684b9-899c-597d-ac17-5105abf4d408")
-  )
-  (label "UP_GPB0"
-    (at 45.72 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "1bd38e6d-9dce-5086-bdbe-83a3708f72ae")
-  )
-  (wire
-    (pts
-      (xy 60.96 304.8)
-      (xy 66.04 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "863bb464-0fbd-53a2-9b51-63274d7baa77")
-  )
-  (label "UP_KEY_7_A"
-    (at 66.04 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "a3963102-fc87-510f-a7bd-5547f08e3173")
-  )
-  (symbol
-    (lib_id "Device:D")
-    (at 88.9 304.8 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "6c8fc05e-d44f-5356-ae82-72a24f0bd29f")
-    (property "Reference" "D7"
-      (at 88.9 290.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "1N4148W / K TO ROW"
-      (at 88.9 292.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Diode_SMD:D_SOD-123"
-      (at 88.9 294.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "D7")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 85.09 304.8)
-      (xy 80.01 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "7536bcec-9448-5c60-ae50-ab0c07535051")
-  )
-  (label "UP_GPA6"
-    (at 80.01 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "7324829c-a855-5a0a-ae5c-1d64a0da742d")
-  )
-  (wire
-    (pts
-      (xy 92.71 304.8)
-      (xy 97.79 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "884f5176-afb3-5b47-b8c4-c06692ce24ac")
-  )
-  (label "UP_KEY_7_A"
-    (at 97.79 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "58e838e8-665f-576f-8a91-145fae210e89")
-  )
-  (symbol
-    (lib_id "Switch:SW_Push")
-    (at 144.78 304.8 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "0d5040a1-a711-5595-9427-ddb1acf47be2")
-    (property "Reference" "SW8"
-      (at 144.78 290.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "KEY_8 MX HOTSWAP"
-      (at 144.78 292.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Workbench:keyswitch_cherrymx_hotswap_1u"
-      (at 144.78 294.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "SW8")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 139.7 304.8)
-      (xy 134.62 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "d391123f-7eac-56f1-8c9a-e5913cf65b6e")
-  )
-  (label "UP_GPB1"
-    (at 134.62 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "71ead145-4852-5088-9a52-bcc5201ff501")
-  )
-  (wire
-    (pts
-      (xy 149.86 304.8)
-      (xy 154.94 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "05362ddc-026e-5e82-abe0-49b5bcb2d6fb")
-  )
-  (label "UP_KEY_8_A"
-    (at 154.94 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "373a5f50-47f5-5215-a3fe-9608d857f33a")
-  )
-  (symbol
-    (lib_id "Device:D")
-    (at 180.34 304.8 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "04f3ad25-174b-579f-85ce-a78464218ff8")
-    (property "Reference" "D8"
-      (at 180.34 290.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "1N4148W / K TO ROW"
-      (at 180.34 292.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Diode_SMD:D_SOD-123"
-      (at 180.34 294.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "D8")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 176.53 304.8)
-      (xy 171.45 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "75decd04-f360-517f-951e-4be248df44e3")
-  )
-  (label "UP_GPA6"
-    (at 171.45 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "f7c2bdca-a1df-5206-9183-b7df5ed8291d")
-  )
-  (wire
-    (pts
-      (xy 184.15 304.8)
-      (xy 189.23 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "55991d50-4f01-5eaf-a4db-2dbf1acaffe4")
-  )
-  (label "UP_KEY_8_A"
-    (at 189.23 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "8430cf1e-7319-520e-9e2a-594f8c0fd8c5")
-  )
-  (symbol
-    (lib_id "Switch:SW_Push")
-    (at 236.22 304.8 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "909a8daf-d583-57fa-b009-0f110fa08d24")
-    (property "Reference" "SW9"
-      (at 236.22 290.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "KEY_9 MX HOTSWAP"
-      (at 236.22 292.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Workbench:keyswitch_cherrymx_hotswap_1u"
-      (at 236.22 294.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "SW9")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 231.14 304.8)
-      (xy 226.06 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "0749c4dc-cf0e-5940-9505-4fcdd142d50f")
-  )
-  (label "UP_GPB2"
-    (at 226.06 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "d9a98345-fb75-5dc3-a7ec-96c2ef2cc3db")
-  )
-  (wire
-    (pts
-      (xy 241.3 304.8)
-      (xy 246.38 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "7709c22e-4e36-5a80-bff6-7c43423d0b3b")
-  )
-  (label "UP_KEY_9_A"
-    (at 246.38 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "19e9d8dd-e54a-57b9-b1b7-2294a7d33f02")
-  )
-  (symbol
-    (lib_id "Device:D")
-    (at 269.24 304.8 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "44160bb9-0df8-521a-abe8-aa92b607a76d")
-    (property "Reference" "D9"
-      (at 269.24 290.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "1N4148W / K TO ROW"
-      (at 269.24 292.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Diode_SMD:D_SOD-123"
-      (at 269.24 294.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "D9")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 265.43 304.8)
-      (xy 260.35 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "0feb4885-5bce-563d-a4bc-41f85ce00f1d")
-  )
-  (label "UP_GPA6"
-    (at 260.35 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "59eb765b-1691-5198-996c-895fa5ad71bf")
-  )
-  (wire
-    (pts
-      (xy 273.05 304.8)
-      (xy 278.13 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "88e6f6c7-d7fe-5fee-bdb6-42d342798555")
-  )
-  (label "UP_KEY_9_A"
-    (at 278.13 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "eaf3d5f5-a9ec-5ff5-a130-f65aa294a903")
-  )
-  (symbol
-    (lib_id "Switch:SW_Push")
-    (at 325.12 304.8 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "c86b8217-dfe1-5b8d-af24-da63e9a027d0")
-    (property "Reference" "SW10"
-      (at 325.12 290.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "KEY_10 MX HOTSWAP"
-      (at 325.12 292.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Workbench:keyswitch_cherrymx_hotswap_1u"
-      (at 325.12 294.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "SW10")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 320.04 304.8)
-      (xy 314.96 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "d49a5004-2e57-52d4-8e68-d7a355566d34")
-  )
-  (label "UP_GPB3"
-    (at 314.96 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "fea51192-cdcd-5b12-bbac-39a93b10a61b")
-  )
-  (wire
-    (pts
-      (xy 330.2 304.8)
-      (xy 335.28 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "490734a1-ece8-57ef-b5c9-b5d10bad202b")
-  )
-  (label "UP_KEY_10_A"
-    (at 335.28 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "ba3807b8-3a56-507d-9422-c71fb413e0bd")
-  )
-  (symbol
-    (lib_id "Device:D")
-    (at 360.68 304.8 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "854f515f-37f9-5a19-afff-9ef87e92244f")
-    (property "Reference" "D10"
-      (at 360.68 290.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "1N4148W / K TO ROW"
-      (at 360.68 292.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Diode_SMD:D_SOD-123"
-      (at 360.68 294.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "D10")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 356.87 304.8)
-      (xy 351.79 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "2a914d28-67e2-57a8-ad45-c79da2147492")
-  )
-  (label "UP_GPA6"
-    (at 351.79 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "512a4601-1311-55d5-ab1a-189faca31e60")
-  )
-  (wire
-    (pts
-      (xy 364.49 304.8)
-      (xy 369.57 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "ce909452-2d4e-5ef1-b4cc-1dfacb321918")
-  )
-  (label "UP_KEY_10_A"
-    (at 369.57 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "19ed5222-4f12-5c59-b442-7ffcdedcab22")
-  )
-  (symbol
-    (lib_id "Switch:SW_Push")
-    (at 414.02 304.8 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "6b9f0b05-f790-5c6b-a381-d557fb97a947")
-    (property "Reference" "SW11"
-      (at 414.02 290.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "KEY_11 MX HOTSWAP"
-      (at 414.02 292.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Workbench:keyswitch_cherrymx_hotswap_1u"
-      (at 414.02 294.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "SW11")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 408.94 304.8)
-      (xy 403.86 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "0595f191-9545-55da-ae04-3f9d7647b69f")
-  )
-  (label "UP_GPB4"
-    (at 403.86 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "33833a48-a89a-53e3-afc6-abbcc1b2e51d")
-  )
-  (wire
-    (pts
-      (xy 419.1 304.8)
-      (xy 424.18 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "c8dc14a2-e0d3-5cc2-be23-649cc01f5f73")
-  )
-  (label "UP_KEY_11_A"
-    (at 424.18 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "de6c3e3d-1470-598b-8aee-a598e120b222")
-  )
-  (symbol
-    (lib_id "Device:D")
-    (at 449.58 304.8 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "8cbe30d4-6c28-55d1-872a-80389c67922d")
-    (property "Reference" "D11"
-      (at 449.58 290.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "1N4148W / K TO ROW"
-      (at 449.58 292.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Diode_SMD:D_SOD-123"
-      (at 449.58 294.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "D11")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 445.77 304.8)
-      (xy 440.69 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "2757b00b-4f3a-50ab-a335-bcf1782603c4")
-  )
-  (label "UP_GPA6"
-    (at 440.69 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "fd8bcc6b-abbe-5298-878c-8e95e595c26d")
-  )
-  (wire
-    (pts
-      (xy 453.39 304.8)
-      (xy 458.47 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "9690637b-0515-52e3-a1f9-f6c930177e51")
-  )
-  (label "UP_KEY_11_A"
-    (at 458.47 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "8d3506bd-d26d-57ea-be49-55b2c5510dd6")
-  )
-  (symbol
-    (lib_id "Switch:SW_Push")
-    (at 505.46 304.8 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "445fcf17-cdcd-5da4-909e-aebdd31c76b8")
-    (property "Reference" "SW12"
-      (at 505.46 290.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "KEY_12 MX HOTSWAP"
-      (at 505.46 292.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Workbench:keyswitch_cherrymx_hotswap_1u"
-      (at 505.46 294.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "SW12")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 500.38 304.8)
-      (xy 495.3 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "de3ebc79-35f3-56f8-a761-e09429f81245")
-  )
-  (label "UP_GPB5"
-    (at 495.3 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "2b7b558e-d982-544e-bd4b-9a93b675ada8")
-  )
-  (wire
-    (pts
-      (xy 510.54 304.8)
-      (xy 515.62 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "10574766-27e7-582e-8eae-17730bf65855")
-  )
-  (label "UP_KEY_12_A"
-    (at 515.62 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "058901e2-2be3-58b6-89c4-622f0fbd5b3e")
-  )
-  (symbol
-    (lib_id "Device:D")
-    (at 541.02 304.8 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "97514a4a-aec2-57b4-b7c8-32bc0792d21b")
-    (property "Reference" "D12"
-      (at 541.02 290.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "1N4148W / K TO ROW"
-      (at 541.02 292.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Diode_SMD:D_SOD-123"
-      (at 541.02 294.8 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "D12")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 537.21 304.8)
-      (xy 532.13 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "dc7efa1e-a03a-5d71-a836-8aa0a582b1ba")
-  )
-  (label "UP_GPA6"
-    (at 532.13 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "a15e6535-556c-51c0-b59f-8dc283f0d700")
-  )
-  (wire
-    (pts
-      (xy 544.83 304.8)
-      (xy 549.91 304.8)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "13fc0736-9038-581d-bd9d-533b245eec83")
-  )
-  (label "UP_KEY_12_A"
-    (at 549.91 304.8 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "5074810f-11a9-5672-ad0b-6e80a793ccc3")
-  )
-  (symbol
-    (lib_id "Switch:SW_Push")
-    (at 55.88 340.36 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "7b7827fc-b438-5c95-8198-d974ff73cfe7")
-    (property "Reference" "SW13"
-      (at 55.88 326.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "KEY_13 MX HOTSWAP"
-      (at 55.88 328.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Workbench:keyswitch_cherrymx_hotswap_1u"
-      (at 55.88 330.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "SW13")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 50.8 340.36)
-      (xy 45.72 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "41e0e2e1-75ae-5304-a547-90c06e3a9882")
-  )
-  (label "UP_GPB0"
-    (at 45.72 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "150e1180-645d-5e1d-be50-ccfcccbdc3db")
-  )
-  (wire
-    (pts
-      (xy 60.96 340.36)
-      (xy 66.04 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "8720cae8-bf13-502b-89f8-18ceb17c8fd3")
-  )
-  (label "UP_KEY_13_A"
-    (at 66.04 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "bd578297-31ed-5d93-b608-130130854025")
-  )
-  (symbol
-    (lib_id "Device:D")
-    (at 88.9 340.36 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "71fc2647-916f-5af4-8e64-c502a11284e7")
-    (property "Reference" "D13"
-      (at 88.9 326.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "1N4148W / K TO ROW"
-      (at 88.9 328.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Diode_SMD:D_SOD-123"
-      (at 88.9 330.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "D13")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 85.09 340.36)
-      (xy 80.01 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "1a4a444e-3268-5482-9157-7d4ba6109abb")
-  )
-  (label "UP_GPA7"
-    (at 80.01 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "d43ea0e2-27ae-5954-bf57-ee61bd0ac2c1")
-  )
-  (wire
-    (pts
-      (xy 92.71 340.36)
-      (xy 97.79 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "466f0d90-b154-506e-b7f7-91a1de3eb4a8")
-  )
-  (label "UP_KEY_13_A"
-    (at 97.79 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "8c1a6146-e50f-57a2-b4eb-c91fd6c5cb30")
-  )
-  (symbol
-    (lib_id "Switch:SW_Push")
-    (at 144.78 340.36 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "e3783950-a7d7-5d76-9fec-561ed3efc408")
-    (property "Reference" "SW14"
-      (at 144.78 326.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "KEY_14 MX HOTSWAP"
-      (at 144.78 328.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Workbench:keyswitch_cherrymx_hotswap_1u"
-      (at 144.78 330.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "SW14")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 139.7 340.36)
-      (xy 134.62 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "87b7d38a-6379-5596-82ef-4a7888853a67")
-  )
-  (label "UP_GPB1"
-    (at 134.62 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "a64a9f6e-d872-5426-9f69-80249695b324")
-  )
-  (wire
-    (pts
-      (xy 149.86 340.36)
-      (xy 154.94 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "4391725b-ff20-5265-a518-8e37959fa9c7")
-  )
-  (label "UP_KEY_14_A"
-    (at 154.94 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "5ed74539-01f4-5851-831d-2ae6f37fa18a")
-  )
-  (symbol
-    (lib_id "Device:D")
-    (at 180.34 340.36 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "089ff9e2-6416-565c-ae59-57dd0546d5b4")
-    (property "Reference" "D14"
-      (at 180.34 326.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "1N4148W / K TO ROW"
-      (at 180.34 328.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Diode_SMD:D_SOD-123"
-      (at 180.34 330.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "D14")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 176.53 340.36)
-      (xy 171.45 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "3c91e1ff-f1e3-51eb-b35c-4a1cb7db70ab")
-  )
-  (label "UP_GPA7"
-    (at 171.45 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "a234dd74-fdbe-5ee1-b889-a50fd46117b1")
-  )
-  (wire
-    (pts
-      (xy 184.15 340.36)
-      (xy 189.23 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "9332b64e-e9ca-54fb-81ff-9d96c450439e")
-  )
-  (label "UP_KEY_14_A"
-    (at 189.23 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "71e0b9ac-21ce-57c0-b8b4-3f2a171f903b")
-  )
-  (symbol
-    (lib_id "Switch:SW_Push")
-    (at 236.22 340.36 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "7fcbb14f-c22f-5ee1-83e8-a274093a38ef")
-    (property "Reference" "SW15"
-      (at 236.22 326.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "KEY_15 MX HOTSWAP"
-      (at 236.22 328.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Workbench:keyswitch_cherrymx_hotswap_1u"
-      (at 236.22 330.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "SW15")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 231.14 340.36)
-      (xy 226.06 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "52c95ee4-8183-5617-9e43-e399f784cc6d")
-  )
-  (label "UP_GPB2"
-    (at 226.06 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "8ac7f51b-b542-5585-a442-2e46b0d5d273")
-  )
-  (wire
-    (pts
-      (xy 241.3 340.36)
-      (xy 246.38 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "7a232bdb-32d8-5292-81a9-d6b027e216ff")
-  )
-  (label "UP_KEY_15_A"
-    (at 246.38 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "7f57eec2-9a59-50cf-97ec-17ecc92f0d47")
-  )
-  (symbol
-    (lib_id "Device:D")
-    (at 269.24 340.36 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "c2ad6449-d350-509e-b107-22ecb3395664")
-    (property "Reference" "D15"
-      (at 269.24 326.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "1N4148W / K TO ROW"
-      (at 269.24 328.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Diode_SMD:D_SOD-123"
-      (at 269.24 330.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "D15")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 265.43 340.36)
-      (xy 260.35 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "72cdc5a9-37fd-53d2-87a8-fefb6ddf3cbd")
-  )
-  (label "UP_GPA7"
-    (at 260.35 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "5e23842e-bac9-5a43-8a34-06040a74171c")
-  )
-  (wire
-    (pts
-      (xy 273.05 340.36)
-      (xy 278.13 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "77566d8d-b5fc-53da-9b8c-3e04f2f82081")
-  )
-  (label "UP_KEY_15_A"
-    (at 278.13 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "20dfaf0c-09e1-54a2-a237-4be15207358a")
-  )
-  (symbol
-    (lib_id "Switch:SW_Push")
-    (at 325.12 340.36 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "7c74cc23-dc18-56f0-9640-fb244b28e3bb")
-    (property "Reference" "SW16"
-      (at 325.12 326.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "KEY_16 MX HOTSWAP"
-      (at 325.12 328.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Workbench:keyswitch_cherrymx_hotswap_1u"
-      (at 325.12 330.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "SW16")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 320.04 340.36)
-      (xy 314.96 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "101c472c-d310-5692-85e3-c9cf992b585a")
-  )
-  (label "UP_GPB3"
-    (at 314.96 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "1d442dda-6a68-5bdc-9261-24077b73ab5c")
-  )
-  (wire
-    (pts
-      (xy 330.2 340.36)
-      (xy 335.28 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "761cfe6d-a173-5003-8049-b4f302468307")
-  )
-  (label "UP_KEY_16_A"
-    (at 335.28 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "b7bff1ac-a86e-5125-87ed-a19517a7b53d")
-  )
-  (symbol
-    (lib_id "Device:D")
-    (at 360.68 340.36 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "e1ac1ab0-29c8-578e-b480-b74194fedc27")
-    (property "Reference" "D16"
-      (at 360.68 326.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "1N4148W / K TO ROW"
-      (at 360.68 328.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Diode_SMD:D_SOD-123"
-      (at 360.68 330.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "D16")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 356.87 340.36)
-      (xy 351.79 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "6b2346f1-9194-5cc0-b4fa-c68a467b7570")
-  )
-  (label "UP_GPA7"
-    (at 351.79 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "83a5da93-299b-54cc-b8c2-88bfd88bbe2e")
-  )
-  (wire
-    (pts
-      (xy 364.49 340.36)
-      (xy 369.57 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "9eda7735-08d1-572f-b11f-5bdabc12ba46")
-  )
-  (label "UP_KEY_16_A"
-    (at 369.57 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "87b60170-c07b-5e62-be20-8fd76d3bae9d")
-  )
-  (symbol
-    (lib_id "Switch:SW_Push")
-    (at 414.02 340.36 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "babae9b9-0b4d-566e-9e39-e09bed60f81a")
-    (property "Reference" "SW17"
-      (at 414.02 326.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "KEY_17 MX HOTSWAP"
-      (at 414.02 328.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Workbench:keyswitch_cherrymx_hotswap_1u"
-      (at 414.02 330.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "SW17")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 408.94 340.36)
-      (xy 403.86 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "1a21b196-fbd1-5106-863e-a47fa6e2b365")
-  )
-  (label "UP_GPB4"
-    (at 403.86 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "662911c4-ddf9-54fa-93f0-4aadeb25153e")
-  )
-  (wire
-    (pts
-      (xy 419.1 340.36)
-      (xy 424.18 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "60e59f47-a811-50ad-b2de-e925f6d7df93")
-  )
-  (label "UP_KEY_17_A"
-    (at 424.18 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "db955a57-a2bc-5ace-ac7d-415fcc727180")
-  )
-  (symbol
-    (lib_id "Device:D")
-    (at 449.58 340.36 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "ffe92443-845e-59e4-9b03-e77b008d269a")
-    (property "Reference" "D17"
-      (at 449.58 326.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "1N4148W / K TO ROW"
-      (at 449.58 328.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Diode_SMD:D_SOD-123"
-      (at 449.58 330.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "D17")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 445.77 340.36)
-      (xy 440.69 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "a0014593-cce4-5de1-bdd9-b9ab8d2d362d")
-  )
-  (label "UP_GPA7"
-    (at 440.69 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "520411cc-46f3-5e08-9ced-d75e045d2421")
-  )
-  (wire
-    (pts
-      (xy 453.39 340.36)
-      (xy 458.47 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "32877e5d-f863-5db6-b11d-84226eaf364d")
-  )
-  (label "UP_KEY_17_A"
-    (at 458.47 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "f9725481-bd64-586c-b874-538de42c2716")
-  )
-  (symbol
-    (lib_id "Switch:SW_Push")
-    (at 505.46 340.36 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "0dc7e8d8-fd57-5386-aef1-1a5eb7f146bf")
-    (property "Reference" "SW18"
-      (at 505.46 326.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "KEY_18 MX HOTSWAP"
-      (at 505.46 328.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Workbench:keyswitch_cherrymx_hotswap_1u"
-      (at 505.46 330.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "SW18")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 500.38 340.36)
-      (xy 495.3 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "561169c7-f8ce-567e-b546-8e6109a074b5")
-  )
-  (label "UP_GPB5"
-    (at 495.3 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "478229dc-855c-5536-aa3a-0eefacf0ea2d")
-  )
-  (wire
-    (pts
-      (xy 510.54 340.36)
-      (xy 515.62 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "71dd573f-173c-57ec-ab09-4fcab88cddcb")
-  )
-  (label "UP_KEY_18_A"
-    (at 515.62 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "76a58e66-3ecb-5c34-a3b9-97f2c1cf7e14")
-  )
-  (symbol
-    (lib_id "Device:D")
-    (at 541.02 340.36 0)
-    (unit 1)
-    (in_bom yes)
-    (on_board yes)
-    (dnp no)
-    (uuid "f67f667b-315e-53e6-b1c6-5b28f1483e4f")
-    (property "Reference" "D18"
-      (at 541.02 326.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Value" "1N4148W / K TO ROW"
-      (at 541.02 328.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (property "Footprint" "Diode_SMD:D_SOD-123"
-      (at 541.02 330.36 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-        (hide yes)
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "D18")
-          (unit 1)
-        )
-      )
-    )
-  )
-  (wire
-    (pts
-      (xy 537.21 340.36)
-      (xy 532.13 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "2f3e9ba3-a726-5187-b4cd-cbdfa2a3c581")
-  )
-  (label "UP_GPA7"
-    (at 532.13 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify right)
-    )
-    (uuid "7fa45d3d-ae15-597f-9a4b-fc6d54aecbe6")
-  )
-  (wire
-    (pts
-      (xy 544.83 340.36)
-      (xy 549.91 340.36)
-    )
-    (stroke
-      (width 0)
-      (type default)
-    )
-    (uuid "45c94ec7-2b71-5572-99b7-dc4014fc9050")
-  )
-  (label "UP_KEY_18_A"
-    (at 549.91 340.36 0)
-    (effects
-      (font
-        (size 0.9 0.9)
-      )
-      (justify left)
-    )
-    (uuid "fe647fd0-b9ad-52a0-aad0-6b9a69492282")
+    (uuid "f929aa91-29da-558b-b47e-2a0e4c680a15")
   )
   (symbol
     (lib_id "power:PWR_FLAG")
-    (at 40.64 50.8 0)
+    (at 66.04 53.34 0)
     (unit 1)
     (in_bom no)
     (on_board no)
     (uuid "5c0d9f38-e70c-5c8f-97ca-f5e15ebeba03")
     (property "Reference" "#FLG01"
-      (at 40.64 50 0)
+      (at 66.04 49.53 0)
       (effects
         (font
           (size 1 1)
@@ -9819,11 +4273,12 @@
       )
     )
     (property "Value" "PWR_FLAG"
-      (at 40.64 46 0)
+      (at 66.04 49.53 0)
       (effects
         (font
           (size 1.0 1.0)
         )
+        (hide yes)
       )
     )
     (instances
@@ -9835,24 +4290,15 @@
       )
     )
   )
-  (label "+3V3"
-    (at 40.64 50.8 0)
-    (effects
-      (font
-        (size 1.0 1.0)
-      )
-    )
-    (uuid "4fd3e41a-3296-5eac-acc3-4b9a4da99f0a")
-  )
   (symbol
     (lib_id "power:PWR_FLAG")
-    (at 66.04 50.8 0)
+    (at 137.16 53.34 0)
     (unit 1)
     (in_bom no)
     (on_board no)
     (uuid "1d212f8b-dcde-5aa9-a3bb-415d58725935")
     (property "Reference" "#FLG02"
-      (at 66.04 50 0)
+      (at 137.16 49.53 0)
       (effects
         (font
           (size 1 1)
@@ -9861,11 +4307,12 @@
       )
     )
     (property "Value" "PWR_FLAG"
-      (at 66.04 46 0)
+      (at 137.16 49.53 0)
       (effects
         (font
           (size 1.0 1.0)
         )
+        (hide yes)
       )
     )
     (instances
@@ -9877,138 +4324,1423 @@
       )
     )
   )
+  (sheet
+    (at 68.58 181.61)
+    (size 38.1 12.7)
+    (stroke
+      (width 0.254)
+      (type default)
+    )
+    (fill
+      (color 0 0 0 0)
+    )
+    (uuid "85d36195-0c9b-5662-a76c-9d68639a5d04")
+    (property "Sheetname" "Upper"
+      (at 68.58 179.07 0)
+      (effects
+        (font
+          (size 1.27 1.27)
+        )
+        (justify left)
+      )
+    )
+    (property "Sheetfile" "workbench-s3-r01-upper.kicad_sch"
+      (at 68.58 195.58 0)
+      (effects
+        (font
+          (size 1 1)
+        )
+        (hide yes)
+      )
+    )
+    (instances
+      (project "workbench-s3-r01"
+        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
+          (page "2")
+        )
+      )
+    )
+  )
+  (text "Keyboard + display"
+    (at 72.39 187.96 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify left)
+    )
+    (uuid "1a7c5eec-3dd5-5b10-b975-606b435300fb")
+  )
+  (wire
+    (pts
+      (xy 71.12 53.34)
+      (xy 66.04 53.34)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "946d8cd3-d281-5d8c-9767-ae7f8ab48419")
+  )
+  (label "+3V3"
+    (at 66.04 53.34 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "60863bda-479b-58ab-a82f-07eafec28f17")
+  )
+  (wire
+    (pts
+      (xy 71.12 55.88)
+      (xy 66.04 55.88)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "3270fdb2-7764-5632-a6f8-198f6a5e73ea")
+  )
+  (label "+3V3"
+    (at 66.04 55.88 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "946817b3-cb1d-57b2-b0f1-08f4bb06f40c")
+  )
+  (wire
+    (pts
+      (xy 71.12 58.42)
+      (xy 66.04 58.42)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "76b5beb9-a074-549c-9668-4df02c6aa662")
+  )
+  (label "EN"
+    (at 66.04 58.42 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "c0a437ca-e512-57f1-af48-0b1f18dc1173")
+  )
+  (wire
+    (pts
+      (xy 71.12 60.96)
+      (xy 66.04 60.96)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "e7fc8528-7a15-5f93-b05d-b4f4232a8037")
+  )
+  (label "GPIO4"
+    (at 66.04 60.96 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "fff3a940-59d4-5503-9a5d-4291088ad097")
+  )
+  (wire
+    (pts
+      (xy 71.12 63.5)
+      (xy 66.04 63.5)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "5164c7b4-7b77-5ba9-ab1e-5b4ba75e43ea")
+  )
+  (label "GPIO5"
+    (at 66.04 63.5 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "7387bed4-11ca-5adc-a3c6-b286abbbfd2a")
+  )
+  (wire
+    (pts
+      (xy 71.12 66.04)
+      (xy 66.04 66.04)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "0a05078c-7364-50ad-b64c-7e302d3775a0")
+  )
+  (label "GPIO6"
+    (at 66.04 66.04 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "18d28d3b-07db-5ea9-8016-aae914b25e5a")
+  )
+  (wire
+    (pts
+      (xy 71.12 68.58)
+      (xy 66.04 68.58)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "7a0f11b8-6636-5835-ad4f-01fc99ac0003")
+  )
+  (label "GPIO7"
+    (at 66.04 68.58 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "d2e1f663-5755-5227-b940-6249ffcad173")
+  )
+  (wire
+    (pts
+      (xy 71.12 71.12)
+      (xy 66.04 71.12)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "d8ec0ef6-557f-5890-8a67-c13fc9932412")
+  )
+  (label "GPIO15"
+    (at 66.04 71.12 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "0f53331b-5681-5913-8003-d25f4460ec00")
+  )
+  (wire
+    (pts
+      (xy 71.12 73.66)
+      (xy 66.04 73.66)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "528d74fa-fc40-5df0-b444-8e86348826b1")
+  )
+  (label "GPIO16"
+    (at 66.04 73.66 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "ede8fa56-cd72-5d30-871b-d3eb06ba55b9")
+  )
+  (wire
+    (pts
+      (xy 71.12 76.2)
+      (xy 66.04 76.2)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "f7680d4b-c8fc-5e61-a22d-84a9f77211c7")
+  )
+  (label "GPIO17"
+    (at 66.04 76.2 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "94758842-5295-538d-9871-9c51e95a8795")
+  )
+  (wire
+    (pts
+      (xy 71.12 78.74)
+      (xy 66.04 78.74)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "6a3c9b5c-8a85-5804-bbd3-13cbabaf7779")
+  )
+  (label "GPIO18"
+    (at 66.04 78.74 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "5e0b8561-c802-5487-b21f-7c5621906742")
+  )
+  (wire
+    (pts
+      (xy 71.12 81.28)
+      (xy 66.04 81.28)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "69d73bc6-55e9-5022-a7f6-a5cfa0de9250")
+  )
+  (label "GPIO8"
+    (at 66.04 81.28 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "b15de124-2f78-529e-9c53-8c3e2311e48d")
+  )
+  (no_connect
+    (at 71.12 83.82)
+    (uuid "03733af1-3951-5481-8b6a-543875a8be88")
+  )
+  (no_connect
+    (at 71.12 86.36)
+    (uuid "b92b7590-b26e-5705-b03d-cea12e7f8cae")
+  )
+  (wire
+    (pts
+      (xy 71.12 88.9)
+      (xy 66.04 88.9)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "46da4596-7194-5da3-8e06-9356e975bf4f")
+  )
+  (label "GPIO9"
+    (at 66.04 88.9 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "8a27f5e7-1b8a-5f76-be0b-05f5e22d89be")
+  )
+  (wire
+    (pts
+      (xy 71.12 91.44)
+      (xy 66.04 91.44)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "d50dbd7e-9727-5340-b3da-67ec013489ba")
+  )
+  (label "GPIO10"
+    (at 66.04 91.44 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "3eefd116-4955-5232-907d-d60992d9ff16")
+  )
+  (wire
+    (pts
+      (xy 71.12 93.98)
+      (xy 66.04 93.98)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "e80feb96-9e77-5c16-a57b-8a6ea5db02ec")
+  )
+  (label "GPIO11"
+    (at 66.04 93.98 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "54deabd1-b1c9-5871-8932-12b58bb7e7ea")
+  )
+  (wire
+    (pts
+      (xy 71.12 96.52)
+      (xy 66.04 96.52)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "d2f21942-838f-5738-a028-933471993279")
+  )
+  (label "GPIO12"
+    (at 66.04 96.52 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "cf0d0dbc-2be3-5e81-b2f2-2a62fd431970")
+  )
+  (wire
+    (pts
+      (xy 71.12 99.06)
+      (xy 66.04 99.06)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "ebbcb9f6-4338-5324-8a65-7995f554fba2")
+  )
+  (label "GPIO13"
+    (at 66.04 99.06 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "49906c48-46d0-53cd-94a5-0536d0f08cd5")
+  )
+  (wire
+    (pts
+      (xy 71.12 101.6)
+      (xy 66.04 101.6)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "d83f04c0-fd45-5a72-b650-5f7d9294b9cd")
+  )
+  (label "GPIO14"
+    (at 66.04 101.6 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "349a8a40-1967-5f7b-bd93-0b48ea101177")
+  )
+  (no_connect
+    (at 71.12 104.14)
+    (uuid "39088b73-2143-5814-bc4a-ea37fa17ab48")
+  )
+  (wire
+    (pts
+      (xy 71.12 106.68)
+      (xy 66.04 106.68)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "a916bcf2-0e09-5ce9-a7ea-766af4f78849")
+  )
   (label "GND"
-    (at 66.04 50.8 0)
+    (at 66.04 106.68 0)
     (effects
       (font
         (size 1.0 1.0)
       )
+      (justify right)
     )
-    (uuid "4be2629c-3137-5462-b4bd-c82a43e40f87")
+    (uuid "2be6af95-d71c-5000-af17-83e959a8d280")
   )
-  (symbol
-    (lib_id "power:PWR_FLAG")
-    (at 91.44 50.8 0)
-    (unit 1)
-    (in_bom no)
-    (on_board no)
-    (uuid "72dbdc1d-dc60-5002-9e8e-f65c7ed52e81")
-    (property "Reference" "#FLG03"
-      (at 91.44 50 0)
-      (effects
-        (font
-          (size 1 1)
-        )
-        (hide yes)
-      )
+  (wire
+    (pts
+      (xy 142.24 53.34)
+      (xy 137.16 53.34)
     )
-    (property "Value" "PWR_FLAG"
-      (at 91.44 46 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
+    (stroke
+      (width 0)
+      (type default)
     )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "#FLG03")
-          (unit 1)
-        )
-      )
-    )
+    (uuid "7d7abd06-f331-552d-bdde-c77c463449a7")
   )
-  (label "UP_3V3"
-    (at 91.44 50.8 0)
+  (label "GND"
+    (at 137.16 53.34 0)
     (effects
       (font
         (size 1.0 1.0)
       )
+      (justify right)
     )
-    (uuid "199c13aa-6769-5be9-ba4d-d418461e8629")
+    (uuid "8e90dba2-cac5-5d0e-947b-1be90293fab8")
   )
-  (symbol
-    (lib_id "power:PWR_FLAG")
-    (at 116.84 50.8 0)
-    (unit 1)
-    (in_bom no)
-    (on_board no)
-    (uuid "8e723036-4531-575c-87f3-4908b66403e0")
-    (property "Reference" "#FLG04"
-      (at 116.84 50 0)
-      (effects
-        (font
-          (size 1 1)
-        )
-        (hide yes)
-      )
-    )
-    (property "Value" "PWR_FLAG"
-      (at 116.84 46 0)
-      (effects
-        (font
-          (size 1.0 1.0)
-        )
-      )
-    )
-    (instances
-      (project "workbench-s3-r01"
-        (path "/e8d74b01-3c82-5ffb-bf15-55a57409f681"
-          (reference "#FLG04")
-          (unit 1)
-        )
-      )
-    )
+  (no_connect
+    (at 142.24 55.88)
+    (uuid "61cabd20-9d4a-5ed2-9ce4-6bb72ba9883a")
   )
-  (label "UP_GND"
-    (at 116.84 50.8 0)
+  (no_connect
+    (at 142.24 58.42)
+    (uuid "43b711ad-d5b5-5ae7-8c2c-607996a878ed")
+  )
+  (wire
+    (pts
+      (xy 142.24 60.96)
+      (xy 137.16 60.96)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "5e1e7f03-52ee-58bd-a946-f1ed3551566d")
+  )
+  (label "GPIO1"
+    (at 137.16 60.96 0)
     (effects
       (font
         (size 1.0 1.0)
       )
+      (justify right)
     )
-    (uuid "3df11177-71c6-5b89-bccc-d77ce991278b")
+    (uuid "59af75be-bae8-5e9f-bb1a-ce309114d99d")
   )
-  (text "I2C4 TWO-BOARD DRAFT: J8/J9 pins 1-4 = GND 3V3 SDA SCL. MCP23017 at 0x20 shares the OLED bus."
-    (at 35 25 0)
+  (wire
+    (pts
+      (xy 142.24 63.5)
+      (xy 137.16 63.5)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "8de70c54-bd6f-5e37-8775-7484d3614681")
+  )
+  (label "GPIO2"
+    (at 137.16 63.5 0)
     (effects
       (font
-        (size 1.27 1.27)
+        (size 1.0 1.0)
       )
-      (justify left)
+      (justify right)
     )
-    (uuid "087018a7-c099-5424-9a5c-9585f2909638")
+    (uuid "aece6fc3-869f-56ac-a7d9-843f8c46838c")
   )
-  (text "J2 matches supplied module diagram: pins 1-9 = VCC GND BAK TRB TRA PSH SCL SDA CON. VCC = 3.3V ONLY."
-    (at 35 380 0)
+  (wire
+    (pts
+      (xy 142.24 66.04)
+      (xy 137.16 66.04)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "3308637d-92ad-52d4-a685-b364db82a945")
+  )
+  (label "GPIO42"
+    (at 137.16 66.04 0)
     (effects
       (font
-        (size 1.27 1.27)
+        (size 1.0 1.0)
       )
-      (justify left)
+      (justify right)
     )
-    (uuid "3bd8204c-0429-5135-b534-d4c55d71611a")
+    (uuid "6fa81361-cba5-5b0d-b4af-81d159f8ebf2")
   )
-  (text "R1/R2: 2.2k I2C pull-ups; check module parallel pull-ups. GPA5-7 rows: selected LOW, inactive HIGH; diode K to row."
-    (at 35 387 0)
+  (wire
+    (pts
+      (xy 142.24 68.58)
+      (xy 137.16 68.58)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "6420f1c5-85fb-5bb1-bb66-28821ad28eff")
+  )
+  (label "GPIO41"
+    (at 137.16 68.58 0)
     (effects
       (font
-        (size 1.27 1.27)
+        (size 1.0 1.0)
       )
-      (justify left)
+      (justify right)
     )
-    (uuid "b57026fb-051a-50f5-b6d5-a8c3e5f8a2b0")
+    (uuid "7ab5ffb6-e7c3-55fc-91c6-028336833c49")
   )
-  (text "UP_* nets are on the upper board. Lower and upper nets join ONLY through the external cable; see interconnect.csv."
-    (at 35 394 0)
+  (wire
+    (pts
+      (xy 142.24 71.12)
+      (xy 137.16 71.12)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "ae8ea508-af80-5b48-950b-bf1e6b570014")
+  )
+  (label "GPIO40"
+    (at 137.16 71.12 0)
     (effects
       (font
-        (size 1.27 1.27)
+        (size 1.0 1.0)
       )
-      (justify left)
+      (justify right)
     )
-    (uuid "8c019bc5-81e9-5e81-952d-d766c47184c9")
+    (uuid "21649605-fd91-5417-8614-499ce59d9642")
+  )
+  (wire
+    (pts
+      (xy 142.24 73.66)
+      (xy 137.16 73.66)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "f1913b67-341f-5186-ace9-23460470e510")
+  )
+  (label "GPIO39"
+    (at 137.16 73.66 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "fb6d06ab-fb8e-5fd1-9a68-adf2c809e011")
+  )
+  (wire
+    (pts
+      (xy 142.24 76.2)
+      (xy 137.16 76.2)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "89888229-450e-5588-bb2b-1661c4bce763")
+  )
+  (label "GPIO38"
+    (at 137.16 76.2 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "8474836b-8235-5206-81fa-48c411a06a7b")
+  )
+  (no_connect
+    (at 142.24 78.74)
+    (uuid "826a7c32-3081-5703-8242-e33344d3d5ec")
+  )
+  (no_connect
+    (at 142.24 81.28)
+    (uuid "82feb021-a950-525d-8449-01ebd2ba39f5")
+  )
+  (no_connect
+    (at 142.24 83.82)
+    (uuid "e7369cce-2328-5b87-92c7-c05c581625d8")
+  )
+  (wire
+    (pts
+      (xy 142.24 86.36)
+      (xy 137.16 86.36)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "b37464ac-3659-5dfd-b9e1-5f5b398e892e")
+  )
+  (label "GPIO0"
+    (at 137.16 86.36 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "08a1d371-db84-5e90-8a44-1eeb5f275ec6")
+  )
+  (no_connect
+    (at 142.24 88.9)
+    (uuid "c33ab223-96e7-50c1-a9cd-881c8d1acc51")
+  )
+  (no_connect
+    (at 142.24 91.44)
+    (uuid "c609da80-ebac-57ec-8bcd-6865c5a8888a")
+  )
+  (wire
+    (pts
+      (xy 142.24 93.98)
+      (xy 137.16 93.98)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "a7cbb254-cb43-5c2b-89af-760947b69336")
+  )
+  (label "GPIO47"
+    (at 137.16 93.98 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "c97e076a-74ac-562c-971b-b8372ae047f0")
+  )
+  (wire
+    (pts
+      (xy 142.24 96.52)
+      (xy 137.16 96.52)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "1d228576-a15a-577e-ba8c-f0c39204cf0f")
+  )
+  (label "GPIO21"
+    (at 137.16 96.52 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "dcbd75bf-d6c4-529f-9fcd-ed4622a9f14e")
+  )
+  (no_connect
+    (at 142.24 99.06)
+    (uuid "06769597-58fc-5ccc-872e-bfbee9386551")
+  )
+  (no_connect
+    (at 142.24 101.6)
+    (uuid "a0e1ac9e-3296-5840-ba74-32b9bf1827c4")
+  )
+  (wire
+    (pts
+      (xy 142.24 104.14)
+      (xy 137.16 104.14)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "05601d32-4e49-5445-b371-f8c594da35bb")
+  )
+  (label "GND"
+    (at 137.16 104.14 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "9ef3f678-6045-5b9a-aff5-701ccd38acc2")
+  )
+  (wire
+    (pts
+      (xy 142.24 106.68)
+      (xy 137.16 106.68)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "8e0205ea-7c1f-5897-8c7e-183ba71cc65c")
+  )
+  (label "GND"
+    (at 137.16 106.68 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "09d50275-30c8-5d58-80fa-4eccd82a5297")
+  )
+  (wire
+    (pts
+      (xy 246.38 50.8)
+      (xy 241.3 50.8)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "0a5d77b6-cbdf-51b3-8b3d-08f91fd1b55f")
+  )
+  (label "GND"
+    (at 241.3 50.8 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "118a8089-3a6d-5368-a6a9-3a1c4e5440c6")
+  )
+  (wire
+    (pts
+      (xy 246.38 53.34)
+      (xy 241.3 53.34)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "f896ef53-f611-5df4-8b5a-ff5ee1e4093c")
+  )
+  (label "+3V3"
+    (at 241.3 53.34 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "84b734c5-ad03-5a54-8890-0f00cb624b3b")
+  )
+  (wire
+    (pts
+      (xy 246.38 55.88)
+      (xy 241.3 55.88)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "93c8d4e1-f4cb-51da-a012-a715f9730afa")
+  )
+  (label "GPIO1"
+    (at 241.3 55.88 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "fee286bf-d56b-5d19-a4bc-a62402d3c3f2")
+  )
+  (wire
+    (pts
+      (xy 246.38 58.42)
+      (xy 241.3 58.42)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "d04eb885-c5f2-55a1-a8c1-5d351f8ad6a5")
+  )
+  (label "GPIO2"
+    (at 241.3 58.42 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "0370848a-f8de-563e-ae60-ee611e5e777e")
+  )
+  (wire
+    (pts
+      (xy 246.38 60.96)
+      (xy 241.3 60.96)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "b6c85a43-42b4-5965-b14e-4db9bde3b2cd")
+  )
+  (label "GPIO4"
+    (at 241.3 60.96 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "b0a4fd99-76b3-5b6c-a8eb-0ca0d84854b0")
+  )
+  (wire
+    (pts
+      (xy 246.38 63.5)
+      (xy 241.3 63.5)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "0ae6fa6f-cbec-5fb8-8759-8a658c718993")
+  )
+  (label "GPIO5"
+    (at 241.3 63.5 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "fc963a52-ef7b-5728-b9b3-94578032352b")
+  )
+  (wire
+    (pts
+      (xy 246.38 66.04)
+      (xy 241.3 66.04)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "73ad9399-bccb-5ad4-b56c-98a59790f235")
+  )
+  (label "GPIO6"
+    (at 241.3 66.04 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "298cff13-f5b1-557c-acff-61c48aba52c6")
+  )
+  (wire
+    (pts
+      (xy 246.38 68.58)
+      (xy 241.3 68.58)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "fe73086b-da21-5db0-b8bc-aa70f60d64d8")
+  )
+  (label "GPIO7"
+    (at 241.3 68.58 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "f90a4f36-2bdf-5b44-9ae0-ffa185b4cb82")
+  )
+  (wire
+    (pts
+      (xy 246.38 71.12)
+      (xy 241.3 71.12)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "4a11a6ef-6fbc-525d-87c8-3a5cc4ee5727")
+  )
+  (label "GPIO8"
+    (at 241.3 71.12 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "83653b12-1e19-51f2-b482-ac56da1d9434")
+  )
+  (wire
+    (pts
+      (xy 246.38 73.66)
+      (xy 241.3 73.66)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "c31588af-c0f6-5c46-9006-8c972a97600d")
+  )
+  (label "GPIO9"
+    (at 241.3 73.66 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "291f5d68-5dbb-5d23-9d0d-f8e778b66f05")
+  )
+  (wire
+    (pts
+      (xy 246.38 76.2)
+      (xy 241.3 76.2)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "c2b8b3f7-4759-502e-afff-2071ac41ab46")
+  )
+  (label "GPIO10"
+    (at 241.3 76.2 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "f06c575a-7479-5dba-8ea0-f8c44af07156")
+  )
+  (wire
+    (pts
+      (xy 246.38 78.74)
+      (xy 241.3 78.74)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "2d73637e-ab86-5703-aa90-d21121b873d8")
+  )
+  (label "GPIO11"
+    (at 241.3 78.74 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "dbe9d27c-a499-575b-8730-65dccb3fd490")
+  )
+  (wire
+    (pts
+      (xy 246.38 81.28)
+      (xy 241.3 81.28)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "45e0888e-b5e9-55ca-90c0-541658da4aa3")
+  )
+  (label "GPIO12"
+    (at 241.3 81.28 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "684d400f-fbee-5ed4-9542-a8c7c241b3ba")
+  )
+  (wire
+    (pts
+      (xy 246.38 83.82)
+      (xy 241.3 83.82)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "1833f25f-5c73-5f40-ba98-10631c6fdc4f")
+  )
+  (label "GPIO15"
+    (at 241.3 83.82 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "2802280f-ca89-5d4f-8a63-763f15f5db3b")
+  )
+  (wire
+    (pts
+      (xy 246.38 86.36)
+      (xy 241.3 86.36)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "27a9b734-a913-503d-a7ad-7d814eef1223")
+  )
+  (label "GPIO16"
+    (at 241.3 86.36 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "d67adf73-9b47-531b-b2ab-adb189480b1e")
+  )
+  (wire
+    (pts
+      (xy 246.38 88.9)
+      (xy 241.3 88.9)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "b35424f7-dd6d-55d0-b9a2-2b1ab5cf79a3")
+  )
+  (label "GPIO17"
+    (at 241.3 88.9 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "ab64d078-a14e-5cff-a92d-41820ca205e8")
+  )
+  (wire
+    (pts
+      (xy 246.38 91.44)
+      (xy 241.3 91.44)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "d2888113-a38d-517c-bac8-af2ee607be44")
+  )
+  (label "GPIO18"
+    (at 241.3 91.44 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "c94dc872-056a-5816-a9ed-1c72794e6f18")
+  )
+  (wire
+    (pts
+      (xy 246.38 93.98)
+      (xy 241.3 93.98)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "9a864b4a-9534-5e21-932e-8bdbe699179e")
+  )
+  (label "GPIO21"
+    (at 241.3 93.98 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "6631e014-9475-50ed-845b-4794d3ea2cd6")
+  )
+  (wire
+    (pts
+      (xy 246.38 96.52)
+      (xy 241.3 96.52)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "141df57a-2b01-5d68-a208-35a83ca24bc0")
+  )
+  (label "GPIO38"
+    (at 241.3 96.52 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "454ed34d-01a2-5f11-93b8-34d6dce9bc9c")
+  )
+  (wire
+    (pts
+      (xy 246.38 99.06)
+      (xy 241.3 99.06)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "61eed0b9-fcb1-5028-bb60-e3d25fac3992")
+  )
+  (label "GPIO39"
+    (at 241.3 99.06 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "0515c0b4-32ff-561c-be9d-098d245783fe")
+  )
+  (wire
+    (pts
+      (xy 246.38 101.6)
+      (xy 241.3 101.6)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "bc729a2e-81d9-5fee-b947-6a113fa4310f")
+  )
+  (label "GPIO40"
+    (at 241.3 101.6 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "3f380101-f7f0-52a0-9606-47b5ad4be115")
+  )
+  (wire
+    (pts
+      (xy 246.38 104.14)
+      (xy 241.3 104.14)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "94f8ecd9-dd61-59cd-b3ce-600adcf2786d")
+  )
+  (label "GPIO41"
+    (at 241.3 104.14 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "2c56cebd-98b7-5c23-87b8-c2d59f68aa0a")
+  )
+  (wire
+    (pts
+      (xy 246.38 106.68)
+      (xy 241.3 106.68)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "27ce7cf9-1e7a-537f-a186-ee85773ba389")
+  )
+  (label "GPIO42"
+    (at 241.3 106.68 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "dd4a88f8-7062-5893-9755-668fb115cd2a")
+  )
+  (wire
+    (pts
+      (xy 246.38 109.22)
+      (xy 241.3 109.22)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "415ec701-0159-5cec-87b3-1d9e73efa75b")
+  )
+  (label "GPIO47"
+    (at 241.3 109.22 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "29679ff1-9438-581c-9115-0cdcf847320c")
+  )
+  (wire
+    (pts
+      (xy 81.28 152.4)
+      (xy 76.2 152.4)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "7891976a-e775-5f67-9eb3-3d0177336b9e")
+  )
+  (label "GND"
+    (at 76.2 152.4 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "76ef016d-e716-5005-834d-dd9e6db1bbe6")
+  )
+  (wire
+    (pts
+      (xy 147.32 149.86)
+      (xy 142.24 149.86)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "032088eb-7c85-5796-990b-c62d3e7e3808")
+  )
+  (label "EN"
+    (at 142.24 149.86 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "c72a0d6b-d227-519c-abf6-704952f172a5")
+  )
+  (wire
+    (pts
+      (xy 147.32 152.4)
+      (xy 142.24 152.4)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "441a94c9-b5b6-5a2d-8675-4731c1f407c7")
+  )
+  (label "GND"
+    (at 142.24 152.4 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "ecea2d4d-cc7c-5b72-b337-44f70357e732")
+  )
+  (wire
+    (pts
+      (xy 213.36 146.05)
+      (xy 208.28 146.05)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "2403fbf8-c4ef-5a26-a7f0-7986006463a5")
+  )
+  (label "GND"
+    (at 208.28 146.05 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "a0598884-4079-5dce-9925-1432e5e148cb")
+  )
+  (wire
+    (pts
+      (xy 213.36 148.59)
+      (xy 208.28 148.59)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "9ad9679a-2d30-56d5-81ef-43453e7a3066")
+  )
+  (label "+3V3"
+    (at 208.28 148.59 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "b95d5a9d-affa-53c5-8410-597b5643c94e")
+  )
+  (wire
+    (pts
+      (xy 213.36 151.13)
+      (xy 208.28 151.13)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "07e51379-d089-51e3-8e0e-90b854adf790")
+  )
+  (label "GPIO13"
+    (at 208.28 151.13 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "12fc8c61-7e74-5351-9a74-b1e019ca8f74")
+  )
+  (wire
+    (pts
+      (xy 213.36 153.67)
+      (xy 208.28 153.67)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "e66b823d-41e7-5004-a806-2fd5ef5c0b59")
+  )
+  (label "GPIO14"
+    (at 208.28 153.67 0)
+    (effects
+      (font
+        (size 1.0 1.0)
+      )
+      (justify right)
+    )
+    (uuid "42326a70-6a3a-52d7-a271-61acb3aa7fbb")
   )
   (embedded_fonts no)
 )
