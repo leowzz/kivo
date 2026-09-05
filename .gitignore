@@ -11,7 +11,11 @@ dist-studio/
 /output/
 src-tauri/target/
 config.yaml
-hardware/
+# Track the Workbench designs while keeping other local hardware folders ignored.
+/hardware/*
+!/hardware/.gitignore
+!/hardware/workbench-r03/
+!/hardware/workbench-s3-r01/
 .idea
 .superpowers
 refer/YD-ESP32-S3

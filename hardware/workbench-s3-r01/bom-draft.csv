@@ -1,0 +1,53 @@
+Reference,Value,Footprint,MPN,DNP
+J1,YD P1 / RIGHT SOCKET / 1x22,Connector_PinSocket_2.54mm:PinSocket_1x22_P2.54mm_Vertical,,False
+J7,YD P2 / LEFT SOCKET / 1x22,Connector_PinSocket_2.54mm:PinSocket_1x22_P2.54mm_Vertical,,False
+J2,DISPLAY / MODULE PIN 1 = 3V3,Connector_PinHeader_2.54mm:PinHeader_1x09_P2.54mm_Vertical,,False
+J4,EXPANSION / 22 SPARE GPIO / 3V3 IO,Connector_PinHeader_2.54mm:PinHeader_1x24_P2.54mm_Vertical,,False
+J5,EXTERNAL BOOT / GPIO0 TO GND,Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical,,False
+J6,EXTERNAL RESET / EN TO GND,Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical,,False
+C1,10u 10V X7R,Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,,False
+C2,100n 16V X7R,Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,,False
+C3,100n 16V X7R / U1,Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,,False
+R1,2.2k I2C PULLUP,Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder,,False
+R2,2.2k I2C PULLUP,Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder,,False
+R3,10k,Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder,,False
+R4,10k U1 RESET PULLUP,Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder,,False
+U1,MCP23017-E/SO / 0x20,Package_SO:SOIC-28W_7.5x17.9mm_P1.27mm,MCP23017-E/SO,False
+J8,LOWER / I2C4 TO J9 / 1:1,Connector_JST:JST_XH_B4B-XH-A_1x04_P2.50mm_Vertical,,False
+J9,UPPER / I2C4 TO J8 / 1:1,Connector_JST:JST_XH_B4B-XH-A_1x04_P2.50mm_Vertical,,False
+SW1,KEY_1 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
+D1,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W,False
+SW2,KEY_2 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
+D2,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W,False
+SW3,KEY_3 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
+D3,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W,False
+SW4,KEY_4 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
+D4,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W,False
+SW5,KEY_5 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
+D5,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W,False
+SW6,KEY_6 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
+D6,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W,False
+SW7,KEY_7 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
+D7,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W,False
+SW8,KEY_8 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
+D8,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W,False
+SW9,KEY_9 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
+D9,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W,False
+SW10,KEY_10 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
+D10,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W,False
+SW11,KEY_11 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
+D11,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W,False
+SW12,KEY_12 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
+D12,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W,False
+SW13,KEY_13 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
+D13,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W,False
+SW14,KEY_14 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
+D14,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W,False
+SW15,KEY_15 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
+D15,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W,False
+SW16,KEY_16 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
+D16,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W,False
+SW17,KEY_17 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
+D17,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W,False
+SW18,KEY_18 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
+D18,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W,False
