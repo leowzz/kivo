@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "Workbench")(type "KiCad")(uri "${KIPRJMOD}/Workbench.pretty")(options "")(descr "Vendored MX hot-swap footprint; see licenses and README"))
+)

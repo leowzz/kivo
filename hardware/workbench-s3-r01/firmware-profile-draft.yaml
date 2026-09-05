@@ -1,0 +1,84 @@
+# Electrical mapping only: current ESP32-S3 firmware lacks display support.
+# Diode-aware rollover support is also pending. Not a released product profile.
+id: workbench-s3-matrix-draft
+name: Workbench S3 matrix draft
+board_profile_id: yd-esp32-s3
+debounce_ms: 30
+sh1106:
+  sda: 13
+  scl: 14
+  control_panel:
+    type: ec11_confirm_back
+    confirm: 15
+    encoder_press: 16
+    encoder_a: 17
+    encoder_b: 18
+    back: 21
+inputs:
+- type: contact_matrix
+  id: matrix-1
+  pins:
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  - 9
+  - 10
+  - 11
+  - 12
+  keys:
+    KEY_1:
+    - 4
+    - 7
+    KEY_2:
+    - 4
+    - 8
+    KEY_3:
+    - 4
+    - 9
+    KEY_4:
+    - 4
+    - 10
+    KEY_5:
+    - 4
+    - 11
+    KEY_6:
+    - 4
+    - 12
+    KEY_7:
+    - 5
+    - 7
+    KEY_8:
+    - 5
+    - 8
+    KEY_9:
+    - 5
+    - 9
+    KEY_10:
+    - 5
+    - 10
+    KEY_11:
+    - 5
+    - 11
+    KEY_12:
+    - 5
+    - 12
+    KEY_13:
+    - 6
+    - 7
+    KEY_14:
+    - 6
+    - 8
+    KEY_15:
+    - 6
+    - 9
+    KEY_16:
+    - 6
+    - 10
+    KEY_17:
+    - 6
+    - 11
+    KEY_18:
+    - 6
+    - 12
