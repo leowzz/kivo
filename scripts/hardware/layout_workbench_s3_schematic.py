@@ -20,6 +20,7 @@ NAME = "workbench-s3-r01"
 UPPER_FILE = "workbench-s3-r01-upper.kicad_sch"
 NAMESPACE = uuid.UUID("b4224770-7f10-497e-94ac-667b578d3f05")
 UPPER_SHEET_UUID = str(uuid.uuid5(NAMESPACE, "upper-sheet"))
+SCHEMATIC_VERSION = 20260306
 
 
 def uid(name):
@@ -39,7 +40,8 @@ class Page:
         self.originals = {child(s, "property")[2]: s for s in children(source, "symbol")}
         self.libraries = {s[1]: s for s in children(child(source, "lib_symbols"), "symbol")}
         self.path = f"/{root_id}" + (f"/{UPPER_SHEET_UUID}" if section == "upper" else "")
-        self.tree = node("kicad_sch", node("version", 20250114), node("generator", "eeschema"),
+        self.tree = node("kicad_sch", node("version", SCHEMATIC_VERSION), node("generator", "eeschema"),
+                         node("generator_version", "10.0"),
                          node("uuid", root_id if section == "lower" else uid("upper-file")),
                          node("paper", "A3" if section == "upper" else "A4"),
                          node("title_block", node("title", f"Workbench S3 r01 / {section.upper()}"),
@@ -157,6 +159,9 @@ class Page:
             self.label(net, x, y)
 
     def save(self, output):
+        if self.section == "lower":
+            # A numbered child with an unnumbered root triggers KiCad's repair dialog.
+            self.tree.append(node("sheet_instances", node("path", "/", node("page", "1"))))
         self.tree.append(node("embedded_fonts", sx.Symbol("no")))
         output.write_text(formatted_sexpr(self.tree)+"\n")
 

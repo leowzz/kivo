@@ -174,3 +174,11 @@ This compares full component definitions, explicit NC pins, every connected
 pin/net and the symbol association paths. It parses both PCB snapshots and
 requires equality except for footprint schematic paths and sheet metadata.
 The regenerated two-page schematic passes ERC with 0 errors and 0 warnings.
+
+The schematic-open repair prompt was traced to the missing root page number:
+the child was page 2 but the root had no `sheet_instances` page 1. Both pages
+are now saved in KiCad 10 format (`20260306`), and the generator emits the
+root page number and format metadata. Reopening in KiCad 10.0.6 shows neither
+the automatic-repair dialog nor the old-format banner. The saved and freshly
+regenerated files pass page-metadata checks, electrical parity and ERC with
+0 violations; the old fixture fails the missing-page check as expected.

@@ -240,7 +240,7 @@
       "internal_id": "",
       "mfg": "",
       "mpn": "",
-      "sch_revision": ""
+      "sch_revision": "S3 r01"
     },
     "layer_pairs": [],
     "layer_presets": [],
@@ -658,13 +658,22 @@
       {
         "filename": "workbench-s3-r01.kicad_sch",
         "name": "workbench-s3-r01",
-        "uuid": "00000000-0000-0000-0000-000000000000"
+        "uuid": "e8d74b01-3c82-5ffb-bf15-55a57409f681"
       }
     ],
     "used_designators": "",
     "variants": []
   },
-  "sheets": [],
+  "sheets": [
+    [
+      "e8d74b01-3c82-5ffb-bf15-55a57409f681",
+      "workbench-s3-r01"
+    ],
+    [
+      "85d36195-0c9b-5662-a76c-9d68639a5d04",
+      "Upper"
+    ]
+  ],
   "text_variables": {},
   "tuning_profiles": {
     "meta": {

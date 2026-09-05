@@ -15,6 +15,23 @@ import sexpdata as sx
 from generate_workbench import child, children
 
 
+def check_page_metadata(source):
+    root = sx.loads(source.read_text())
+    instances = child(root,"sheet_instances")
+    assert instances is not None, "Missing root page number triggers KiCad's repair dialog"
+    root_page = next(p for p in children(instances,"path") if p[1] == "/")
+    assert child(root_page,"page")[1] == "1"
+    sheets = children(root,"sheet")
+    assert len(sheets) == 1
+    project = child(child(sheets[0],"instances"),"project")
+    assert child(child(project,"path"),"page")[1] == "2"
+    upper_file = next(p[2] for p in children(sheets[0],"property") if p[1] == "Sheetfile")
+    upper = sx.loads((source.parent/upper_file).read_text())
+    for page in (root,upper):
+        assert child(page,"version")[1] == 20260306, "Schematic must use the KiCad 10 format"
+        assert child(page,"generator_version")[1] == "10.0"
+
+
 def netlist(path):
     tree = ET.parse(path)
     source = sx.loads(Path(tree.findtext("./design/source")).read_text())
@@ -70,8 +87,10 @@ def main():
         if args.before_pcb:
             original = sx.loads(args.before_pcb.read_text())
             assert pcb_content(original) == pcb_content(tree), "PCB content changed beyond schematic associations"
+    check_page_metadata(Path(ET.parse(args.after).findtext("./design/source")))
     print(json.dumps(dict(result="PASS",components=52,connected_pins=185,
                           connected_nets=len(set(after[1].values())),
+                          sheet_pages=["1","2"],native_kicad_10_format=True,
                           pcb_associations_checked=bool(args.pcb),
                           pcb_geometry_unchanged=bool(args.before_pcb)),indent=2))
 
