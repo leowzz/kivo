@@ -10,6 +10,8 @@ C2,100n 16V X7R,Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,,False
 R1,4.7k DNP,Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder,,True
 R2,4.7k DNP,Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder,,True
 R3,10k,Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder,,False
+J8,LOWER / IDC20 TO J9 / 1:1,Connector_IDC:IDC-Header_2x10_P2.54mm_Vertical,,False
+J9,UPPER / IDC20 TO J8 / 1:1,Connector_IDC:IDC-Header_2x10_P2.54mm_Vertical,,False
 SW1,KEY_1 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False
 D1,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W,False
 SW2,KEY_2 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,,False

@@ -1,4 +1,4 @@
-# S3 Draft Verification - 2026-09-05
+# S3 Stacked Draft Verification - 2026-09-05
 
 KiCad CLI and pcbnew 10.0.6 on macOS. This is a review of the carrier's
 electrical definitions and placement, not approval for fabrication.
@@ -7,8 +7,12 @@ electrical definitions and placement, not approval for fabrication.
 | --- | --- |
 | Schematic load, SVG and XML netlist export | Pass |
 | ERC, including warnings | 0 violations |
-| Exported schematic versus PCB pads | 137 connected pins and 46 nets match |
-| Carrier schematic components | 47, plus 5 board-only mounting holes |
+| Exported schematic versus panel PCB pads | 177 connected pins and 64 nets match |
+| Carrier schematic components | 49, plus 8 board-only mounting holes and 6 mouse-bite footprints |
+| Separate upper-board connectivity | 42 parts, 109 connected pins, 36 nets |
+| Separate lower-board connectivity | 7 parts, 68 connected pins, 28 nets |
+| Board-to-board cable | J8/J9, 20 pins, 1:1; full mapping matches CSV and schematic |
+| Circuit separation | No net shared by the two board sections; upper nets prefixed `UP_` |
 | YD P1/P2 pin mapping and socket orientation | Pass against manufacturer references |
 | Module sockets | 2 x 22 PTH; 2.54 mm pitch; 25.40 mm row spacing; 1.0 mm drills |
 | All 18 key/diode paths | Pass; column -> switch -> diode A -> K -> row |
@@ -17,15 +21,24 @@ electrical definitions and placement, not approval for fabrication.
 | BOOT/RESET | Pass; J5 GPIO0/GND, J6 EN/GND |
 | Expansion | Pass; GPIO1/2/38/39/40/41/42/47, 3V3 and GND |
 | Hand-solder packages | SOD-123 diodes; 0805 extended pads; through-hole connectors |
-| Board size and stack | 126 x 135 mm; 1.6 mm; 2 copper layers |
+| Panel size and stack | 126 x 187 mm; 1.6 mm; 2 copper layers |
+| Finished boards | Upper 126 x 98 mm; lower 126 x 86 mm |
+| Panel outline | One connected outer polygon, two internal separation slots and one antenna aperture |
+| Breakaway tabs | Three 5 mm nominal necks; 36 NPTH holes, 0.5 mm drill / 0.8 mm pitch |
+| Trim-band protection | Tracks/vias/pours forbidden on both layers; electrical pads verified outside Y 96-103 |
+| Lower-board transform | 180 degrees in the panel; socket and IDC pad numbering checked after rotation |
 | Key positions | 18 positions match CSV; 19.05 mm spacing retained |
 | Antenna | Copper/pad/track/via/footprint keepout on both layers; opening inspected |
-| Top/bottom renders and schematic | Visually inspected |
+| Panel top/bottom, individual boards, stack side view and schematic | Visually inspected |
 | DRC placement/clearance/silkscreen violations | 0 |
-| Unconnected items | **91; routing has not started** |
-| Copper tracks and pours | **0 tracks, no copper pours; one rule-area zone** |
+| Unconnected items | **113 total: 73 upper, 40 lower; routing has not started** |
+| Copper tracks and pours | **0 tracks, no copper pours; two panel rule-area zones** |
+| Nominal stacking calculation | 30 degrees; front underside Z 25 mm, rear Z 74 mm; upper PCB projected depth 85.67 mm |
+| Nominal clearances | Core 14.69 mm, antenna 16.33 mm normal to upper plane/parts; upper IDC to core 29.07 mm vertically |
+| Cable endpoint distance | 58.72 mm chord; 150 mm ribbon nominal, service loop and bend radius not fitted |
 | Installed core-board/display 3D fit and RF performance | **Not verified** |
-| Enclosure and panel | **New design required; old models not modified** |
+| Enclosure and switch plate | **New stacked design required; old models not modified** |
+| Manufacturer panelization review | **Pending: slot/drill/tab process and two-design pricing** |
 | ESP32-S3 display and diode-aware multi-key firmware | **Not implemented** |
 | Manufacturing outputs | **Not generated** |
 
@@ -35,6 +48,15 @@ visually in the manufacturer metric PDF. Pin numbering, 3.3 V supply,
 BOOT/EN and the 5V input diode/jumper were checked against the V1.4 schematic
 and manufacturer README. Actual purchased-board dimensions, male pin seating
 and female socket height still require a fit check.
+
+The stack study assumes maximum core/socket top Z = 20 mm, antenna top
+Z = 14.5 mm, underside key/diode height 3.5 mm and mated IDC height 18 mm.
+It checks nominal geometric envelopes, not manufacturing tolerances, the
+actual display/control assembly, USB plugs, cable service loop, RF behavior,
+keycaps or printed enclosure. A different socket height or IDC housing
+requires a fresh fit calculation. The separated boards' four mounting holes
+are independently supported; tilted upper holes do not align with vertical
+lower-board standoffs.
 
 The carrier deliberately avoids native USB pins, UART bridge pins, PSRAM
 pins and unused strap pins. Its P1 pin 21 is unconnected, so the reference
@@ -52,9 +74,12 @@ Current firmware evidence:
   `lib/gpio_trigger/src/BoardProfile.h` also disables OLED for ESP32-S3 and
   excludes GPIO39-42. No firmware or released product changes were made.
 
-Generated evidence is in ignored `output/hardware/workbench-s3-r01/`:
-`erc.json`, `drc.json`, `netlist.xml`, `board-top.png`, `board-bottom.png`,
-and `schematic/workbench-s3-r01.svg`.
+Generated evidence is in ignored `output/hardware/workbench-s3-r01/stacked/`:
+`erc.json`, `drc.json`, `netlist.xml`, `panel-top.png`, `panel-bottom.png`,
+`upper.kicad_pcb`, `lower.kicad_pcb`, individual-board renders and DRC reports,
+`stack-side.png`, `stack-side.svg`, `stack-clearances.json`, and
+`schematic/workbench-s3-r01.svg`. The individual PCBs are derived trimmed
+previews; the panel PCB in this source directory is the editable master.
 
 Re-run from the repository root:
 
@@ -79,3 +104,8 @@ The last command is expected to fail until routing is complete. The focused
 verification script deliberately asserts this draft has no tracks; update
 that assertion when routing begins. Passing ERC does not validate the
 preassembled module's internal circuitry or real hardware behavior.
+
+Use `--individual-boards output/hardware/workbench-s3-r01/stacked` on the
+verification command to include the two derived boards. See `README.md`
+for reproducing them and the stack envelope calculation. No DRC violations
+were excluded to make this panel pass; unconnected items are still reported.

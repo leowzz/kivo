@@ -2,8 +2,92 @@
   "name": "workbench-s3-r01",
   "sheet_uuid": "e8d74b01-3c82-5ffb-bf15-55a57409f681",
   "width": 126,
-  "height": 135,
-  "rear_extension_mm": 30,
+  "height": 187,
+  "boards": {
+    "upper": {
+      "size": [
+        126,
+        98
+      ],
+      "mounting_holes": [
+        [
+          4,
+          4
+        ],
+        [
+          122,
+          4
+        ],
+        [
+          4,
+          94
+        ],
+        [
+          122,
+          94
+        ]
+      ]
+    },
+    "lower": {
+      "size": [
+        126,
+        86
+      ],
+      "mounting_holes": [
+        [
+          4,
+          4
+        ],
+        [
+          122,
+          4
+        ],
+        [
+          4,
+          82
+        ],
+        [
+          122,
+          82
+        ]
+      ]
+    }
+  },
+  "panel": {
+    "gap": [
+      98,
+      101
+    ],
+    "tab_centers": [
+      20,
+      63,
+      106
+    ],
+    "tab_neck_width": 5,
+    "mouse_bite_rows": [
+      98.75,
+      100.25
+    ],
+    "holes_per_row": 6,
+    "drill": 0.5,
+    "pitch": 0.8,
+    "copper_keepout": [
+      0,
+      96,
+      126,
+      103
+    ]
+  },
+  "stack": {
+    "tilt_deg": 30,
+    "upper_front_underside_z": 25,
+    "lower_pcb_z": 0,
+    "core_top_z": 20,
+    "antenna_top_z": 14.5,
+    "upper_underside_parts_height": 3.5,
+    "upper_idc_mated_height": 18,
+    "ribbon_length_mm": 150
+  },
   "matrix_rows": [
     4,
     5,
@@ -16,6 +100,108 @@
     10,
     11,
     12
+  ],
+  "interconnect": [
+    {
+      "pin": 1,
+      "lower": "GND",
+      "upper": "UP_GND"
+    },
+    {
+      "pin": 2,
+      "lower": "+3V3",
+      "upper": "UP_3V3"
+    },
+    {
+      "pin": 3,
+      "lower": "GPIO4",
+      "upper": "UP_GPIO4"
+    },
+    {
+      "pin": 4,
+      "lower": "GPIO5",
+      "upper": "UP_GPIO5"
+    },
+    {
+      "pin": 5,
+      "lower": "GPIO6",
+      "upper": "UP_GPIO6"
+    },
+    {
+      "pin": 6,
+      "lower": "GPIO7",
+      "upper": "UP_GPIO7"
+    },
+    {
+      "pin": 7,
+      "lower": "GPIO8",
+      "upper": "UP_GPIO8"
+    },
+    {
+      "pin": 8,
+      "lower": "GPIO9",
+      "upper": "UP_GPIO9"
+    },
+    {
+      "pin": 9,
+      "lower": "GPIO10",
+      "upper": "UP_GPIO10"
+    },
+    {
+      "pin": 10,
+      "lower": "GPIO11",
+      "upper": "UP_GPIO11"
+    },
+    {
+      "pin": 11,
+      "lower": "GPIO12",
+      "upper": "UP_GPIO12"
+    },
+    {
+      "pin": 12,
+      "lower": "GND",
+      "upper": "UP_GND"
+    },
+    {
+      "pin": 13,
+      "lower": "GPIO13",
+      "upper": "UP_GPIO13"
+    },
+    {
+      "pin": 14,
+      "lower": "GPIO14",
+      "upper": "UP_GPIO14"
+    },
+    {
+      "pin": 15,
+      "lower": "GPIO15",
+      "upper": "UP_GPIO15"
+    },
+    {
+      "pin": 16,
+      "lower": "GPIO16",
+      "upper": "UP_GPIO16"
+    },
+    {
+      "pin": 17,
+      "lower": "GPIO17",
+      "upper": "UP_GPIO17"
+    },
+    {
+      "pin": 18,
+      "lower": "GPIO18",
+      "upper": "UP_GPIO18"
+    },
+    {
+      "pin": 19,
+      "lower": "GPIO21",
+      "upper": "UP_GPIO21"
+    },
+    {
+      "pin": 20,
+      "lower": "+3V3",
+      "upper": "UP_3V3"
+    }
   ],
   "display": {
     "sda": 13,
@@ -127,9 +313,14 @@
         105
       ],
       "pcb": [
+        14.299999999999997,
+        131.75
+      ],
+      "local_pcb": [
         111.7,
         55.25
       ],
+      "section": "lower",
       "footprint": "Connector_PinSocket_2.54mm:PinSocket_1x22_P2.54mm_Vertical",
       "angle": 180,
       "side": "F",
@@ -170,9 +361,14 @@
         105
       ],
       "pcb": [
+        39.7,
+        131.75
+      ],
+      "local_pcb": [
         86.3,
         55.25
       ],
+      "section": "lower",
       "footprint": "Connector_PinSocket_2.54mm:PinSocket_1x22_P2.54mm_Vertical",
       "angle": 180,
       "side": "F",
@@ -185,24 +381,29 @@
       "lib": "Connector_Generic:Conn_01x09",
       "value": "DISPLAY HARNESS / 3V3",
       "nets": {
-        "1": "GND",
-        "2": "+3V3",
-        "3": "GPIO14",
-        "4": "GPIO13",
-        "5": "GPIO15",
-        "6": "GPIO16",
-        "7": "GPIO17",
-        "8": "GPIO18",
-        "9": "GPIO21"
+        "1": "UP_GND",
+        "2": "UP_3V3",
+        "3": "UP_GPIO14",
+        "4": "UP_GPIO13",
+        "5": "UP_GPIO15",
+        "6": "UP_GPIO16",
+        "7": "UP_GPIO17",
+        "8": "UP_GPIO18",
+        "9": "UP_GPIO21"
       },
       "schematic": [
         330,
         95
       ],
       "pcb": [
-        68,
-        35
+        73,
+        5
       ],
+      "local_pcb": [
+        73,
+        5
+      ],
+      "section": "upper",
       "footprint": "Connector_PinHeader_2.54mm:PinHeader_1x09_P2.54mm_Vertical",
       "angle": 0,
       "side": "F",
@@ -231,9 +432,14 @@
         95
       ],
       "pcb": [
+        116,
+        184
+      ],
+      "local_pcb": [
         10,
         3
       ],
+      "section": "lower",
       "footprint": "Connector_PinHeader_2.54mm:PinHeader_1x10_P2.54mm_Vertical",
       "angle": 90,
       "side": "F",
@@ -254,9 +460,14 @@
         160
       ],
       "pcb": [
+        61,
+        183
+      ],
+      "local_pcb": [
         65,
         4
       ],
+      "section": "lower",
       "footprint": "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical",
       "angle": 90,
       "side": "F",
@@ -277,9 +488,14 @@
         160
       ],
       "pcb": [
+        52,
+        183
+      ],
+      "local_pcb": [
         74,
         4
       ],
+      "section": "lower",
       "footprint": "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical",
       "angle": 90,
       "side": "F",
@@ -292,17 +508,22 @@
       "lib": "Device:C",
       "value": "10u 10V X7R",
       "nets": {
-        "1": "+3V3",
-        "2": "GND"
+        "1": "UP_3V3",
+        "2": "UP_GND"
       },
       "schematic": [
         80,
         200
       ],
       "pcb": [
-        74,
-        30
+        89,
+        28
       ],
+      "local_pcb": [
+        89,
+        28
+      ],
+      "section": "upper",
       "footprint": "Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder",
       "angle": 0,
       "side": "F",
@@ -315,17 +536,22 @@
       "lib": "Device:C",
       "value": "100n 16V X7R",
       "nets": {
-        "1": "+3V3",
-        "2": "GND"
+        "1": "UP_3V3",
+        "2": "UP_GND"
       },
       "schematic": [
         130,
         200
       ],
       "pcb": [
-        79,
-        30
+        94,
+        28
       ],
+      "local_pcb": [
+        94,
+        28
+      ],
+      "section": "upper",
       "footprint": "Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder",
       "angle": 0,
       "side": "F",
@@ -338,17 +564,22 @@
       "lib": "Device:R",
       "value": "4.7k DNP",
       "nets": {
-        "1": "+3V3",
-        "2": "GPIO13"
+        "1": "UP_3V3",
+        "2": "UP_GPIO13"
       },
       "schematic": [
         220,
         200
       ],
       "pcb": [
-        74,
-        40
+        101,
+        28
       ],
+      "local_pcb": [
+        101,
+        28
+      ],
+      "section": "upper",
       "footprint": "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder",
       "angle": 0,
       "side": "F",
@@ -361,17 +592,22 @@
       "lib": "Device:R",
       "value": "4.7k DNP",
       "nets": {
-        "1": "+3V3",
-        "2": "GPIO14"
+        "1": "UP_3V3",
+        "2": "UP_GPIO14"
       },
       "schematic": [
         285,
         200
       ],
       "pcb": [
-        79,
-        40
+        106,
+        28
       ],
+      "local_pcb": [
+        106,
+        28
+      ],
+      "section": "upper",
       "footprint": "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder",
       "angle": 0,
       "side": "F",
@@ -392,9 +628,14 @@
         200
       ],
       "pcb": [
+        54,
+        175
+      ],
+      "local_pcb": [
         72,
         12
       ],
+      "section": "lower",
       "footprint": "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder",
       "angle": 0,
       "side": "F",
@@ -403,12 +644,104 @@
       "dnp": false
     },
     {
+      "ref": "J8",
+      "lib": "Connector_Generic:Conn_02x10_Odd_Even",
+      "value": "LOWER / IDC20 TO J9 / 1:1",
+      "nets": {
+        "1": "GND",
+        "2": "+3V3",
+        "3": "GPIO4",
+        "4": "GPIO5",
+        "5": "GPIO6",
+        "6": "GPIO7",
+        "7": "GPIO8",
+        "8": "GPIO9",
+        "9": "GPIO10",
+        "10": "GPIO11",
+        "11": "GPIO12",
+        "12": "GND",
+        "13": "GPIO13",
+        "14": "GPIO14",
+        "15": "GPIO15",
+        "16": "GPIO16",
+        "17": "GPIO17",
+        "18": "GPIO18",
+        "19": "GPIO21",
+        "20": "+3V3"
+      },
+      "schematic": [
+        115,
+        160
+      ],
+      "pcb": [
+        79,
+        162
+      ],
+      "local_pcb": [
+        47,
+        25
+      ],
+      "section": "lower",
+      "footprint": "Connector_IDC:IDC-Header_2x10_P2.54mm_Vertical",
+      "angle": 90,
+      "side": "F",
+      "uuid": "4edd9100-2a92-5ddb-b8b2-84be3ec341df",
+      "mpn": "",
+      "dnp": false
+    },
+    {
+      "ref": "J9",
+      "lib": "Connector_Generic:Conn_02x10_Odd_Even",
+      "value": "UPPER / IDC20 TO J8 / 1:1",
+      "nets": {
+        "1": "UP_GND",
+        "2": "UP_3V3",
+        "3": "UP_GPIO4",
+        "4": "UP_GPIO5",
+        "5": "UP_GPIO6",
+        "6": "UP_GPIO7",
+        "7": "UP_GPIO8",
+        "8": "UP_GPIO9",
+        "9": "UP_GPIO10",
+        "10": "UP_GPIO11",
+        "11": "UP_GPIO12",
+        "12": "UP_GND",
+        "13": "UP_GPIO13",
+        "14": "UP_GPIO14",
+        "15": "UP_GPIO15",
+        "16": "UP_GPIO16",
+        "17": "UP_GPIO17",
+        "18": "UP_GPIO18",
+        "19": "UP_GPIO21",
+        "20": "UP_3V3"
+      },
+      "schematic": [
+        515,
+        160
+      ],
+      "pcb": [
+        112,
+        15
+      ],
+      "local_pcb": [
+        112,
+        15
+      ],
+      "section": "upper",
+      "footprint": "Connector_IDC:IDC-Header_2x10_P2.54mm_Vertical",
+      "angle": 90,
+      "side": "B",
+      "uuid": "ceb52f79-f859-548d-ba62-578c61fae309",
+      "mpn": "",
+      "dnp": false
+    },
+    {
       "ref": "SW1",
       "lib": "Switch:SW_Push",
       "value": "KEY_1 MX HOTSWAP",
       "nets": {
-        "1": "GPIO7",
-        "2": "KEY_1_A"
+        "1": "UP_GPIO7",
+        "2": "UP_KEY_1_A"
       },
       "schematic": [
         55,
@@ -416,8 +749,13 @@
       ],
       "pcb": [
         16.875,
-        86.375
+        48.0
       ],
+      "local_pcb": [
+        16.875,
+        48.0
+      ],
+      "section": "upper",
       "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
       "angle": 0,
       "side": "B",
@@ -430,8 +768,8 @@
       "lib": "Device:D",
       "value": "1N4148W / K TO ROW",
       "nets": {
-        "1": "GPIO4",
-        "2": "KEY_1_A"
+        "1": "UP_GPIO4",
+        "2": "UP_KEY_1_A"
       },
       "schematic": [
         90,
@@ -439,8 +777,13 @@
       ],
       "pcb": [
         16.875,
-        80.375
+        42.0
       ],
+      "local_pcb": [
+        16.875,
+        42.0
+      ],
+      "section": "upper",
       "footprint": "Diode_SMD:D_SOD-123",
       "angle": 0,
       "side": "B",
@@ -453,8 +796,8 @@
       "lib": "Switch:SW_Push",
       "value": "KEY_2 MX HOTSWAP",
       "nets": {
-        "1": "GPIO8",
-        "2": "KEY_2_A"
+        "1": "UP_GPIO8",
+        "2": "UP_KEY_2_A"
       },
       "schematic": [
         145,
@@ -462,8 +805,13 @@
       ],
       "pcb": [
         35.925,
-        86.375
+        48.0
       ],
+      "local_pcb": [
+        35.925,
+        48.0
+      ],
+      "section": "upper",
       "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
       "angle": 0,
       "side": "B",
@@ -476,8 +824,8 @@
       "lib": "Device:D",
       "value": "1N4148W / K TO ROW",
       "nets": {
-        "1": "GPIO4",
-        "2": "KEY_2_A"
+        "1": "UP_GPIO4",
+        "2": "UP_KEY_2_A"
       },
       "schematic": [
         180,
@@ -485,8 +833,13 @@
       ],
       "pcb": [
         35.925,
-        80.375
+        42.0
       ],
+      "local_pcb": [
+        35.925,
+        42.0
+      ],
+      "section": "upper",
       "footprint": "Diode_SMD:D_SOD-123",
       "angle": 0,
       "side": "B",
@@ -499,8 +852,8 @@
       "lib": "Switch:SW_Push",
       "value": "KEY_3 MX HOTSWAP",
       "nets": {
-        "1": "GPIO9",
-        "2": "KEY_3_A"
+        "1": "UP_GPIO9",
+        "2": "UP_KEY_3_A"
       },
       "schematic": [
         235,
@@ -508,8 +861,13 @@
       ],
       "pcb": [
         54.974999999999994,
-        86.375
+        48.0
       ],
+      "local_pcb": [
+        54.974999999999994,
+        48.0
+      ],
+      "section": "upper",
       "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
       "angle": 0,
       "side": "B",
@@ -522,8 +880,8 @@
       "lib": "Device:D",
       "value": "1N4148W / K TO ROW",
       "nets": {
-        "1": "GPIO4",
-        "2": "KEY_3_A"
+        "1": "UP_GPIO4",
+        "2": "UP_KEY_3_A"
       },
       "schematic": [
         270,
@@ -531,8 +889,13 @@
       ],
       "pcb": [
         54.974999999999994,
-        80.375
+        42.0
       ],
+      "local_pcb": [
+        54.974999999999994,
+        42.0
+      ],
+      "section": "upper",
       "footprint": "Diode_SMD:D_SOD-123",
       "angle": 0,
       "side": "B",
@@ -545,8 +908,8 @@
       "lib": "Switch:SW_Push",
       "value": "KEY_4 MX HOTSWAP",
       "nets": {
-        "1": "GPIO10",
-        "2": "KEY_4_A"
+        "1": "UP_GPIO10",
+        "2": "UP_KEY_4_A"
       },
       "schematic": [
         325,
@@ -554,8 +917,13 @@
       ],
       "pcb": [
         74.02499999999998,
-        86.375
+        48.0
       ],
+      "local_pcb": [
+        74.02499999999998,
+        48.0
+      ],
+      "section": "upper",
       "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
       "angle": 0,
       "side": "B",
@@ -568,8 +936,8 @@
       "lib": "Device:D",
       "value": "1N4148W / K TO ROW",
       "nets": {
-        "1": "GPIO4",
-        "2": "KEY_4_A"
+        "1": "UP_GPIO4",
+        "2": "UP_KEY_4_A"
       },
       "schematic": [
         360,
@@ -577,8 +945,13 @@
       ],
       "pcb": [
         74.02499999999998,
-        80.375
+        42.0
       ],
+      "local_pcb": [
+        74.02499999999998,
+        42.0
+      ],
+      "section": "upper",
       "footprint": "Diode_SMD:D_SOD-123",
       "angle": 0,
       "side": "B",
@@ -591,8 +964,8 @@
       "lib": "Switch:SW_Push",
       "value": "KEY_5 MX HOTSWAP",
       "nets": {
-        "1": "GPIO11",
-        "2": "KEY_5_A"
+        "1": "UP_GPIO11",
+        "2": "UP_KEY_5_A"
       },
       "schematic": [
         415,
@@ -600,8 +973,13 @@
       ],
       "pcb": [
         93.07499999999999,
-        86.375
+        48.0
       ],
+      "local_pcb": [
+        93.07499999999999,
+        48.0
+      ],
+      "section": "upper",
       "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
       "angle": 0,
       "side": "B",
@@ -614,8 +992,8 @@
       "lib": "Device:D",
       "value": "1N4148W / K TO ROW",
       "nets": {
-        "1": "GPIO4",
-        "2": "KEY_5_A"
+        "1": "UP_GPIO4",
+        "2": "UP_KEY_5_A"
       },
       "schematic": [
         450,
@@ -623,8 +1001,13 @@
       ],
       "pcb": [
         93.07499999999999,
-        80.375
+        42.0
       ],
+      "local_pcb": [
+        93.07499999999999,
+        42.0
+      ],
+      "section": "upper",
       "footprint": "Diode_SMD:D_SOD-123",
       "angle": 0,
       "side": "B",
@@ -637,8 +1020,8 @@
       "lib": "Switch:SW_Push",
       "value": "KEY_6 MX HOTSWAP",
       "nets": {
-        "1": "GPIO12",
-        "2": "KEY_6_A"
+        "1": "UP_GPIO12",
+        "2": "UP_KEY_6_A"
       },
       "schematic": [
         505,
@@ -646,8 +1029,13 @@
       ],
       "pcb": [
         112.125,
-        86.375
+        48.0
       ],
+      "local_pcb": [
+        112.125,
+        48.0
+      ],
+      "section": "upper",
       "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
       "angle": 0,
       "side": "B",
@@ -660,8 +1048,8 @@
       "lib": "Device:D",
       "value": "1N4148W / K TO ROW",
       "nets": {
-        "1": "GPIO4",
-        "2": "KEY_6_A"
+        "1": "UP_GPIO4",
+        "2": "UP_KEY_6_A"
       },
       "schematic": [
         540,
@@ -669,8 +1057,13 @@
       ],
       "pcb": [
         112.125,
-        80.375
+        42.0
       ],
+      "local_pcb": [
+        112.125,
+        42.0
+      ],
+      "section": "upper",
       "footprint": "Diode_SMD:D_SOD-123",
       "angle": 0,
       "side": "B",
@@ -683,8 +1076,8 @@
       "lib": "Switch:SW_Push",
       "value": "KEY_7 MX HOTSWAP",
       "nets": {
-        "1": "GPIO7",
-        "2": "KEY_7_A"
+        "1": "UP_GPIO7",
+        "2": "UP_KEY_7_A"
       },
       "schematic": [
         55,
@@ -692,8 +1085,13 @@
       ],
       "pcb": [
         16.875,
-        105.425
+        67.05
       ],
+      "local_pcb": [
+        16.875,
+        67.05
+      ],
+      "section": "upper",
       "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
       "angle": 0,
       "side": "B",
@@ -706,8 +1104,8 @@
       "lib": "Device:D",
       "value": "1N4148W / K TO ROW",
       "nets": {
-        "1": "GPIO5",
-        "2": "KEY_7_A"
+        "1": "UP_GPIO5",
+        "2": "UP_KEY_7_A"
       },
       "schematic": [
         90,
@@ -715,8 +1113,13 @@
       ],
       "pcb": [
         16.875,
-        99.425
+        61.05
       ],
+      "local_pcb": [
+        16.875,
+        61.05
+      ],
+      "section": "upper",
       "footprint": "Diode_SMD:D_SOD-123",
       "angle": 0,
       "side": "B",
@@ -729,8 +1132,8 @@
       "lib": "Switch:SW_Push",
       "value": "KEY_8 MX HOTSWAP",
       "nets": {
-        "1": "GPIO8",
-        "2": "KEY_8_A"
+        "1": "UP_GPIO8",
+        "2": "UP_KEY_8_A"
       },
       "schematic": [
         145,
@@ -738,8 +1141,13 @@
       ],
       "pcb": [
         35.925,
-        105.425
+        67.05
       ],
+      "local_pcb": [
+        35.925,
+        67.05
+      ],
+      "section": "upper",
       "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
       "angle": 0,
       "side": "B",
@@ -752,8 +1160,8 @@
       "lib": "Device:D",
       "value": "1N4148W / K TO ROW",
       "nets": {
-        "1": "GPIO5",
-        "2": "KEY_8_A"
+        "1": "UP_GPIO5",
+        "2": "UP_KEY_8_A"
       },
       "schematic": [
         180,
@@ -761,8 +1169,13 @@
       ],
       "pcb": [
         35.925,
-        99.425
+        61.05
       ],
+      "local_pcb": [
+        35.925,
+        61.05
+      ],
+      "section": "upper",
       "footprint": "Diode_SMD:D_SOD-123",
       "angle": 0,
       "side": "B",
@@ -775,8 +1188,8 @@
       "lib": "Switch:SW_Push",
       "value": "KEY_9 MX HOTSWAP",
       "nets": {
-        "1": "GPIO9",
-        "2": "KEY_9_A"
+        "1": "UP_GPIO9",
+        "2": "UP_KEY_9_A"
       },
       "schematic": [
         235,
@@ -784,8 +1197,13 @@
       ],
       "pcb": [
         54.974999999999994,
-        105.425
+        67.05
       ],
+      "local_pcb": [
+        54.974999999999994,
+        67.05
+      ],
+      "section": "upper",
       "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
       "angle": 0,
       "side": "B",
@@ -798,8 +1216,8 @@
       "lib": "Device:D",
       "value": "1N4148W / K TO ROW",
       "nets": {
-        "1": "GPIO5",
-        "2": "KEY_9_A"
+        "1": "UP_GPIO5",
+        "2": "UP_KEY_9_A"
       },
       "schematic": [
         270,
@@ -807,8 +1225,13 @@
       ],
       "pcb": [
         54.974999999999994,
-        99.425
+        61.05
       ],
+      "local_pcb": [
+        54.974999999999994,
+        61.05
+      ],
+      "section": "upper",
       "footprint": "Diode_SMD:D_SOD-123",
       "angle": 0,
       "side": "B",
@@ -821,8 +1244,8 @@
       "lib": "Switch:SW_Push",
       "value": "KEY_10 MX HOTSWAP",
       "nets": {
-        "1": "GPIO10",
-        "2": "KEY_10_A"
+        "1": "UP_GPIO10",
+        "2": "UP_KEY_10_A"
       },
       "schematic": [
         325,
@@ -830,8 +1253,13 @@
       ],
       "pcb": [
         74.02499999999998,
-        105.425
+        67.05
       ],
+      "local_pcb": [
+        74.02499999999998,
+        67.05
+      ],
+      "section": "upper",
       "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
       "angle": 0,
       "side": "B",
@@ -844,8 +1272,8 @@
       "lib": "Device:D",
       "value": "1N4148W / K TO ROW",
       "nets": {
-        "1": "GPIO5",
-        "2": "KEY_10_A"
+        "1": "UP_GPIO5",
+        "2": "UP_KEY_10_A"
       },
       "schematic": [
         360,
@@ -853,8 +1281,13 @@
       ],
       "pcb": [
         74.02499999999998,
-        99.425
+        61.05
       ],
+      "local_pcb": [
+        74.02499999999998,
+        61.05
+      ],
+      "section": "upper",
       "footprint": "Diode_SMD:D_SOD-123",
       "angle": 0,
       "side": "B",
@@ -867,8 +1300,8 @@
       "lib": "Switch:SW_Push",
       "value": "KEY_11 MX HOTSWAP",
       "nets": {
-        "1": "GPIO11",
-        "2": "KEY_11_A"
+        "1": "UP_GPIO11",
+        "2": "UP_KEY_11_A"
       },
       "schematic": [
         415,
@@ -876,8 +1309,13 @@
       ],
       "pcb": [
         93.07499999999999,
-        105.425
+        67.05
       ],
+      "local_pcb": [
+        93.07499999999999,
+        67.05
+      ],
+      "section": "upper",
       "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
       "angle": 0,
       "side": "B",
@@ -890,8 +1328,8 @@
       "lib": "Device:D",
       "value": "1N4148W / K TO ROW",
       "nets": {
-        "1": "GPIO5",
-        "2": "KEY_11_A"
+        "1": "UP_GPIO5",
+        "2": "UP_KEY_11_A"
       },
       "schematic": [
         450,
@@ -899,8 +1337,13 @@
       ],
       "pcb": [
         93.07499999999999,
-        99.425
+        61.05
       ],
+      "local_pcb": [
+        93.07499999999999,
+        61.05
+      ],
+      "section": "upper",
       "footprint": "Diode_SMD:D_SOD-123",
       "angle": 0,
       "side": "B",
@@ -913,8 +1356,8 @@
       "lib": "Switch:SW_Push",
       "value": "KEY_12 MX HOTSWAP",
       "nets": {
-        "1": "GPIO12",
-        "2": "KEY_12_A"
+        "1": "UP_GPIO12",
+        "2": "UP_KEY_12_A"
       },
       "schematic": [
         505,
@@ -922,8 +1365,13 @@
       ],
       "pcb": [
         112.125,
-        105.425
+        67.05
       ],
+      "local_pcb": [
+        112.125,
+        67.05
+      ],
+      "section": "upper",
       "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
       "angle": 0,
       "side": "B",
@@ -936,8 +1384,8 @@
       "lib": "Device:D",
       "value": "1N4148W / K TO ROW",
       "nets": {
-        "1": "GPIO5",
-        "2": "KEY_12_A"
+        "1": "UP_GPIO5",
+        "2": "UP_KEY_12_A"
       },
       "schematic": [
         540,
@@ -945,8 +1393,13 @@
       ],
       "pcb": [
         112.125,
-        99.425
+        61.05
       ],
+      "local_pcb": [
+        112.125,
+        61.05
+      ],
+      "section": "upper",
       "footprint": "Diode_SMD:D_SOD-123",
       "angle": 0,
       "side": "B",
@@ -959,8 +1412,8 @@
       "lib": "Switch:SW_Push",
       "value": "KEY_13 MX HOTSWAP",
       "nets": {
-        "1": "GPIO7",
-        "2": "KEY_13_A"
+        "1": "UP_GPIO7",
+        "2": "UP_KEY_13_A"
       },
       "schematic": [
         55,
@@ -968,8 +1421,13 @@
       ],
       "pcb": [
         16.875,
-        124.475
+        86.1
       ],
+      "local_pcb": [
+        16.875,
+        86.1
+      ],
+      "section": "upper",
       "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
       "angle": 0,
       "side": "B",
@@ -982,8 +1440,8 @@
       "lib": "Device:D",
       "value": "1N4148W / K TO ROW",
       "nets": {
-        "1": "GPIO6",
-        "2": "KEY_13_A"
+        "1": "UP_GPIO6",
+        "2": "UP_KEY_13_A"
       },
       "schematic": [
         90,
@@ -991,8 +1449,13 @@
       ],
       "pcb": [
         16.875,
-        118.475
+        80.1
       ],
+      "local_pcb": [
+        16.875,
+        80.1
+      ],
+      "section": "upper",
       "footprint": "Diode_SMD:D_SOD-123",
       "angle": 0,
       "side": "B",
@@ -1005,8 +1468,8 @@
       "lib": "Switch:SW_Push",
       "value": "KEY_14 MX HOTSWAP",
       "nets": {
-        "1": "GPIO8",
-        "2": "KEY_14_A"
+        "1": "UP_GPIO8",
+        "2": "UP_KEY_14_A"
       },
       "schematic": [
         145,
@@ -1014,8 +1477,13 @@
       ],
       "pcb": [
         35.925,
-        124.475
+        86.1
       ],
+      "local_pcb": [
+        35.925,
+        86.1
+      ],
+      "section": "upper",
       "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
       "angle": 0,
       "side": "B",
@@ -1028,8 +1496,8 @@
       "lib": "Device:D",
       "value": "1N4148W / K TO ROW",
       "nets": {
-        "1": "GPIO6",
-        "2": "KEY_14_A"
+        "1": "UP_GPIO6",
+        "2": "UP_KEY_14_A"
       },
       "schematic": [
         180,
@@ -1037,8 +1505,13 @@
       ],
       "pcb": [
         35.925,
-        118.475
+        80.1
       ],
+      "local_pcb": [
+        35.925,
+        80.1
+      ],
+      "section": "upper",
       "footprint": "Diode_SMD:D_SOD-123",
       "angle": 0,
       "side": "B",
@@ -1051,8 +1524,8 @@
       "lib": "Switch:SW_Push",
       "value": "KEY_15 MX HOTSWAP",
       "nets": {
-        "1": "GPIO9",
-        "2": "KEY_15_A"
+        "1": "UP_GPIO9",
+        "2": "UP_KEY_15_A"
       },
       "schematic": [
         235,
@@ -1060,8 +1533,13 @@
       ],
       "pcb": [
         54.974999999999994,
-        124.475
+        86.1
       ],
+      "local_pcb": [
+        54.974999999999994,
+        86.1
+      ],
+      "section": "upper",
       "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
       "angle": 0,
       "side": "B",
@@ -1074,8 +1552,8 @@
       "lib": "Device:D",
       "value": "1N4148W / K TO ROW",
       "nets": {
-        "1": "GPIO6",
-        "2": "KEY_15_A"
+        "1": "UP_GPIO6",
+        "2": "UP_KEY_15_A"
       },
       "schematic": [
         270,
@@ -1083,8 +1561,13 @@
       ],
       "pcb": [
         54.974999999999994,
-        118.475
+        80.1
       ],
+      "local_pcb": [
+        54.974999999999994,
+        80.1
+      ],
+      "section": "upper",
       "footprint": "Diode_SMD:D_SOD-123",
       "angle": 0,
       "side": "B",
@@ -1097,8 +1580,8 @@
       "lib": "Switch:SW_Push",
       "value": "KEY_16 MX HOTSWAP",
       "nets": {
-        "1": "GPIO10",
-        "2": "KEY_16_A"
+        "1": "UP_GPIO10",
+        "2": "UP_KEY_16_A"
       },
       "schematic": [
         325,
@@ -1106,8 +1589,13 @@
       ],
       "pcb": [
         74.02499999999998,
-        124.475
+        86.1
       ],
+      "local_pcb": [
+        74.02499999999998,
+        86.1
+      ],
+      "section": "upper",
       "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
       "angle": 0,
       "side": "B",
@@ -1120,8 +1608,8 @@
       "lib": "Device:D",
       "value": "1N4148W / K TO ROW",
       "nets": {
-        "1": "GPIO6",
-        "2": "KEY_16_A"
+        "1": "UP_GPIO6",
+        "2": "UP_KEY_16_A"
       },
       "schematic": [
         360,
@@ -1129,8 +1617,13 @@
       ],
       "pcb": [
         74.02499999999998,
-        118.475
+        80.1
       ],
+      "local_pcb": [
+        74.02499999999998,
+        80.1
+      ],
+      "section": "upper",
       "footprint": "Diode_SMD:D_SOD-123",
       "angle": 0,
       "side": "B",
@@ -1143,8 +1636,8 @@
       "lib": "Switch:SW_Push",
       "value": "KEY_17 MX HOTSWAP",
       "nets": {
-        "1": "GPIO11",
-        "2": "KEY_17_A"
+        "1": "UP_GPIO11",
+        "2": "UP_KEY_17_A"
       },
       "schematic": [
         415,
@@ -1152,8 +1645,13 @@
       ],
       "pcb": [
         93.07499999999999,
-        124.475
+        86.1
       ],
+      "local_pcb": [
+        93.07499999999999,
+        86.1
+      ],
+      "section": "upper",
       "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
       "angle": 0,
       "side": "B",
@@ -1166,8 +1664,8 @@
       "lib": "Device:D",
       "value": "1N4148W / K TO ROW",
       "nets": {
-        "1": "GPIO6",
-        "2": "KEY_17_A"
+        "1": "UP_GPIO6",
+        "2": "UP_KEY_17_A"
       },
       "schematic": [
         450,
@@ -1175,8 +1673,13 @@
       ],
       "pcb": [
         93.07499999999999,
-        118.475
+        80.1
       ],
+      "local_pcb": [
+        93.07499999999999,
+        80.1
+      ],
+      "section": "upper",
       "footprint": "Diode_SMD:D_SOD-123",
       "angle": 0,
       "side": "B",
@@ -1189,8 +1692,8 @@
       "lib": "Switch:SW_Push",
       "value": "KEY_18 MX HOTSWAP",
       "nets": {
-        "1": "GPIO12",
-        "2": "KEY_18_A"
+        "1": "UP_GPIO12",
+        "2": "UP_KEY_18_A"
       },
       "schematic": [
         505,
@@ -1198,8 +1701,13 @@
       ],
       "pcb": [
         112.125,
-        124.475
+        86.1
       ],
+      "local_pcb": [
+        112.125,
+        86.1
+      ],
+      "section": "upper",
       "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
       "angle": 0,
       "side": "B",
@@ -1212,8 +1720,8 @@
       "lib": "Device:D",
       "value": "1N4148W / K TO ROW",
       "nets": {
-        "1": "GPIO6",
-        "2": "KEY_18_A"
+        "1": "UP_GPIO6",
+        "2": "UP_KEY_18_A"
       },
       "schematic": [
         540,
@@ -1221,8 +1729,13 @@
       ],
       "pcb": [
         112.125,
-        118.475
+        80.1
       ],
+      "local_pcb": [
+        112.125,
+        80.1
+      ],
+      "section": "upper",
       "footprint": "Diode_SMD:D_SOD-123",
       "angle": 0,
       "side": "B",
@@ -1239,7 +1752,7 @@
       "panel_x": 19.875,
       "panel_y": 56.625,
       "pcb_x": 16.875,
-      "pcb_y": 86.375
+      "pcb_y": 48.0
     },
     {
       "key": "KEY_2",
@@ -1248,7 +1761,7 @@
       "panel_x": 38.925,
       "panel_y": 56.625,
       "pcb_x": 35.925,
-      "pcb_y": 86.375
+      "pcb_y": 48.0
     },
     {
       "key": "KEY_3",
@@ -1257,7 +1770,7 @@
       "panel_x": 57.974999999999994,
       "panel_y": 56.625,
       "pcb_x": 54.974999999999994,
-      "pcb_y": 86.375
+      "pcb_y": 48.0
     },
     {
       "key": "KEY_4",
@@ -1266,7 +1779,7 @@
       "panel_x": 77.02499999999998,
       "panel_y": 56.625,
       "pcb_x": 74.02499999999998,
-      "pcb_y": 86.375
+      "pcb_y": 48.0
     },
     {
       "key": "KEY_5",
@@ -1275,7 +1788,7 @@
       "panel_x": 96.07499999999999,
       "panel_y": 56.625,
       "pcb_x": 93.07499999999999,
-      "pcb_y": 86.375
+      "pcb_y": 48.0
     },
     {
       "key": "KEY_6",
@@ -1284,7 +1797,7 @@
       "panel_x": 115.125,
       "panel_y": 56.625,
       "pcb_x": 112.125,
-      "pcb_y": 86.375
+      "pcb_y": 48.0
     },
     {
       "key": "KEY_7",
@@ -1293,7 +1806,7 @@
       "panel_x": 19.875,
       "panel_y": 37.575,
       "pcb_x": 16.875,
-      "pcb_y": 105.425
+      "pcb_y": 67.05
     },
     {
       "key": "KEY_8",
@@ -1302,7 +1815,7 @@
       "panel_x": 38.925,
       "panel_y": 37.575,
       "pcb_x": 35.925,
-      "pcb_y": 105.425
+      "pcb_y": 67.05
     },
     {
       "key": "KEY_9",
@@ -1311,7 +1824,7 @@
       "panel_x": 57.974999999999994,
       "panel_y": 37.575,
       "pcb_x": 54.974999999999994,
-      "pcb_y": 105.425
+      "pcb_y": 67.05
     },
     {
       "key": "KEY_10",
@@ -1320,7 +1833,7 @@
       "panel_x": 77.02499999999998,
       "panel_y": 37.575,
       "pcb_x": 74.02499999999998,
-      "pcb_y": 105.425
+      "pcb_y": 67.05
     },
     {
       "key": "KEY_11",
@@ -1329,7 +1842,7 @@
       "panel_x": 96.07499999999999,
       "panel_y": 37.575,
       "pcb_x": 93.07499999999999,
-      "pcb_y": 105.425
+      "pcb_y": 67.05
     },
     {
       "key": "KEY_12",
@@ -1338,7 +1851,7 @@
       "panel_x": 115.125,
       "panel_y": 37.575,
       "pcb_x": 112.125,
-      "pcb_y": 105.425
+      "pcb_y": 67.05
     },
     {
       "key": "KEY_13",
@@ -1347,7 +1860,7 @@
       "panel_x": 19.875,
       "panel_y": 18.525,
       "pcb_x": 16.875,
-      "pcb_y": 124.475
+      "pcb_y": 86.1
     },
     {
       "key": "KEY_14",
@@ -1356,7 +1869,7 @@
       "panel_x": 38.925,
       "panel_y": 18.525,
       "pcb_x": 35.925,
-      "pcb_y": 124.475
+      "pcb_y": 86.1
     },
     {
       "key": "KEY_15",
@@ -1365,7 +1878,7 @@
       "panel_x": 57.974999999999994,
       "panel_y": 18.525,
       "pcb_x": 54.974999999999994,
-      "pcb_y": 124.475
+      "pcb_y": 86.1
     },
     {
       "key": "KEY_16",
@@ -1374,7 +1887,7 @@
       "panel_x": 77.02499999999998,
       "panel_y": 18.525,
       "pcb_x": 74.02499999999998,
-      "pcb_y": 124.475
+      "pcb_y": 86.1
     },
     {
       "key": "KEY_17",
@@ -1383,7 +1896,7 @@
       "panel_x": 96.07499999999999,
       "panel_y": 18.525,
       "pcb_x": 93.07499999999999,
-      "pcb_y": 124.475
+      "pcb_y": 86.1
     },
     {
       "key": "KEY_18",
@@ -1392,7 +1905,7 @@
       "panel_x": 115.125,
       "panel_y": 18.525,
       "pcb_x": 112.125,
-      "pcb_y": 124.475
+      "pcb_y": 86.1
     }
   ]
 }

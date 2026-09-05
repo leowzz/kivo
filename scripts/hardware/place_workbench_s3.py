@@ -170,6 +170,9 @@ def generate(manifest, output, libraries, view="panel"):
         text("S3 r01 / UNROUTED", 30, 13, "upper")
         text("J2 DISPLAY / 3V3", 28, 30, "upper")
         text("J9 IDC20 / TO LOWER J8", 101, 24, "upper", pcb.B_SilkS, size=0.8)
+        for ref, x in [("C1",89), ("C2",94), ("R1",101), ("R2",106)]:
+            text(ref, x, 31, "upper", size=0.8)
+        text("R1/R2 DNP", 103.5, 34, "upper", size=0.8)
         for row, label in enumerate(["GND", "3V3", "SCL", "SDA", "OK", "PRESS", "A", "B", "BACK"]):
             text(label, 68, 5+row*2.54, "upper", size=0.8)
         for key in data["keys"]:
@@ -185,6 +188,7 @@ def generate(manifest, output, libraries, view="panel"):
         text("J4 / 3V3 IO", 21.43, 12, "lower", size=0.8)
         text("BOOT", 66.27, 1, "lower", size=0.8)
         text("RESET", 75.27, 1, "lower", size=0.8)
+        text("R3", 72, 15, "lower", size=0.8)
         text("J7 / P2", 82, 26, "lower", size=0.8, angle=90)
         text("J1 / P1", 116, 26, "lower", size=0.8, angle=90)
         text("2 x 22 SOCKETS", 99, 28, "lower")

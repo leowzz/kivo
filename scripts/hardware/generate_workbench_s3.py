@@ -104,7 +104,7 @@ def generate(library_root, output):
     add("J8", "Connector_Generic:Conn_02x10_Odd_Even", "LOWER / IDC20 TO J9 / 1:1",
         {str(i+1): net for i, net in enumerate(cable_signals)}, (115, 160), (47, 25), idc, angle=90)
     add("J9", "Connector_Generic:Conn_02x10_Odd_Even", "UPPER / IDC20 TO J8 / 1:1",
-        {str(i+1): net for i, net in enumerate(cable_signals)}, (515, 160), (90, 15), idc,
+        {str(i+1): net for i, net in enumerate(cable_signals)}, (515, 160), (112, 15), idc,
         angle=90, side="B", section="upper")
     key_centers = []
     for index in range(18):
@@ -129,7 +129,7 @@ def generate(library_root, output):
     schematic = node("kicad_sch", node("version", 20250114), node("generator", "eeschema"),
                      node("uuid", root_id), node("paper", "A2"),
                      node("title_block", node("title", "Kivo Workbench"),
-                          node("rev", "S3 r01 TWO-BOARD DRAFT"), node("date", "2026-09-05")))
+                          node("rev", "S3 r01 / SPLIT"), node("date", "2026-09-05")))
     schematic.append(node("lib_symbols", *[value for _, value in sorted(symbols.used.items())]))
     for part in parts:
         symbol = symbols.get(part["lib"])

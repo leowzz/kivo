@@ -1,4 +1,4 @@
-# Workbench S3 r01 - Socketed Carrier
+# Workbench S3 r01 - Stacked Breakaway Boards
 
 Independent **unrouted review draft**, using the YD ESP32-S3 core board from
 `refer/YD-ESP32-S3/`. Open `workbench-s3-r01.kicad_pro` in KiCad 10.
@@ -7,6 +7,13 @@ for fabrication and is not a released product definition.
 
 ## Architecture
 
+- Manufacture a single mechanically connected 126 x 187 mm panel, then cut
+  the perforated tabs into an upper key board and a lower controller board.
+- Assemble the 126 x 86 mm lower board horizontally and the 126 x 98 mm upper
+  board rear-high at a nominal 30 degrees. The PCB projection fits in 86 mm
+  depth, compared with 135 mm for the previous single-board draft.
+- J8 on the lower board and J9 on the upper underside connect by one IDC20
+  ribbon cable. There are no electrical connections through the tabs.
 - Preassembled YD ESP32-S3 plugs into two 1x22 female sockets, J1 and J7.
 - Reuse the core board's native USB Type-C for HID/data and power.
 - 18 MX hot-swap keys use a 3x6 matrix with one 1N4148W diode per key.
@@ -68,7 +75,8 @@ themselves change the firmware's multi-key filtering behavior.
 
 ## Other Interfaces
 
-All pin orders below are from the component side with USB at the top.
+All pin orders below use each separated board's front/component-side view,
+rear edge at the top. The lower board is rotated 180 degrees in the panel.
 
 | J2 Pin | Signal | GPIO |
 | --- | --- | --- |
@@ -87,7 +95,7 @@ module connector order. Check the actual module's power rating and labels.
 R1/R2 are optional 4.7 kohm I2C pull-ups: fit them only if the module does
 not already provide suitable pull-ups.
 
-J4 sits at the upper-left edge. Its 1x10, 2.54 mm pitch plated holes have
+J4 sits at the lower board's rear-left edge. Its 1x10, 2.54 mm pitch plated holes have
 1.0 mm drills. From the left square pad to the right:
 
 | Pin | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
@@ -108,36 +116,122 @@ They parallel the core board buttons. R3 adds a 10 kohm BOOT pull-up; the
 module already supplies the EN pull-up and reset capacitors. Hold BOOT,
 press/release RESET, then release BOOT to request the ROM download mode.
 
-## Mechanical Basis
+## Board-to-Board Cable
 
-The proposed carrier is 126 x 135 mm, two copper layers, 1.6 mm thick.
-Its rear is 30 mm deeper than the RP2040 carrier. The 18 key centers retain
-19.05 mm pitch and their relative geometry; only their distance from the
-new rear edge changes. A new enclosure and panel are allowed and required.
-Existing STL and CAD outputs have not been regenerated.
+Use two shrouded, keyed **2x10, 2.54 mm pitch, vertical through-hole IDC
+headers** and two matching female IDC cable connectors. The ribbon itself
+has **20 conductors at 1.27 mm pitch**. Start with a 150 mm cable, including
+service slack, and confirm its exit direction, bend radius and strain relief
+against the actual connectors before finalizing the enclosure.
 
-The core board occupies the right rear, USB facing outward. An opening under
-its antenna and a two-layer no-copper/no-component rule area reserve RF
-clearance. Keep metal, cables and enclosure screws away from that area.
-This is a placement provision, not measured RF performance.
+J8 mounts on the lower board's top; J9 mounts on the upper board's bottom.
+They face into the space between boards. The connection is **pin 1 to pin 1,
+through pin 20 to pin 20**, regardless of how the ribbon is folded. Use the
+square pad, connector triangle and red conductor to identify pin 1. Do not
+infer numbering by looking at the cable mating face; check continuity before
+powering the assembly. Reversed or offset insertion can connect power to GPIO.
 
-Choose female socket height only after checking the actual core-board
-underside and pin length. Include socket height, unplugging access, both USB
-plugs, external buttons, the display harness and MX plate capture in the new
-enclosure. The display rectangle and core-board outline are drawing references,
-not validated 3D assemblies. Rendered previews show the carrier and sockets,
-without a fitted core-board model.
+| Pins | Signals In Pin Order |
+| --- | --- |
+| 1-5 | GND, 3V3, GPIO4, GPIO5, GPIO6 |
+| 6-10 | GPIO7, GPIO8, GPIO9, GPIO10, GPIO11 |
+| 11-15 | GPIO12, GND, GPIO13, GPIO14, GPIO15 |
+| 16-20 | GPIO16, GPIO17, GPIO18, GPIO21, 3V3 |
+
+`interconnect.csv` is the complete pin-by-pin mapping. Upper-board schematic
+nets use `UP_` prefixes, including `UP_GND` and `UP_3V3`; lower-board nets use
+the original names. The external cable joins these separate circuit domains.
+Never merge the names or route across the breakaway tabs to remove airwires.
+The duplicate power and ground conductors are parallel paths, not separate
+power supplies. Start I2C testing at 100 kHz; verify pull-ups and signal
+integrity with the actual display cable and module.
+
+## Panel And Separation
+
+Both boards use two copper layers and 1.6 mm FR-4. Panel coordinates below
+start at the top-left of the outline; KiCad drawing coordinates add 50 mm
+to X and Y.
+
+| Section | Panel Coordinates | Finished Size |
+| --- | --- | --- |
+| Upper | X 0-126, Y 0-98 | 126 x 98 mm |
+| Routed separation channel | Y 98-101 | 3 mm wide |
+| Lower, rotated 180 degrees | X 0-126, Y 101-187 | 126 x 86 mm |
+
+The lower-board transform is `(panel_x, panel_y) = (126-x, 187-y)`.
+Rotate it back 180 degrees in-plane after separation. Its sockets remain
+on the top side, with Type-C at the rear. Do not turn the lower board over.
+
+Two internal racetrack slots and open side notches leave three nominal
+5 mm wide tab necks centered at X 20, 63 and 106 mm. Each tab has two rows of
+six **0.5 mm NPTH holes at 0.8 mm pitch**, at Y 98.75 and 100.25: 36 holes
+total. `Edge.Cuts` defines the actual routed slots; the holes are drilling
+features. This is tab routing with mouse bites, not a V-score line.
+
+Cut both perforated rows with flush cutters while supporting each board,
+then file the remaining tab stubs back to Y 98 and Y 101. The outer holes
+leave roughly 1.25 mm of stub at each finished edge; the two rectangular
+separated-board previews assume these stubs have been removed. Separate and
+deburr the bare panel before soldering. Do not bend the panel with the
+core board, display or other parts installed.
+
+The Y 96-103 band forbids copper tracks, vias and pours on both layers.
+Only mechanical holes are permitted there; the verifier also checks that
+electrical pads stay out. Each finished board has its own four M3 mounting
+holes, so the tabs carry no load in the finished assembly.
+
+Confirm the slot tooling, perforation drill/spacing, tab strength and
+customer-panelization policy with the chosen fabricator before ordering.
+Two circuits connected by tabs may still be charged as two designs; the
+126 x 187 mm panel area is larger than the previous single board. A shorter
+enclosure does not imply cheaper PCB fabrication or lower print volume.
+
+## Stacked Assembly
+
+Nominal dimensions are in `placement.json` under `stack`; the generated
+`stack-side.png` and `stack-clearances.json` show an envelope study. They are
+not a completed enclosure or a fitted model of the purchased parts.
+
+- Lower PCB top is Z = 0; its rear edge is Y = 0, with USB facing outward.
+- Upper PCB rear is also Y = 0. Tilt it 30 degrees, rear high/front low.
+  Its front underside is Z = 25 mm and rear underside is Z = 74 mm.
+- Including 1.6 mm board thickness, upper-board depth projects to 85.67 mm.
+  The two boards therefore fit a nominal 126 x 86 mm PCB footprint.
+- Allow a maximum core-board/socket envelope of Z = 20 mm, antenna top
+  Z = 14.5 mm, upper underside parts of 3.5 mm, and mated IDC envelopes
+  of 18 mm. Under these assumptions, core-to-upper-parts clearance is
+  14.69 mm normal to the upper plane; antenna clearance is 16.33 mm.
+- The upper IDC envelope clears the core envelope vertically by 29.07 mm.
+  J8 is beside the core, not underneath it. Keep the cable loop left of the
+  antenna and secure it away from key sockets and screw posts.
+- Fix the upper board to sloped seats or angle brackets. Its four mounting
+  holes do not align vertically with the lower holes; straight shared
+  standoffs are not the intended mounting method.
+
+The lower board's antenna aperture and two-layer keepout remain. Space to
+the upper copper is included in the nominal study, but RF performance is
+unmeasured. Keep metal, wiring and screws out of the antenna volume.
+
+Measure the purchased core board, female socket height, plug engagement,
+IDC housings, button leads and display assembly before locking these heights.
+The PCB footprint excludes keycaps, controls, enclosure walls, feet and USB
+plug clearance. Provide a removable top for unplugging the core board and
+support hot-swap sockets with the switch plate. Existing STL/CAD models have
+not been regenerated; the new enclosure must follow this stacked assembly.
 
 ## Hand Assembly
 
-1. Solder the 0805 parts and 18 SOD-123 diodes first. Check every diode stripe.
-2. Solder Kailh sockets on the back, keeping the iron and solder off plastic.
+1. Cut and deburr the bare panel, then clean both boards before fitting parts.
+2. Solder the 0805 parts and 18 SOD-123 diodes first. Check every diode stripe.
+3. Solder Kailh sockets on the back, keeping the iron and solder off plastic.
    Support each socket flat on the PCB; inspect both contacts for wetting.
-3. Fit the two 1x22 female sockets using the unpowered core board as an
+4. Fit the two 1x22 female sockets using the unpowered core board as an
    alignment jig. Tack one end of each row, check seating, then finish.
-4. Fit the display/expansion headers and external buttons or wires.
-5. Inspect bridges and polarity and measure supply-to-ground resistance
-   before plugging in the core board or applying power.
+5. Fit J8 on the lower top and J9 on the upper bottom, then the
+   display/expansion headers and external buttons or wires.
+6. Inspect bridges and polarity and measure supply-to-ground resistance
+   before plugging in the core board or applying power. Verify all 20 cable
+   connections pin-for-pin and confirm supply polarity at upper-board J2.
 
 Buy one preassembled YD ESP32-S3 core board and two matching 1x22 male strips
 if the core board is supplied without pins. `bom-draft.csv` lists the carrier
@@ -163,7 +257,7 @@ and direct keys and cannot be used unchanged.
 
 ## Files And Reproduction
 
-Schematic, PCB, project, BOM, placement manifest and key-coordinate CSV are
+Schematic, panel PCB, project, BOM, placement manifest, interconnect and key-coordinate CSV are
 editable sources. `verification.md` records checks and remaining work.
 Generators refuse to overwrite existing designs:
 
@@ -182,6 +276,16 @@ Copy this directory's `Workbench.pretty`, `3dmodels`, `licenses`,
 
 The S3 schematic generator reuses symbol-format helpers from
 `generate_workbench.py`; the RP2040 design scripts are otherwise unchanged.
+
+Add `--view upper` or `--view lower` to the placement command, using new
+output filenames `upper.kicad_pcb` / `lower.kicad_pcb`, to inspect the trimmed
+boards in their assembled orientation. These are derived review files,
+not separate sources to edit. Generate the nominal stack study with:
+
+```sh
+uv run --script scripts/hardware/preview_workbench_s3_stack.py \
+  /tmp/workbench-s3-review/placement.json /tmp/workbench-s3-review
+```
 
 ## Sources
 
