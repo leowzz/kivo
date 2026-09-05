@@ -41,3 +41,5 @@ plots/
 *.tar.gz
 *.tgz
 *.tar.xz
+
+**/.history
