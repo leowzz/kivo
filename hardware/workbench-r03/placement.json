@@ -1,0 +1,1507 @@
+{
+  "name": "workbench-r03",
+  "sheet_uuid": "2bdf32c0-a042-5471-a629-e5f60e81b403",
+  "width": 126,
+  "height": 105,
+  "parts": [
+    {
+      "ref": "U1",
+      "lib": "MCU_RaspberryPi:RP2040",
+      "value": "RP2040",
+      "nets": {
+        "1": "+3V3",
+        "2": "GPIO0",
+        "3": "GPIO1",
+        "4": "GPIO2",
+        "5": "GPIO3",
+        "6": "GPIO4",
+        "7": "GPIO5",
+        "8": "GPIO6",
+        "9": "GPIO7",
+        "10": "+3V3",
+        "11": "GPIO8",
+        "12": "GPIO9",
+        "13": "GPIO10",
+        "14": "GPIO11",
+        "15": "GPIO12",
+        "16": "GPIO13",
+        "17": "GPIO14",
+        "18": "GPIO15",
+        "19": "GND",
+        "20": "XIN",
+        "21": "XOUT",
+        "22": "+3V3",
+        "23": "+1V1",
+        "24": "SWCLK",
+        "25": "SWDIO",
+        "26": "RUN",
+        "27": "GPIO16",
+        "28": "GPIO17",
+        "29": "GPIO18",
+        "30": "GPIO19",
+        "31": "GPIO20",
+        "32": "GPIO21",
+        "33": "+3V3",
+        "34": "GPIO22",
+        "35": "GPIO23",
+        "36": null,
+        "37": null,
+        "38": "GPIO26",
+        "39": "GPIO27",
+        "40": "GPIO28",
+        "41": "GPIO29",
+        "42": "+3V3",
+        "43": "+3V3",
+        "44": "+3V3",
+        "45": "+1V1",
+        "46": "USB_DM",
+        "47": "USB_DP",
+        "48": "+3V3",
+        "49": "+3V3",
+        "50": "+1V1",
+        "51": "QSPI_SD3",
+        "52": "QSPI_SCLK",
+        "53": "QSPI_SD0",
+        "54": "QSPI_SD2",
+        "55": "QSPI_SD1",
+        "56": "QSPI_SS",
+        "57": "GND"
+      },
+      "schematic": [
+        130,
+        115
+      ],
+      "pcb": [
+        99,
+        25
+      ],
+      "footprint": "Package_DFN_QFN:QFN-56-1EP_7x7mm_P0.4mm_EP3.2x3.2mm",
+      "angle": 0,
+      "side": "F",
+      "uuid": "a2e27762-eee8-5dbb-8847-12aeff582e10",
+      "mpn": "RP2040"
+    },
+    {
+      "ref": "U2",
+      "lib": "Memory_Flash:W25Q128JVS",
+      "value": "W25Q128JVSIQ / 16MiB",
+      "nets": {
+        "1": "QSPI_SS",
+        "2": "QSPI_SD1",
+        "3": "QSPI_SD2",
+        "4": "GND",
+        "5": "QSPI_SD0",
+        "6": "QSPI_SCLK",
+        "7": "QSPI_SD3",
+        "8": "+3V3"
+      },
+      "schematic": [
+        245,
+        120
+      ],
+      "pcb": [
+        84,
+        25
+      ],
+      "footprint": "Package_SO:SOIC-8_5.3x5.3mm_P1.27mm",
+      "angle": 0,
+      "side": "F",
+      "uuid": "ba3b42eb-6903-5696-a818-a3934c4426e9",
+      "mpn": "W25Q128JVSIQ"
+    },
+    {
+      "ref": "U3",
+      "lib": "Regulator_Linear:AP2112K-3.3",
+      "value": "AP2112K-3.3",
+      "nets": {
+        "1": "VBUS",
+        "2": "GND",
+        "3": "VBUS",
+        "4": null,
+        "5": "+3V3"
+      },
+      "schematic": [
+        400,
+        65
+      ],
+      "pcb": [
+        114,
+        34
+      ],
+      "footprint": "Package_TO_SOT_SMD:SOT-23-5",
+      "angle": 0,
+      "side": "F",
+      "uuid": "2ffb1a22-9911-59e9-b711-0b266ab71891",
+      "mpn": "AP2112K-3.3TRG1"
+    },
+    {
+      "ref": "J1",
+      "lib": "Connector:USB_C_Receptacle_USB2.0_16P",
+      "value": "USB-C USB2.0",
+      "nets": {
+        "A1": "GND",
+        "A4": "VBUS",
+        "A5": "CC1",
+        "A6": "USB_CONN_DP",
+        "A7": "USB_CONN_DM",
+        "A8": null,
+        "A9": "VBUS",
+        "A12": "GND",
+        "B1": "GND",
+        "B4": "VBUS",
+        "B5": "CC2",
+        "B6": "USB_CONN_DP",
+        "B7": "USB_CONN_DM",
+        "B8": null,
+        "B9": "VBUS",
+        "B12": "GND",
+        "SH": "GND"
+      },
+      "schematic": [
+        270,
+        55
+      ],
+      "pcb": [
+        115,
+        3.675
+      ],
+      "footprint": "Connector_USB:USB_C_Receptacle_GCT_USB4105-xx-A_16P_TopMnt_Horizontal",
+      "angle": 180,
+      "side": "F",
+      "uuid": "c902916c-70de-5d89-87a7-c7ce88fd9387",
+      "mpn": "GCT USB4105-GF-A"
+    },
+    {
+      "ref": "U4",
+      "lib": "Power_Protection:USBLC6-2SC6",
+      "value": "USBLC6-2SC6",
+      "nets": {
+        "1": "USB_CONN_DP",
+        "2": "GND",
+        "3": "USB_CONN_DM",
+        "4": "USB_CONN_DM",
+        "5": "VBUS",
+        "6": "USB_CONN_DP"
+      },
+      "schematic": [
+        355,
+        120
+      ],
+      "pcb": [
+        113,
+        12
+      ],
+      "footprint": "Package_TO_SOT_SMD:SOT-23-6",
+      "angle": 0,
+      "side": "F",
+      "uuid": "d60cd33d-89f9-5362-8c48-8c19595465e3",
+      "mpn": "USBLC6-2SC6"
+    },
+    {
+      "ref": "Y1",
+      "lib": "Device:Crystal_GND24",
+      "value": "12MHz ABM8-272-T3",
+      "nets": {
+        "1": "XIN",
+        "2": "GND",
+        "3": "XTAL_OUT",
+        "4": "GND"
+      },
+      "schematic": [
+        250,
+        205
+      ],
+      "pcb": [
+        99,
+        13
+      ],
+      "footprint": "Crystal:Crystal_SMD_3225-4Pin_3.2x2.5mm",
+      "angle": 0,
+      "side": "F",
+      "uuid": "461b0b0d-c0d6-52c0-b878-18e4613d0dbf",
+      "mpn": "ABM8-272-T3"
+    },
+    {
+      "ref": "R1",
+      "lib": "Device:R",
+      "value": "5.1k 1%",
+      "nets": {
+        "1": "CC1",
+        "2": "GND"
+      },
+      "schematic": [
+        330,
+        45
+      ],
+      "pcb": [
+        107,
+        8
+      ],
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "72439653-6982-566e-b5ba-887db32cf35b",
+      "mpn": ""
+    },
+    {
+      "ref": "R2",
+      "lib": "Device:R",
+      "value": "5.1k 1%",
+      "nets": {
+        "1": "CC2",
+        "2": "GND"
+      },
+      "schematic": [
+        355,
+        45
+      ],
+      "pcb": [
+        122,
+        8
+      ],
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "21347686-5c6d-51e0-8f1e-e8c69343214c",
+      "mpn": ""
+    },
+    {
+      "ref": "R3",
+      "lib": "Device:R",
+      "value": "27",
+      "nets": {
+        "1": "USB_CONN_DP",
+        "2": "USB_DP"
+      },
+      "schematic": [
+        400,
+        120
+      ],
+      "pcb": [
+        106,
+        22
+      ],
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "e6375130-7d2d-5ec1-ab47-e2f90cf90dfe",
+      "mpn": ""
+    },
+    {
+      "ref": "R4",
+      "lib": "Device:R",
+      "value": "27",
+      "nets": {
+        "1": "USB_CONN_DM",
+        "2": "USB_DM"
+      },
+      "schematic": [
+        430,
+        120
+      ],
+      "pcb": [
+        106,
+        25
+      ],
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "f6e4f1d0-9f5d-5f64-ad14-0895db8da109",
+      "mpn": ""
+    },
+    {
+      "ref": "R5",
+      "lib": "Device:R",
+      "value": "1k",
+      "nets": {
+        "1": "XOUT",
+        "2": "XTAL_OUT"
+      },
+      "schematic": [
+        290,
+        205
+      ],
+      "pcb": [
+        103,
+        13
+      ],
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "31229f06-4928-5dfd-bef0-65a69e7a688e",
+      "mpn": ""
+    },
+    {
+      "ref": "R6",
+      "lib": "Device:R",
+      "value": "10k",
+      "nets": {
+        "1": "+3V3",
+        "2": "QSPI_SS"
+      },
+      "schematic": [
+        200,
+        120
+      ],
+      "pcb": [
+        86,
+        18
+      ],
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "a78e7a56-7b25-576e-a195-242c9ca2c0fc",
+      "mpn": ""
+    },
+    {
+      "ref": "R7",
+      "lib": "Device:R",
+      "value": "1k",
+      "nets": {
+        "1": "QSPI_SS",
+        "2": "BOOT_BUTTON"
+      },
+      "schematic": [
+        200,
+        175
+      ],
+      "pcb": [
+        80,
+        18
+      ],
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "1a28e440-d612-5777-a029-d54048fb8961",
+      "mpn": ""
+    },
+    {
+      "ref": "R8",
+      "lib": "Device:R",
+      "value": "10k",
+      "nets": {
+        "1": "+3V3",
+        "2": "RUN"
+      },
+      "schematic": [
+        355,
+        195
+      ],
+      "pcb": [
+        90,
+        38
+      ],
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "b9360f07-8363-568c-a152-2044af457dac",
+      "mpn": ""
+    },
+    {
+      "ref": "R9",
+      "lib": "Device:R",
+      "value": "4.7k DNP",
+      "nets": {
+        "1": "+3V3",
+        "2": "GPIO26"
+      },
+      "schematic": [
+        430,
+        195
+      ],
+      "pcb": [
+        77,
+        44
+      ],
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "3d264c4e-4ce8-5833-82e4-1acf8c2574c9",
+      "mpn": "",
+      "dnp": true
+    },
+    {
+      "ref": "R10",
+      "lib": "Device:R",
+      "value": "4.7k DNP",
+      "nets": {
+        "1": "+3V3",
+        "2": "GPIO27"
+      },
+      "schematic": [
+        465,
+        195
+      ],
+      "pcb": [
+        80,
+        44
+      ],
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "1d37ef36-f779-5564-a86d-bb133604eb94",
+      "mpn": "",
+      "dnp": true
+    },
+    {
+      "ref": "C1",
+      "lib": "Device:C",
+      "value": "1u 10V X7R",
+      "nets": {
+        "1": "VBUS",
+        "2": "GND"
+      },
+      "schematic": [
+        440,
+        60
+      ],
+      "pcb": [
+        110,
+        34
+      ],
+      "footprint": "Capacitor_SMD:C_0603_1608Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "43dcf493-5c21-593a-a564-4000462abb46",
+      "mpn": ""
+    },
+    {
+      "ref": "C2",
+      "lib": "Device:C",
+      "value": "4.7u 10V X7R",
+      "nets": {
+        "1": "+3V3",
+        "2": "GND"
+      },
+      "schematic": [
+        480,
+        60
+      ],
+      "pcb": [
+        118,
+        34
+      ],
+      "footprint": "Capacitor_SMD:C_0603_1608Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "aa7e2fed-844b-59d7-91ef-c69f4a9b536e",
+      "mpn": ""
+    },
+    {
+      "ref": "C3",
+      "lib": "Device:C",
+      "value": "100n 16V X7R",
+      "nets": {
+        "1": "+3V3",
+        "2": "GND"
+      },
+      "schematic": [
+        285,
+        120
+      ],
+      "pcb": [
+        84,
+        31
+      ],
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "254ca24d-4d17-51c1-8014-59851cd86d00",
+      "mpn": ""
+    },
+    {
+      "ref": "C4",
+      "lib": "Device:C",
+      "value": "15p C0G",
+      "nets": {
+        "1": "XIN",
+        "2": "GND"
+      },
+      "schematic": [
+        215,
+        205
+      ],
+      "pcb": [
+        95,
+        13
+      ],
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "fc7cad48-14c7-5469-b339-92b26c034c24",
+      "mpn": ""
+    },
+    {
+      "ref": "C5",
+      "lib": "Device:C",
+      "value": "15p C0G",
+      "nets": {
+        "1": "XTAL_OUT",
+        "2": "GND"
+      },
+      "schematic": [
+        320,
+        205
+      ],
+      "pcb": [
+        99,
+        9
+      ],
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "e36560c8-ff54-55b9-835d-3b8630208f7a",
+      "mpn": ""
+    },
+    {
+      "ref": "C6",
+      "lib": "Device:C",
+      "value": "1u 10V X7R",
+      "nets": {
+        "1": "+3V3",
+        "2": "GND"
+      },
+      "schematic": [
+        55,
+        205
+      ],
+      "pcb": [
+        104,
+        30
+      ],
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "f277b053-539e-5b44-b30f-f9867e37720d",
+      "mpn": ""
+    },
+    {
+      "ref": "C7",
+      "lib": "Device:C",
+      "value": "1u 10V X7R",
+      "nets": {
+        "1": "+1V1",
+        "2": "GND"
+      },
+      "schematic": [
+        90,
+        205
+      ],
+      "pcb": [
+        101,
+        31
+      ],
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "87975b96-7b7c-50a3-a6cd-aa739eee5427",
+      "mpn": ""
+    },
+    {
+      "ref": "C8",
+      "lib": "Device:C",
+      "value": "100n 16V X7R",
+      "nets": {
+        "1": "+3V3",
+        "2": "GND"
+      },
+      "schematic": [
+        40,
+        245
+      ],
+      "pcb": [
+        95,
+        20
+      ],
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "15a21be1-f4c2-5d3a-9af1-3a7a07ccef1d",
+      "mpn": ""
+    },
+    {
+      "ref": "C9",
+      "lib": "Device:C",
+      "value": "100n 16V X7R",
+      "nets": {
+        "1": "+3V3",
+        "2": "GND"
+      },
+      "schematic": [
+        85,
+        245
+      ],
+      "pcb": [
+        99,
+        20
+      ],
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "52f60f49-b4e7-5d39-88e7-1a8148fca9da",
+      "mpn": ""
+    },
+    {
+      "ref": "C10",
+      "lib": "Device:C",
+      "value": "100n 16V X7R",
+      "nets": {
+        "1": "+3V3",
+        "2": "GND"
+      },
+      "schematic": [
+        130,
+        245
+      ],
+      "pcb": [
+        102,
+        20
+      ],
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "6941ab6e-1b28-54ac-afdd-4a86dc57fb0d",
+      "mpn": ""
+    },
+    {
+      "ref": "C11",
+      "lib": "Device:C",
+      "value": "100n 16V X7R",
+      "nets": {
+        "1": "+3V3",
+        "2": "GND"
+      },
+      "schematic": [
+        175,
+        245
+      ],
+      "pcb": [
+        105,
+        28
+      ],
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "2987ab6c-3a2e-5db4-8d8a-0172a8270f59",
+      "mpn": ""
+    },
+    {
+      "ref": "C12",
+      "lib": "Device:C",
+      "value": "100n 16V X7R",
+      "nets": {
+        "1": "+3V3",
+        "2": "GND"
+      },
+      "schematic": [
+        220,
+        245
+      ],
+      "pcb": [
+        93,
+        29
+      ],
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "81d59d45-a746-58e9-aa49-fade96f5a413",
+      "mpn": ""
+    },
+    {
+      "ref": "C13",
+      "lib": "Device:C",
+      "value": "100n 16V X7R",
+      "nets": {
+        "1": "+3V3",
+        "2": "GND"
+      },
+      "schematic": [
+        265,
+        245
+      ],
+      "pcb": [
+        97,
+        31
+      ],
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "2c64e899-3fe9-514e-910f-636c1024711e",
+      "mpn": ""
+    },
+    {
+      "ref": "C14",
+      "lib": "Device:C",
+      "value": "100n 16V X7R",
+      "nets": {
+        "1": "+3V3",
+        "2": "GND"
+      },
+      "schematic": [
+        310,
+        245
+      ],
+      "pcb": [
+        93,
+        25
+      ],
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "c011d8f9-c320-5af1-8a61-a9888a50a6c5",
+      "mpn": ""
+    },
+    {
+      "ref": "C15",
+      "lib": "Device:C",
+      "value": "100n 16V X7R",
+      "nets": {
+        "1": "+3V3",
+        "2": "GND"
+      },
+      "schematic": [
+        355,
+        245
+      ],
+      "pcb": [
+        96,
+        32
+      ],
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "a5a99f49-f8a1-5125-8c5f-37c41b427b63",
+      "mpn": ""
+    },
+    {
+      "ref": "C16",
+      "lib": "Device:C",
+      "value": "100n 16V X7R",
+      "nets": {
+        "1": "+3V3",
+        "2": "GND"
+      },
+      "schematic": [
+        400,
+        245
+      ],
+      "pcb": [
+        92,
+        23
+      ],
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "458520a6-f92d-5412-a1a6-65c2be09f2d6",
+      "mpn": ""
+    },
+    {
+      "ref": "C17",
+      "lib": "Device:C",
+      "value": "100n 16V X7R",
+      "nets": {
+        "1": "+1V1",
+        "2": "GND"
+      },
+      "schematic": [
+        445,
+        245
+      ],
+      "pcb": [
+        102,
+        33
+      ],
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "4fa5ad5d-9513-5e8a-b026-77eb7280b850",
+      "mpn": ""
+    },
+    {
+      "ref": "C18",
+      "lib": "Device:C",
+      "value": "100n 16V X7R",
+      "nets": {
+        "1": "+1V1",
+        "2": "GND"
+      },
+      "schematic": [
+        490,
+        245
+      ],
+      "pcb": [
+        94,
+        32
+      ],
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "angle": 0,
+      "side": "F",
+      "uuid": "91f2b7ab-41fc-5b3b-ba45-fb6ed06f10fb",
+      "mpn": ""
+    },
+    {
+      "ref": "SW19",
+      "lib": "Switch:SW_Push",
+      "value": "BOOTSEL",
+      "nets": {
+        "1": "BOOT_BUTTON",
+        "2": "GND"
+      },
+      "schematic": [
+        235,
+        175
+      ],
+      "pcb": [
+        82,
+        8
+      ],
+      "footprint": "Button_Switch_SMD:SW_SPST_TL3342",
+      "angle": 0,
+      "side": "F",
+      "uuid": "acd883d5-926b-55d7-95d2-4c25f806aef6",
+      "mpn": ""
+    },
+    {
+      "ref": "SW20",
+      "lib": "Switch:SW_Push",
+      "value": "RESET",
+      "nets": {
+        "1": "RUN",
+        "2": "GND"
+      },
+      "schematic": [
+        390,
+        195
+      ],
+      "pcb": [
+        91,
+        8
+      ],
+      "footprint": "Button_Switch_SMD:SW_SPST_TL3342",
+      "angle": 0,
+      "side": "F",
+      "uuid": "656a81ae-85be-5a5d-9bc0-cd0f0837ea97",
+      "mpn": ""
+    },
+    {
+      "ref": "J2",
+      "lib": "Connector_Generic:Conn_01x09",
+      "value": "DISPLAY HARNESS - SEE README",
+      "nets": {
+        "1": "GND",
+        "2": "+3V3",
+        "3": "GPIO27",
+        "4": "GPIO26",
+        "5": "GPIO22",
+        "6": "GPIO28",
+        "7": "GPIO21",
+        "8": "GPIO20",
+        "9": "GPIO19"
+      },
+      "schematic": [
+        515,
+        135
+      ],
+      "pcb": [
+        73,
+        16
+      ],
+      "footprint": "Connector_PinHeader_2.54mm:PinHeader_1x09_P2.54mm_Vertical",
+      "angle": 0,
+      "side": "F",
+      "uuid": "ae76edfa-3ebf-55f9-90c1-821c330fcc4f",
+      "mpn": ""
+    },
+    {
+      "ref": "J3",
+      "lib": "Connector_Generic:Conn_01x04",
+      "value": "SWD 3V3 GND SWDIO SWCLK",
+      "nets": {
+        "1": "+3V3",
+        "2": "GND",
+        "3": "SWDIO",
+        "4": "SWCLK"
+      },
+      "schematic": [
+        515,
+        195
+      ],
+      "pcb": [
+        120,
+        20
+      ],
+      "footprint": "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical",
+      "angle": 0,
+      "side": "F",
+      "uuid": "67373ec6-8171-5be7-8b2c-c42993ed8e47",
+      "mpn": ""
+    },
+    {
+      "ref": "J4",
+      "lib": "Connector_Generic:Conn_01x05",
+      "value": "AUX GND 3V3 GP0 GP23 GP29",
+      "nets": {
+        "1": "GND",
+        "2": "+3V3",
+        "3": "GPIO0",
+        "4": "GPIO23",
+        "5": "GPIO29"
+      },
+      "schematic": [
+        515,
+        75
+      ],
+      "pcb": [
+        84,
+        43
+      ],
+      "footprint": "Connector_PinHeader_2.54mm:PinHeader_1x05_P2.54mm_Vertical",
+      "angle": 90,
+      "side": "F",
+      "uuid": "e4e82129-121c-54f8-a7d6-88a14836c620",
+      "mpn": ""
+    },
+    {
+      "ref": "SW1",
+      "lib": "Switch:SW_Push",
+      "value": "KEY_1 MX HOTSWAP",
+      "nets": {
+        "1": "GPIO1",
+        "2": "GND"
+      },
+      "schematic": [
+        55,
+        290
+      ],
+      "pcb": [
+        16.875,
+        56.375
+      ],
+      "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
+      "angle": 0,
+      "side": "B",
+      "uuid": "9bcc08e1-7e17-503e-a04e-5bbb04c45191",
+      "mpn": ""
+    },
+    {
+      "ref": "SW2",
+      "lib": "Switch:SW_Push",
+      "value": "KEY_2 MX HOTSWAP",
+      "nets": {
+        "1": "GPIO2",
+        "2": "GND"
+      },
+      "schematic": [
+        145,
+        290
+      ],
+      "pcb": [
+        35.925,
+        56.375
+      ],
+      "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
+      "angle": 0,
+      "side": "B",
+      "uuid": "224d2918-28a9-56e5-8b8a-42f4acb404f9",
+      "mpn": ""
+    },
+    {
+      "ref": "SW3",
+      "lib": "Switch:SW_Push",
+      "value": "KEY_3 MX HOTSWAP",
+      "nets": {
+        "1": "GPIO3",
+        "2": "GND"
+      },
+      "schematic": [
+        235,
+        290
+      ],
+      "pcb": [
+        54.974999999999994,
+        56.375
+      ],
+      "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
+      "angle": 0,
+      "side": "B",
+      "uuid": "fc00053f-f449-557d-9f43-4ce576de3dc0",
+      "mpn": ""
+    },
+    {
+      "ref": "SW4",
+      "lib": "Switch:SW_Push",
+      "value": "KEY_4 MX HOTSWAP",
+      "nets": {
+        "1": "GPIO4",
+        "2": "GND"
+      },
+      "schematic": [
+        325,
+        290
+      ],
+      "pcb": [
+        74.02499999999998,
+        56.375
+      ],
+      "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
+      "angle": 0,
+      "side": "B",
+      "uuid": "7c30d06d-0566-56e4-bf4d-22d00c0d21b0",
+      "mpn": ""
+    },
+    {
+      "ref": "SW5",
+      "lib": "Switch:SW_Push",
+      "value": "KEY_5 MX HOTSWAP",
+      "nets": {
+        "1": "GPIO5",
+        "2": "GND"
+      },
+      "schematic": [
+        415,
+        290
+      ],
+      "pcb": [
+        93.07499999999999,
+        56.375
+      ],
+      "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
+      "angle": 0,
+      "side": "B",
+      "uuid": "ec3d0d28-0d68-5f3c-995b-6b86622572fc",
+      "mpn": ""
+    },
+    {
+      "ref": "SW6",
+      "lib": "Switch:SW_Push",
+      "value": "KEY_6 MX HOTSWAP",
+      "nets": {
+        "1": "GPIO6",
+        "2": "GND"
+      },
+      "schematic": [
+        505,
+        290
+      ],
+      "pcb": [
+        112.125,
+        56.375
+      ],
+      "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
+      "angle": 0,
+      "side": "B",
+      "uuid": "82b3f1a6-6c60-5c2e-9a47-131be56aeb4a",
+      "mpn": ""
+    },
+    {
+      "ref": "SW7",
+      "lib": "Switch:SW_Push",
+      "value": "KEY_7 MX HOTSWAP",
+      "nets": {
+        "1": "GPIO7",
+        "2": "GND"
+      },
+      "schematic": [
+        55,
+        325
+      ],
+      "pcb": [
+        16.875,
+        75.425
+      ],
+      "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
+      "angle": 0,
+      "side": "B",
+      "uuid": "86407cca-7951-51a5-a305-f86d70608156",
+      "mpn": ""
+    },
+    {
+      "ref": "SW8",
+      "lib": "Switch:SW_Push",
+      "value": "KEY_8 MX HOTSWAP",
+      "nets": {
+        "1": "GPIO8",
+        "2": "GND"
+      },
+      "schematic": [
+        145,
+        325
+      ],
+      "pcb": [
+        35.925,
+        75.425
+      ],
+      "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
+      "angle": 0,
+      "side": "B",
+      "uuid": "98378e31-d635-5038-a06e-767106312258",
+      "mpn": ""
+    },
+    {
+      "ref": "SW9",
+      "lib": "Switch:SW_Push",
+      "value": "KEY_9 MX HOTSWAP",
+      "nets": {
+        "1": "GPIO9",
+        "2": "GND"
+      },
+      "schematic": [
+        235,
+        325
+      ],
+      "pcb": [
+        54.974999999999994,
+        75.425
+      ],
+      "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
+      "angle": 0,
+      "side": "B",
+      "uuid": "3c25ef43-bf6d-52e2-9b84-ea51aa1da57f",
+      "mpn": ""
+    },
+    {
+      "ref": "SW10",
+      "lib": "Switch:SW_Push",
+      "value": "KEY_10 MX HOTSWAP",
+      "nets": {
+        "1": "GPIO10",
+        "2": "GND"
+      },
+      "schematic": [
+        325,
+        325
+      ],
+      "pcb": [
+        74.02499999999998,
+        75.425
+      ],
+      "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
+      "angle": 0,
+      "side": "B",
+      "uuid": "582b6366-4c46-5472-a16f-5cdb71a4b623",
+      "mpn": ""
+    },
+    {
+      "ref": "SW11",
+      "lib": "Switch:SW_Push",
+      "value": "KEY_11 MX HOTSWAP",
+      "nets": {
+        "1": "GPIO11",
+        "2": "GND"
+      },
+      "schematic": [
+        415,
+        325
+      ],
+      "pcb": [
+        93.07499999999999,
+        75.425
+      ],
+      "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
+      "angle": 0,
+      "side": "B",
+      "uuid": "cc138ba4-cc29-5ce4-a95c-276eee0b580e",
+      "mpn": ""
+    },
+    {
+      "ref": "SW12",
+      "lib": "Switch:SW_Push",
+      "value": "KEY_12 MX HOTSWAP",
+      "nets": {
+        "1": "GPIO12",
+        "2": "GND"
+      },
+      "schematic": [
+        505,
+        325
+      ],
+      "pcb": [
+        112.125,
+        75.425
+      ],
+      "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
+      "angle": 0,
+      "side": "B",
+      "uuid": "ab7b9dc7-07dd-5a9f-8aa7-8047dfaff78f",
+      "mpn": ""
+    },
+    {
+      "ref": "SW13",
+      "lib": "Switch:SW_Push",
+      "value": "KEY_13 MX HOTSWAP",
+      "nets": {
+        "1": "GPIO13",
+        "2": "GND"
+      },
+      "schematic": [
+        55,
+        360
+      ],
+      "pcb": [
+        16.875,
+        94.475
+      ],
+      "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
+      "angle": 0,
+      "side": "B",
+      "uuid": "3b96a605-2001-52e2-bc8b-dce31c3f8cb9",
+      "mpn": ""
+    },
+    {
+      "ref": "SW14",
+      "lib": "Switch:SW_Push",
+      "value": "KEY_14 MX HOTSWAP",
+      "nets": {
+        "1": "GPIO14",
+        "2": "GND"
+      },
+      "schematic": [
+        145,
+        360
+      ],
+      "pcb": [
+        35.925,
+        94.475
+      ],
+      "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
+      "angle": 0,
+      "side": "B",
+      "uuid": "5e468cfc-3aa3-5b48-9c34-08c54504384a",
+      "mpn": ""
+    },
+    {
+      "ref": "SW15",
+      "lib": "Switch:SW_Push",
+      "value": "KEY_15 MX HOTSWAP",
+      "nets": {
+        "1": "GPIO15",
+        "2": "GND"
+      },
+      "schematic": [
+        235,
+        360
+      ],
+      "pcb": [
+        54.974999999999994,
+        94.475
+      ],
+      "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
+      "angle": 0,
+      "side": "B",
+      "uuid": "b7be16da-bbc4-54ac-9c9d-5f4b744c8366",
+      "mpn": ""
+    },
+    {
+      "ref": "SW16",
+      "lib": "Switch:SW_Push",
+      "value": "KEY_16 MX HOTSWAP",
+      "nets": {
+        "1": "GPIO16",
+        "2": "GND"
+      },
+      "schematic": [
+        325,
+        360
+      ],
+      "pcb": [
+        74.02499999999998,
+        94.475
+      ],
+      "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
+      "angle": 0,
+      "side": "B",
+      "uuid": "19c47351-020c-5105-804a-4ea37e24bc62",
+      "mpn": ""
+    },
+    {
+      "ref": "SW17",
+      "lib": "Switch:SW_Push",
+      "value": "KEY_17 MX HOTSWAP",
+      "nets": {
+        "1": "GPIO17",
+        "2": "GND"
+      },
+      "schematic": [
+        415,
+        360
+      ],
+      "pcb": [
+        93.07499999999999,
+        94.475
+      ],
+      "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
+      "angle": 0,
+      "side": "B",
+      "uuid": "c0928faa-cdfc-5bd6-a774-dedb291bd384",
+      "mpn": ""
+    },
+    {
+      "ref": "SW18",
+      "lib": "Switch:SW_Push",
+      "value": "KEY_18 MX HOTSWAP",
+      "nets": {
+        "1": "GPIO18",
+        "2": "GND"
+      },
+      "schematic": [
+        505,
+        360
+      ],
+      "pcb": [
+        112.125,
+        94.475
+      ],
+      "footprint": "Workbench:keyswitch_cherrymx_hotswap_1u",
+      "angle": 0,
+      "side": "B",
+      "uuid": "560fc7a8-fb8e-5079-8aae-0e554ab320d8",
+      "mpn": ""
+    }
+  ],
+  "keys": [
+    {
+      "key": "KEY_1",
+      "gpio": 1,
+      "panel_x": 19.875,
+      "panel_y": 56.625,
+      "pcb_x": 16.875,
+      "pcb_y": 56.375
+    },
+    {
+      "key": "KEY_2",
+      "gpio": 2,
+      "panel_x": 38.925,
+      "panel_y": 56.625,
+      "pcb_x": 35.925,
+      "pcb_y": 56.375
+    },
+    {
+      "key": "KEY_3",
+      "gpio": 3,
+      "panel_x": 57.974999999999994,
+      "panel_y": 56.625,
+      "pcb_x": 54.974999999999994,
+      "pcb_y": 56.375
+    },
+    {
+      "key": "KEY_4",
+      "gpio": 4,
+      "panel_x": 77.02499999999998,
+      "panel_y": 56.625,
+      "pcb_x": 74.02499999999998,
+      "pcb_y": 56.375
+    },
+    {
+      "key": "KEY_5",
+      "gpio": 5,
+      "panel_x": 96.07499999999999,
+      "panel_y": 56.625,
+      "pcb_x": 93.07499999999999,
+      "pcb_y": 56.375
+    },
+    {
+      "key": "KEY_6",
+      "gpio": 6,
+      "panel_x": 115.125,
+      "panel_y": 56.625,
+      "pcb_x": 112.125,
+      "pcb_y": 56.375
+    },
+    {
+      "key": "KEY_7",
+      "gpio": 7,
+      "panel_x": 19.875,
+      "panel_y": 37.575,
+      "pcb_x": 16.875,
+      "pcb_y": 75.425
+    },
+    {
+      "key": "KEY_8",
+      "gpio": 8,
+      "panel_x": 38.925,
+      "panel_y": 37.575,
+      "pcb_x": 35.925,
+      "pcb_y": 75.425
+    },
+    {
+      "key": "KEY_9",
+      "gpio": 9,
+      "panel_x": 57.974999999999994,
+      "panel_y": 37.575,
+      "pcb_x": 54.974999999999994,
+      "pcb_y": 75.425
+    },
+    {
+      "key": "KEY_10",
+      "gpio": 10,
+      "panel_x": 77.02499999999998,
+      "panel_y": 37.575,
+      "pcb_x": 74.02499999999998,
+      "pcb_y": 75.425
+    },
+    {
+      "key": "KEY_11",
+      "gpio": 11,
+      "panel_x": 96.07499999999999,
+      "panel_y": 37.575,
+      "pcb_x": 93.07499999999999,
+      "pcb_y": 75.425
+    },
+    {
+      "key": "KEY_12",
+      "gpio": 12,
+      "panel_x": 115.125,
+      "panel_y": 37.575,
+      "pcb_x": 112.125,
+      "pcb_y": 75.425
+    },
+    {
+      "key": "KEY_13",
+      "gpio": 13,
+      "panel_x": 19.875,
+      "panel_y": 18.525,
+      "pcb_x": 16.875,
+      "pcb_y": 94.475
+    },
+    {
+      "key": "KEY_14",
+      "gpio": 14,
+      "panel_x": 38.925,
+      "panel_y": 18.525,
+      "pcb_x": 35.925,
+      "pcb_y": 94.475
+    },
+    {
+      "key": "KEY_15",
+      "gpio": 15,
+      "panel_x": 57.974999999999994,
+      "panel_y": 18.525,
+      "pcb_x": 54.974999999999994,
+      "pcb_y": 94.475
+    },
+    {
+      "key": "KEY_16",
+      "gpio": 16,
+      "panel_x": 77.02499999999998,
+      "panel_y": 18.525,
+      "pcb_x": 74.02499999999998,
+      "pcb_y": 94.475
+    },
+    {
+      "key": "KEY_17",
+      "gpio": 17,
+      "panel_x": 96.07499999999999,
+      "panel_y": 18.525,
+      "pcb_x": 93.07499999999999,
+      "pcb_y": 94.475
+    },
+    {
+      "key": "KEY_18",
+      "gpio": 18,
+      "panel_x": 115.125,
+      "panel_y": 18.525,
+      "pcb_x": 112.125,
+      "pcb_y": 94.475
+    }
+  ]
+}
