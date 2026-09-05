@@ -2,6 +2,8 @@
 
 Tools: KiCad CLI and pcbnew 10.0.6, Freerouting 1.9.0. This is an independent
 keyboard-only hardware revision with an external ESP32-S3 connection.
+The 0402 package update was checked again with KiCad 10.0.6; it preserves
+the routed master and adds ten short pad connections without rerouting keys.
 
 | Check | Result |
 | --- | --- |
@@ -11,6 +13,9 @@ keyboard-only hardware revision with an external ESP32-S3 connection.
 | Schematic / manifest / PCB pin parity | 103 connected pins and 32 nets match |
 | Explicit no-connect parity | All 11 unused/NC U1 pins match; no connected net is discarded |
 | Electrical components | 43: 18 sockets, 18 diodes, U1, J1, C1-C2, R1-R3 |
+| Passive packages | R1-R3 and C1-C2: imperial 0402 / metric 1005, elongated hand-solder pads |
+| Passive specifications | R1/R2 2.2 kohm; R3 10 kohm; C1 10 uF / 10 V / X5R; C2 100 nF / 16 V / X7R |
+| Footprint parity | All schematic, manifest and PCB footprint names match; PCB values match the manifest |
 | Mechanical components | Four M3 clearance holes; no module/display mounts or breakaway tabs |
 | Board | 124 x 76 mm, two copper layers, 1.6 mm thick |
 | Key positions | Six columns and three rows, 19.05 mm pitch, 18 total |
@@ -21,8 +26,8 @@ keyboard-only hardware revision with an external ESP32-S3 connection.
 | J1 physical pad coordinates | Pin 1 at (90,6); pins 2-4 at +2.54 mm X increments |
 | J1 silkscreen | Each front/back signal label aligned to the corresponding physical pad; underside text mirrored correctly |
 | Connector nets | 1 GND, 2 3V3, 3 SDA, 4 SCL; matches interconnect.csv and netlist |
-| Copper | 313 track segments, 20 through vias, two filled ground pours |
-| Routing dimensions | 0.25 mm signals, 0.5 mm power, 0.4 mm local decoupling; 0.2 mm clearance |
+| Copper | 323 track segments, 20 through vias, two filled ground pours |
+| Routing dimensions | 0.25 mm signals and passive pad necks, 0.5 mm power, 0.4 mm local decoupling; 0.2 mm clearance |
 | Board-edge clearance | Minimum 0.5 mm copper setback |
 | Via geometry | 0.6 mm diameter / 0.3 mm drill; tenting specified |
 | Screw clearance | Four 3 mm radius track/via/pour keepouts on both copper layers |
@@ -36,7 +41,7 @@ keyboard-only hardware revision with an external ESP32-S3 connection.
 
 The two new scripts validate the electrical manifest against the exported
 schematic and actual PCB pads, including the explicit no-connect pin set.
-They also check connector pitch, hole size, mounting side, key paths and
+They also compare footprint names and check connector pitch, hole size, mounting side, key paths and
 the correspondence between front/back connector labels and pad positions.
 Ground pours are filled before final DRC and manufacturing export.
 

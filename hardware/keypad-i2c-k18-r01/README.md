@@ -88,7 +88,17 @@ GPA7 is correctly used as a row output and GPB7 is unused here.
 - Switches need a suitable switch plate and socket support during insertion.
   The previous enclosure is not automatically compatible with this outline.
 
-Solder U1 first with flux, then the 0805 resistors/capacitors, SOD-123 diodes,
+R1-R3 and C1-C2 use **0402 imperial (1005 metric, 1.0 x 0.5 mm)** bodies
+with elongated hand-solder pads. R1/R2 are 2.2 kohm, R3 is 10 kohm; use 1%
+resistors rated at least 1/16 W. C1 is 10 uF / 10 V / X5R, and C2 is
+100 nF / 16 V / X7R. MLCC capacitance falls under DC bias; C1 is nominal
+bulk bypass and C2 remains the short local decoupler. Check the selected
+capacitor's 3.3 V bias curve when sourcing it. Do not substitute metric
+0402 (imperial 01005) parts or the previous 0805 parts on these pads.
+The 18 key positions and 124 x 76 mm outline are unchanged by this package
+update; the MX key pitch determines the main board area.
+
+Solder U1 first with flux, then the 0402 resistors/capacitors, SOD-123 diodes,
 hot-swap sockets and J1. All are intended for soldering-iron assembly, with
 no hot-air station or bare MCU assembly. Inspect U1 bridges and diode
 polarity, then check 3V3-to-GND resistance and all four cable connections

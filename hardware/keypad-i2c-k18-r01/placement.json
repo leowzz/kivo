@@ -63,7 +63,7 @@
     {
       "ref": "C1",
       "lib": "Device:C",
-      "value": "10u 10V X7R",
+      "value": "10u 10V X5R",
       "nets": {
         "1": "3V3",
         "2": "GND"
@@ -81,7 +81,7 @@
         7
       ],
       "section": "lower",
-      "footprint": "Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder",
+      "footprint": "Capacitor_SMD:C_0402_1005Metric_Pad0.74x0.62mm_HandSolder",
       "angle": 0,
       "side": "F",
       "uuid": "d4a158d0-ad6d-5ead-a19a-85c8ab39fb07",
@@ -109,7 +109,7 @@
         15.1
       ],
       "section": "lower",
-      "footprint": "Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder",
+      "footprint": "Capacitor_SMD:C_0402_1005Metric_Pad0.74x0.62mm_HandSolder",
       "angle": 0,
       "side": "F",
       "uuid": "b182761f-ba4e-572c-969c-2b52ca14bc89",
@@ -137,7 +137,7 @@
         5
       ],
       "section": "lower",
-      "footprint": "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder",
+      "footprint": "Resistor_SMD:R_0402_1005Metric_Pad0.72x0.64mm_HandSolder",
       "angle": 0,
       "side": "F",
       "uuid": "88473613-77fd-5d60-95b9-8ab6cddb0bfc",
@@ -165,7 +165,7 @@
         9
       ],
       "section": "lower",
-      "footprint": "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder",
+      "footprint": "Resistor_SMD:R_0402_1005Metric_Pad0.72x0.64mm_HandSolder",
       "angle": 0,
       "side": "F",
       "uuid": "18bc03ea-20b7-562e-bcba-f823e231f811",
@@ -193,7 +193,7 @@
         13
       ],
       "section": "lower",
-      "footprint": "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder",
+      "footprint": "Resistor_SMD:R_0402_1005Metric_Pad0.72x0.64mm_HandSolder",
       "angle": 0,
       "side": "F",
       "uuid": "24cac883-dd58-53a1-a8dc-acd329bebc49",

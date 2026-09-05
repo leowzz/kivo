@@ -223,8 +223,11 @@ def verify(data,board_path,netlist):
     fps = {f.GetReference():f for f in board.GetFootprints()}
     expected = {(p["ref"],n):"/"+net for p in data["parts"] for n,net in p["nets"].items() if net}
     actual = {(f.GetReference(),p.GetNumber()):p.GetNetname() for f in fps.values() for p in f.Pads() if p.GetNumber() and p.GetNetname()}
+    schematic = ET.parse(netlist)
+    schematic_footprints = {c.attrib["ref"]: c.findtext("footprint")
+                            for c in schematic.findall("./components/comp")}
     exported,unconnected = {},set()
-    for net in ET.parse(netlist).findall("./nets/net"):
+    for net in schematic.findall("./nets/net"):
         for node in net.findall("node"):
             if node.attrib["ref"].startswith("#"):
                 continue
@@ -244,6 +247,9 @@ def verify(data,board_path,netlist):
     assert abs(pcb.ToMM(bounds.GetHeight())-data["height"]) < .1
     for part in data["parts"]:
         fp = fps[part["ref"]]
+        assert str(fp.GetFPID().GetLibItemName()) == part["footprint"].split(":")[1], part["ref"]
+        assert schematic_footprints[part["ref"]] == part["footprint"], part["ref"]
+        assert fp.GetValue() == part["value"], part["ref"]
         assert all(abs(a-b)<.001 for a,b in zip(xy(fp),part["local_pcb"]))
         assert fp.GetLayer() == (pcb.B_Cu if part["side"] == "B" else pcb.F_Cu)
         for pad in fp.Pads():

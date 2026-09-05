@@ -62,6 +62,12 @@ def generate(output):
         if ref == "J1":
             part["value"] = "I2C / 3V3 / 1x4 FEMALE / 2.54mm"
             part["footprint"] = "Connector_PinSocket_2.54mm:PinSocket_1x04_P2.54mm_Vertical"
+        if ref in ("R1", "R2", "R3"):
+            part["footprint"] = "Resistor_SMD:R_0402_1005Metric_Pad0.72x0.64mm_HandSolder"
+        if ref in ("C1", "C2"):
+            part["footprint"] = "Capacitor_SMD:C_0402_1005Metric_Pad0.74x0.62mm_HandSolder"
+        if ref == "C1":
+            part["value"] = "10u 10V X5R"
         if ref.startswith(("SW", "D")):
             index = int(ref.removeprefix("SW").removeprefix("D")) - 1
             row, col = divmod(index, 6)
