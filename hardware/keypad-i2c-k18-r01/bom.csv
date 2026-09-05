@@ -1,0 +1,44 @@
+Reference,Value,Footprint,MPN
+C1,10u 10V X7R,Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,
+C2,100n 16V X7R / U1,Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,
+R1,2.2k I2C PULLUP,Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder,
+R2,2.2k I2C PULLUP,Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder,
+R3,10k U1 RESET PULLUP,Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder,
+U1,MCP23017-E/SO / 0x20,Package_SO:SOIC-28W_7.5x17.9mm_P1.27mm,MCP23017-E/SO
+J1,I2C / 3V3 / 1x4 FEMALE / 2.54mm,Connector_PinSocket_2.54mm:PinSocket_1x04_P2.54mm_Vertical,
+SW1,KEY_1 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,
+D1,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W
+SW2,KEY_2 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,
+D2,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W
+SW3,KEY_3 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,
+D3,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W
+SW4,KEY_4 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,
+D4,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W
+SW5,KEY_5 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,
+D5,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W
+SW6,KEY_6 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,
+D6,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W
+SW7,KEY_7 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,
+D7,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W
+SW8,KEY_8 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,
+D8,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W
+SW9,KEY_9 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,
+D9,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W
+SW10,KEY_10 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,
+D10,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W
+SW11,KEY_11 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,
+D11,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W
+SW12,KEY_12 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,
+D12,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W
+SW13,KEY_13 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,
+D13,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W
+SW14,KEY_14 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,
+D14,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W
+SW15,KEY_15 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,
+D15,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W
+SW16,KEY_16 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,
+D16,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W
+SW17,KEY_17 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,
+D17,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W
+SW18,KEY_18 MX HOTSWAP,Workbench:keyswitch_cherrymx_hotswap_1u,
+D18,1N4148W / K TO ROW,Diode_SMD:D_SOD-123,1N4148W
