@@ -80,18 +80,55 @@ rear edge at the top. The lower board is rotated 180 degrees in the panel.
 
 | J2 Pin | Signal | GPIO |
 | --- | --- | --- |
-| 1, square pad at rear | GND | - |
-| 2 | 3.3 V | - |
-| 3 | SCL | 14 |
-| 4 | SDA | 13 |
-| 5 | Confirm | 15 |
-| 6 | Encoder press | 16 |
-| 7 | Encoder A | 17 |
-| 8 | Encoder B | 18 |
-| 9 | Back | 21 |
+| 1, rightmost square pad | VCC / 3.3 V | - |
+| 2 | GND | - |
+| 3 | BAK / KEY0 / Back | 21 |
+| 4 | TRB / TRIM_B / Encoder B | 18 |
+| 5 | TRA / TRIM_A / Encoder A | 17 |
+| 6 | PSH / PUSH / Encoder press | 16 |
+| 7 | SCL / IIC_SCL | 14 |
+| 8 | SDA / IIC_SDA | 13 |
+| 9, leftmost pad | CON / KEY1 / Confirm | 15 |
 
-J2 is the carrier's chosen 1x9 harness order, not a verified pin-for-pin
-module connector order. Check the actual module's power rating and labels.
+J2 matches the supplied module interface diagram and front photograph in
+`references/display-interface.png`. Looking at the readable display with
+the encoder on the right, the top connector reads **CON, SDA, SCL, PSH,
+TRA, TRB, BAK, GND, VCC from left to right**. This is pin 9 through pin 1.
+VCC is **3.3 V only**. Use a pin-for-pin 9-wire harness and identify the
+square pad rather than inferring pin numbers from a rear or mating-face view.
+The GPIO assignments to display functions are unchanged; J8/J9 also retain
+their existing cable mapping.
+
+The dimension source is `references/display-dimensions.png`. The module's
+64.90 x 35.03 mm bounding rectangle is placed at upper-board `(8,3)` mm,
+front-facing with the encoder on the right. `Dwgs.User` shows this assembly
+envelope, including the notched board's full rectangular extent; it is not
+a cutout in the carrier. The module connector runs horizontally near the
+rear edge. Its leftmost pin is 11.38 mm from the module's left edge and
+the row is 1.93 mm below its top edge. On the carrier, J2 pin 9 is at
+`(19.38,4.93)` and pin 1 is at `(39.70,4.93)` mm.
+
+The 2.54 mm header pitch is the standard pitch assumed for this module;
+it is not explicitly dimensioned in the supplied drawing. Pin 1's X value
+uses `11.38 + 8 * 2.54 = 31.70` mm. Confirm pitch against the purchased
+module before fabrication. Carrier J2 uses 1.0 mm plated drills.
+
+Four additional 3.4 mm NPTH clearance holes follow the module's M3 mounting
+centers. The drawing's slight asymmetry is retained:
+
+| Mount | Relative To Module Top-Left | Relative To Upper PCB Top-Left |
+| --- | --- | --- |
+| H_D1, rear left | (2.87, 2.85) | (10.87, 5.85) |
+| H_D2, rear right | (61.90, 2.90) | (69.90, 5.90) |
+| H_D3, front left | (2.95, 32.06) | (10.95, 35.06) |
+| H_D4, front right | (61.93, 31.88) | (69.93, 34.88) |
+
+These module mounts are separate from the upper PCB's four enclosure mounts.
+Set module standoff height and header/harness direction from the actual
+assembly; this connector is still a harness interface, not a validated
+rigid board-to-board mating stack. Keep underside screw heads within the
+3.5 mm nominal parts envelope or recheck the stack clearances.
+
 R1/R2 are optional 4.7 kohm I2C pull-ups: fit them only if the module does
 not already provide suitable pull-ups.
 
@@ -177,8 +214,9 @@ core board, display or other parts installed.
 
 The Y 96-103 band forbids copper tracks, vias and pours on both layers.
 Only mechanical holes are permitted there; the verifier also checks that
-electrical pads stay out. Each finished board has its own four M3 mounting
-holes, so the tabs carry no load in the finished assembly.
+electrical pads stay out. Each finished board has its own four M3 enclosure
+mounting holes, in addition to the upper board's four display mounts, so the
+tabs carry no load in the finished assembly.
 
 Confirm the slot tooling, perforation drill/spacing, tab strength and
 customer-panelization policy with the chosen fabricator before ordering.
@@ -296,3 +334,5 @@ uv run --script scripts/hardware/preview_workbench_s3_stack.py \
 - Kailh socket footprint/model from foostan/kbd, copied from the RP2040
   draft with its MIT license in `licenses/`.
 - Standard socket, diode and hand-solder footprints: KiCad 10.0.6 libraries.
+- User-supplied module drawings: `references/display-dimensions.png` and
+  `references/display-interface.png`, supplied on 2026-09-05.

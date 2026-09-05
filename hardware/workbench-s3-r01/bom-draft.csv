@@ -1,7 +1,7 @@
 Reference,Value,Footprint,MPN,DNP
 J1,YD P1 / RIGHT SOCKET / 1x22,Connector_PinSocket_2.54mm:PinSocket_1x22_P2.54mm_Vertical,,False
 J7,YD P2 / LEFT SOCKET / 1x22,Connector_PinSocket_2.54mm:PinSocket_1x22_P2.54mm_Vertical,,False
-J2,DISPLAY HARNESS / 3V3,Connector_PinHeader_2.54mm:PinHeader_1x09_P2.54mm_Vertical,,False
+J2,DISPLAY / MODULE PIN 1 = 3V3,Connector_PinHeader_2.54mm:PinHeader_1x09_P2.54mm_Vertical,,False
 J4,EXPANSION / 3V3 IO,Connector_PinHeader_2.54mm:PinHeader_1x10_P2.54mm_Vertical,,False
 J5,EXTERNAL BOOT / GPIO0 TO GND,Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical,,False
 J6,EXTERNAL RESET / EN TO GND,Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical,,False

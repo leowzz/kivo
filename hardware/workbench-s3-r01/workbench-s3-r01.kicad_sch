@@ -3933,7 +3933,7 @@
         )
       )
     )
-    (property "Value" "DISPLAY HARNESS / 3V3"
+    (property "Value" "DISPLAY / MODULE PIN 1 = 3V3"
       (at 330.2 71.82000000000001 0)
       (effects
         (font
@@ -3970,7 +3970,7 @@
     )
     (uuid "11061001-621e-5816-b177-39e43301b364")
   )
-  (label "UP_GND"
+  (label "UP_3V3"
     (at 320.04 83.82 0)
     (effects
       (font
@@ -3991,7 +3991,7 @@
     )
     (uuid "03a6b4d2-5e23-5d4c-92ff-32864363608b")
   )
-  (label "UP_3V3"
+  (label "UP_GND"
     (at 320.04 86.36 0)
     (effects
       (font
@@ -4012,7 +4012,7 @@
     )
     (uuid "ab6cf378-6c37-50a7-b608-64e011fc4776")
   )
-  (label "UP_GPIO14"
+  (label "UP_GPIO21"
     (at 320.04 88.9 0)
     (effects
       (font
@@ -4033,7 +4033,7 @@
     )
     (uuid "953a0820-15e5-51e3-bed0-15c9b5125af1")
   )
-  (label "UP_GPIO13"
+  (label "UP_GPIO18"
     (at 320.04 91.44 0)
     (effects
       (font
@@ -4054,7 +4054,7 @@
     )
     (uuid "c501fa98-e7e4-51bc-a5cc-5ef98a786736")
   )
-  (label "UP_GPIO15"
+  (label "UP_GPIO17"
     (at 320.04 93.98 0)
     (effects
       (font
@@ -4096,7 +4096,7 @@
     )
     (uuid "4d8a0107-78db-5d3e-8b24-10b09bfde418")
   )
-  (label "UP_GPIO17"
+  (label "UP_GPIO14"
     (at 320.04 99.06 0)
     (effects
       (font
@@ -4117,7 +4117,7 @@
     )
     (uuid "217cdbbe-fc88-51ab-95ff-e7ebfc6f7449")
   )
-  (label "UP_GPIO18"
+  (label "UP_GPIO13"
     (at 320.04 101.6 0)
     (effects
       (font
@@ -4138,7 +4138,7 @@
     )
     (uuid "1b5c809a-4169-5882-ab26-1c5e5e0347e4")
   )
-  (label "UP_GPIO21"
+  (label "UP_GPIO15"
     (at 320.04 104.14 0)
     (effects
       (font
@@ -9030,7 +9030,7 @@
     )
     (uuid "087018a7-c099-5424-9a5c-9585f2909638")
   )
-  (text "J2 is the MAIN BOARD harness order, not a verified module mating pinout. 3.3V only."
+  (text "J2 matches supplied module diagram: pins 1-9 = VCC GND BAK TRB TRA PSH SCL SDA CON. VCC = 3.3V ONLY."
     (at 35 380 0)
     (effects
       (font

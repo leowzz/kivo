@@ -164,17 +164,30 @@ def generate(manifest, output, libraries, view="panel"):
             board.Add(hole)
 
     if view in ("panel", "upper"):
-        rectangle([2,2,67,37], "upper", pcb.Dwgs_User)
-        text("SH1106 + EC11 / PANEL MOUNT", 34, 18, "upper", pcb.Dwgs_User)
-        text("UPPER / 3x6 MATRIX", 30, 9, "upper", size=1.2)
-        text("S3 r01 / UNROUTED", 30, 13, "upper")
-        text("J2 DISPLAY / 3V3", 28, 30, "upper")
+        module = data["display_module"]
+        mx, my = module["origin"]
+        mw, mh = module["size"]
+        rectangle([mx,my,mx+mw,my+mh], "upper", pcb.Dwgs_User)
+        text("SH1106 + EC11 / FRONT VIEW", mx+mw/2, my+16, "upper", pcb.Dwgs_User)
+        text("64.90 x 35.03 / 4 x M3", mx+mw/2, my+20, "upper", pcb.Dwgs_User)
+        for i, (x,y) in enumerate(module["mounting_holes"], 1):
+            hole = pcb.FootprintLoad(str(manifest.parent / "Workbench.pretty"), "MountingHole_M3_5.6mm_Head")
+            hole.SetReference(f"H_D{i}")
+            hole.SetPosition(point(mx+x, my+y, "upper"))
+            hole.Value().SetVisible(False)
+            hole.Reference().SetVisible(False)
+            hole.SetBoardOnly(True)
+            board.Add(hole)
+        text("UPPER / 3x6 MATRIX", 96, 4, "upper", size=1.2)
+        text("S3 r01 / UNROUTED", 96, 7, "upper")
+        text("J2", mx+7, my+1.93, "upper", size=0.8)
         text("J9 IDC20 / TO LOWER J8", 101, 24, "upper", pcb.B_SilkS, size=0.8)
         for ref, x in [("C1",89), ("C2",94), ("R1",101), ("R2",106)]:
             text(ref, x, 31, "upper", size=0.8)
         text("R1/R2 DNP", 103.5, 34, "upper", size=0.8)
-        for row, label in enumerate(["GND", "3V3", "SCL", "SDA", "OK", "PRESS", "A", "B", "BACK"]):
-            text(label, 68, 5+row*2.54, "upper", size=0.8)
+        connector = module["connector"]
+        for index, label in enumerate(connector["signals"]):
+            text(label, mx+connector["pin1"][0]-index*connector["pitch"], my+5.5, "upper", size=0.8)
         for key in data["keys"]:
             text(key["key"].replace("KEY_", "K"), key["pcb_x"], key["pcb_y"]+7, "upper")
         text("TRIM TAB STUBS BEFORE ASSEMBLY", 63, 97, "upper", pcb.Dwgs_User, size=0.8)

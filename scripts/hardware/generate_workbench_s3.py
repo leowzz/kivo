@@ -38,6 +38,14 @@ def generate(library_root, output):
     display = dict(sda=13, scl=14, control_panel=dict(
         type="ec11_confirm_back", confirm=15, encoder_press=16,
         encoder_a=17, encoder_b=18, back=21))
+    # Supplied module drawing: front view, display readable and encoder on the right.
+    display_module = dict(
+        origin=[8,3], size=[64.90,35.03],
+        mounting_holes=[[2.87,2.85],[61.90,2.90],[2.95,32.06],[61.93,31.88]],
+        connector=dict(ref="J2", pin1=[31.70,1.93], pin9=[11.38,1.93], pitch=2.54,
+                       signals=["VCC","GND","BAK","TRB","TRA","PSH","SCL","SDA","CON"]),
+        source_view="Front; encoder right; square pin 1 at the right end",
+        pitch_basis="Standard 2.54 mm assumed; drawing does not explicitly dimension pitch")
     expansion = [1, 2, 38, 39, 40, 41, 42, 47]
     # Manufacturer P1/P2 numbering: pin 1 is at the antenna end.
     p1 = ["+3V3", "+3V3", "EN", "GPIO4", "GPIO5", "GPIO6", "GPIO7",
@@ -72,9 +80,13 @@ def generate(library_root, output):
     add("J7", "Connector_Generic:Conn_01x22", "YD P2 / LEFT SOCKET / 1x22",
         {str(i+1): n for i, n in enumerate(p2)}, (215, 105), (86.3, 55.25), socket, angle=180)
     control = display["control_panel"]
-    j2 = ["GND", "+3V3", "GPIO14", "GPIO13", "GPIO15", "GPIO16", "GPIO17", "GPIO18", "GPIO21"]
-    add("J2", "Connector_Generic:Conn_01x09", "DISPLAY HARNESS / 3V3",
-        {str(i+1): n for i, n in enumerate(j2)}, (330, 95), (73, 5), header.format(9), section="upper")
+    j2 = ["+3V3", "GND", f"GPIO{control['back']}", f"GPIO{control['encoder_b']}",
+          f"GPIO{control['encoder_a']}", f"GPIO{control['encoder_press']}",
+          f"GPIO{display['scl']}", f"GPIO{display['sda']}", f"GPIO{control['confirm']}"]
+    j2_position = [a+b for a,b in zip(display_module["origin"], display_module["connector"]["pin1"])]
+    add("J2", "Connector_Generic:Conn_01x09", "DISPLAY / MODULE PIN 1 = 3V3",
+        {str(i+1): n for i, n in enumerate(j2)}, (330, 95), j2_position, header.format(9),
+        angle=-90, section="upper")
     add("J4", "Connector_Generic:Conn_01x10", "EXPANSION / 3V3 IO",
         {str(i+1): n for i, n in enumerate(["GND", "+3V3"] + [f"GPIO{p}" for p in expansion])},
         (440, 95), (10, 3), header.format(10), angle=90)
@@ -176,7 +188,7 @@ def generate(library_root, output):
     child(schematic, "lib_symbols").append(symbols.get("power:PWR_FLAG"))
     for index, (text, position) in enumerate([
         ("TWO-BOARD REVIEW DRAFT: J8 to J9 uses a pin-1-to-pin-1 IDC20 cable. NO COPPER ACROSS BREAKAWAY TABS.", (35, 25)),
-        ("J2 is the MAIN BOARD harness order, not a verified module mating pinout. 3.3V only.", (35, 380)),
+        ("J2 matches supplied module diagram: pins 1-9 = VCC GND BAK TRB TRA PSH SCL SDA CON. VCC = 3.3V ONLY.", (35, 380)),
         ("R1/R2: DNP until module pull-ups are checked. Matrix: rows sink LOW, columns use pull-ups; diode K to row.", (35, 387)),
         ("UP_* nets are on the upper board. Lower and upper nets join ONLY through the external cable; see interconnect.csv.", (35, 394)),
     ]):
@@ -195,7 +207,7 @@ def generate(library_root, output):
                    core_top_z=20, antenna_top_z=14.5, upper_underside_parts_height=3.5,
                    upper_idc_mated_height=18, ribbon_length_mm=150),
         matrix_rows=rows, matrix_columns=columns, interconnect=cable,
-        display=display, expansion_gpios=expansion, module_p1=p1, module_p2=p2,
+        display=display, display_module=display_module, expansion_gpios=expansion, module_p1=p1, module_p2=p2,
         antenna_keepout=[75, 57.15, 123, 78.39], parts=parts, keys=key_centers), indent=2) + "\n")
     with (output / "interconnect.csv").open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=["pin", "lower", "upper"])

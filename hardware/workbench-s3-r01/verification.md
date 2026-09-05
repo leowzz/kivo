@@ -8,7 +8,7 @@ electrical definitions and placement, not approval for fabrication.
 | Schematic load, SVG and XML netlist export | Pass |
 | ERC, including warnings | 0 violations |
 | Exported schematic versus panel PCB pads | 177 connected pins and 64 nets match |
-| Carrier schematic components | 49, plus 8 board-only mounting holes and 6 mouse-bite footprints |
+| Carrier schematic components | 49, plus 12 board-only mounting holes and 6 mouse-bite footprints |
 | Separate upper-board connectivity | 42 parts, 109 connected pins, 36 nets |
 | Separate lower-board connectivity | 7 parts, 68 connected pins, 28 nets |
 | Board-to-board cable | J8/J9, 20 pins, 1:1; full mapping matches CSV and schematic |
@@ -17,7 +17,10 @@ electrical definitions and placement, not approval for fabrication.
 | Module sockets | 2 x 22 PTH; 2.54 mm pitch; 25.40 mm row spacing; 1.0 mm drills |
 | All 18 key/diode paths | Pass; column -> switch -> diode A -> K -> row |
 | Key matrix | Rows GPIO4/5/6, columns GPIO7-12; 9 GPIOs |
-| Display harness and optional pull-ups | Pass; J2 map and R1/R2 DNP checked |
+| Display harness and optional pull-ups | Pass against supplied interface image; pin 1 VCC, 2 GND, 3 Back, 4 B, 5 A, 6 Press, 7 SCL, 8 SDA, 9 Confirm; R1/R2 DNP |
+| Display connector position | Horizontal, front view; rightmost pin 1 at (39.70,4.93), leftmost pin 9 at (19.38,4.93) mm on upper PCB |
+| Display mechanical reference | 64.90 x 35.03 mm envelope at (8,3); 4 additional M3 mounts match the supplied asymmetric centers |
+| Display header pitch | 2.54 mm assumed standard; not explicitly dimensioned in source image; physical measurement pending |
 | BOOT/RESET | Pass; J5 GPIO0/GND, J6 EN/GND |
 | Expansion | Pass; GPIO1/2/38/39/40/41/42/47, 3V3 and GND |
 | Hand-solder packages | SOD-123 diodes; 0805 extended pads; through-hole connectors |
@@ -78,7 +81,8 @@ Generated evidence is in ignored `output/hardware/workbench-s3-r01/stacked/`:
 `erc.json`, `drc.json`, `netlist.xml`, `panel-top.png`, `panel-bottom.png`,
 `upper.kicad_pcb`, `lower.kicad_pcb`, individual-board renders and DRC reports,
 `stack-side.png`, `stack-side.svg`, `stack-clearances.json`, and
-`schematic/workbench-s3-r01.svg`. The individual PCBs are derived trimmed
+`schematic/workbench-s3-r01.svg`. The supplied display reference images are
+retained under `hardware/workbench-s3-r01/references/`. The individual PCBs are derived trimmed
 previews; the panel PCB in this source directory is the editable master.
 
 Re-run from the repository root:

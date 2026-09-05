@@ -84,6 +84,17 @@ def verify_board(path, data, expected, view):
             for coordinate, value in zip(xy(pad), target):
                 near(coordinate, value)
 
+    if view in ("panel", "upper"):
+        pads = {pad.GetNumber(): pad for pad in footprints["J2"].Pads()}
+        assert len(pads) == 9
+        for i in range(1,10):
+            pad = pads[str(i)]
+            assert pad.GetAttribute() == pcb.PAD_ATTRIB_PTH
+            near(pcb.ToMM(pad.GetDrillSize().x), 1)
+            # Module pin 1 is the rightmost square pad in the supplied front view.
+            near(xy(pad)[0], 8+11.38+(9-i)*2.54)
+            near(xy(pad)[1], 3+1.93)
+
     keepouts = {zone.GetZoneName(): zone for zone in board.Zones()}
     assert len(keepouts) == {"panel":2, "upper":0, "lower":1}[view]
     for name, zone in keepouts.items():
@@ -114,7 +125,7 @@ def verify_board(path, data, expected, view):
                     low, high = pcb.ToMM(bounds.GetTop())-50, pcb.ToMM(bounds.GetBottom())-50
                     assert high < 96 or low > 103, (ref,pad.GetNumber(),"electrical pad in trim band")
     mounts = {ref for ref in footprints if ref.startswith("H_")}
-    assert len(mounts) == (8 if view == "panel" else 4)
+    assert len(mounts) == {"panel":12, "upper":8, "lower":4}[view]
     assert len({xy(footprints[ref]) for ref in mounts}) == len(mounts)
     for section, settings in data["boards"].items():
         if view != "panel" and view != section:
@@ -123,6 +134,15 @@ def verify_board(path, data, expected, view):
             hole = footprints[f"H_{section[0].upper()}{i}"]
             for coordinate, value in zip(xy(hole), panel_point(*center, section, view)):
                 near(coordinate, value)
+            assert all(p.GetAttribute() == pcb.PAD_ATTRIB_NPTH for p in hole.Pads())
+    if view in ("panel", "upper"):
+        module = data["display_module"]
+        assert module["origin"] == [8,3] and module["size"] == [64.90,35.03]
+        centers = [[2.87,2.85],[64.90-3,2.90],[2.95,35.03-2.97],[64.90-2.97,35.03-3.15]]
+        for i, (x,y) in enumerate(centers,1):
+            hole = footprints[f"H_D{i}"]
+            near(xy(hole)[0], 8+x)
+            near(xy(hole)[1], 3+y)
             assert all(p.GetAttribute() == pcb.PAD_ATTRIB_NPTH for p in hole.Pads())
     assert set(footprints) == set(parts) | mounts | {f"MB{i}" for i in range(1,len(holes)//6+1)}
     outlines = pcb.SHAPE_POLY_SET()
@@ -176,7 +196,7 @@ def verify(directory, netlist, individual_boards=None):
         assert expected[(f"D{i}","1")] == f"/UP_GPIO{rows[row]}"
         assert parts[f"SW{i}"]["side"] == parts[f"D{i}"]["side"] == "B"
         assert parts[f"D{i}"]["footprint"] == "Diode_SMD:D_SOD-123"
-    display = ["UP_GND","UP_3V3","UP_GPIO14","UP_GPIO13","UP_GPIO15","UP_GPIO16","UP_GPIO17","UP_GPIO18","UP_GPIO21"]
+    display = ["UP_3V3","UP_GND","UP_GPIO21","UP_GPIO18","UP_GPIO17","UP_GPIO16","UP_GPIO14","UP_GPIO13","UP_GPIO15"]
     assert [expected[("J2",str(i))] for i in range(1,10)] == ["/"+s for s in display]
     spare = [1,2,38,39,40,41,42,47]
     assert [expected[("J4",str(i))] for i in range(1,11)] == ["/GND","/+3V3"]+[f"/GPIO{i}" for i in spare]
