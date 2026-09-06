@@ -15,7 +15,8 @@ class IoTestProtocol {
 
   template <typename ConfigurePin>
   void reset(ConfigurePin configure) {
-    apply(IoInputMode::Floating, configure);
+    // Open contacts need a defined level instead of a floating input.
+    apply(IoInputMode::PullUp, configure);
   }
 
   template <typename ReadPin, typename ConfigurePin>
@@ -45,5 +46,5 @@ class IoTestProtocol {
   }
 
   const BoardProfile &board_;
-  IoInputMode mode_ = IoInputMode::Floating;
+  IoInputMode mode_ = IoInputMode::PullUp;
 };

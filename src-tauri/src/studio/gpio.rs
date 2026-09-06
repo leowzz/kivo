@@ -215,6 +215,15 @@ fn parse_pins(line: &str, expected: &[u8]) -> Result<Vec<GpioPin>, AppError> {
 }
 
 impl Session {
+    fn start(&mut self) -> Result<GpioSnapshot, AppError> {
+        if self.hello.firmware_build_id.starts_with("io-test-") {
+            // Older diagnostic builds reset to floating inputs on disconnect.
+            self.set_input_mode(InputMode::PullUp)
+        } else {
+            self.sample()
+        }
+    }
+
     fn sample(&mut self) -> Result<GpioSnapshot, AppError> {
         let input_mode = if self.hello.firmware_build_id.starts_with("io-test-") {
             Some(InputMode::parse(&exchange(
@@ -294,7 +303,7 @@ impl Monitor {
             port,
             hello,
         };
-        let snapshot = session.sample().map_err(|error| {
+        let snapshot = session.start().map_err(|error| {
             if error.code == "gpio_response_timeout" {
                 AppError::new("gpio_monitor_unsupported")
             } else {
@@ -463,6 +472,53 @@ mod tests {
             monitor.connect(&device_id).unwrap_err().code,
             "gpio_session_closed"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn starting_diagnostics_enables_pullups_but_product_firmware_stays_passive() {
+        use std::io::{BufRead, BufReader};
+        for (build, mode, commands) in [
+            (
+                "io-test-218a6cbe9402",
+                Some(InputMode::PullUp),
+                vec![
+                    ("GPIO_MODE PULLUP\n", "GPIO_MODE PULLUP\n"),
+                    ("GPIO_MODE\n", "GPIO_MODE PULLUP\n"),
+                    ("GPIO_READ\n", "GPIO_STATE 1 1:1\n"),
+                ],
+            ),
+            (
+                "product-build",
+                None,
+                vec![("GPIO_READ\n", "GPIO_STATE 1 1:1\n")],
+            ),
+        ] {
+            let (mut board, mut port) = serialport::TTYPort::pair().unwrap();
+            port.set_timeout(Duration::from_millis(50)).unwrap();
+            board.set_timeout(Duration::from_secs(2)).unwrap();
+            let mut session = Session {
+                id: 1,
+                device_id: DeviceId::new("yd-rp2040", "TEST").unwrap(),
+                port: Box::new(port),
+                hello: parse_hello(&format!("HELLO 13 rp2040 yd-rp2040 {build} - 1 1")).unwrap(),
+            };
+            let responder = std::thread::spawn(move || {
+                let mut reader = BufReader::new(&mut board);
+                for (expected, response) in commands {
+                    let mut command = String::new();
+                    reader.read_line(&mut command).unwrap();
+                    assert_eq!(command, expected);
+                    reader.get_mut().write_all(response.as_bytes()).unwrap();
+                }
+                drop(reader);
+                board
+            });
+            let snapshot = session.start().unwrap();
+            assert_eq!(snapshot.input_mode, mode);
+            assert!(snapshot.pins[0].high);
+            responder.join().unwrap();
+        }
     }
 
     #[cfg(unix)]

@@ -46,8 +46,9 @@ void test_io_test_protocol_only_configures_inputs_and_ignores_runtime_commands()
     TEST_ASSERT_EQUAL_UINT32(board->safePinCount, configured.size());
     for (const auto &[pin, mode] : configured) {
       (void)pin;
-      TEST_ASSERT_EQUAL(IoInputMode::Floating, mode);
+      TEST_ASSERT_EQUAL(IoInputMode::PullUp, mode);
     }
+    TEST_ASSERT_EQUAL_STRING("GPIO_MODE PULLUP\n", protocol.handle("GPIO_MODE", "io-test-dev", read, configure).c_str());
     configured.clear();
     for (const auto command : {"CONFIG_BEGIN 1", "HOTKEY 1 0 4", "GPIO_MODE OUTPUT", "GPIO_MODE PULLUP 0"}) {
       TEST_ASSERT_TRUE(protocol.handle(command, "io-test-dev", read, configure).empty());
@@ -61,8 +62,16 @@ void test_io_test_protocol_only_configures_inputs_and_ignores_runtime_commands()
     }
     TEST_ASSERT_EQUAL_STRING("GPIO_MODE PULLUP\n", protocol.handle("GPIO_MODE", "io-test-dev", read, configure).c_str());
     TEST_ASSERT_EQUAL_STRING("GPIO_MODE PULLDOWN\n", protocol.handle("GPIO_MODE PULLDOWN", "io-test-dev", read, configure).c_str());
-    protocol.reset(configure);
+    TEST_ASSERT_EQUAL_STRING("GPIO_MODE INPUT\n", protocol.handle("GPIO_MODE INPUT", "io-test-dev", read, configure).c_str());
     TEST_ASSERT_EQUAL_STRING("GPIO_MODE INPUT\n", protocol.handle("GPIO_MODE", "io-test-dev", read, configure).c_str());
+    configured.clear();
+    protocol.reset(configure);
+    TEST_ASSERT_EQUAL_UINT32(board->safePinCount, configured.size());
+    for (const auto &[pin, mode] : configured) {
+      (void)pin;
+      TEST_ASSERT_EQUAL(IoInputMode::PullUp, mode);
+    }
+    TEST_ASSERT_EQUAL_STRING("GPIO_MODE PULLUP\n", protocol.handle("GPIO_MODE", "io-test-dev", read, configure).c_str());
     TEST_ASSERT_EQUAL_STRING(formatHello(*board, "io-test-dev").c_str(), protocol.handle("HELLO", "io-test-dev", read, configure).c_str());
     TEST_ASSERT_EQUAL_STRING(formatGpioState(*board, read).c_str(), protocol.handle("GPIO_READ", "io-test-dev", read, configure).c_str());
   }
