@@ -146,7 +146,7 @@ test:
 	bash test/test_release.sh
 	bash test/test_studio_bundle.sh
 	$(UV_CMD) run pytest test/test_repo_version.py test/test_release_transaction.py test/test_platformio_build_id.py
-	$(UV_CMD) run pytest test/test_upload_targeting.py test/test_rp2040_upload.py test/test_runtime_smoke.py
+	$(UV_CMD) run pytest test/test_upload_targeting.py test/test_rp2040_upload.py test/test_runtime_smoke.py test/test_studio_firmware.py
 	$(UV_CMD) run pytest test/test_firmware_target_selector.py test/test_product_firmware_selector.py test/test_make_upload_selection.py
 	$(UV_CMD) run pytest test/test_monitor.py test/test_kill_helper.py
 	$(UV_CMD) run pio test -e native

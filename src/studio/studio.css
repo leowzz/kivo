@@ -169,6 +169,16 @@
 .gpio-error svg { flex: 0 0 auto; }
 .gpio-empty { display: grid; place-items: center; min-height: 260px; color: var(--gray-9); font-size: 13px; }
 .gpio-footer { padding-block: 12px; color: var(--gray-9); font-size: 11px; overflow-wrap: anywhere; }
+.firmware-actions { padding: 14px 0; border-bottom: 1px solid var(--border-default); }
+.firmware-buttons { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.firmware-buttons button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 0 12px; border: 1px solid var(--border-default); border-radius: 6px; background: white; font-size: 12px; }
+.firmware-buttons button:last-of-type { color: #28598c; border-color: #8caecf; }
+.firmware-buttons [role="status"] { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--gray-10); }
+.firmware-result { display: grid; gap: 6px; margin-top: 12px; overflow-wrap: anywhere; font-size: 12px; }
+.firmware-result small { color: var(--gray-10); font-size: 11px; }
+.firmware-result p, .firmware-failure { color: var(--red-text); }
+.firmware-failure { margin-top: 12px; font-size: 12px; }
+.firmware-failure pre { margin: 6px 0 0; max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.5 ui-monospace, monospace; }
 @media (max-width: 760px) {
   .studio-shell { display: flex; flex-direction: column; }
   .studio-sidebar { flex: 0 0 auto; max-height: 184px; border-right: 0; border-bottom: 1px solid var(--border-default); display: grid; grid-template-columns: minmax(0, 1fr) auto; }

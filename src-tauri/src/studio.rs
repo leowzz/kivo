@@ -17,12 +17,14 @@ use std::{
     time::Duration,
 };
 use tauri::Manager;
+mod firmware;
 mod gpio;
 
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(gpio::GpioState::default())
+        .manage(firmware::FirmwareState::default())
         .setup(|app| {
             setup(app)?;
             Ok(())
@@ -40,6 +42,7 @@ pub fn run() {
             gpio::studio_connect_gpio,
             gpio::studio_read_gpio,
             gpio::studio_disconnect_gpio,
+            firmware::studio_firmware_operation,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Kivo Product Studio");
@@ -49,13 +52,21 @@ pub fn run() {
             event: tauri::WindowEvent::CloseRequested { api, .. },
             ..
         } => {
+            if app.state::<firmware::FirmwareState>().prevent_shutdown() {
+                api.prevent_close();
+                return;
+            }
             app.state::<gpio::GpioState>().close();
             if cancel_active_build_for_shutdown(app) {
                 api.prevent_close();
             }
         }
-        tauri::RunEvent::ExitRequested { api, .. } if cancel_active_build_for_shutdown(app) => {
-            api.prevent_exit()
+        tauri::RunEvent::ExitRequested { api, .. } => {
+            if app.state::<firmware::FirmwareState>().prevent_shutdown()
+                || cancel_active_build_for_shutdown(app)
+            {
+                api.prevent_exit();
+            }
         }
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen {

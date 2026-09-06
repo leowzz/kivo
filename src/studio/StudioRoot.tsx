@@ -7,6 +7,7 @@ const GpioMonitor = lazy(() => import("./GpioMonitor"));
 
 export default function StudioRoot() {
   const [view, setView] = useState<"definition" | "gpio">("definition");
+  const [firmwareBusy, setFirmwareBusy] = useState(false);
   return (
     <div className="studio-hub-shell">
       <header className="studio-hub-header">
@@ -17,6 +18,7 @@ export default function StudioRoot() {
         <nav className="studio-hub-tabs" aria-label="Studio 工作区">
           <button
             aria-pressed={view === "definition"}
+            disabled={firmwareBusy}
             onClick={() => setView("definition")}
           >
             <PackageOpen size={16} />
@@ -24,6 +26,7 @@ export default function StudioRoot() {
           </button>
           <button
             aria-pressed={view === "gpio"}
+            disabled={firmwareBusy}
             onClick={() => setView("gpio")}
           >
             <CircuitBoard size={16} />
@@ -43,7 +46,7 @@ export default function StudioRoot() {
               </div>
             }
           >
-            <GpioMonitor />
+            <GpioMonitor onBusyChange={setFirmwareBusy} />
           </Suspense>
         </div>
       )}

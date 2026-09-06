@@ -27,11 +27,14 @@ Studio 的 Tauri window 明确加载 `studio.html`。不再把 Studio 页面复�
 - `src/studio/StudioRoot.tsx`：产品定义和硬件测试两个视图；切换时保留产品草稿，卸载串口测试视图。
 - `src/studio/StudioApp.tsx`：产品定义编辑、校验、保存、复制、删除和固件构建。
 - `src/studio/GpioMonitor.tsx`：设备枚举、连接、串行轮询、错误状态和连接释放。
+- `src/studio/FirmwareActions.tsx`：固件文件选择、备份和刷写确认、进度与结果展示。
 - `src/shared/`：共享领域类型、颜色与基础控件样式，不持有运行服务或应用状态。
 - `src/app/types.ts`：APP 独有的设备状态、动作配置和 IPC 快照；产品定义由共享类型统一维护。
 - `src-tauri/src/app/mod.rs`：APP 启动、后台服务装配和关闭；`commands.rs` 负责 IPC 及工作区变更，`tests.rs` 验证行为。
 - `src-tauri/src/studio.rs`：Studio 的仓库选择、产品文件操作和构建生命周期。
 - `src-tauri/src/studio/gpio.rs`：独立串口会话、握手、采样解析和错误后的释放。
+- `src-tauri/src/studio/firmware.rs`：固件操作 IPC、独占设备访问、进度通道与关闭保护。
+- `scripts/studio_firmware.py`：构建清单校验、整片 Flash 备份、设备身份核对和刷写后验证；复用现有 RP2040 / ESP32-S3 上传工具的设备定位。
 - `src-tauri/src/{error,input,handshake,serial}.rs`：两个入口共用的错误、输入编码、握手和串口别名处理。
 - `firmware/src/`：固件入口和平台适配；`lib/gpio_trigger/` 保留通用扫描、去抖和协议逻辑。
 
@@ -64,6 +67,23 @@ GPIO 测试”。固件不改变引脚模式、上下拉、输出电平或运行
 
 GPIO 读数是瞬时数字采样。悬空输入、矩阵行扫描和 I2C 引脚的瞬时状态并不等于
 导线连通性；结合已知接线和按下/释放时预期的电平变化进行检查。
+
+## 固件操作
+
+固件操作只属于 Studio，不依赖 APP 的设备运行服务。前端锁定所选设备及工作区，
+后端使用同一个 GPIO 会话锁释放串口并排除并发采样。固件操作结束前拒绝窗口关闭，
+避免因关闭应用而中断 Flash 写入。进度通过 Tauri Channel 返回。
+
+备份使用 picotool `save -a` 或 esptool `read_flash 0 ALL` 读取整片 Flash，先写入
+目标目录下的临时文件，读取完成后原子替换保存路径，再尝试重启设备。
+自动重启失败不会把已保存的备份误报为丢失。
+
+刷写要求 Studio 的产品构建清单与固件同行，校验板型、大小、SHA-256，ESP32-S3
+只接受合并的 factory 镜像。确认后的 SHA-256 会再次核对，并暂存确切的固件字节，
+避免并发构建替换源文件。运行中的产品固件必须与目标 Product Version ID 一致。
+RP2040 按 Flash ID 定位，ESP32-S3 在下载模式再核对芯片 MAC；失败后的同视图重试
+可以定位留在引导模式的原设备。刷写完成后校验 HELLO 的板型、构建和产品身份，
+再恢复 GPIO 测试。工具子进程有超时；测试使用模拟设备，不会自动刷写实体硬件。
 
 ## 验证
 

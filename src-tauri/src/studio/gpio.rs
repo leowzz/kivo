@@ -55,10 +55,22 @@ struct Monitor {
     closed: bool,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct GpioState(Arc<Mutex<Monitor>>);
 
 impl GpioState {
+    pub(super) fn exclusive_access<T>(
+        &self,
+        operation: impl FnOnce() -> Result<T, AppError>,
+    ) -> Result<T, AppError> {
+        let mut monitor = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        if monitor.closed {
+            return Err(AppError::new("gpio_session_closed"));
+        }
+        monitor.session = None;
+        operation()
+    }
+
     pub(super) fn close(&self) {
         let monitor = Arc::clone(&self.0);
         // Window teardown may skip React cleanup. Release even an in-flight connect.
@@ -365,6 +377,31 @@ mod tests {
             monitor.connect(&device_id).unwrap_err().code,
             "gpio_session_closed"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn firmware_access_releases_sampling_and_excludes_concurrent_connections() {
+        let (_board, port) = serialport::TTYPort::pair().unwrap();
+        let state = GpioState::default();
+        state.0.lock().unwrap().session = Some(Session {
+            id: 1,
+            device_id: DeviceId::new("yd-rp2040", "TEST").unwrap(),
+            port: Box::new(port),
+            hello: parse_hello("HELLO 13 rp2040 yd-rp2040 test - 1 1").unwrap(),
+        });
+        let result: Result<(), AppError> = state.exclusive_access(|| {
+            assert!(state.0.try_lock().is_err());
+            Err(AppError::new("simulated_firmware_failure"))
+        });
+        assert!(result.is_err());
+        let mut monitor = state.0.try_lock().unwrap();
+        assert!(monitor.session.is_none());
+        monitor.closed = true;
+        drop(monitor);
+        let result: Result<(), AppError> =
+            state.exclusive_access(|| panic!("closed window must not touch hardware"));
+        assert_eq!(result.unwrap_err().code, "gpio_session_closed");
     }
 
     #[cfg(unix)]

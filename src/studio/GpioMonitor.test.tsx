@@ -87,6 +87,8 @@ test("reports unsupported firmware without showing fabricated readings", async (
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "当前固件不支持 GPIO 测试",
   );
+  expect(screen.getByRole("button", { name: "备份原有固件" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "刷入新版固件" })).toBeEnabled();
   expect(screen.queryByLabelText("GPIO 电平")).toBeNull();
 });
 

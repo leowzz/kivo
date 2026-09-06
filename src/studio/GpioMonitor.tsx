@@ -7,6 +7,7 @@ import {
   Square,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import FirmwareActions from "./FirmwareActions";
 
 interface GpioDevice {
   id: string;
@@ -46,16 +47,28 @@ function errorText(error: unknown) {
   return errors[code] ?? code;
 }
 
-export default function GpioMonitor() {
+export default function GpioMonitor({
+  onBusyChange,
+}: {
+  onBusyChange?: (busy: boolean) => void;
+}) {
   const [devices, setDevices] = useState<GpioDevice[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [running, setRunning] = useState(false);
   const [snapshot, setSnapshot] = useState<GpioSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [firmwareBusy, setFirmwareBusy] = useState(false);
   const connectionQueue = useRef(Promise.resolve());
   const mounted = useRef(false);
   const refreshVersion = useRef(0);
+  const firmwareBusyChanged = useCallback(
+    (busy: boolean) => {
+      setFirmwareBusy(busy);
+      onBusyChange?.(busy);
+    },
+    [onBusyChange],
+  );
 
   const refresh = useCallback(async () => {
     const version = ++refreshVersion.current;
@@ -150,7 +163,7 @@ export default function GpioMonitor() {
         <select
           aria-label="测试设备"
           value={selectedId}
-          disabled={running || refreshing}
+          disabled={running || refreshing || firmwareBusy}
           onChange={(event) => {
             setSelectedId(event.target.value);
             setSnapshot(null);
@@ -171,14 +184,14 @@ export default function GpioMonitor() {
           className="icon-button"
           title="刷新设备"
           aria-label="刷新设备"
-          disabled={running || refreshing}
+          disabled={running || refreshing || firmwareBusy}
           onClick={() => void refresh()}
         >
           <RefreshCw size={16} className={refreshing ? "spin" : ""} />
         </button>
         <button
           className="gpio-run-button"
-          disabled={!selectedId || refreshing}
+          disabled={!selectedId || refreshing || firmwareBusy}
           onClick={() => {
             setSnapshot(null);
             setRunning((current) => !current);
@@ -222,6 +235,19 @@ export default function GpioMonitor() {
           <CircleAlert size={16} />
           {error}
         </div>
+      )}
+      {selectedDevice && (
+        <FirmwareActions
+          key={selectedDevice.id}
+          device={selectedDevice}
+          disabled={running || refreshing}
+          onBusyChange={firmwareBusyChanged}
+          onFlashed={() => {
+            setError(null);
+            setSnapshot(null);
+            setRunning(true);
+          }}
+        />
       )}
       {snapshot ? (
         <section className="gpio-grid" aria-label="GPIO 电平">
