@@ -53,6 +53,8 @@ pub(super) enum FirmwareOperation {
     Inspect,
     Backup,
     Flash,
+    InstallTest,
+    Status,
 }
 
 impl FirmwareOperation {
@@ -61,6 +63,8 @@ impl FirmwareOperation {
             Self::Inspect => "inspect",
             Self::Backup => "backup",
             Self::Flash => "flash",
+            Self::InstallTest => "install_test",
+            Self::Status => "status",
         }
     }
 }
@@ -69,7 +73,7 @@ fn run_operation(
     repo: &Path,
     operation: FirmwareOperation,
     device_id: &DeviceId,
-    path: &Path,
+    path: Option<&Path>,
     sha256: Option<&str>,
     progress: Channel<Value>,
 ) -> Result<Value, AppError> {
@@ -90,10 +94,11 @@ fn run_operation(
             "--serial",
             device_id.hardware_serial(),
         ])
-        .arg("--path")
-        .arg(path)
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
+    if let Some(path) = path {
+        command.arg("--path").arg(path);
+    }
     if let Some(sha256) = sha256 {
         command.args(["--sha256", sha256]);
     }
@@ -143,25 +148,34 @@ pub(super) async fn studio_firmware_operation(
     gpio: tauri::State<'_, GpioState>,
     operation: FirmwareOperation,
     device_id: DeviceId,
-    path: PathBuf,
+    path: Option<PathBuf>,
     sha256: Option<String>,
     progress: Channel<Value>,
 ) -> Result<Value, AppError> {
-    let guard = firmware.reserve()?;
+    let guard = if matches!(operation, FirmwareOperation::Status) {
+        None
+    } else {
+        Some(firmware.reserve()?)
+    };
     let repo = state.repository_root()?;
     let gpio = (*gpio).clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = guard;
-        gpio.exclusive_access(|| {
+        let run = || {
             run_operation(
                 &repo,
                 operation,
                 &device_id,
-                &path,
+                path.as_deref(),
                 sha256.as_deref(),
                 progress,
             )
-        })
+        };
+        if matches!(operation, FirmwareOperation::Status) {
+            run()
+        } else {
+            gpio.exclusive_access(run)
+        }
     })
     .await
     .map_err(|error| AppError::new("studio_firmware_failed").with_detail(error.to_string()))?

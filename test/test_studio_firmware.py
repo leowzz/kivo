@@ -2,6 +2,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import struct
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -10,9 +11,22 @@ import pytest
 from scripts import studio_firmware as fw
 
 
+def uf2(blocks=1):
+    return b"".join(struct.pack("<8I", 0x0A324655, 0x9E5D5157, 0x2000,
+        0x10000000 + block * 256, 256, block, blocks, 0xE48BFF56)
+        + b"x" * 476 + struct.pack("<I", 0x0AB16F30) for block in range(blocks))
+
+
+def esp_image():
+    data = bytearray(64)
+    data[0] = 0xE9
+    struct.pack_into("<H", data, 12, 9)
+    return bytes(data)
+
+
 def artifact(tmp_path, board="yd-rp2040"):
     path = tmp_path / ("firmware.uf2" if board == "yd-rp2040" else "firmware.factory.bin")
-    path.write_bytes(b"firmware")
+    path.write_bytes(uf2() if board == "yd-rp2040" else esp_image())
     manifest = {
         "board_profile_id": board, "firmware_file": path.name,
         "firmware_size": path.stat().st_size,
@@ -28,19 +42,25 @@ def test_inspection_validates_board_and_content_before_touching_device(tmp_path)
     assert fw.inspect_firmware(path, "yd-rp2040")["sha256"] == manifest["firmware_sha256"]
     with pytest.raises(ValueError, match="board"):
         fw.inspect_firmware(path, "yd-esp32-s3")
-    path.write_bytes(b"tampered")
+    data = bytearray(path.read_bytes())
+    data[32] ^= 1
+    path.write_bytes(data)
     with pytest.raises(ValueError, match="checksum"):
         fw.inspect_firmware(path, "yd-rp2040")
 
 
-def test_esp_requires_merged_image(tmp_path):
+def test_esp_rejects_application_only_image_at_zero(tmp_path):
     path, manifest = artifact(tmp_path, "yd-esp32-s3")
     assert fw.inspect_firmware(path, "yd-esp32-s3")["path"] == str(path)
     renamed = path.with_name("firmware.bin")
     path.rename(renamed)
     manifest["firmware_file"] = renamed.name
     renamed.with_name("manifest.json").write_text(json.dumps(manifest))
-    with pytest.raises(ValueError, match="merged"):
+    assert fw.inspect_firmware(renamed, "yd-esp32-s3")["path"] == str(renamed)
+    data = bytearray(renamed.read_bytes())
+    struct.pack_into("<I", data, 32, 0xABCD5432)
+    renamed.write_bytes(data)
+    with pytest.raises(ValueError, match="Application-only"):
         fw.inspect_firmware(renamed, "yd-esp32-s3")
 
 
@@ -128,29 +148,25 @@ def test_flash_rejects_changed_confirmation_before_bootloader(tmp_path, monkeypa
 
 def test_flash_verifies_written_bytes_and_runtime_identity(tmp_path, monkeypatch, rp_device):
     path, manifest = artifact(tmp_path)
-    product_check = Mock()
     runtime_check = Mock()
-    monkeypatch.setattr(fw, "validate_runtime_product", product_check)
     monkeypatch.setattr(fw, "verify_runtime_firmware", runtime_check)
     def tool(args):
         assert args[:3] == ["load", "-v", "-x"]
-        assert Path(args[3]).read_bytes() == b"firmware"
+        assert Path(args[3]).read_bytes() == path.read_bytes()
         assert Path(args[3]) != path
     monkeypatch.setattr(fw, "picotool", tool)
     fw.flash("yd-rp2040", "SERIAL", path, manifest["firmware_sha256"])
-    product_check.assert_called_once_with("yd-rp2040", "SERIAL", "key-rp-k1-r01")
     runtime_check.assert_called_once_with("SERIAL", (0x2E8A, 0x102E), "rp2040", "yd-rp2040", "new-build", "key-rp-k1-r01")
 
 
-def test_runtime_product_mismatch_is_rejected(monkeypatch):
+def test_current_product_identity_can_be_read_before_temporary_replacement(monkeypatch):
     port = SimpleNamespace(vid=0x2E8A, pid=0x102E, serial_number="SERIAL", device="port")
     monkeypatch.setattr(fw, "comports", lambda: [port])
     connection = Mock()
     connection.readline.return_value = b"HELLO 13 rp2040 yd-rp2040 old other-product more\n"
     context = Mock(__enter__=Mock(return_value=connection), __exit__=Mock(return_value=False))
     monkeypatch.setattr(fw.serial, "Serial", Mock(return_value=context))
-    with pytest.raises(ValueError, match="Product mismatch"):
-        fw.validate_runtime_product("yd-rp2040", "SERIAL", "key-rp-k1-r01")
+    assert fw.read_runtime_hello("yd-rp2040", "SERIAL")["productVersionId"] == "other-product"
 
 
 @pytest.mark.parametrize("reply", [
@@ -165,7 +181,92 @@ def test_legacy_generic_and_matching_product_firmware_can_be_upgraded(monkeypatc
     connection.readline.return_value = reply
     context = Mock(__enter__=Mock(return_value=connection), __exit__=Mock(return_value=False))
     monkeypatch.setattr(fw.serial, "Serial", Mock(return_value=context))
-    fw.validate_runtime_product("yd-rp2040", "SERIAL", "key-rp-k1-r01")
+    assert fw.read_runtime_hello("yd-rp2040", "SERIAL")["buildId"] == "old"
+
+
+def test_raw_uf2_and_full_bin_do_not_require_product_manifests(tmp_path):
+    for board, data in [("yd-rp2040", uf2()), ("yd-esp32-s3", esp_image())]:
+        path = tmp_path / ("raw" + fw.BOARDS[board][2])
+        path.write_bytes(data)
+        assert "productVersionId" not in fw.inspect_firmware(path, board)
+
+
+@pytest.mark.parametrize("offset,value", [(28, 0xE48BFF59), (12, 0x20000000), (8, 1), (24, 2)])
+def test_uf2_rejects_wrong_chip_ram_targets_and_incomplete_blocks(tmp_path, offset, value):
+    data = bytearray(uf2())
+    struct.pack_into("<I", data, offset, value)
+    path = tmp_path / "invalid.uf2"
+    path.write_bytes(data)
+    with pytest.raises(ValueError, match="RP2040"):
+        fw.inspect_firmware(path, "yd-rp2040")
+
+
+@pytest.fixture
+def test_install(tmp_path, monkeypatch):
+    path = tmp_path / "test.uf2"
+    path.write_bytes(uf2())
+    image = {**fw.inspect_firmware(path, "yd-rp2040"), "buildId": "io-test-unit"}
+    monkeypatch.setattr(fw, "build_io_test", Mock(return_value=image))
+    monkeypatch.setattr(fw, "read_runtime_hello", Mock(return_value={"buildId": "original", "productVersionId": "original-product"}))
+    monkeypatch.setattr(fw, "write_image", Mock())
+    monkeypatch.setattr(fw, "verify_runtime_firmware", Mock())
+    def backup(board, serial_number, destination):
+        destination.write_bytes(uf2(1024))
+        digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+        fw.atomic_json(destination.with_suffix(".uf2.backup.json"), {"boardProfileId": board, "serial": serial_number, "sha256": digest})
+        return {"path": str(destination), "sha256": digest, "bytes": destination.stat().st_size}
+    monkeypatch.setattr(fw, "backup", Mock(side_effect=backup))
+    return image
+
+
+def test_test_firmware_install_backs_up_once_and_retains_recovery_across_retries(tmp_path, monkeypatch, test_install):
+    fw.write_image.side_effect = RuntimeError("USB lost")
+    with pytest.raises(RuntimeError, match="USB lost"):
+        fw.install_io_test(tmp_path, "yd-rp2040", "SERIAL")
+    status = fw.recovery_status(tmp_path, "yd-rp2040", "SERIAL")
+    assert Path(status["backupPath"]).is_file()
+    fw.write_image.side_effect = None
+    fw.read_runtime_hello.return_value = {"buildId": "io-test-unit"}
+    result = fw.install_io_test(tmp_path, "yd-rp2040", "SERIAL")
+    assert result["backupPath"] == status["backupPath"]
+    fw.backup.assert_called_once()
+    fw.verify_runtime_firmware.assert_called_once_with("SERIAL", (0x2E8A, 0x102E), "rp2040", "yd-rp2040", "io-test-unit", "-")
+
+
+def test_failed_backup_prevents_test_firmware_write(tmp_path, monkeypatch, test_install):
+    fw.backup.side_effect = RuntimeError("read failed")
+    with pytest.raises(RuntimeError, match="read failed"):
+        fw.install_io_test(tmp_path, "yd-rp2040", "SERIAL")
+    fw.write_image.assert_not_called()
+
+
+def test_existing_test_firmware_without_original_backup_is_not_saved_as_original(tmp_path, test_install):
+    fw.read_runtime_hello.return_value = {"buildId": "io-test-existing"}
+    with pytest.raises(ValueError, match="original backup"):
+        fw.install_io_test(tmp_path, "yd-rp2040", "SERIAL")
+    fw.backup.assert_not_called()
+    fw.write_image.assert_not_called()
+
+
+def test_backup_files_restore_without_a_product_manifest_and_end_test_session(tmp_path, monkeypatch, test_install):
+    installed = fw.install_io_test(tmp_path, "yd-rp2040", "SERIAL")
+    monkeypatch.setattr(fw, "wait_for_runtime_port", Mock())
+    backup = Path(installed["backupPath"])
+    result = fw.flash("yd-rp2040", "SERIAL", backup, installed["backupSha256"], root=tmp_path)
+    assert not result.get("warning")
+    assert fw.recovery_status(tmp_path, "yd-rp2040", "SERIAL") == {}
+    assert backup.is_file()
+    with pytest.raises(ValueError, match="another device"):
+        fw.flash("yd-rp2040", "OTHER", backup, installed["backupSha256"])
+
+
+def test_damaged_original_backup_blocks_reinstall(tmp_path, test_install):
+    installed = fw.install_io_test(tmp_path, "yd-rp2040", "SERIAL")
+    Path(installed["backupPath"]).write_bytes(b"damaged")
+    fw.write_image.reset_mock()
+    with pytest.raises(ValueError, match="damaged"):
+        fw.install_io_test(tmp_path, "yd-rp2040", "SERIAL")
+    fw.write_image.assert_not_called()
 
 
 def test_esp_bootloader_retry_requires_matching_chip_mac(monkeypatch):

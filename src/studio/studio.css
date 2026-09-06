@@ -169,6 +169,9 @@
 .gpio-error svg { flex: 0 0 auto; }
 .gpio-empty { display: grid; place-items: center; min-height: 260px; color: var(--gray-9); font-size: 13px; }
 .gpio-footer { padding-block: 12px; color: var(--gray-9); font-size: 11px; overflow-wrap: anywhere; }
+.gpio-mode-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding-top: 16px; font-size: 12px; }
+.gpio-mode-toolbar label { display: inline-flex; align-items: center; gap: 8px; }
+.gpio-mode-toolbar select { width: 100px; height: 30px; font-size: 12px; }
 .firmware-actions { padding: 14px 0; border-bottom: 1px solid var(--border-default); }
 .firmware-buttons { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .firmware-buttons button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 0 12px; border: 1px solid var(--border-default); border-radius: 6px; background: white; font-size: 12px; }
@@ -179,6 +182,19 @@
 .firmware-result p, .firmware-failure { color: var(--red-text); }
 .firmware-failure { margin-top: 12px; font-size: 12px; }
 .firmware-failure pre { margin: 6px 0 0; max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.5 ui-monospace, monospace; }
+.test-firmware-dialog { max-height: calc(100dvh - 32px); margin: auto; padding: 0; overflow-y: auto; color: var(--gray-12); }
+.test-firmware-dialog::backdrop { background: rgba(26, 33, 30, .4); }
+.test-firmware-dialog > header strong { display: flex; align-items: center; gap: 8px; color: var(--red-text); }
+.test-firmware-dialog .test-firmware-confirm-body { grid-template-columns: minmax(0, 1fr); font-size: var(--text-13); line-height: 1.6; }
+.test-firmware-confirm-body dl { display: grid; gap: 6px; margin: 0; }
+.test-firmware-confirm-body dl > div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px; }
+.test-firmware-confirm-body dt { color: var(--gray-10); }
+.test-firmware-confirm-body dd { margin: 0; overflow-wrap: anywhere; }
+.test-firmware-risks { display: grid; gap: 8px; color: var(--gray-11); }
+.test-firmware-risks p { margin: 0; }
+.test-firmware-risks strong { color: var(--red-text); }
+.test-firmware-acknowledgement { display: flex; align-items: flex-start; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
+.test-firmware-acknowledgement input { flex: 0 0 auto; width: 16px; height: 16px; margin: 3px 0 0; }
 @media (max-width: 760px) {
   .studio-shell { display: flex; flex-direction: column; }
   .studio-sidebar { flex: 0 0 auto; max-height: 184px; border-right: 0; border-bottom: 1px solid var(--border-default); display: grid; grid-template-columns: minmax(0, 1fr) auto; }

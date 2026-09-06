@@ -24,9 +24,9 @@ Studio 的 Tauri window 明确加载 `studio.html`。不再把 Studio 页面复�
 
 - `src/app/App.tsx`：主界面的快照、编辑草稿、自动保存、历史和设备设置流程。
 - `src/app/DeviceManagement.tsx`：设备选择、动作配置选择、键盘与动作工作区；技术信息折叠展示。
-- `src/studio/StudioRoot.tsx`：产品定义和硬件测试两个视图；切换时保留产品草稿，卸载串口测试视图。
+- `src/studio/StudioRoot.tsx`：产品定义和工具台两个视图；切换时保留产品草稿，卸载串口测试视图。
 - `src/studio/StudioApp.tsx`：产品定义编辑、校验、保存、复制、删除和固件构建。
-- `src/studio/GpioMonitor.tsx`：设备枚举、连接、串行轮询、错误状态和连接释放。
+- `src/studio/Toolbox.tsx`：工具台，负责设备选择、GPIO 采样、临时固件的输入模式和连接释放。
 - `src/studio/FirmwareActions.tsx`：固件文件选择、备份和刷写确认、进度与结果展示。
 - `src/shared/`：共享领域类型、颜色与基础控件样式，不持有运行服务或应用状态。
 - `src/app/types.ts`：APP 独有的设备状态、动作配置和 IPC 快照；产品定义由共享类型统一维护。
@@ -34,7 +34,7 @@ Studio 的 Tauri window 明确加载 `studio.html`。不再把 Studio 页面复�
 - `src-tauri/src/studio.rs`：Studio 的仓库选择、产品文件操作和构建生命周期。
 - `src-tauri/src/studio/gpio.rs`：独立串口会话、握手、采样解析和错误后的释放。
 - `src-tauri/src/studio/firmware.rs`：固件操作 IPC、独占设备访问、进度通道与关闭保护。
-- `scripts/studio_firmware.py`：构建清单校验、整片 Flash 备份、设备身份核对和刷写后验证；复用现有 RP2040 / ESP32-S3 上传工具的设备定位。
+- `scripts/studio_firmware.py`：固件文件校验、完整备份、临时固件构建和刷写；复用现有上传工具的物理设备定位。
 - `src-tauri/src/{error,input,handshake,serial}.rs`：两个入口共用的错误、输入编码、握手和串口别名处理。
 - `firmware/src/`：固件入口和平台适配；`lib/gpio_trigger/` 保留通用扫描、去抖和协议逻辑。
 
@@ -78,12 +78,28 @@ GPIO 读数是瞬时数字采样。悬空输入、矩阵行扫描和 I2C 引脚�
 目标目录下的临时文件，读取完成后原子替换保存路径，再尝试重启设备。
 自动重启失败不会把已保存的备份误报为丢失。
 
-刷写要求 Studio 的产品构建清单与固件同行，校验板型、大小、SHA-256，ESP32-S3
-只接受合并的 factory 镜像。确认后的 SHA-256 会再次核对，并暂存确切的固件字节，
-避免并发构建替换源文件。运行中的产品固件必须与目标 Product Version ID 一致。
+文件刷写检查 RP2040 UF2 的块结构、Flash 地址和芯片 family ID，或 ESP32-S3
+完整 Flash / factory BIN 的芯片头，拒绝应写入应用分区的独立 BIN。产品清单和
+备份校验记录若存在也会核对；确认后的 SHA-256 在暂存时再次检查，避免并发构建
+替换源文件。可以明确选择另一个产品固件，也可以通过文件入口恢复原固件备份。
 RP2040 按 Flash ID 定位，ESP32-S3 在下载模式再核对芯片 MAC；失败后的同视图重试
 可以定位留在引导模式的原设备。刷写完成后校验 HELLO 的板型、构建和产品身份，
-再恢复 GPIO 测试。工具子进程有超时；测试使用模拟设备，不会自动刷写实体硬件。
+普通镜像验证 Flash 内容并等待运行时 USB；临时测试固件验证握手后自动开始采样。
+工具子进程有超时；测试使用模拟设备，不会自动刷写实体硬件。
+
+## 临时 I/O 固件
+
+`firmware/src/io_test.cpp` 是独立的串口入口，PlatformIO 的 `io-test-rp2040` 和
+`io-test-esp32s3` 环境只编译此入口，不链接产品接线、动作控制、矩阵扫描和显示驱动。
+`IoTestProtocol.h` 只接受 `HELLO`、`GPIO_READ` 和 `GPIO_MODE [INPUT|PULLUP|PULLDOWN]`。
+模式改变只操作板卡允许的输入引脚，没有输出驱动命令；上电与串口断开后使用浮空输入。
+普通产品固件仍只读电平，输入模式命令限定于构建 ID 以 `io-test-` 开头的临时固件。
+
+构建隔离在 `.pio/io-test/`，产物写入 `output/io-test/<board>/<build-id>/`，不依赖
+Product Definition。首次安装前保存整片 Flash 及设备/校验记录，再原子写入设备对应的
+`active.json`，此后才允许覆盖固件。失败重试或重复安装复用原备份；备份丢失、损坏，
+或设备已是测试固件但没有原备份时，阻止重新覆盖。恢复或刷入其他固件成功后清理活动
+记录，保留备份文件；重新打开工具台仍能从仓库读取尚未恢复的原备份路径。
 
 ## 验证
 

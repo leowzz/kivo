@@ -1,4 +1,4 @@
-.PHONY: all dev clean build build-esp32s3 build-rp2040 build-product download-mode upload upload-esp32s3 upload-rp2040 upload-prod monitor monitor-esp32s3 monitor-rp2040 require-build-id require-product validate-env-build-id require-serial test client helper studio helper-kill helper-build helper-build-app helper-build-studio release
+.PHONY: all dev clean build build-esp32s3 build-rp2040 build-product build-io-test download-mode upload upload-esp32s3 upload-rp2040 upload-prod monitor monitor-esp32s3 monitor-rp2040 require-build-id require-product validate-env-build-id require-serial test client helper studio helper-kill helper-build helper-build-app helper-build-studio release
 
 ENV_FILE ?= .env
 ifeq ($(origin BUILD_ID),undefined)
@@ -46,6 +46,10 @@ build-esp32s3: require-build-id
 
 build-rp2040: require-build-id
 	$(RP2040_BUILD)
+
+build-io-test:
+	$(UV_CMD) run python -m scripts.studio_firmware build_test --board yd-rp2040
+	$(UV_CMD) run python -m scripts.studio_firmware build_test --board yd-esp32-s3
 
 build-product: require-build-id require-product
 	KIVO_REPOSITORY_ROOT="$$(pwd -P)" KIVO_FIRMWARE_BUILD_ID="$(BUILD_ID)" cargo run --manifest-path src-tauri/Cargo.toml --features product-studio,product-cli --bin kivo-product -- build "$(PRODUCT)"

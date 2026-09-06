@@ -7,9 +7,14 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import GpioMonitor from "./GpioMonitor";
+import Toolbox from "./Toolbox";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+  Channel: class {
+    onmessage = () => {};
+  },
+}));
 
 const device = {
   id: "yd-rp2040:TEST",
@@ -47,7 +52,7 @@ async function start() {
 }
 
 test("samples actual high and low transitions and releases the connection on stop", async () => {
-  render(<GpioMonitor />);
+  render(<Toolbox />);
   await start();
   expect(await screen.findByLabelText("GPIO 1 高电平")).toBeInTheDocument();
   expect(screen.getByText("高电平 1")).toBeInTheDocument();
@@ -68,7 +73,7 @@ test("clears stale pin levels and reports a disconnected device", async () => {
     if (command === "studio_connect_gpio") return sample();
     if (command === "studio_read_gpio") throw { code: "gpio_disconnected" };
   });
-  render(<GpioMonitor />);
+  render(<Toolbox />);
   await start();
   await screen.findByLabelText("GPIO 1 高电平");
   expect(await screen.findByRole("alert")).toHaveTextContent("设备已断开");
@@ -82,13 +87,14 @@ test("reports unsupported firmware without showing fabricated readings", async (
     if (command === "studio_connect_gpio")
       throw { code: "gpio_monitor_unsupported" };
   });
-  render(<GpioMonitor />);
+  render(<Toolbox />);
   await start();
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "当前固件不支持 GPIO 测试",
   );
-  expect(screen.getByRole("button", { name: "备份原有固件" })).toBeEnabled();
-  expect(screen.getByRole("button", { name: "刷入新版固件" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "备份固件" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "刷入固件文件" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "刷入测试固件" })).toBeEnabled();
   expect(screen.queryByLabelText("GPIO 电平")).toBeNull();
 });
 
@@ -101,7 +107,7 @@ test("closes a connection that finishes after the view unmounts", async () => {
     if (command === "studio_list_devices") return [device];
     if (command === "studio_connect_gpio") return pending;
   });
-  const { unmount } = render(<GpioMonitor />);
+  const { unmount } = render(<Toolbox />);
   await start();
   await waitFor(() =>
     expect(invoke).toHaveBeenCalledWith("studio_connect_gpio", {
@@ -124,7 +130,7 @@ test("closes a connection that finishes after the view unmounts", async () => {
 });
 
 test("stops polling and closes the serial session when leaving the view", async () => {
-  const { unmount } = render(<GpioMonitor />);
+  const { unmount } = render(<Toolbox />);
   await start();
   await screen.findByLabelText("GPIO 1 高电平");
   vi.useFakeTimers();
@@ -143,9 +149,37 @@ test("stops polling and closes the serial session when leaving the view", async 
 
 test("keeps the test disabled when no supported device is connected", async () => {
   vi.mocked(invoke).mockResolvedValue([]);
-  render(<GpioMonitor />);
+  render(<Toolbox />);
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: "刷新设备" })).toBeEnabled(),
+    expect(screen.getByRole("button", { name: "刷新设备列表" })).toBeEnabled(),
   );
   expect(screen.getByRole("button", { name: "开始测试" })).toBeDisabled();
+});
+
+test("offers input pull modes only on the temporary I/O firmware", async () => {
+  let inputMode = "input";
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "studio_list_devices") return [device];
+    if (command === "studio_set_gpio_input_mode")
+      inputMode = (args as { mode: string }).mode;
+    if (
+      [
+        "studio_connect_gpio",
+        "studio_read_gpio",
+        "studio_set_gpio_input_mode",
+      ].includes(command)
+    )
+      return { ...sample(), firmwareBuildId: "io-test-unit", inputMode };
+    return {};
+  });
+  render(<Toolbox />);
+  await start();
+  const select = await screen.findByRole("combobox", { name: "输入模式" });
+  expect(select).toHaveValue("input");
+  fireEvent.change(select, { target: { value: "pull_up" } });
+  await waitFor(() => expect(select).toHaveValue("pull_up"));
+  expect(invoke).toHaveBeenCalledWith("studio_set_gpio_input_mode", {
+    sessionId: 7,
+    mode: "pull_up",
+  });
 });

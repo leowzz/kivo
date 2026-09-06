@@ -1,12 +1,12 @@
-import { CircuitBoard, PackageOpen } from "lucide-react";
+import { Wrench, PackageOpen } from "lucide-react";
 import { lazy, Suspense, useState } from "react";
 import brandIcon from "../../src-tauri/icons/128x128.png";
 import StudioApp from "./StudioApp";
 
-const GpioMonitor = lazy(() => import("./GpioMonitor"));
+const Toolbox = lazy(() => import("./Toolbox"));
 
 export default function StudioRoot() {
-  const [view, setView] = useState<"definition" | "gpio">("definition");
+  const [view, setView] = useState<"definition" | "tools">("definition");
   const [firmwareBusy, setFirmwareBusy] = useState(false);
   return (
     <div className="studio-hub-shell">
@@ -25,19 +25,19 @@ export default function StudioRoot() {
             产品定义
           </button>
           <button
-            aria-pressed={view === "gpio"}
+            aria-pressed={view === "tools"}
             disabled={firmwareBusy}
-            onClick={() => setView("gpio")}
+            onClick={() => setView("tools")}
           >
-            <CircuitBoard size={16} />
-            硬件测试
+            <Wrench size={16} />
+            工具台
           </button>
         </nav>
       </header>
       <div className="studio-hub-panel" hidden={view !== "definition"}>
         <StudioApp />
       </div>
-      {view === "gpio" && (
+      {view === "tools" && (
         <div className="studio-hub-panel">
           <Suspense
             fallback={
@@ -46,7 +46,7 @@ export default function StudioRoot() {
               </div>
             }
           >
-            <GpioMonitor onBusyChange={setFirmwareBusy} />
+            <Toolbox onBusyChange={setFirmwareBusy} />
           </Suspense>
         </div>
       )}

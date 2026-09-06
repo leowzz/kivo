@@ -4,7 +4,7 @@ use crate::{
     hardware::{DeviceId, board_by_id, board_by_runtime_usb},
     serial::collapse_serial_port_aliases,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serialport::{SerialPort, SerialPortType};
 use std::{
     collections::BTreeSet,
@@ -38,7 +38,35 @@ pub(super) struct GpioSnapshot {
     session_id: u64,
     device_id: DeviceId,
     firmware_build_id: String,
+    input_mode: Option<InputMode>,
     pins: Vec<GpioPin>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum InputMode {
+    Input,
+    PullUp,
+    PullDown,
+}
+
+impl InputMode {
+    fn wire(self) -> &'static str {
+        match self {
+            Self::Input => "INPUT",
+            Self::PullUp => "PULLUP",
+            Self::PullDown => "PULLDOWN",
+        }
+    }
+
+    fn parse(line: &str) -> Result<Self, AppError> {
+        match line {
+            "GPIO_MODE INPUT" => Ok(Self::Input),
+            "GPIO_MODE PULLUP" => Ok(Self::PullUp),
+            "GPIO_MODE PULLDOWN" => Ok(Self::PullDown),
+            _ => Err(AppError::new("gpio_invalid_response")),
+        }
+    }
 }
 
 struct Session {
@@ -188,6 +216,15 @@ fn parse_pins(line: &str, expected: &[u8]) -> Result<Vec<GpioPin>, AppError> {
 
 impl Session {
     fn sample(&mut self) -> Result<GpioSnapshot, AppError> {
+        let input_mode = if self.hello.firmware_build_id.starts_with("io-test-") {
+            Some(InputMode::parse(&exchange(
+                self.port.as_mut(),
+                b"GPIO_MODE\n",
+                |line| line.starts_with("GPIO_MODE"),
+            )?)?)
+        } else {
+            None
+        };
         let line = exchange(self.port.as_mut(), b"GPIO_READ\n", |line| {
             line.starts_with("GPIO_STATE")
         })?;
@@ -195,8 +232,23 @@ impl Session {
             session_id: self.id,
             device_id: self.device_id.clone(),
             firmware_build_id: self.hello.firmware_build_id.clone(),
+            input_mode,
             pins: parse_pins(&line, &self.hello.pins)?,
         })
+    }
+
+    fn set_input_mode(&mut self, mode: InputMode) -> Result<GpioSnapshot, AppError> {
+        if !self.hello.firmware_build_id.starts_with("io-test-") {
+            return Err(AppError::new("gpio_input_mode_unsupported"));
+        }
+        let command = format!("GPIO_MODE {}\n", mode.wire());
+        let response = exchange(self.port.as_mut(), command.as_bytes(), |line| {
+            line.starts_with("GPIO_MODE")
+        })?;
+        if InputMode::parse(&response)? != mode {
+            return Err(AppError::new("gpio_invalid_response"));
+        }
+        self.sample()
     }
 }
 
@@ -275,6 +327,40 @@ impl Monitor {
             self.session = None;
         }
     }
+
+    fn set_input_mode(
+        &mut self,
+        session_id: u64,
+        mode: InputMode,
+    ) -> Result<GpioSnapshot, AppError> {
+        let session = self
+            .session
+            .as_mut()
+            .filter(|session| session.id == session_id)
+            .ok_or_else(|| AppError::new("gpio_session_closed"))?;
+        let result = session.set_input_mode(mode);
+        if result.is_err() {
+            self.session = None;
+        }
+        result
+    }
+}
+
+#[tauri::command]
+pub(super) async fn studio_set_gpio_input_mode(
+    state: tauri::State<'_, GpioState>,
+    session_id: u64,
+    mode: InputMode,
+) -> Result<GpioSnapshot, AppError> {
+    let monitor = Arc::clone(&state.0);
+    tauri::async_runtime::spawn_blocking(move || {
+        monitor
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .set_input_mode(session_id, mode)
+    })
+    .await
+    .map_err(|error| AppError::new("gpio_task_failed").with_detail(error.to_string()))?
 }
 
 #[tauri::command]
@@ -377,6 +463,52 @@ mod tests {
             monitor.connect(&device_id).unwrap_err().code,
             "gpio_session_closed"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_firmware_mode_changes_are_acknowledged_before_sampling() {
+        use std::io::{BufRead, BufReader};
+        let (mut board, mut port) = serialport::TTYPort::pair().unwrap();
+        port.set_timeout(Duration::from_millis(50)).unwrap();
+        board.set_timeout(Duration::from_secs(2)).unwrap();
+        let mut monitor = Monitor {
+            session: Some(Session {
+                id: 9,
+                device_id: DeviceId::new("yd-rp2040", "TEST").unwrap(),
+                port: Box::new(port),
+                hello: parse_hello("HELLO 13 rp2040 yd-rp2040 io-test-unit - 1 1").unwrap(),
+            }),
+            ..Monitor::default()
+        };
+        assert_eq!(
+            monitor
+                .set_input_mode(8, InputMode::PullUp)
+                .unwrap_err()
+                .code,
+            "gpio_session_closed"
+        );
+        let responder = std::thread::spawn(move || {
+            let mut reader = BufReader::new(&mut board);
+            for (expected, response) in [
+                ("GPIO_MODE PULLUP\n", "GPIO_MODE PULLUP\n"),
+                ("GPIO_MODE\n", "GPIO_MODE PULLUP\n"),
+                ("GPIO_READ\n", "GPIO_STATE 1 1:1\n"),
+            ] {
+                let mut command = String::new();
+                reader.read_line(&mut command).unwrap();
+                assert_eq!(command, expected);
+                reader.get_mut().write_all(response.as_bytes()).unwrap();
+            }
+            drop(reader);
+            board
+        });
+        let snapshot = monitor.set_input_mode(9, InputMode::PullUp).unwrap();
+        assert_eq!(snapshot.input_mode, Some(InputMode::PullUp));
+        assert!(snapshot.pins[0].high);
+        responder.join().unwrap();
+        assert!(serde_json::from_str::<InputMode>("\"output\"").is_err());
+        assert!(InputMode::parse("GPIO_MODE OUTPUT").is_err());
     }
 
     #[cfg(unix)]

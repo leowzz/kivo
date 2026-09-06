@@ -12,6 +12,7 @@
 #include "ActionRunController.h"
 #include "GpioTriggerController.h"
 #include "GpioMonitor.h"
+#include "IoTestProtocol.h"
 #include "Handshake.h"
 #include "InputTopology.h"
 #include "KeyActivityIndicator.h"
@@ -31,6 +32,41 @@ static_assert(sizeof(RemoteDisplayCommit) <= 1280,
 
 void setUp() {}
 void tearDown() {}
+
+void test_io_test_protocol_only_configures_inputs_and_ignores_runtime_commands() {
+  for (const auto *board : {&kYdEsp32S3, &kYdRp2040}) {
+    IoTestProtocol protocol(*board);
+    std::vector<std::pair<std::uint8_t, IoInputMode>> configured;
+    auto configure = [&](std::uint8_t pin, IoInputMode mode) {
+      TEST_ASSERT_TRUE(board->supports(pin));
+      configured.emplace_back(pin, mode);
+    };
+    auto read = [](std::uint8_t) { return true; };
+    protocol.reset(configure);
+    TEST_ASSERT_EQUAL_UINT32(board->safePinCount, configured.size());
+    for (const auto &[pin, mode] : configured) {
+      (void)pin;
+      TEST_ASSERT_EQUAL(IoInputMode::Floating, mode);
+    }
+    configured.clear();
+    for (const auto command : {"CONFIG_BEGIN 1", "HOTKEY 1 0 4", "GPIO_MODE OUTPUT", "GPIO_MODE PULLUP 0"}) {
+      TEST_ASSERT_TRUE(protocol.handle(command, "io-test-dev", read, configure).empty());
+    }
+    TEST_ASSERT_TRUE(configured.empty());
+    TEST_ASSERT_EQUAL_STRING("GPIO_MODE PULLUP\n", protocol.handle("GPIO_MODE PULLUP", "io-test-dev", read, configure).c_str());
+    TEST_ASSERT_EQUAL_UINT32(board->safePinCount, configured.size());
+    for (const auto &[pin, mode] : configured) {
+      (void)pin;
+      TEST_ASSERT_EQUAL(IoInputMode::PullUp, mode);
+    }
+    TEST_ASSERT_EQUAL_STRING("GPIO_MODE PULLUP\n", protocol.handle("GPIO_MODE", "io-test-dev", read, configure).c_str());
+    TEST_ASSERT_EQUAL_STRING("GPIO_MODE PULLDOWN\n", protocol.handle("GPIO_MODE PULLDOWN", "io-test-dev", read, configure).c_str());
+    protocol.reset(configure);
+    TEST_ASSERT_EQUAL_STRING("GPIO_MODE INPUT\n", protocol.handle("GPIO_MODE", "io-test-dev", read, configure).c_str());
+    TEST_ASSERT_EQUAL_STRING(formatHello(*board, "io-test-dev").c_str(), protocol.handle("HELLO", "io-test-dev", read, configure).c_str());
+    TEST_ASSERT_EQUAL_STRING(formatGpioState(*board, read).c_str(), protocol.handle("GPIO_READ", "io-test-dev", read, configure).c_str());
+  }
+}
 
 void test_gpio_monitor_requires_an_exact_read_command() {
   const auto read = parseHelperCommand("GPIO_READ\n");
@@ -2095,6 +2131,7 @@ void test_hid_consumer_control_waits_for_press_and_release_report_slots() {
 
 int main(int, char **) {
   UNITY_BEGIN();
+  RUN_TEST(test_io_test_protocol_only_configures_inputs_and_ignores_runtime_commands);
   RUN_TEST(test_gpio_monitor_requires_an_exact_read_command);
   RUN_TEST(test_gpio_monitor_samples_only_board_safe_pins_and_reports_changes);
   RUN_TEST(test_dirty_tiles_emit_only_changed_counter_region);

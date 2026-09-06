@@ -21,6 +21,7 @@ interface GpioSnapshot {
   sessionId: number;
   deviceId: string;
   firmwareBuildId: string;
+  inputMode?: "input" | "pull_up" | "pull_down" | null;
   pins: { gpio: number; high: boolean }[];
 }
 
@@ -28,12 +29,13 @@ const errors: Record<string, string> = {
   gpio_port_unavailable: "串口被占用或无法打开。请先退出 Kivo 或其他串口工具。",
   gpio_device_missing: "设备已断开",
   gpio_disconnected: "设备已断开",
-  gpio_monitor_unsupported: "当前固件不支持 GPIO 测试，请刷入新版固件。",
+  gpio_monitor_unsupported: "当前固件不支持 GPIO 测试，请刷入测试固件。",
+  gpio_input_mode_unsupported: "输入模式切换需要 I/O 测试固件",
   gpio_incompatible_firmware: "设备固件不兼容",
   gpio_invalid_response: "设备返回了无效的 GPIO 状态",
   gpio_response_timeout: "设备响应超时",
   gpio_handshake_failed: "设备握手失败",
-  gpio_session_active: "已有硬件测试连接",
+  gpio_session_active: "已有 GPIO 测试连接",
   gpio_session_closed: "测试连接已关闭",
   gpio_enumeration_failed: "无法获取串口设备",
   duplicate_identity: "设备身份重复，请只连接一台具有此序列号的设备。",
@@ -47,7 +49,7 @@ function errorText(error: unknown) {
   return errors[code] ?? code;
 }
 
-export default function GpioMonitor({
+export default function Toolbox({
   onBusyChange,
 }: {
   onBusyChange?: (busy: boolean) => void;
@@ -59,6 +61,8 @@ export default function GpioMonitor({
   const [snapshot, setSnapshot] = useState<GpioSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [firmwareBusy, setFirmwareBusy] = useState(false);
+  const [modeBusy, setModeBusy] = useState(false);
+  const readVersion = useRef(0);
   const connectionQueue = useRef(Promise.resolve());
   const mounted = useRef(false);
   const refreshVersion = useRef(0);
@@ -116,12 +120,13 @@ export default function GpioMonitor({
       setRunning(false);
     };
     const poll = async () => {
+      const version = readVersion.current;
       try {
         const next = await invoke<GpioSnapshot>("studio_read_gpio", {
           sessionId,
         });
         if (!active) return;
-        setSnapshot(next);
+        if (version === readVersion.current) setSnapshot(next);
         timer = setTimeout(() => void poll(), 125);
       } catch (reason) {
         fail(reason);
@@ -156,10 +161,34 @@ export default function GpioMonitor({
   const selectedDevice = devices.find((device) => device.id === selectedId);
   const highCount = snapshot?.pins.filter((pin) => pin.high).length ?? 0;
 
+  async function changeInputMode(mode: NonNullable<GpioSnapshot["inputMode"]>) {
+    if (!snapshot || modeBusy) return;
+    readVersion.current++;
+    setModeBusy(true);
+    try {
+      const next = await invoke<GpioSnapshot>("studio_set_gpio_input_mode", {
+        sessionId: snapshot.sessionId,
+        mode,
+      });
+      if (mounted.current)
+        setSnapshot((current) =>
+          current?.sessionId === next.sessionId ? next : current,
+        );
+    } catch (reason) {
+      if (mounted.current) {
+        setError(errorText(reason));
+        setRunning(false);
+        setSnapshot(null);
+      }
+    } finally {
+      if (mounted.current) setModeBusy(false);
+    }
+  }
+
   return (
     <main className="gpio-monitor">
       <header className="gpio-toolbar">
-        <h1>硬件测试</h1>
+        <h1>工具台</h1>
         <select
           aria-label="测试设备"
           value={selectedId}
@@ -182,8 +211,8 @@ export default function GpioMonitor({
         </select>
         <button
           className="icon-button"
-          title="刷新设备"
-          aria-label="刷新设备"
+          title="刷新设备列表"
+          aria-label="刷新设备列表"
           disabled={running || refreshing || firmwareBusy}
           onClick={() => void refresh()}
         >
@@ -191,7 +220,7 @@ export default function GpioMonitor({
         </button>
         <button
           className="gpio-run-button"
-          disabled={!selectedId || refreshing || firmwareBusy}
+          disabled={!selectedId || refreshing || firmwareBusy || modeBusy}
           onClick={() => {
             setSnapshot(null);
             setRunning((current) => !current);
@@ -242,12 +271,34 @@ export default function GpioMonitor({
           device={selectedDevice}
           disabled={running || refreshing}
           onBusyChange={firmwareBusyChanged}
-          onFlashed={() => {
+          onFlashed={(testing) => {
             setError(null);
             setSnapshot(null);
-            setRunning(true);
+            setRunning(testing);
           }}
         />
+      )}
+      {snapshot?.inputMode && (
+        <div className="gpio-mode-toolbar">
+          <span>I/O 测试固件</span>
+          <label>
+            输入模式
+            <select
+              aria-label="输入模式"
+              value={snapshot.inputMode}
+              disabled={modeBusy}
+              onChange={(event) =>
+                void changeInputMode(
+                  event.target.value as NonNullable<GpioSnapshot["inputMode"]>,
+                )
+              }
+            >
+              <option value="input">浮空</option>
+              <option value="pull_up">上拉</option>
+              <option value="pull_down">下拉</option>
+            </select>
+          </label>
+        </div>
       )}
       {snapshot ? (
         <section className="gpio-grid" aria-label="GPIO 电平">

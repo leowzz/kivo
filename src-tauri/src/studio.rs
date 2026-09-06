@@ -42,6 +42,7 @@ pub fn run() {
             gpio::studio_connect_gpio,
             gpio::studio_read_gpio,
             gpio::studio_disconnect_gpio,
+            gpio::studio_set_gpio_input_mode,
             firmware::studio_firmware_operation,
         ])
         .build(tauri::generate_context!())

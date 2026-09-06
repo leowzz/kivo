@@ -7,7 +7,7 @@ const { release } = vi.hoisted(() => ({ release: vi.fn() }));
 vi.mock("./StudioApp", () => ({
   default: () => <input aria-label="产品名称" defaultValue="" />,
 }));
-vi.mock("./GpioMonitor", () => ({
+vi.mock("./Toolbox", () => ({
   default: function Monitor() {
     useEffect(() => release, []);
     return <h1>GPIO 测试</h1>;
@@ -19,7 +19,7 @@ test("preserves product drafts while releasing hardware tests when changing view
   fireEvent.change(screen.getByLabelText("产品名称"), {
     target: { value: "我的键盘" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "硬件测试" }));
+  fireEvent.click(screen.getByRole("button", { name: "工具台" }));
   await screen.findByRole("heading", { name: "GPIO 测试" });
   expect(screen.getByLabelText("产品名称")).not.toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "产品定义" }));
