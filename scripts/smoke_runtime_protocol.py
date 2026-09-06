@@ -36,7 +36,7 @@ def expect_tokens(device: LineTransport, expected: list[str]) -> None:
         tokens = line.split()
         if tokens == expected:
             return
-        if tokens and tokens[0] in {"HELLO", "STATE", "LEARN_DIRECT", "LEARN_CONTACT"}:
+        if tokens and tokens[0] in {"HELLO", "STATE"}:
             continue
         raise RuntimeError(f"expected {' '.join(expected)!r}, got {line!r}")
     raise RuntimeError(f"expected {' '.join(expected)!r}, got too many asynchronous events")
@@ -132,13 +132,6 @@ def run_smoke(
     for pin in rejected_pins:
         revision += 1
         send_topology(device, revision, [pin], expect_ok=False)
-
-    revision += 1
-    pins_text = " ".join(str(pin) for pin in valid_pins)
-    write_line(device, f"LEARN_BEGIN {revision} {len(valid_pins)} {pins_text}\n")
-    expect_tokens(device, ["LEARN_OK", str(revision)])
-    write_line(device, f"LEARN_END {revision}\n")
-    expect_tokens(device, ["LEARN_OK", str(revision)])
 
     if exercise_actions:
         event_id = state_down_event(device)

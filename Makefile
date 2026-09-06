@@ -146,34 +146,37 @@ test:
 	bash test/test_release.sh
 	bash test/test_studio_bundle.sh
 	$(UV_CMD) run pytest test/test_repo_version.py test/test_release_transaction.py test/test_platformio_build_id.py
-	$(UV_CMD) run pytest test/test_upload_targeting.py test/test_rp2040_upload.py
+	$(UV_CMD) run pytest test/test_upload_targeting.py test/test_rp2040_upload.py test/test_runtime_smoke.py
 	$(UV_CMD) run pytest test/test_firmware_target_selector.py test/test_product_firmware_selector.py test/test_make_upload_selection.py
-	$(UV_CMD) run pytest test/test_monitor.py
+	$(UV_CMD) run pytest test/test_monitor.py test/test_kill_helper.py
 	$(UV_CMD) run pio test -e native
 	cargo test --manifest-path src-tauri/Cargo.toml
+	cargo test --manifest-path src-tauri/Cargo.toml --all-features
+	cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 	cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 	npm test
 	npm run build
 
-client: helper-kill
+client:
 	npm run tauri dev
 
 helper: client
 
-studio: helper-kill
-	KIVO_REPOSITORY_ROOT="$$(pwd -P)" npm run tauri -- dev --features product-studio --config src-tauri/tauri.studio.conf.json
+studio:
+	CARGO_TARGET_DIR="$$(pwd -P)/src-tauri/target-studio" KIVO_REPOSITORY_ROOT="$$(pwd -P)" npm run tauri -- dev --features product-studio --config src-tauri/tauri.studio.conf.json
 
 helper-kill:
 	@$(UV_CMD) run python scripts/kill_helper.py
 
 kill: helper-kill
 
-helper-build: helper-build-studio
+helper-build: helper-build-app
+	$(MAKE) helper-build-studio
 
 helper-build-app:
 	npm run tauri build
 
-helper-build-studio: helper-build-app
+helper-build-studio:
 	npm run tauri build -- --features product-studio --config src-tauri/tauri.studio.conf.json
 
 # Bump patch in .env and create annotated git tag. Override version: make release V=v1.2.3

@@ -11,7 +11,7 @@ use crate::{
         DisplayRenderer, DisplaySnapshot, RenderedScene, RendererRegistry, SH1106_PANEL_ID,
         SSD1306_PANEL_ID, SceneTracker, SceneUpdate, built_in_renderer_registry,
     },
-    hardware::{BoardProfile, DeviceId},
+    hardware::BoardProfile,
     metrics::{HomeMetricsSnapshot, MetricAttribution, MetricsStore},
     paste::{Clock, PasteHandle, PasteReply, PasteRequest, SystemClock},
     product::{PRODUCT_DEFINITION_SCHEMA_VERSION, ProductDefinition, ProductDefinitionCache},
@@ -58,7 +58,6 @@ pub struct RuntimeActivity {
     pub detail: Option<String>,
     pub input: Option<PhysicalInput>,
     pub pressed: Option<bool>,
-    pub learning_target: Option<LearningTarget>,
     #[serde(skip)]
     context: Option<RuntimeEventContext>,
     #[serde(skip)]
@@ -100,7 +99,6 @@ impl RuntimeActivity {
             detail: None,
             input: None,
             pressed: None,
-            learning_target: None,
             context: None,
             metric_press: None,
             feature_disabled_log: None,
@@ -164,8 +162,6 @@ pub struct DeviceSession {
     active_receive_sequence: Option<u64>,
     pending_paste: Option<PendingPaste>,
     pending_reconfiguration: Option<PendingReconfiguration>,
-    pending_learning: Option<LearningTarget>,
-    learning: Option<ActiveLearning>,
     target_opener: Arc<dyn TargetOpener>,
 }
 
@@ -227,11 +223,6 @@ struct ConfigurationInFlight {
     kind: ConfigurationKind,
 }
 
-struct ActiveLearning {
-    target: LearningTarget,
-    acknowledged: bool,
-}
-
 impl DeviceSession {
     #[cfg(test)]
     pub fn new(profile: RuntimeProfileSnapshot) -> Self {
@@ -257,8 +248,6 @@ impl DeviceSession {
             active_receive_sequence: None,
             pending_paste: None,
             pending_reconfiguration: None,
-            pending_learning: None,
-            learning: None,
             target_opener: Arc::new(SystemTargetOpener),
         }
     }
@@ -285,8 +274,6 @@ impl DeviceSession {
             active_receive_sequence: None,
             pending_paste: None,
             pending_reconfiguration: None,
-            pending_learning: None,
-            learning: None,
             target_opener: Arc::new(SystemTargetOpener),
         }
     }
@@ -324,8 +311,6 @@ impl DeviceSession {
         revision: u32,
     ) -> SessionOutput {
         let mut output = SessionOutput::default();
-        self.end_active_learning(&mut output);
-        self.pending_learning = None;
         self.settle_queued(&mut output);
         self.reset_gestures();
         self.settle_placeholders(&mut output);
@@ -341,70 +326,15 @@ impl DeviceSession {
         output
     }
 
-    pub fn begin_learning(&mut self, target: LearningTarget) -> SessionOutput {
-        let mut output = SessionOutput::default();
-        if self.learning.is_some() || self.pending_learning.is_some() {
-            output
-                .activities
-                .push(RuntimeActivity::new("learning_session_active"));
-            return output;
-        }
-        let pins = target.pins.iter().copied().collect::<BTreeSet<_>>();
-        let reported = self
-            .hello
-            .as_ref()
-            .map(|hello| hello.pins.iter().copied().collect::<BTreeSet<_>>())
-            .unwrap_or_default();
-        if target.firmware_revision == 0
-            || target.device_id.board_profile_id() != self.candidate_board.id
-            || target.pins.is_empty()
-            || pins.len() != target.pins.len()
-            || !pins.is_subset(&reported)
-            || !pins
-                .iter()
-                .all(|pin| self.candidate_board.safe_pins.contains(pin))
-        {
-            output
-                .activities
-                .push(RuntimeActivity::new("invalid_learning_target"));
-            return output;
-        }
-        self.pending_reconfiguration = None;
-        self.configuring = None;
-        self.ready = false;
-        self.settle_queued(&mut output);
-        self.reset_gestures();
-        self.settle_placeholders(&mut output);
-        self.pending_learning = Some(target);
-        self.start_pending_control(&mut output);
-        output
-    }
-
-    pub fn end_learning(
-        &mut self,
-        restore: Option<Arc<RuntimeProfileSnapshot>>,
-        revision: u32,
-    ) -> SessionOutput {
-        let mut output = SessionOutput::default();
-        self.end_active_learning(&mut output);
-        self.pending_learning = None;
-        let restored = self.reconfigure(restore, revision);
-        merge_output(&mut output, restored);
-        output
-    }
-
     pub fn is_awaiting_action(&self) -> bool {
         self.active_snapshot.is_some()
             && self.active.as_ref().is_some_and(ActionSequence::is_waiting)
     }
 
     pub(crate) fn runtime_profile_for_input(&self) -> Option<Arc<RuntimeProfileSnapshot>> {
-        (self.ready
-            && self.pending_reconfiguration.is_none()
-            && self.pending_learning.is_none()
-            && self.learning.is_none())
-        .then(|| self.profile.clone())
-        .flatten()
+        (self.ready && self.pending_reconfiguration.is_none())
+            .then(|| self.profile.clone())
+            .flatten()
     }
 
     pub fn fail_active_deferred(&mut self, code: &str, detail: Option<String>) -> SessionOutput {
@@ -529,57 +459,8 @@ impl DeviceSession {
                 );
             }
             DeviceMessage::Done { run_id, step } => self.handle_done(run_id, step, &mut output),
-            DeviceMessage::LearnOk { revision }
-                if self
-                    .learning
-                    .as_ref()
-                    .is_some_and(|learning| learning.target.firmware_revision == revision) =>
-            {
-                let learning = self.learning.as_mut().expect("matching learning exists");
-                learning.acknowledged = true;
-                output.activities.push(RuntimeActivity {
-                    learning_target: Some(learning.target.clone()),
-                    ..RuntimeActivity::new("learning_ready")
-                        .with_param("revision", revision.to_string())
-                });
-            }
-            DeviceMessage::LearnDirect { gpio, state } => {
-                if let Some(learning) = self.learning.as_ref().filter(|learning| {
-                    learning.acknowledged && learning.target.pins.contains(&gpio)
-                }) {
-                    output.activities.push(RuntimeActivity {
-                        input: Some(PhysicalInput::Direct { gpio }),
-                        pressed: Some(state == InputState::Down),
-                        learning_target: Some(learning.target.clone()),
-                        ..RuntimeActivity::new("learning_input")
-                    });
-                }
-            }
-            DeviceMessage::LearnContact {
-                pin_a,
-                pin_b,
-                state,
-            } => {
-                if let Some(learning) = self.learning.as_ref().filter(|learning| {
-                    learning.acknowledged
-                        && learning.target.pins.contains(&pin_a)
-                        && learning.target.pins.contains(&pin_b)
-                }) {
-                    output.activities.push(RuntimeActivity {
-                        input: Some(PhysicalInput::Contact {
-                            source: 0,
-                            pin_a,
-                            pin_b,
-                        }),
-                        pressed: Some(state == InputState::Down),
-                        learning_target: Some(learning.target.clone()),
-                        ..RuntimeActivity::new("learning_input")
-                    });
-                }
-            }
             DeviceMessage::ConfigOk { .. }
             | DeviceMessage::ConfigError { .. }
-            | DeviceMessage::LearnOk { .. }
             | DeviceMessage::DisplayOk { .. }
             | DeviceMessage::DisplayResync { .. }
             | DeviceMessage::DisplayError { .. }
@@ -1126,8 +1007,6 @@ impl DeviceSession {
         self.pending_paste = None;
         self.queue.clear();
         self.pending_reconfiguration = None;
-        self.pending_learning = None;
-        self.learning = None;
         self.reset_gestures();
         self.gesture_placeholders.clear();
         self.pending_receive_sequences.clear();
@@ -1196,36 +1075,8 @@ impl DeviceSession {
         }
     }
 
-    fn end_active_learning(&mut self, output: &mut SessionOutput) {
-        if let Some(learning) = self.learning.take() {
-            output
-                .lines
-                .push(format!("LEARN_END {}\n", learning.target.firmware_revision));
-        }
-    }
-
     fn start_pending_control(&mut self, output: &mut SessionOutput) {
         if self.active.is_some() {
-            return;
-        }
-        if let Some(target) = self.pending_learning.take() {
-            self.revision = target.firmware_revision;
-            let pins = target
-                .pins
-                .iter()
-                .map(u8::to_string)
-                .collect::<Vec<_>>()
-                .join(" ");
-            output.lines.push(format!(
-                "LEARN_BEGIN {} {} {}\n",
-                target.firmware_revision,
-                target.pins.len(),
-                pins
-            ));
-            self.learning = Some(ActiveLearning {
-                target,
-                acknowledged: false,
-            });
             return;
         }
         if let Some(pending) = self.pending_reconfiguration.take() {
@@ -1288,11 +1139,7 @@ impl DeviceSession {
     fn start_next(&mut self, output: &mut SessionOutput) {
         while self.active.is_none() {
             self.start_pending_control(output);
-            if self.pending_reconfiguration.is_some()
-                || self.pending_learning.is_some()
-                || self.learning.is_some()
-                || self.configuring.is_some()
-            {
+            if self.pending_reconfiguration.is_some() || self.configuring.is_some() {
                 return;
             }
             let Some(queued) = self.queue.pop_front() else {
@@ -1619,6 +1466,7 @@ fn message_event_id(message: &DeviceMessage) -> Option<u64> {
     }
 }
 
+#[cfg(test)]
 fn merge_output(target: &mut SessionOutput, mut source: SessionOutput) {
     target.lines.append(&mut source.lines);
     target.activities.append(&mut source.activities);
@@ -1633,13 +1481,8 @@ fn merge_output(target: &mut SessionOutput, mut source: SessionOutput) {
 
 fn configuration_error_code(code: &str) -> &str {
     match code {
-        "invalid_begin"
-        | "invalid_direct"
-        | "invalid_matrix"
-        | "invalid_oled"
-        | "invalid_commit"
-        | "invalid_learning"
-        | "invalid_learning_revision" => code,
+        "invalid_begin" | "invalid_direct" | "invalid_matrix" | "invalid_oled"
+        | "invalid_commit" => code,
         _ => "device_configuration_error",
     }
 }
@@ -1649,17 +1492,6 @@ fn activity_from_error(error: crate::workspace::AppError) -> RuntimeActivity {
     activity.params = error.params;
     activity.detail = error.detail;
     activity
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LearningTarget {
-    pub device_id: DeviceId,
-    pub device_profile_id: String,
-    pub hardware_profile_id: String,
-    pub editing_revision: u64,
-    pub firmware_revision: u32,
-    pub pins: Vec<u8>,
 }
 
 fn persist_metrics(
@@ -2200,24 +2032,6 @@ fn run_isolated_worker_inner(
                     .with_port(current_port.clone());
                     (
                         session.reconfigure(snapshot, revision),
-                        current_context.clone(),
-                    )
-                }
-                WorkerCommand::BeginLearning(target) => {
-                    current_context =
-                        RuntimeEventContext::from_learning(clock.unix_time_ms(), &target)
-                            .with_port(current_port.clone());
-                    (session.begin_learning(target), current_context.clone())
-                }
-                WorkerCommand::EndLearning { snapshot, revision } => {
-                    display_link.configure(display_protocol, snapshot.as_deref(), renderers);
-                    current_context = RuntimeEventContext::from_snapshot(
-                        clock.unix_time_ms(),
-                        snapshot.as_deref(),
-                    )
-                    .with_port(current_port.clone());
-                    (
-                        session.end_learning(snapshot, revision),
                         current_context.clone(),
                     )
                 }
@@ -3976,8 +3790,6 @@ mod tests {
             "invalid_matrix",
             "invalid_oled",
             "invalid_commit",
-            "invalid_learning",
-            "invalid_learning_revision",
         ] {
             let activity = configuration_rejection(code);
             assert_eq!(
@@ -5227,65 +5039,6 @@ mod tests {
         assert!(!session.ready);
         session.on_message_deferred(DeviceMessage::ConfigOk { revision: 2 }, 0, 107);
         assert!(session.ready);
-    }
-
-    #[test]
-    fn learning_emits_only_matching_revision_captures_with_the_complete_target() {
-        let mut session = DeviceSession::new(runtime_model());
-        let DeviceMessage::Hello(hello) = hello() else {
-            unreachable!();
-        };
-        session.on_message_deferred(DeviceMessage::Hello(hello), 0, 100);
-        session.on_message_deferred(DeviceMessage::ConfigOk { revision: 1 }, 0, 101);
-        let target = LearningTarget {
-            device_id: DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "ABCDEF123456")
-                .unwrap(),
-            device_profile_id: "phone".into(),
-            hardware_profile_id: "esp-primary".into(),
-            editing_revision: 9,
-            firmware_revision: 2,
-            pins: vec![6, 7],
-        };
-
-        let begin = session.begin_learning(target.clone());
-        assert_eq!(begin.lines, ["LEARN_BEGIN 2 2 6 7\n"]);
-        assert!(
-            session
-                .on_message_deferred(DeviceMessage::LearnOk { revision: 1 }, 0, 102)
-                .activities
-                .is_empty()
-        );
-        assert!(
-            session
-                .on_message_deferred(
-                    DeviceMessage::LearnDirect {
-                        gpio: 6,
-                        state: InputState::Down,
-                    },
-                    0,
-                    103,
-                )
-                .activities
-                .is_empty()
-        );
-        let ready = session.on_message_deferred(DeviceMessage::LearnOk { revision: 2 }, 0, 104);
-        assert_eq!(ready.activities[0].learning_target.as_ref(), Some(&target));
-        let capture = session.on_message_deferred(
-            DeviceMessage::LearnDirect {
-                gpio: 6,
-                state: InputState::Down,
-            },
-            0,
-            105,
-        );
-        assert_eq!(
-            capture.activities[0].learning_target.as_ref(),
-            Some(&target)
-        );
-
-        let restored = session.end_learning(Some(Arc::new(runtime_model())), 3);
-        assert_eq!(restored.lines[0], "LEARN_END 2\n");
-        assert_eq!(restored.lines[1], "CONFIG_BEGIN 3 30\n");
     }
 
     #[test]

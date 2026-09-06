@@ -1,10 +1,10 @@
 use crate::{
+    error::AppError,
     model::ModelLayout,
     profile::{
         DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION, TriggerSettings,
     },
     storage::atomic_write,
-    workspace::AppError,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

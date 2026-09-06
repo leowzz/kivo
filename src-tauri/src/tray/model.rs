@@ -122,7 +122,6 @@ impl TrayMenuModel {
                     || !matches!(
                         device.runtime,
                         RuntimeDimension::Configuring
-                            | RuntimeDimension::Learning
                             | RuntimeDimension::Ready
                             | RuntimeDimension::RuntimeError
                     )
@@ -384,7 +383,6 @@ mod tests {
                 hardware_profile_id: "hardware".into(),
             }),
             latest_error: None,
-            learning: None,
         }
     }
 
@@ -454,7 +452,6 @@ mod tests {
         enroll_and_assign(&mut workspace, &valid);
         for runtime in [
             RuntimeDimension::Configuring,
-            RuntimeDimension::Learning,
             RuntimeDimension::Ready,
             RuntimeDimension::RuntimeError,
         ] {

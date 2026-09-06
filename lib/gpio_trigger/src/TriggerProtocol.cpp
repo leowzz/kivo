@@ -154,15 +154,6 @@ std::string formatInputEvent(const InputEvent &event) {
   return result + (event.state == InputState::Down ? " DOWN\n" : " UP\n");
 }
 
-std::string formatLearningEvent(const InputEvent &event) {
-  std::string result = event.input.kind == PhysicalInputKind::Direct
-                           ? "LEARN_DIRECT " + std::to_string(event.input.pinA)
-                           : "LEARN_CONTACT " +
-                                 std::to_string(event.input.pinA) + " " +
-                                 std::to_string(event.input.pinB);
-  return result + (event.state == InputState::Down ? " DOWN\n" : " UP\n");
-}
-
 std::string formatDone(std::uint32_t runId, std::uint16_t step) {
   return "DONE " + std::to_string(runId) + " " + std::to_string(step) +
          "\n";
@@ -173,6 +164,11 @@ std::optional<HelperCommand> parseHelperCommand(std::string_view line) {
   trimLineEnd(line);
   const auto kind = takeToken(line);
   if (!kind.has_value()) return std::nullopt;
+
+  if (*kind == "GPIO_READ") {
+    if (takeToken(line).has_value()) return std::nullopt;
+    return HelperCommand{HelperCommandKind::GpioRead};
+  }
 
   if (*kind == "HELLO") {
     return takeToken(line).has_value()
@@ -276,12 +272,10 @@ std::optional<HelperCommand> parseHelperCommand(std::string_view line) {
     return command;
   }
 
-  if (*kind == "CONFIG_COMMIT" || *kind == "LEARN_END") {
+  if (*kind == "CONFIG_COMMIT") {
     const auto revision = takeNumber(line);
     if (!revision.has_value() || takeToken(line).has_value()) return std::nullopt;
-    HelperCommand command{*kind == "CONFIG_COMMIT"
-                              ? HelperCommandKind::ConfigCommit
-                              : HelperCommandKind::LearnEnd};
+    HelperCommand command{HelperCommandKind::ConfigCommit};
     command.revision = *revision;
     return command;
   }
@@ -301,18 +295,6 @@ std::optional<HelperCommand> parseHelperCommand(std::string_view line) {
     command.usageCostMicros = *costMicros;
     command.usageTodayTokens = *todayTokens;
     command.usageTpm = *tpm;
-    return command;
-  }
-
-  if (*kind == "LEARN_BEGIN") {
-    const auto revision = takeNumber(line);
-    const auto count = takeNumber(line);
-    if (!revision.has_value() || !count.has_value()) return std::nullopt;
-    HelperCommand command{HelperCommandKind::LearnBegin};
-    command.revision = *revision;
-    if (!takePins(line, *count, command.pins) || takeToken(line).has_value()) {
-      return std::nullopt;
-    }
     return command;
   }
 

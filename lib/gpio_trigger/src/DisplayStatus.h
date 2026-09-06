@@ -37,7 +37,6 @@ class DisplayStatusModel {
   void setUsbConnected(bool connected) { usbConnected_ = connected; }
   void setStandaloneDebug(bool enabled) { standaloneDebug_ = enabled; }
   void setReady(std::size_t keyCount);
-  void setLearning(std::size_t pinCount);
   void setConfigError();
   void recordInput(const InputEvent &event);
   void clearLastInput();
@@ -47,7 +46,6 @@ class DisplayStatusModel {
   enum class Mode {
     Waiting,
     Ready,
-    Learning,
     ConfigError,
   };
 

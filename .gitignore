@@ -6,10 +6,12 @@ __pycache__/
 .env
 .superpowers/
 node_modules/
+.playwright-cli/
 dist/
 dist-studio/
 /output/
 src-tauri/target/
+src-tauri/target-studio/
 config.yaml
 # Track the Workbench designs while keeping other local hardware folders ignored.
 /hardware/*

@@ -1,3 +1,5 @@
+#![cfg(not(feature = "product-studio"))]
+
 use kivo_lib::{
     hardware::{BOARD_PROFILES, BoardProfile, DeviceId},
     test_support::{

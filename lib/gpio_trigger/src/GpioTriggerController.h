@@ -36,21 +36,6 @@ class GpioTriggerController {
                                           std::uint8_t pinA,
                                           std::uint8_t pinB, bool closed,
                                           std::uint32_t nowMs);
-  bool beginLearning(std::uint32_t revision,
-                     const std::vector<std::uint8_t> &pins,
-                     std::uint32_t nowMs);
-  bool endLearning(std::uint32_t revision, std::uint32_t nowMs);
-  std::optional<InputEvent> updateLearningPin(std::uint8_t gpio,
-                                              bool inputHigh,
-                                              std::uint32_t nowMs);
-  std::optional<InputEvent> updateLearningContact(std::uint8_t pinA,
-                                                  std::uint8_t pinB,
-                                                  bool closed,
-                                                  std::uint32_t nowMs);
-  bool isLearning() const { return learningRevision_.has_value(); }
-  const std::vector<std::uint8_t> &learningPins() const {
-    return learningPins_;
-  }
   const RuntimeTopology &topology() const { return topology_; }
 
  private:
@@ -70,7 +55,5 @@ class GpioTriggerController {
   RuntimeTopology topology_;
   const BoardProfile &profile_;
   std::vector<InputSlot> inputs_;
-  std::optional<std::uint32_t> learningRevision_;
-  std::vector<std::uint8_t> learningPins_;
   std::uint32_t nextEventId_ = 1;
 };

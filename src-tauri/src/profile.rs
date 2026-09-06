@@ -1,12 +1,12 @@
 use crate::{
+    error::AppError,
     hardware::board_by_id,
-    model::ModelLayout,
-    protocol::{
+    input::{
         ACTION_RUN_PROTOCOL_VERSION, ADVANCED_ACTION_PROTOCOL_VERSION,
         OLED_CONTROL_PANEL_PROTOCOL_VERSION, OLED_PROTOCOL_VERSION, PhysicalInput,
         SH1106_PROTOCOL_VERSION, encode_hotkey,
     },
-    workspace::AppError,
+    model::ModelLayout,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 use std::{
@@ -39,6 +39,12 @@ pub struct SnapshotMetadata {
     pub source_device_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_device_name: Option<String>,
+}
+
+impl Default for SnapshotMetadata {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SnapshotMetadata {
@@ -1158,7 +1164,10 @@ mod tests {
         };
         let yaml = serde_yaml_ng::to_string(&actions).unwrap();
         assert!(yaml.contains("note: Current contact"));
-        assert_eq!(serde_yaml_ng::from_str::<TriggerActions>(&yaml).unwrap(), actions);
+        assert_eq!(
+            serde_yaml_ng::from_str::<TriggerActions>(&yaml).unwrap(),
+            actions
+        );
     }
 
     #[test]

@@ -22,7 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import type { ButtonGroup, HardwareProfile, InputSource } from "../types";
+import type { ButtonGroup, HardwareProfile, InputSource } from "../shared/types";
 import type {
   NormalizedDefinition,
   ProductBuildResult,

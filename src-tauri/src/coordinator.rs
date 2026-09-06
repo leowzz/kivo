@@ -1,7 +1,7 @@
 #[cfg(test)]
 use crate::profile::{TriggerActions, TriggerSettings};
 use crate::{
-    device::{LearningTarget, RuntimeActivity, RuntimeProfileSnapshot},
+    device::{RuntimeActivity, RuntimeProfileSnapshot},
     display::{DisplaySnapshot, RendererRegistry, built_in_renderer_registry},
     hardware::{BoardProfile, DeviceId, HardwareRegistry, compiled_registry},
     metrics::{HomeMetricsSnapshot, MetricAttribution},
@@ -11,8 +11,8 @@ use crate::{
     protocol::{HelloCapabilities, InputState, PhysicalInput, validate_hello},
     usage::UsageSnapshot,
     workspace::{
-        AppError, AssignmentResolution, ProductConfigurationProfile, RuntimeAssignment,
-        SettingsDocument, Workspace,
+        AssignmentResolution, ProductConfigurationProfile, RuntimeAssignment, SettingsDocument,
+        Workspace,
     },
 };
 use nusb::MaybeFuture;
@@ -64,23 +64,7 @@ pub(crate) fn enumerate_devices(enumerator: &dyn UsbEnumerator) -> Result<Device
 
 pub struct SystemUsbEnumerator;
 
-fn collapse_serial_port_aliases(
-    ports: Vec<serialport::SerialPortInfo>,
-) -> Vec<serialport::SerialPortInfo> {
-    let callout_suffixes = ports
-        .iter()
-        .filter_map(|port| port.port_name.strip_prefix("/dev/cu."))
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>();
-
-    ports
-        .into_iter()
-        .filter(|port| match port.port_name.strip_prefix("/dev/tty.") {
-            Some(suffix) => !callout_suffixes.contains(suffix),
-            None => true,
-        })
-        .collect()
-}
+use crate::serial::collapse_serial_port_aliases;
 
 impl UsbEnumerator for SystemUsbEnumerator {
     fn serial_ports(&self) -> Result<Vec<SerialObservation>, String> {
@@ -155,7 +139,7 @@ pub enum AssignmentDimension {
 pub enum RuntimeDimension {
     Inactive,
     Configuring,
-    Learning,
+
     Ready,
     RuntimeError,
 }
@@ -186,7 +170,6 @@ pub struct DeviceStatus {
     pub pins: Vec<u8>,
     pub runtime_assignment: Option<RuntimeAssignment>,
     pub latest_error: Option<RuntimeActivity>,
-    pub learning: Option<LearningTarget>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -282,15 +265,6 @@ impl RuntimeEventContext {
         }
     }
 
-    pub(crate) fn from_learning(timestamp_ms: u64, target: &LearningTarget) -> Self {
-        Self {
-            timestamp_ms,
-            port: None,
-            device_profile_id: Some(target.device_profile_id.clone()),
-            hardware_profile_id: Some(target.hardware_profile_id.clone()),
-        }
-    }
-
     pub(crate) fn with_port(mut self, port: impl Into<String>) -> Self {
         self.port = Some(port.into());
         self
@@ -323,11 +297,7 @@ pub enum WorkerCommand {
         snapshot: Option<Arc<RuntimeProfileSnapshot>>,
         revision: u32,
     },
-    BeginLearning(LearningTarget),
-    EndLearning {
-        snapshot: Option<Arc<RuntimeProfileSnapshot>>,
-        revision: u32,
-    },
+
     Input {
         receive_sequence: u64,
         captured: CapturedInput,
@@ -735,7 +705,6 @@ impl RuntimeCoordinator {
                     status.firmware_build_id = None;
                     status.firmware_protocol = None;
                     status.pins.clear();
-                    status.learning = None;
                 }
                 continue;
             }
@@ -784,7 +753,6 @@ impl RuntimeCoordinator {
                                 status.firmware_build_id = None;
                                 status.firmware_protocol = None;
                                 status.pins.clear();
-                                status.learning = None;
                                 status.latest_error = Some(runtime_error(error));
                             } else {
                                 self.candidates.push(candidate_from_runtime(
@@ -919,7 +887,6 @@ impl RuntimeCoordinator {
                 status.firmware_protocol = None;
                 status.pins.clear();
                 status.latest_error = None;
-                status.learning = None;
             }
         }
     }
@@ -1066,7 +1033,6 @@ impl RuntimeCoordinator {
                     status.firmware_protocol = None;
                     status.pins.clear();
                     status.port = None;
-                    status.learning = None;
                     status.latest_error = error.clone().map(runtime_error);
                 } else if let Some(candidate) = self
                     .candidates
@@ -1379,7 +1345,6 @@ impl RuntimeCoordinator {
                             } else {
                                 RuntimeDimension::Inactive
                             };
-                            status.learning = None;
                             status.latest_error = None;
                         }
                         Err(error) => {
@@ -1447,119 +1412,6 @@ impl RuntimeCoordinator {
         self.apply_workspace_revision(revision);
     }
 
-    pub fn begin_learning(
-        &mut self,
-        device_id: &DeviceId,
-        device_profile_id: &str,
-        hardware_profile_id: &str,
-        editing_revision: u64,
-        pins: Vec<u8>,
-    ) -> Result<LearningTarget, AppError> {
-        let status = self
-            .devices
-            .get(device_id)
-            .ok_or_else(|| AppError::new("unknown_device"))?
-            .clone();
-        if status.connection != ConnectionDimension::Online
-            || status.mode != Some(DeviceMode::Runtime)
-            || status.identity != IdentityDimension::Valid
-            || !self.workers.contains_key(device_id)
-        {
-            return Err(AppError::new("device_not_available"));
-        }
-        if status.learning.is_some() {
-            return Err(AppError::new("learning_session_active"));
-        }
-        let board = self
-            .registry
-            .board_by_id(device_id.board_profile_id())
-            .ok_or_else(|| AppError::new("unknown_board_profile"))?;
-        {
-            let profile = self
-                .workspace_revision
-                .profiles
-                .get(device_profile_id)
-                .ok_or_else(|| AppError::new("unknown_profile"))?;
-            let hardware = profile
-                .hardware_profile(hardware_profile_id)
-                .ok_or_else(|| AppError::new("unknown_hardware_profile"))?;
-            if hardware.board_profile_id != board.id {
-                return Err(AppError::new("learning_board_mismatch"));
-            }
-        }
-        let unique = pins.iter().copied().collect::<BTreeSet<_>>();
-        if pins.is_empty()
-            || unique.len() != pins.len()
-            || !unique.iter().all(|pin| board.safe_pins.contains(pin))
-            || !unique.iter().all(|pin| status.pins.contains(pin))
-        {
-            return Err(AppError::new("invalid_learning_pins"));
-        }
-        let slot = self
-            .workers
-            .get_mut(device_id)
-            .ok_or_else(|| AppError::new("device_not_available"))?;
-        let firmware_revision = slot.next_revision();
-        let target = LearningTarget {
-            device_id: device_id.clone(),
-            device_profile_id: device_profile_id.into(),
-            hardware_profile_id: hardware_profile_id.into(),
-            editing_revision,
-            firmware_revision,
-            pins,
-        };
-        slot.worker
-            .send(WorkerCommand::BeginLearning(target.clone()))
-            .map_err(|detail| AppError::new("learning_command_failed").with_detail(detail))?;
-        if let Some(status) = self.devices.get_mut(device_id) {
-            status.runtime = RuntimeDimension::Learning;
-            status.learning = Some(target.clone());
-            status.latest_error = None;
-        }
-        Ok(target)
-    }
-
-    pub fn end_learning(&mut self, device_id: &DeviceId) -> Result<(), AppError> {
-        if self
-            .devices
-            .get(device_id)
-            .and_then(|status| status.learning.as_ref())
-            .is_none()
-        {
-            return Err(AppError::new("no_learning_session"));
-        }
-        let snapshot = runtime_profile(
-            &self.workspace_revision,
-            device_id,
-            self.product_definitions.get(device_id),
-        )
-        .map(Arc::new);
-        let has_assignment = snapshot.is_some();
-        let slot = self
-            .workers
-            .get_mut(device_id)
-            .ok_or_else(|| AppError::new("device_not_available"))?;
-        let revision = slot.next_revision();
-        slot.worker
-            .send(WorkerCommand::EndLearning { snapshot, revision })
-            .map_err(|detail| AppError::new("learning_command_failed").with_detail(detail))?;
-        if let Some(status) = self.devices.get_mut(device_id) {
-            status.learning = None;
-            status.runtime = if has_assignment {
-                RuntimeDimension::Configuring
-            } else {
-                RuntimeDimension::Inactive
-            };
-            status.latest_error = None;
-        }
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub fn cancel_learning(&mut self, device_id: &DeviceId) -> Result<(), AppError> {
-        self.end_learning(device_id)
-    }
-
     #[cfg(test)]
     pub fn sync_profiles(&mut self) {
         self.workspace_revision = {
@@ -1590,7 +1442,6 @@ impl RuntimeCoordinator {
             if let Some(status) = self.devices.get_mut(&id) {
                 match result {
                     Ok(_) => {
-                        status.learning = None;
                         status.runtime = if has_assignment {
                             RuntimeDimension::Configuring
                         } else {
@@ -1677,8 +1528,6 @@ fn activity_level(code: &str) -> EventLevel {
         "topology_active"
         | "topology_cleared"
         | "input_state"
-        | "learning_ready"
-        | "learning_input"
         | "feature_switch_changed"
         | "trigger_occurred"
         | "action_step_started"
@@ -1760,7 +1609,6 @@ fn set_observed(
         status.firmware_build_id = None;
         status.firmware_protocol = None;
         status.pins.clear();
-        status.learning = None;
         status.latest_error = None;
     }
 }
@@ -1940,7 +1788,6 @@ fn offline_status(
         pins: Vec::new(),
         runtime_assignment,
         latest_error: None,
-        learning: None,
     }
 }
 
@@ -4160,80 +4007,5 @@ mod tests {
         };
         assert!(b_revision > 0);
         assert!(launcher.commands_for(&a).is_empty());
-    }
-
-    #[test]
-    fn learning_targets_one_exact_device_keeps_draft_unpersisted_and_cancels_on_disconnect() {
-        let (_directory, enumerator, launcher, mut coordinator) = harness();
-        enumerator.set(
-            vec![
-                serial("/dev/a", 0x303a, 0x4002, Some("A")),
-                serial("/dev/b", 0x303a, 0x4002, Some("B")),
-            ],
-            Vec::new(),
-        );
-        scan(&mut coordinator);
-        let a = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "A").unwrap();
-        let b = DeviceId::new(crate::hardware::YD_ESP32_S3_BOARD_ID, "B").unwrap();
-        let persisted = coordinator.workspace.read().unwrap().profiles["red-phone-v1"].clone();
-        launcher.clear_commands();
-
-        let target = coordinator
-            .begin_learning(&a, "red-phone-v1", "esp", 17, vec![6, 7])
-            .unwrap();
-
-        assert_eq!(target.device_id, a);
-        assert_eq!(target.device_profile_id, "red-phone-v1");
-        assert_eq!(target.hardware_profile_id, "esp");
-        assert_eq!(target.editing_revision, 17);
-        assert!(target.firmware_revision > 0);
-        assert!(matches!(
-            launcher.commands_for(&a).as_slice(),
-            [WorkerCommand::BeginLearning(sent)] if sent == &target
-        ));
-        assert!(launcher.commands_for(&b).is_empty());
-        assert_eq!(
-            coordinator.workspace.read().unwrap().profiles["red-phone-v1"],
-            persisted
-        );
-
-        launcher.clear_commands();
-        coordinator.cancel_learning(&a).unwrap();
-        assert!(matches!(
-            launcher.commands_for(&a).as_slice(),
-            [WorkerCommand::EndLearning { .. }]
-        ));
-        assert!(launcher.commands_for(&b).is_empty());
-
-        launcher.clear_commands();
-        coordinator
-            .begin_learning(&a, "red-phone-v1", "esp", 18, vec![6, 7])
-            .unwrap();
-        coordinator.handle_worker_event(WorkerEvent::Disconnected {
-            generation: 1,
-            device_id: a.clone(),
-            error: None,
-        });
-        let statuses = coordinator.devices();
-        assert!(
-            statuses
-                .iter()
-                .find(|status| status.device_id == a)
-                .unwrap()
-                .learning
-                .is_none()
-        );
-        assert_eq!(
-            statuses
-                .iter()
-                .find(|status| status.device_id == b)
-                .unwrap()
-                .connection,
-            ConnectionDimension::Online
-        );
-        assert_eq!(
-            coordinator.workspace.read().unwrap().profiles["red-phone-v1"],
-            persisted
-        );
     }
 }

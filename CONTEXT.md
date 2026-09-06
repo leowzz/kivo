@@ -130,11 +130,19 @@ Profile**. Every Hardware Profile targets one Board Profile, and one Device
 Profile may contain multiple wiring variants for the same board.
 _Avoid_: Board Profile, Device Profile, pin list
 
-**Learning Session**:
-A temporary scan bound to one explicit Device and one Hardware Profile. It
-produces editor draft bindings and suspends only that Device; it never applies
-results to other Devices until the draft is saved.
-_Avoid_: Global learning, automatic assignment
+**GPIO Monitor**:
+A Studio-only passive serial diagnostic session bound to one explicit Device.
+It reads the current digital level of every Board Profile safe pin without
+changing pin modes, pull resistors, topology, or stored configuration. It owns
+the port until stopped, disconnected, or closed. Per-key learning is removed.
+
+## Entry Boundaries
+
+`src/app/main.tsx` and `src-tauri/src/app/` own daily device and action workflows.
+`src/studio/main.tsx` and `src-tauri/src/studio.rs` own product authoring,
+firmware builds, and hardware diagnostics. The `product-studio` Cargo feature
+selects Studio at compile time. Studio never mounts the APP or starts its runtime.
+See `docs/architecture.md` for the module map and validation commands.
 
 ## Flagged Ambiguities
 

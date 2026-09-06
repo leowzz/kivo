@@ -6,10 +6,10 @@ TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 MAKEFILE="$ROOT/Makefile"
-FIRMWARE_MAIN="$ROOT/src/main.cpp"
-PLATFORM_HEADER="$ROOT/src/platform/Platform.h"
-RP2040_PLATFORM="$ROOT/src/platform/rp2040.cpp"
-ESP32S3_PLATFORM="$ROOT/src/platform/esp32s3.cpp"
+FIRMWARE_MAIN="$ROOT/firmware/src/main.cpp"
+PLATFORM_HEADER="$ROOT/firmware/src/platform/Platform.h"
+RP2040_PLATFORM="$ROOT/firmware/src/platform/rp2040.cpp"
+ESP32S3_PLATFORM="$ROOT/firmware/src/platform/esp32s3.cpp"
 DISPLAY_CONTROLLER="$ROOT/lib/gpio_trigger/src/DisplayController.h"
 PLATFORMIO_CONFIG="$ROOT/platformio.ini"
 ESP32S3_MERGE_SCRIPT="$ROOT/scripts/merge_esp32s3_firmware.py"
@@ -210,17 +210,20 @@ expected_test_commands=(
   'bash test/test_release.sh'
   'bash test/test_studio_bundle.sh'
   '$(UV_CMD) run pytest test/test_repo_version.py test/test_release_transaction.py test/test_platformio_build_id.py'
-  '$(UV_CMD) run pytest test/test_upload_targeting.py test/test_rp2040_upload.py'
+  '$(UV_CMD) run pytest test/test_upload_targeting.py test/test_rp2040_upload.py test/test_runtime_smoke.py'
   '$(UV_CMD) run pytest test/test_firmware_target_selector.py test/test_product_firmware_selector.py test/test_make_upload_selection.py'
+  '$(UV_CMD) run pytest test/test_monitor.py test/test_kill_helper.py'
   '$(UV_CMD) run pio test -e native'
   'cargo test --manifest-path src-tauri/Cargo.toml'
+  'cargo test --manifest-path src-tauri/Cargo.toml --all-features'
+  'cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings'
   'cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings'
   'npm test'
   'npm run build'
 )
 previous_line=0
 for command in "${expected_test_commands[@]}"; do
-  line="$(grep -n -F "$command" <<<"$test_body" | cut -d: -f1)"
+  line="$(awk -v command="$command" '$0 == "\t" command { print NR }' <<<"$test_body")"
   test -n "$line"
   test "$line" -gt "$previous_line"
   previous_line="$line"

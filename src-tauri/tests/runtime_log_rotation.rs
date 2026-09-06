@@ -1,3 +1,5 @@
+#![cfg(not(feature = "product-studio"))]
+
 use std::{env, error::Error, fs, path::Path, process::Command};
 use tauri_plugin_log::{
     Builder, RotationStrategy, Target, TargetKind,

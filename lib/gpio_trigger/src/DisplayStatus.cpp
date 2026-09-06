@@ -26,11 +26,6 @@ void DisplayStatusModel::setReady(std::size_t keyCount) {
   count_ = keyCount;
 }
 
-void DisplayStatusModel::setLearning(std::size_t pinCount) {
-  mode_ = Mode::Learning;
-  count_ = pinCount;
-}
-
 void DisplayStatusModel::setConfigError() { mode_ = Mode::ConfigError; }
 
 void DisplayStatusModel::recordInput(const InputEvent &event) {
@@ -53,9 +48,6 @@ DisplayFrame DisplayStatusModel::frame() const {
       break;
     case Mode::Ready:
       result.lines[1] = rightAlignedCount("READY", count_, " KEYS");
-      break;
-    case Mode::Learning:
-      result.lines[1] = rightAlignedCount("LEARNING", count_, " PINS");
       break;
     case Mode::ConfigError:
       result.lines[1] = fitLine("CONFIG ERROR");
