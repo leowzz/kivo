@@ -11,6 +11,7 @@
 
 enum class HelperCommandKind {
   Hello,
+  GpioRead,
   ProductInfo,
   ProductRead,
   ConfigBegin,
@@ -25,8 +26,6 @@ enum class HelperCommandKind {
   DisplayClear,
   DisplayText,
   DisplayCommit,
-  LearnBegin,
-  LearnEnd,
   Paste,
   Hotkey,
   Chord,
@@ -83,6 +82,5 @@ class ResponseLineBuffer {
 };
 
 std::string formatInputEvent(const InputEvent &event);
-std::string formatLearningEvent(const InputEvent &event);
 std::string formatDone(std::uint32_t runId, std::uint16_t step);
 std::optional<HelperCommand> parseHelperCommand(std::string_view line);

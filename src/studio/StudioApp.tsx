@@ -22,8 +22,10 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import type { ButtonGroup, HardwareProfile, InputSource } from "../types";
+import type { ButtonGroup, HardwareProfile, InputSource } from "../shared/types";
+import BuildResultPanel from "./BuildResultPanel";
 import type {
+  BuiltFirmware,
   NormalizedDefinition,
   ProductBuildResult,
   ProductDefinition,
@@ -42,6 +44,10 @@ const CAPABILITIES = ["mic", "spk", "disp", "enc", "encp"] as const;
 function errorText(error: unknown) {
   if (typeof error === "object" && error && "code" in error) {
     const value = error as StudioError;
+    if (value.code === "display_capability_required")
+      return "硬件引脚仍配置了显示组件，请先移除显示组件，再取消 disp。";
+    if (value.code === "encoder_press_capability_required")
+      return "硬件引脚仍配置了带按压的编码器控制面板，需要保留 encp。";
     if (value.code === "product_already_exists") {
       const id = value.params?.productVersionId;
       return id
@@ -330,7 +336,9 @@ function nextGroupId(groups: ButtonGroup[]) {
   return `group-${index}`;
 }
 
-export default function StudioApp() {
+export default function StudioApp({ onFirmwareBusyChange }: {
+  onFirmwareBusyChange?: (busy: boolean) => void;
+}) {
   const [snapshot, setSnapshot] = useState<StudioSnapshot | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [definition, setDefinition] = useState<ProductDefinition | null>(null);
@@ -341,6 +349,8 @@ export default function StudioApp() {
   const [validationError, setValidationError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [buildLogs, setBuildLogs] = useState<string[]>([]);
+  const [buildArtifact, setBuildArtifact] = useState<BuiltFirmware | null>(null);
+  const [builtDefinition, setBuiltDefinition] = useState("");
   const [modal, setModal] = useState<CreateMode | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [fatal, setFatal] = useState<string | null>(null);
@@ -408,6 +418,7 @@ export default function StudioApp() {
       setIsNew(false);
       setTab("identity");
       setBuildLogs([]);
+      setBuildArtifact(null);
     } catch (error) {
       setFatal(errorText(error));
     } finally {
@@ -493,6 +504,7 @@ export default function StudioApp() {
       setSaved("");
       setIsNew(false);
       setBuildLogs([]);
+      setBuildArtifact(null);
       return;
     }
     setBusy(true);
@@ -506,6 +518,7 @@ export default function StudioApp() {
       setSaved("");
       setIsNew(false);
       setBuildLogs([]);
+      setBuildArtifact(null);
       setDeleteOpen(false);
     } catch (error) {
       setFatal(errorText(error));
@@ -516,6 +529,8 @@ export default function StudioApp() {
   };
 
   const createProduct = async (nextDefinition: ProductDefinition) => {
+    setBuildLogs([]);
+    setBuildArtifact(null);
     if (modal !== "copy") {
       setDefinition(nextDefinition);
       setSelectedId(null);
@@ -551,11 +566,18 @@ export default function StudioApp() {
   const build = async () => {
     if (!definition || dirty || validationError) return;
     setBusy(true);
+    setBuildArtifact(null);
     setBuildLogs([`Building ${definition.product.product_version_id}`]);
     try {
       const result = await invoke<ProductBuildResult>("studio_build_product", {
         productVersionId: definition.product.product_version_id,
       });
+      setBuildArtifact({
+        ...result.output,
+        productVersionId: definition.product.product_version_id,
+        boardProfileId: definition.hardware_profile.board_profile_id,
+      });
+      setBuiltDefinition(JSON.stringify(definition));
       setBuildLogs([...result.logs, `Output: ${result.output.outputDirectory}`]);
     } catch (error) {
       setBuildLogs((logs) => [...logs, `Error: ${errorText(error)}`]);
@@ -592,14 +614,15 @@ export default function StudioApp() {
           <div><strong>Kivo Product Studio</strong><span>{snapshot.repoRoot}</span></div>
         </div>
         <div className="sidebar-actions">
-          <button className="primary" onClick={() => setModal("new")}><Plus size={15} />新建</button>
+          <button className="primary" disabled={busy} onClick={() => setModal("new")}><Plus size={15} />新建</button>
           <button aria-label="复制产品版本" title="复制产品版本" disabled={!definition || dirty || busy} onClick={() => setModal("copy")}><Copy size={15} /></button>
-          <button aria-label="刷新" title="刷新" onClick={() => refresh()}><RefreshCw size={15} /></button>
+          <button aria-label="刷新" title="刷新" disabled={busy} onClick={() => refresh()}><RefreshCw size={15} /></button>
         </div>
         <nav className="product-list" aria-label="产品版本">
           {snapshot.products.map((product) => (
             <button
               key={product.productVersionId}
+              disabled={busy}
               className={selectedId === product.productVersionId ? "selected" : ""}
               onClick={() => selectProduct(product.productVersionId)}
             >
@@ -674,10 +697,14 @@ export default function StudioApp() {
               <span>{definition.hardware_profile.board_profile_id}</span>
             </footer>
             {buildLogs.length > 0 ? (
-              <section className="build-log">
-                <header><strong>构建日志</strong><button aria-label="关闭构建日志" onClick={() => setBuildLogs([])}><X size={14} /></button></header>
-                <pre>{buildLogs.join("\n")}</pre>
-              </section>
+              <BuildResultPanel
+                key={buildArtifact?.firmwarePath ?? "building"}
+                logs={buildLogs}
+                artifact={buildArtifact}
+                canFlash={!busy && !dirty && builtDefinition === JSON.stringify(definition)}
+                onClose={() => setBuildLogs([])}
+                onFirmwareBusyChange={onFirmwareBusyChange}
+              />
             ) : null}
           </>
         ) : (
@@ -758,13 +785,16 @@ function IdentityEditor({
       <h3>Capabilities</h3>
       <div className="capability-row">
         {CAPABILITIES.map((token) => (
-          <label key={token} className="check-control"><input type="checkbox" disabled={immutable} checked={definition.product.capabilities.includes(token)} onChange={(event) => update((draft) => {
-            const selected = new Set(draft.product.capabilities);
-            if (token === "enc" && event.target.checked) selected.delete("encp");
-            if (token === "encp" && event.target.checked) selected.delete("enc");
-            event.target.checked ? selected.add(token) : selected.delete(token);
-            draft.product.capabilities = CAPABILITIES.filter((value) => selected.has(value));
-          })} /><span>{token}</span></label>
+          <label key={token} className="check-control"><input type="checkbox" disabled={deleting} checked={definition.product.capabilities.includes(token)} onChange={(event) => {
+            const checked = event.target.checked;
+            update((draft) => {
+              const selected = new Set(draft.product.capabilities);
+              if (token === "enc" && checked) selected.delete("encp");
+              if (token === "encp" && checked) selected.delete("enc");
+              checked ? selected.add(token) : selected.delete(token);
+              draft.product.capabilities = CAPABILITIES.filter((value) => selected.has(value));
+            });
+          }} /><span>{token}</span></label>
         ))}
       </div>
       <div className="identity-delete">

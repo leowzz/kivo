@@ -1,0 +1,5 @@
+J1 pin,Signal,YD ESP32-S3 header,Header pin,Cable
+1,GND,P1,22,male-to-female Dupont 2.54mm
+2,3V3,P1,1,male-to-female Dupont 2.54mm
+3,SDA / GPIO13,P1,19,male-to-female Dupont 2.54mm
+4,SCL / GPIO14,P1,20,male-to-female Dupont 2.54mm

@@ -5,7 +5,7 @@
   "mainBinaryName": "kivo",
   "build": {
     "beforeDevCommand": "npm run dev -- --mode studio --port 1421",
-    "devUrl": "http://localhost:1421/studio.html",
+    "devUrl": "http://localhost:1421",
     "beforeBuildCommand": "npm run build -- --mode studio",
     "frontendDist": "../dist-studio"
   },
@@ -13,6 +13,7 @@
     "windows": [
       {
         "label": "main",
+        "url": "studio.html",
         "title": "Kivo Product Studio",
         "width": 1380,
         "height": 860,
@@ -24,7 +25,7 @@
   },
   "bundle": {
     "active": true,
-    "resources": {},
+    "resources": [],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

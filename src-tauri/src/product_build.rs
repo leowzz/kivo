@@ -1,7 +1,7 @@
 use crate::{
+    error::AppError,
     product::{ProductDefinition, generated_header, sha256_hex},
     storage::atomic_write,
-    workspace::AppError,
 };
 use serde::Serialize;
 use std::{

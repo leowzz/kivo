@@ -1,20 +1,5 @@
-import type { HardwareProfile, ModelLayout } from "../types";
-
-export interface ProductIdentity {
-  display_name: string;
-  family_id: string;
-  variant_id: string;
-  hardware_revision: number;
-  product_version_id: string;
-  capabilities: string[];
-}
-
-export interface ProductDefinition {
-  schema_version: 1;
-  product: ProductIdentity;
-  layout: ModelLayout;
-  hardware_profile: HardwareProfile;
-}
+import type { ProductDefinition } from "../shared/types";
+export type { ProductDefinition, ProductIdentity } from "../shared/types";
 
 export interface StudioError {
   code: string;
@@ -61,3 +46,8 @@ export interface ProductBuildResult {
   };
   logs: string[];
 }
+
+export type BuiltFirmware = ProductBuildResult["output"] & {
+  productVersionId: string;
+  boardProfileId: string;
+};

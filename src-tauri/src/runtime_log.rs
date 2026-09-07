@@ -473,7 +473,6 @@ struct DeviceLogSnapshot<'a> {
     board_profile_id: &'a str,
     firmware_build_id: Option<&'a str>,
     runtime_assignment: Option<RuntimeAssignmentLogSnapshot<'a>>,
-    learning_active: bool,
     latest_error_code: Option<&'a str>,
 }
 
@@ -495,7 +494,6 @@ impl<'a> From<&'a DeviceStatus> for DeviceLogSnapshot<'a> {
                 .runtime_assignment
                 .as_ref()
                 .map(RuntimeAssignmentLogSnapshot::from),
-            learning_active: status.learning.is_some(),
             latest_error_code: status
                 .latest_error
                 .as_ref()
@@ -530,11 +528,7 @@ fn stable_runtime_activity_code(code: &str) -> &'static str {
         "input_state" => "input_state",
         "invalid_action_acknowledgement" => "invalid_action_acknowledgement",
         "invalid_assignment" => "invalid_assignment",
-        "invalid_learning_target" => "invalid_learning_target",
         "invalid_topology" => "invalid_topology",
-        "learning_input" => "learning_input",
-        "learning_ready" => "learning_ready",
-        "learning_session_active" => "learning_session_active",
         "metrics_write_failed" => "metrics_write_failed",
         "no_runtime_assignment" => "no_runtime_assignment",
         "paste_coordinator_stopped" => "paste_coordinator_stopped",
@@ -853,7 +847,7 @@ mod tests {
             ConnectionDimension, DeviceMode, DeviceStatus, EventLevel, IdentityDimension,
             RuntimeDimension, RuntimeEvent, SerialObservation, UsbEnumerator, enumerate_devices,
         },
-        device::{LearningTarget, RuntimeActivity},
+        device::RuntimeActivity,
         hardware::{DeviceId, ESP32S3_FAMILY_ID, YD_ESP32_S3_BOARD_ID},
         metrics::HomeMetricsSnapshot,
         workspace::{AppError, RuntimeAssignment},
@@ -958,7 +952,6 @@ mod tests {
             pins: Vec::new(),
             runtime_assignment: None,
             latest_error: None,
-            learning: None,
         }
     }
 
@@ -1532,7 +1525,6 @@ mod tests {
         let prefixed_code_secret = "/Users/alice/private/serial-device.txt";
         let unknown_code_secret = "diagnostic_token_abc123";
         let candidate_error_secret = "/Users/alice/private/candidate-error.txt";
-        let learning_secret = "private-learning-profile";
         let mut device = device_status(ConnectionDimension::Online);
         device.name = device_name_secret.into();
         device.pins = vec![201, 202, 203];
@@ -1547,14 +1539,6 @@ mod tests {
             .insert("rawError".into(), device_error_secret.into());
         latest_error.detail = Some(device_error_secret.into());
         device.latest_error = Some(latest_error);
-        device.learning = Some(LearningTarget {
-            device_id: device.device_id.clone(),
-            device_profile_id: learning_secret.into(),
-            hardware_profile_id: "private-learning-hardware".into(),
-            editing_revision: 991,
-            firmware_revision: 992,
-            pins: vec![204, 205],
-        });
         let mut candidate = candidate_status(CandidateIssue::PortUnavailable);
         candidate.latest_error = Some(candidate_error_secret.into());
 
@@ -1597,7 +1581,6 @@ mod tests {
                 "firmwareBuildId",
                 "identity",
                 "latestErrorCode",
-                "learningActive",
                 "mode",
                 "port",
                 "rawSerial",
@@ -1612,7 +1595,6 @@ mod tests {
             unknown_error_entries[0].context["current"]["latestErrorCode"],
             "runtime_error"
         );
-        assert_eq!(device_context["learningActive"], true);
         assert_eq!(
             device_context["runtimeAssignment"],
             json!({
@@ -1647,7 +1629,6 @@ mod tests {
             prefixed_code_secret,
             unknown_code_secret,
             candidate_error_secret,
-            learning_secret,
             "201",
             "202",
             "203",

@@ -37,7 +37,7 @@ def merge_factory_image(source, target, env):
     subprocess.run(command, check=True)
 
 
-if env.subst("$PIOENV") == "esp32s3":
+if env.get("BOARD") and env.BoardConfig().get("build.mcu") == "esp32s3":
     env.AddPostAction(
         "$BUILD_DIR/${PROGNAME}.bin",
         env.VerboseAction(

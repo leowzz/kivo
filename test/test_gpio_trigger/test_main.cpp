@@ -11,6 +11,8 @@
 #include "ActionRunDispatcher.h"
 #include "ActionRunController.h"
 #include "GpioTriggerController.h"
+#include "GpioMonitor.h"
+#include "IoTestProtocol.h"
 #include "Handshake.h"
 #include "InputTopology.h"
 #include "KeyActivityIndicator.h"
@@ -30,6 +32,80 @@ static_assert(sizeof(RemoteDisplayCommit) <= 1280,
 
 void setUp() {}
 void tearDown() {}
+
+void test_io_test_protocol_only_configures_inputs_and_ignores_runtime_commands() {
+  for (const auto *board : {&kYdEsp32S3, &kYdRp2040}) {
+    IoTestProtocol protocol(*board);
+    std::vector<std::pair<std::uint8_t, IoInputMode>> configured;
+    auto configure = [&](std::uint8_t pin, IoInputMode mode) {
+      TEST_ASSERT_TRUE(board->supports(pin));
+      configured.emplace_back(pin, mode);
+    };
+    auto read = [](std::uint8_t) { return true; };
+    protocol.reset(configure);
+    TEST_ASSERT_EQUAL_UINT32(board->safePinCount, configured.size());
+    for (const auto &[pin, mode] : configured) {
+      (void)pin;
+      TEST_ASSERT_EQUAL(IoInputMode::PullUp, mode);
+    }
+    TEST_ASSERT_EQUAL_STRING("GPIO_MODE PULLUP\n", protocol.handle("GPIO_MODE", "io-test-dev", read, configure).c_str());
+    configured.clear();
+    for (const auto command : {"CONFIG_BEGIN 1", "HOTKEY 1 0 4", "GPIO_MODE OUTPUT", "GPIO_MODE PULLUP 0"}) {
+      TEST_ASSERT_TRUE(protocol.handle(command, "io-test-dev", read, configure).empty());
+    }
+    TEST_ASSERT_TRUE(configured.empty());
+    TEST_ASSERT_EQUAL_STRING("GPIO_MODE PULLUP\n", protocol.handle("GPIO_MODE PULLUP", "io-test-dev", read, configure).c_str());
+    TEST_ASSERT_EQUAL_UINT32(board->safePinCount, configured.size());
+    for (const auto &[pin, mode] : configured) {
+      (void)pin;
+      TEST_ASSERT_EQUAL(IoInputMode::PullUp, mode);
+    }
+    TEST_ASSERT_EQUAL_STRING("GPIO_MODE PULLUP\n", protocol.handle("GPIO_MODE", "io-test-dev", read, configure).c_str());
+    TEST_ASSERT_EQUAL_STRING("GPIO_MODE PULLDOWN\n", protocol.handle("GPIO_MODE PULLDOWN", "io-test-dev", read, configure).c_str());
+    TEST_ASSERT_EQUAL_STRING("GPIO_MODE INPUT\n", protocol.handle("GPIO_MODE INPUT", "io-test-dev", read, configure).c_str());
+    TEST_ASSERT_EQUAL_STRING("GPIO_MODE INPUT\n", protocol.handle("GPIO_MODE", "io-test-dev", read, configure).c_str());
+    configured.clear();
+    protocol.reset(configure);
+    TEST_ASSERT_EQUAL_UINT32(board->safePinCount, configured.size());
+    for (const auto &[pin, mode] : configured) {
+      (void)pin;
+      TEST_ASSERT_EQUAL(IoInputMode::PullUp, mode);
+    }
+    TEST_ASSERT_EQUAL_STRING("GPIO_MODE PULLUP\n", protocol.handle("GPIO_MODE", "io-test-dev", read, configure).c_str());
+    TEST_ASSERT_EQUAL_STRING(formatHello(*board, "io-test-dev").c_str(), protocol.handle("HELLO", "io-test-dev", read, configure).c_str());
+    TEST_ASSERT_EQUAL_STRING(formatGpioState(*board, read).c_str(), protocol.handle("GPIO_READ", "io-test-dev", read, configure).c_str());
+  }
+}
+
+void test_gpio_monitor_requires_an_exact_read_command() {
+  const auto read = parseHelperCommand("GPIO_READ\n");
+  TEST_ASSERT_TRUE(read.has_value());
+  TEST_ASSERT_EQUAL(HelperCommandKind::GpioRead, read->kind);
+  TEST_ASSERT_FALSE(parseHelperCommand("GPIO_READ 1\n").has_value());
+  TEST_ASSERT_FALSE(parseHelperCommand("GPIO_READ_MORE\n").has_value());
+}
+
+void test_gpio_monitor_samples_only_board_safe_pins_and_reports_changes() {
+  for (const auto *board : {&kYdEsp32S3, &kYdRp2040}) {
+    std::vector<std::uint8_t> sampled;
+    const auto high = formatGpioState(*board, [&](std::uint8_t pin) {
+      sampled.push_back(pin);
+      return true;
+    });
+    TEST_ASSERT_EQUAL_UINT32(board->safePinCount, sampled.size());
+    std::string expected = "GPIO_STATE " + std::to_string(board->safePinCount);
+    for (std::size_t i = 0; i < board->safePinCount; ++i) {
+      TEST_ASSERT_EQUAL_UINT8(board->safePins[i], sampled[i]);
+      expected += " " + std::to_string(board->safePins[i]) + ":1";
+    }
+    expected += "\n";
+    TEST_ASSERT_EQUAL_STRING(expected.c_str(), high.c_str());
+    const auto low = formatGpioState(*board, [](std::uint8_t) { return false; });
+    TEST_ASSERT_TRUE(low.find(":1") == std::string::npos);
+    TEST_ASSERT_TRUE(low.find(":0") != std::string::npos);
+    TEST_ASSERT_LESS_THAN_UINT32(255, high.size());
+  }
+}
 
 void test_dirty_tiles_emit_only_changed_counter_region() {
   DirtyTiles dirty(16, 8);
@@ -269,13 +345,13 @@ void test_local_critical_overrides_and_then_restores_latest_remote_scene() {
   TEST_ASSERT_EQUAL_UINT32(2, controller.remoteRevision());
 }
 
-void test_learning_override_retains_remote_and_restores_on_runtime_return() {
+void test_critical_override_retains_remote_and_restores_on_runtime_return() {
   DisplayController controller;
   controller.commitRemote(remoteScene(7, "CODEX", "IDLE"));
 
-  controller.showLocal(localFrame("LEARNING 4 PINS"),
+  controller.showLocal(localFrame("CONFIG ERROR"),
                        LocalDisplayPriority::Critical);
-  controller.showLocal(localFrame("LEARNING GPIO 6"),
+  controller.showLocal(localFrame("CONFIG ERROR 6"),
                        LocalDisplayPriority::Critical);
   controller.commitRemote(remoteScene(8, "KIVO", "TASK STOPPED", false));
 
@@ -327,11 +403,11 @@ void test_disconnect_discards_remote_and_reconnect_requires_new_full_scene() {
 void test_reconnect_preserves_the_critical_override_from_before_disconnect() {
   DisplayController controller;
   controller.commitRemote(remoteScene(1, "CODEX", "RUNNING"));
-  controller.showLocal(localFrame("LEARNING 4 PINS"),
+  controller.showLocal(localFrame("CONFIG ERROR"),
                        LocalDisplayPriority::Critical);
   controller.helperDisconnected(localFrame("HELPER OFFLINE"));
 
-  controller.helperConnected(localFrame("LEARNING 4 PINS"));
+  controller.helperConnected(localFrame("CONFIG ERROR"));
   const auto hiddenFull =
       controller.commitRemote(remoteScene(2, "CODEX", "READY"));
 
@@ -1362,16 +1438,7 @@ void test_parser_defers_unsupported_pins_to_board_validation() {
   TEST_ASSERT_FALSE(rp2040.addDirect(3, 0, direct->pins));
 }
 
-void test_parses_learning_and_ordered_action_commands() {
-  const auto begin = parseHelperCommand("LEARN_BEGIN 4 4 1 2 12 13\n");
-  TEST_ASSERT_TRUE(begin.has_value());
-  TEST_ASSERT_EQUAL(HelperCommandKind::LearnBegin, begin->kind);
-  TEST_ASSERT_EQUAL_UINT8(4, begin->pins.size());
-
-  const auto end = parseHelperCommand("LEARN_END 4\n");
-  TEST_ASSERT_TRUE(end.has_value());
-  TEST_ASSERT_EQUAL(HelperCommandKind::LearnEnd, end->kind);
-
+void test_parses_ordered_action_commands() {
   const auto paste = parseHelperCommand("PASTE 9 1 2\n");
   TEST_ASSERT_TRUE(paste.has_value());
   TEST_ASSERT_EQUAL(HelperCommandKind::Paste, paste->kind);
@@ -1458,55 +1525,6 @@ void test_debounced_input_edges_do_not_create_action_state() {
   TEST_ASSERT_FALSE(runs.hasActiveRun());
 }
 
-void test_learning_reports_contact_and_restores_runtime_topology() {
-  TopologyBuilder builder(kYdEsp32S3);
-  builder.begin(7, 30);
-  builder.addDirect(7, 0, {6});
-  GpioTriggerController controller(kYdEsp32S3, 0);
-  controller.configure(*builder.commit(7), 0);
-
-  TEST_ASSERT_FALSE(controller.beginLearning(4, {1, 12, 35}, 0));
-  TEST_ASSERT_TRUE(controller.beginLearning(4, {1, 12}, 0));
-  TEST_ASSERT_FALSE(
-      controller.updateLearningContact(12, 1, true, 10).has_value());
-  const auto event = controller.updateLearningContact(1, 12, true, 40);
-
-  TEST_ASSERT_TRUE(event.has_value());
-  TEST_ASSERT_EQUAL_STRING("LEARN_CONTACT 1 12 DOWN\n",
-                           formatLearningEvent(*event).c_str());
-  TEST_ASSERT_FALSE(controller.endLearning(5, 50));
-  TEST_ASSERT_TRUE(controller.endLearning(4, 50));
-  TEST_ASSERT_EQUAL_UINT32(7, controller.topology().revision);
-}
-
-void test_rp2040_learning_accepts_gpio23_and_gpio29() {
-  GpioTriggerController esp32(kYdEsp32S3, 0);
-  TEST_ASSERT_FALSE(esp32.beginLearning(4, {29}, 0));
-
-  GpioTriggerController rp2040(kYdRp2040, 0);
-  TEST_ASSERT_TRUE(rp2040.beginLearning(4, {29}, 0));
-  TEST_ASSERT_TRUE(rp2040.endLearning(4, 1));
-  TEST_ASSERT_TRUE(rp2040.beginLearning(5, {23}, 1));
-  TEST_ASSERT_TRUE(rp2040.endLearning(5, 2));
-  TEST_ASSERT_FALSE(rp2040.beginLearning(6, {24}, 2));
-}
-
-void test_learning_rejects_active_oled_pins() {
-  TopologyBuilder builder(kYdRp2040);
-  TEST_ASSERT_TRUE(builder.begin(7, 30));
-  TEST_ASSERT_TRUE(builder.addDirect(7, 0, {6}));
-  TEST_ASSERT_TRUE(builder.addOled(7, 4, 5));
-  TEST_ASSERT_TRUE(builder.addOledControlPanel(7, 19, 20, 21, 22, 26));
-  GpioTriggerController controller(kYdRp2040, 0);
-  controller.configure(*builder.commit(7), 0);
-
-  TEST_ASSERT_FALSE(controller.beginLearning(8, {4, 7}, 0));
-  TEST_ASSERT_FALSE(controller.beginLearning(8, {5, 7}, 0));
-  TEST_ASSERT_FALSE(controller.beginLearning(8, {19, 7}, 0));
-  TEST_ASSERT_FALSE(controller.beginLearning(8, {22, 7}, 0));
-  TEST_ASSERT_TRUE(controller.beginLearning(8, {7, 8}, 0));
-}
-
 void test_display_status_frames_have_two_sixteen_character_status_lines() {
   DisplayStatusModel status;
 
@@ -1521,9 +1539,6 @@ void test_display_status_frames_have_two_sixteen_character_status_lines() {
   TEST_ASSERT_EQUAL_STRING("KIVO      USB ON", frame.lines[0].c_str());
   TEST_ASSERT_EQUAL_STRING("READY    18 KEYS", frame.lines[1].c_str());
 
-  status.setLearning(18);
-  TEST_ASSERT_EQUAL_STRING("LEARNING 18 PINS",
-                           status.frame().lines[1].c_str());
   status.setConfigError();
   TEST_ASSERT_EQUAL_STRING("CONFIG ERROR    ",
                            status.frame().lines[1].c_str());
@@ -2060,6 +2075,9 @@ void test_hid_consumer_control_waits_for_press_and_release_report_slots() {
 
 int main(int, char **) {
   UNITY_BEGIN();
+  RUN_TEST(test_io_test_protocol_only_configures_inputs_and_ignores_runtime_commands);
+  RUN_TEST(test_gpio_monitor_requires_an_exact_read_command);
+  RUN_TEST(test_gpio_monitor_samples_only_board_safe_pins_and_reports_changes);
   RUN_TEST(test_dirty_tiles_emit_only_changed_counter_region);
   RUN_TEST(test_dirty_tiles_respect_per_loop_budget_and_coalesce_updates);
   RUN_TEST(test_dirty_tiles_round_outward_clip_and_stay_within_one_row);
@@ -2069,7 +2087,7 @@ int main(int, char **) {
   RUN_TEST(test_startup_refresh_does_not_demote_remote_or_critical_content);
   RUN_TEST(test_display_reconfiguration_redraws_the_current_visible_source);
   RUN_TEST(test_local_critical_overrides_and_then_restores_latest_remote_scene);
-  RUN_TEST(test_learning_override_retains_remote_and_restores_on_runtime_return);
+  RUN_TEST(test_critical_override_retains_remote_and_restores_on_runtime_return);
   RUN_TEST(test_normal_input_debug_does_not_overwrite_active_remote_scene);
   RUN_TEST(test_disconnect_discards_remote_and_reconnect_requires_new_full_scene);
   RUN_TEST(test_reconnect_preserves_the_critical_override_from_before_disconnect);
@@ -2117,12 +2135,9 @@ int main(int, char **) {
   RUN_TEST(test_oled_control_panel_reserves_five_pins_without_counting_keys);
   RUN_TEST(test_parses_extended_registered_board_pin_domain);
   RUN_TEST(test_parser_defers_unsupported_pins_to_board_validation);
-  RUN_TEST(test_parses_learning_and_ordered_action_commands);
+  RUN_TEST(test_parses_ordered_action_commands);
   RUN_TEST(test_rejects_malformed_runtime_commands);
   RUN_TEST(test_debounced_input_edges_do_not_create_action_state);
-  RUN_TEST(test_learning_reports_contact_and_restores_runtime_topology);
-  RUN_TEST(test_rp2040_learning_accepts_gpio23_and_gpio29);
-  RUN_TEST(test_learning_rejects_active_oled_pins);
   RUN_TEST(test_display_status_frames_have_two_sixteen_character_status_lines);
   RUN_TEST(test_standalone_debug_display_does_not_depend_on_usb_state);
   RUN_TEST(test_standalone_debug_display_returns_to_managed_usb_status);

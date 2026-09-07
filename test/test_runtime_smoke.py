@@ -56,8 +56,6 @@ def test_smoke_requires_expected_protocol_responses() -> None:
             b"HELLO 6 esp32s3 yd-esp32-s3 test-build 2 1 2\n",
             b"CONFIG_OK 1\n",
             b"CONFIG_ERROR 2 invalid_direct\n",
-            b"LEARN_OK 3\n",
-            b"LEARN_OK 3\n",
         ]
     )
 
@@ -77,8 +75,6 @@ def test_smoke_requires_expected_protocol_responses() -> None:
         b"CONFIG_COMMIT 1\n",
         b"CONFIG_BEGIN 2 30\n",
         b"CONFIG_DIRECT 2 0 1 99\n",
-        b"LEARN_BEGIN 3 2 1 2\n",
-        b"LEARN_END 3\n",
     ]
 
 
@@ -87,8 +83,6 @@ def test_smoke_accepts_generic_protocol_v9_hello() -> None:
         [
             b"HELLO 9 rp2040 yd-rp2040 test-build - 2 1 2\n",
             b"CONFIG_OK 1\n",
-            b"LEARN_OK 2\n",
-            b"LEARN_OK 2\n",
         ]
     )
 
@@ -108,8 +102,6 @@ def test_smoke_accepts_generic_protocol_v12_hello() -> None:
         [
             b"HELLO 12 rp2040 yd-rp2040 test-build - 2 1 2\n",
             b"CONFIG_OK 1\n",
-            b"LEARN_OK 2\n",
-            b"LEARN_OK 2\n",
         ]
     )
 
@@ -131,8 +123,6 @@ def test_smoke_ignores_duplicate_hello_before_command_ack() -> None:
             hello,
             b"CONFIG_OK 1\n",
             b"CONFIG_ERROR 2 invalid_direct\n",
-            b"LEARN_OK 3\n",
-            b"LEARN_OK 3\n",
         ]
     )
 
@@ -208,8 +198,6 @@ def test_smoke_cli_requires_build_and_passes_it_to_run_arguments() -> None:
             b"HELLO 13 esp32s3 yd-esp32-s3 test-build - 2 1 2\n",
             b"CONFIG_OK 1\n",
             b"CONFIG_ERROR 2 invalid_direct\n",
-            b"LEARN_OK 3\n",
-            b"LEARN_OK 3\n",
         ]
     )
     run_from_args(
@@ -243,32 +231,12 @@ def test_smoke_rejects_wrong_configuration_ack(response: bytes, message: str) ->
         )
 
 
-def test_smoke_rejects_wrong_learning_ack() -> None:
-    device = FakeSerial(
-        [
-            b"HELLO 6 esp32s3 yd-esp32-s3 test-build 2 1 2\n",
-            b"CONFIG_OK 1\n",
-            b"LEARN_OK 3\n",
-        ]
-    )
-    with pytest.raises(RuntimeError, match="LEARN_OK 2"):
-        run_smoke(
-            device,
-            family="esp32s3",
-            board="yd-esp32-s3",
-            build="test-build",
-            valid_pins=[1, 2],
-            rejected_pins=[],
-        )
-
 
 def test_smoke_actions_use_one_host_created_run_and_sequential_done_steps() -> None:
     device = FakeSerial(
         [
             b"HELLO 6 esp32s3 yd-esp32-s3 test-build 2 1 2\n",
             b"CONFIG_OK 1\n",
-            b"LEARN_OK 2\n",
-            b"LEARN_OK 2\n",
             b"\n",
             b"STATE 7 DIRECT 1 DOWN\n",
             b"DONE 1 1\n",
@@ -287,7 +255,7 @@ def test_smoke_actions_use_one_host_created_run_and_sequential_done_steps() -> N
         exercise_actions=True,
     )
 
-    action_writes = device.writes[6:]
+    action_writes = device.writes[4:]
     assert action_writes == [
         b"PASTE 1 1 3\n",
         b"DELAY 1 2 3 500\n",
@@ -325,8 +293,6 @@ def test_smoke_rejects_wrong_action_completion_before_advancing(
         [
             b"HELLO 6 esp32s3 yd-esp32-s3 test-build 2 1 2\n",
             b"CONFIG_OK 1\n",
-            b"LEARN_OK 2\n",
-            b"LEARN_OK 2\n",
             b"STATE 7 DIRECT 1 DOWN\n",
             *done_responses,
         ]
@@ -341,7 +307,7 @@ def test_smoke_rejects_wrong_action_completion_before_advancing(
             rejected_pins=[],
             exercise_actions=True,
         )
-    action_writes = device.writes[6:]
+    action_writes = device.writes[4:]
     assert action_writes == expected_writes
 
 
@@ -354,8 +320,6 @@ def test_smoke_preserves_legacy_event_id_action_exchange(protocol_version: int) 
                 "test-build 2 1 2\n"
             ).encode(),
             b"CONFIG_OK 1\n",
-            b"LEARN_OK 2\n",
-            b"LEARN_OK 2\n",
             b"STATE 7 DIRECT 1 DOWN\n",
             b"DONE 7 1\n",
             b"DONE 7 2\n",

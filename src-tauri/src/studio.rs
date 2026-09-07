@@ -1,9 +1,9 @@
 use crate::{
+    error::AppError,
     hardware::BOARD_PROFILES,
     product::{NormalizedProductDefinition, ProductDefinition},
     product_build::{ProductBuildOutput, build_product_cancellable, product_path},
     storage::atomic_write,
-    workspace::AppError,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -17,6 +17,71 @@ use std::{
     time::Duration,
 };
 use tauri::Manager;
+mod firmware;
+mod gpio;
+
+pub fn run() {
+    let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .manage(gpio::GpioState::default())
+        .manage(firmware::FirmwareState::default())
+        .setup(|app| {
+            setup(app)?;
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            studio_select_repository,
+            studio_get_snapshot,
+            studio_load_product,
+            studio_validate_product,
+            studio_save_product,
+            studio_copy_product,
+            studio_delete_product,
+            studio_build_product,
+            gpio::studio_list_devices,
+            gpio::studio_connect_gpio,
+            gpio::studio_read_gpio,
+            gpio::studio_disconnect_gpio,
+            gpio::studio_set_gpio_input_mode,
+            firmware::studio_firmware_operation,
+        ])
+        .build(tauri::generate_context!())
+        .expect("error while building Kivo Product Studio");
+
+    app.run(|app, event| match event {
+        tauri::RunEvent::WindowEvent {
+            event: tauri::WindowEvent::CloseRequested { api, .. },
+            ..
+        } => {
+            if app.state::<firmware::FirmwareState>().prevent_shutdown() {
+                api.prevent_close();
+                return;
+            }
+            app.state::<gpio::GpioState>().close();
+            if cancel_active_build_for_shutdown(app) {
+                api.prevent_close();
+            }
+        }
+        tauri::RunEvent::ExitRequested { api, .. } => {
+            if app.state::<firmware::FirmwareState>().prevent_shutdown()
+                || cancel_active_build_for_shutdown(app)
+            {
+                api.prevent_exit();
+            }
+        }
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen {
+            has_visible_windows: false,
+            ..
+        } => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+        _ => {}
+    });
+}
 
 pub(super) struct StudioState {
     repo_root: RwLock<Option<PathBuf>>,
@@ -345,7 +410,7 @@ pub(super) fn studio_select_repository(
     snapshot(&repo_root)
 }
 
-pub(super) fn setup(app: &mut tauri::App) -> Result<Option<PathBuf>, AppError> {
+fn setup(app: &mut tauri::App) -> Result<(), AppError> {
     let settings_path = app
         .path()
         .app_config_dir()
@@ -355,16 +420,16 @@ pub(super) fn setup(app: &mut tauri::App) -> Result<Option<PathBuf>, AppError> {
         .join("studio-settings.json");
     let repo_root = configured_repository_root(&settings_path);
     app.manage(StudioState {
-        repo_root: RwLock::new(repo_root.clone()),
+        repo_root: RwLock::new(repo_root),
         settings_path,
         build_active: Arc::new(AtomicBool::new(false)),
         build_cancelled: Arc::new(AtomicBool::new(false)),
         closing: Arc::new(AtomicBool::new(false)),
     });
-    Ok(repo_root)
+    Ok(())
 }
 
-pub(super) fn cancel_active_build_for_shutdown(app: &tauri::AppHandle) -> bool {
+fn cancel_active_build_for_shutdown(app: &tauri::AppHandle) -> bool {
     if !app
         .state::<StudioState>()
         .build_active

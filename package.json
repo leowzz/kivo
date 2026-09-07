@@ -22,7 +22,9 @@
   },
   "scripts": {
     "dev": "vite",
+    "dev:studio": "vite --mode studio --open /studio.html",
     "build": "tsc && vite build",
+    "build:studio": "tsc && vite build --mode studio",
     "test": "vitest run",
     "tauri": "tauri"
   },
@@ -31,8 +33,7 @@
     "@tauri-apps/plugin-dialog": "^2.7.2",
     "lucide-react": "^1.27.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8",
-    "reicon-react": "^1.2.0"
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",

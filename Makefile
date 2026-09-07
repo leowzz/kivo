@@ -1,4 +1,4 @@
-.PHONY: all dev clean build build-esp32s3 build-rp2040 build-product download-mode upload upload-esp32s3 upload-rp2040 upload-prod monitor monitor-esp32s3 monitor-rp2040 require-build-id require-product validate-env-build-id require-serial test client helper studio helper-kill helper-build helper-build-app helper-build-studio release
+.PHONY: all dev clean build build-esp32s3 build-rp2040 build-product build-io-test download-mode upload upload-esp32s3 upload-rp2040 upload-prod monitor monitor-esp32s3 monitor-rp2040 require-build-id require-product validate-env-build-id require-serial test client helper studio helper-kill helper-build helper-build-app helper-build-studio release
 
 ENV_FILE ?= .env
 ifeq ($(origin BUILD_ID),undefined)
@@ -46,6 +46,10 @@ build-esp32s3: require-build-id
 
 build-rp2040: require-build-id
 	$(RP2040_BUILD)
+
+build-io-test:
+	$(UV_CMD) run python -m scripts.studio_firmware build_test --board yd-rp2040
+	$(UV_CMD) run python -m scripts.studio_firmware build_test --board yd-esp32-s3
 
 build-product: require-build-id require-product
 	KIVO_REPOSITORY_ROOT="$$(pwd -P)" KIVO_FIRMWARE_BUILD_ID="$(BUILD_ID)" cargo run --manifest-path src-tauri/Cargo.toml --features product-studio,product-cli --bin kivo-product -- build "$(PRODUCT)"
@@ -146,34 +150,37 @@ test:
 	bash test/test_release.sh
 	bash test/test_studio_bundle.sh
 	$(UV_CMD) run pytest test/test_repo_version.py test/test_release_transaction.py test/test_platformio_build_id.py
-	$(UV_CMD) run pytest test/test_upload_targeting.py test/test_rp2040_upload.py
+	$(UV_CMD) run pytest test/test_upload_targeting.py test/test_rp2040_upload.py test/test_runtime_smoke.py test/test_studio_firmware.py
 	$(UV_CMD) run pytest test/test_firmware_target_selector.py test/test_product_firmware_selector.py test/test_make_upload_selection.py
-	$(UV_CMD) run pytest test/test_monitor.py
+	$(UV_CMD) run pytest test/test_monitor.py test/test_kill_helper.py
 	$(UV_CMD) run pio test -e native
 	cargo test --manifest-path src-tauri/Cargo.toml
+	cargo test --manifest-path src-tauri/Cargo.toml --all-features
+	cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 	cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 	npm test
 	npm run build
 
-client: helper-kill
+client:
 	npm run tauri dev
 
 helper: client
 
-studio: helper-kill
-	KIVO_REPOSITORY_ROOT="$$(pwd -P)" npm run tauri -- dev --features product-studio --config src-tauri/tauri.studio.conf.json
+studio:
+	CARGO_TARGET_DIR="$$(pwd -P)/src-tauri/target-studio" KIVO_REPOSITORY_ROOT="$$(pwd -P)" npm run tauri -- dev --features product-studio --config src-tauri/tauri.studio.conf.json
 
 helper-kill:
 	@$(UV_CMD) run python scripts/kill_helper.py
 
 kill: helper-kill
 
-helper-build: helper-build-studio
+helper-build: helper-build-app
+	$(MAKE) helper-build-studio
 
 helper-build-app:
 	npm run tauri build
 
-helper-build-studio: helper-build-app
+helper-build-studio:
 	npm run tauri build -- --features product-studio --config src-tauri/tauri.studio.conf.json
 
 # Bump patch in .env and create annotated git tag. Override version: make release V=v1.2.3

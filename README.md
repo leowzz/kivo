@@ -6,16 +6,17 @@
 
 ![小黑操作 Kivo 插线台，把实体按键接成文字和快捷键](assets/readme-illustrations/01-kivo-switchboard.png)
 
-Kivo 是一套由设备固件和 Tauri 桌面 helper 组成的实体按键工作台。它识别每一台控制器，为设备分配对应的按键布局与接线配置，再把按下动作转换成文字粘贴或快捷键。
+Kivo 包含两个独立的 Tauri 桌面入口：日常使用的 **Kivo APP**，以及配置产品、硬件和固件的 **Kivo Studio**。APP 从设备读取产品定义，负责按键动作；Studio 负责生成产品固件并检查 GPIO 电平。
 
 ## 能做什么
 
 - **执行桌面动作**：一个按键可以依次执行文字粘贴和快捷键动作。
-- **学习实体接线**：支持独立 GPIO 按键与触点矩阵，并可通过指定设备进行按键学习。
+- **配置产品硬件**：Studio 编辑按键布局、直连 GPIO、触点矩阵、功能开关和显示模块。
+- **测试 GPIO 电平**：Studio 实时展示板卡允许使用的 GPIO 高低电平，支持 YD-ESP32-S3 和 YD-RP2040。
 - **管理多台设备**：每台设备保留独立的 Runtime Assignment，切换编辑中的配置不会改动其他设备。
 - **复用设备配置**：一个 Device Profile 可以包含多个 Hardware Profile，适配不同板卡或接线版本。
 - **功能开关门控**：Hardware Profile 可把一个 GPIO 开关绑定到若干按钮；开关断开时，这些按钮不会执行动作。
-- **观察实际使用**：首页展示累计次数、今日次数、活跃按键、七日热力图和最近活动。
+- **编辑按键动作**：APP 展示设备键盘，支持动作列表、自动保存、撤销和重做。
 - **迁移与恢复**：支持单个设备配置导入导出，以及包含设备分配和统计数据的完整备份恢复。
 
 ![Kivo 首页显示设备状态、按键统计和最近活动](assets/readme/app-overview.jpg)
@@ -24,12 +25,12 @@ Kivo 是一套由设备固件和 Tauri 桌面 helper 组成的实体按键工作
 
 1. 从 [Releases](https://github.com/leowzz/kivo/releases/latest) 下载 macOS 安装包或 Windows x64 安装程序。
 2. 按照[刷入固件](#刷入固件)为受支持的控制器刷入对应固件，然后连接控制器。通过身份与协议校验后，Kivo 会自动登记这台设备。
-3. 新建 Device Profile，或从已有配置复制/导入。Device Profile 决定可见按键布局与动作。
-4. 为目标板卡创建 Hardware Profile，通过手动配置或学习模式把实体输入映射到按键。
-5. 在“按键行为”中配置文字粘贴或快捷键，然后在“设备管理”中保存 Runtime Assignment。
-6. 按下实体按键，在首页确认动作、计数和活动记录。
+3. 产品固件会直接提供按键布局和硬件定义。在 APP 的“我的键盘”中选中设备，再选择或新建动作配置。
+4. 点击按键编辑动作。修改自动保存，顶栏提供撤销和重做。
+5. 改接线、布局或显示模块时，使用 Studio 修改产品定义并重新构建固件。
+6. 通用固件仍可使用已有 Device Profile：通过“添加键盘”选择兼容配置，或从设置页导入旧配置。
 
-新登记的设备在获得有效 Runtime Assignment 前不会执行动作。编辑中的 Device Profile 也不会自动替换任何设备正在使用的配置。
+产品设备会按 Product Version ID 选择已有或默认动作配置。通用固件设备在获得有效 Runtime Assignment 前不会执行动作；编辑中的 Device Profile 不会自动替换其他设备正在使用的配置。
 
 ## 刷入固件
 
@@ -66,7 +67,9 @@ ESP32-S3 的下载模式不会显示成磁盘。请使用 Chrome 或 Edge：
 
 | 概念 | 负责什么 |
 |---|---|
-| Device Profile | 可见布局、按键定义、动作，以及一个或多个 Hardware Profile |
+| Product Definition | Studio 编辑并嵌入固件的产品身份、布局和硬件定义 |
+| Product Configuration Profile | APP 编辑的触发设置与动作；同一 Product Version ID 的设备可以共享 |
+| Device Profile | 通用固件的旧版兼容格式，包含布局、动作及一个或多个 Hardware Profile |
 | Hardware Profile | 面向具体板卡的接线拓扑、输入绑定和去抖设置 |
 | Device | 一台有稳定硬件序列号的实体控制器；USB 端口不是设备身份 |
 | Runtime Assignment | 把一个 Device Profile 和兼容的 Hardware Profile 分配给一台 Device |
@@ -100,7 +103,7 @@ workbench-one-k18-mic-disp-encp-r01
 
 YD-RP2040 的 UF2 bootloader USB 标识为 `2e8a:0003`。Kivo 会先校验 USB 身份，再通过 `HELLO` 协议确认板卡和固件；不受该 Board Profile 支持的 GPIO 会被拒绝。
 
-YD-RP2040 的 Hardware Profile 支持两种地址为 `0x3C` 的 OLED：原有 SSD1306 128x32 模块占用 SDA/SCL 两个 GPIO；`sh1106-1.3-128x64-ec11` 模块使用 SH1106 128x64 屏，并带 EC11 旋转、EC11 按压、确认和返回，共占用七个 GPIO。OLED 和控制面板占用的 GPIO 不会再分配给按键输入或学习模式。
+YD-RP2040 的 Hardware Profile 支持两种地址为 `0x3C` 的 OLED：原有 SSD1306 128x32 模块占用 SDA/SCL 两个 GPIO；`sh1106-1.3-128x64-ec11` 模块使用 SH1106 128x64 屏，并带 EC11 旋转、EC11 按压、确认和返回，共占用七个 GPIO。OLED 和控制面板占用的 GPIO 不会再分配给按键输入。
 
 ## Codex 状态屏
 
@@ -138,6 +141,44 @@ make client
 ```
 
 `.env` 会被有意忽略，且只包含 `version=vX.Y.Z`。它为本地固件构建和 `make release` 提供仓库版本。
+
+### 两个桌面入口
+
+| 命令 | 用途 |
+|---|---|
+| `make client` | 启动 Kivo APP，管理设备和按键动作 |
+| `make studio` | 启动 Kivo Studio，编辑产品定义、构建固件、测试 GPIO |
+| `make helper-build-app` | 单独打包 APP |
+| `make helper-build-studio` | 单独打包 Studio |
+| `make helper-build` | 打包两个入口 |
+| `make test` | 前端、两个 Rust 入口、固件逻辑与构建流程验证 |
+
+浏览器开发使用 `npm run dev` 和 `npm run dev:studio`，默认端口分别为 1420 和 1421。
+APP 的 `/?preview` 仅在开发环境提供交互预览；真实串口和文件操作需要 Tauri。
+
+Studio 使用独立的应用标识和配置目录，不会启动 APP 的设备运行服务。产品定义编辑可以与 APP 同时运行；GPIO 测试需要独占目标串口，测试前退出 APP 或其他串口工具。
+
+已保存产品的 Capabilities 可直接修改；能力变化会同步更新产品 ID，保存时创建对应的新变体。
+构建完成后，日志面板提供“复制输出路径”和“刷入固件”。后者直接使用本次构建文件，筛选匹配板卡的设备，校验文件后确认覆盖；未保存的修改需要先保存并重新构建。
+
+### 工具台
+
+Studio 的“工具台”集中提供刷新设备列表、备份固件、刷入固件文件和刷入测试固件四项操作，并可查看 GPIO 高低电平。
+
+- **刷新设备列表**：重新枚举受支持的板卡，操作按序列号定位所选物理设备。
+- **备份固件**：读取整片 Flash，RP2040 保存为 UF2，ESP32-S3 保存为 BIN；同时保存 `.backup.json` 校验记录。读取失败不会覆盖已有备份。
+- **刷入固件文件**：选择 RP2040 UF2 或 ESP32-S3 完整 Flash / factory BIN，检查芯片、文件结构和 SHA-256 后确认刷写。支持恢复备份；若文件附带产品 `manifest.json`，额外校验清单和刷写后的产品、构建身份。ESP32-S3 写入地址固定为 `0x0`，拒绝仅含应用、应写入 `0x10000` 的 BIN。
+- **刷入测试固件**：自动构建所选板卡的临时 I/O 固件，首次刷入前备份原固件，完成后开始采样。测试固件不含产品接线、按键动作、矩阵扫描或显示驱动；安全 GPIO 默认上拉输入，可切换浮空或下拉，串口断开时回到上拉输入。Studio 每次开始测试时也会先为临时固件启用上拉，兼容默认浮空的旧测试固件。
+
+原固件备份位于 `output/firmware-backups/<board>/<device>/`，工具台显示具体路径。备份按设备持久保存，重复刷测试固件会复用原备份，不会把测试固件覆盖到原备份。测试完成后停止采样，点击“刷入固件文件”，文件选择器会默认定位到原备份。恢复成功后保留备份文件并结束此次临时测试记录。
+
+每次采样完成后约 125 ms 再次读取。已有产品固件若支持 `GPIO_READ`，也可直接查看当前电平，但工具台不会修改它的引脚模式或运行拓扑。瞬时 HIGH / LOW 不等于连通性；悬空输入、矩阵扫描和通信引脚可能变化，应结合接线判断。
+
+操作需要已配置的 Kivo 仓库、`uv` 和 PlatformIO 工具链。操作期间设备选择、工作区切换和窗口关闭被锁定；请勿拔线，并先退出 APP 或其他串口工具。设备留在引导模式时，可在当前视图直接重试，仍按原序列号定位设备。RP2040 自动进入与定位 BOOTSEL 沿用现有 macOS / Windows 上传工具。
+
+备份文件是设备的完整 Flash 镜像，APP 动作配置仍使用 APP 的配置备份。`make build-io-test` 可单独构建两种测试固件，产物位于 `output/io-test/`；此命令不会操作硬件。
+
+入口边界、目录职责和诊断协议见[架构说明](docs/architecture.md)。逐键学习已从界面、桌面协议和固件移除。
 
 仓库的 `.envrc` 会加载 `.nvmrc` 中的精确 Node 版本。使用 direnv 时可以验证实际解析到的工具：
 
@@ -233,11 +274,16 @@ make helper-build
 ## 项目结构
 
 ```text
-src/                 React 配置界面与共享固件入口
-src/platform/        ESP32-S3 与 RP2040 的 USB/HID 适配
-src-tauri/           设备发现、运行协调、存储、统计与系统托盘
+src/app/             APP 入口、设备管理、动作编辑、设置与备份
+src/studio/          Studio 入口、产品定义编辑、固件构建与 GPIO 测试
+src/shared/          两个前端入口共享的领域类型和基础样式
+src-tauri/src/app/   APP 启动、运行服务装配与 IPC 命令
+src-tauri/src/studio.rs  Studio 启动、产品仓库和构建命令
+src-tauri/src/studio/    独立串口诊断会话
+firmware/src/        固件入口与 ESP32-S3、RP2040 平台适配
 lib/gpio_trigger/    板卡无关的输入拓扑、去抖与协议状态机
 models/prod/         随应用发布的 Device Profile
+products/            Studio 管理的产品定义
 scripts/             固件选择、上传与运行时验证工具
 test/                Python、PlatformIO 与发布流程测试
 docs/                硬件改造、兼容性与设计记录

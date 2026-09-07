@@ -2,24 +2,14 @@
 use crate::profile::{TriggerActions, TriggerSettings};
 use crate::{
     display::{DrawOperation, SceneMode, SceneUpdate},
-    hardware::{BoardProfile, board_by_id},
+    hardware::board_by_id,
     profile::{ActionTrigger, ButtonAction, HardwareProfile, InputSource, MediaCommand},
     workspace::AppError,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-pub const HOST_PROTOCOL_VERSION: u16 = 13;
-pub const DISPLAY_PROTOCOL_VERSION: u16 = 7;
-pub const DISPLAY_LARGE_FONT_PROTOCOL_VERSION: u16 = 8;
-pub const ACTION_RUN_PROTOCOL_VERSION: u16 = 6;
-pub const OLED_PROTOCOL_VERSION: u16 = 4;
-pub const SH1106_PROTOCOL_VERSION: u16 = 11;
-pub const OLED_CONTROL_PANEL_PROTOCOL_VERSION: u16 = 10;
-pub const ADVANCED_ACTION_PROTOCOL_VERSION: u16 = 5;
-const PRODUCT_DEFINITION_PROTOCOL_VERSION: u16 = 9;
-const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 3;
+pub use crate::input::*;
 const DISPLAY_WIDTH: u16 = 128;
 const DISPLAY_HEIGHT: u16 = 64;
 const DISPLAY_MAX_REGIONS: usize = 8;
@@ -27,13 +17,6 @@ const DISPLAY_MAX_OPERATIONS: usize = 24;
 const DISPLAY_MAX_TEXT_BYTES: usize = 48;
 const DISPLAY_MAX_FONT_ID: u8 = 2;
 pub const PRODUCT_CHUNK_BYTES: usize = 144;
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum PhysicalInput {
-    Direct { gpio: u8 },
-    Contact { source: u8, pin_a: u8, pin_b: u8 },
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DeviceMessage {
@@ -75,18 +58,7 @@ pub enum DeviceMessage {
         run_id: u64,
         step: u16,
     },
-    LearnOk {
-        revision: u32,
-    },
-    LearnDirect {
-        gpio: u8,
-        state: InputState,
-    },
-    LearnContact {
-        pin_a: u8,
-        pin_b: u8,
-        state: InputState,
-    },
+
     DisplayOk {
         revision: u32,
     },
@@ -99,60 +71,14 @@ pub enum DeviceMessage {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HelloCapabilities {
-    pub protocol: u16,
-    pub controller_family_id: String,
-    pub board_profile_id: String,
-    pub firmware_build_id: String,
-    pub product_version_id: Option<String>,
-    pub pins: Vec<u8>,
-}
-
-pub fn validate_hello(
-    candidate_board: &BoardProfile,
-    hello: &HelloCapabilities,
-) -> Result<(), AppError> {
-    if !(MIN_SUPPORTED_PROTOCOL_VERSION..=HOST_PROTOCOL_VERSION).contains(&hello.protocol) {
-        return Err(AppError::new("protocol_mismatch")
-            .with_param("expected", HOST_PROTOCOL_VERSION.to_string())
-            .with_param("actual", hello.protocol.to_string()));
-    }
-    if hello.protocol < PRODUCT_DEFINITION_PROTOCOL_VERSION && hello.product_version_id.is_some() {
-        return Err(AppError::new("protocol_mismatch"));
-    }
-    if let Some(product_version_id) = &hello.product_version_id
-        && !crate::product::valid_product_version_id(product_version_id)
-    {
-        return Err(AppError::new("invalid_product_version_id"));
-    }
-    if hello.controller_family_id != candidate_board.family_id {
-        return Err(AppError::new("controller_family_mismatch")
-            .with_param("expected", candidate_board.family_id)
-            .with_param("actual", &hello.controller_family_id));
-    }
-    if !crate::hardware::board_profile_ids_match(&hello.board_profile_id, candidate_board.id) {
-        return Err(AppError::new("board_profile_mismatch")
-            .with_param("expected", candidate_board.id)
-            .with_param("actual", &hello.board_profile_id));
-    }
-    if let Some(pin) = hello
-        .pins
-        .iter()
-        .find(|pin| !candidate_board.safe_pins.contains(pin))
-    {
-        return Err(AppError::new("capability_mismatch").with_param("gpio", pin.to_string()));
-    }
-    Ok(())
-}
+pub(crate) use crate::handshake::{HelloCapabilities, is_hello_line, validate_hello};
 
 pub fn parse_device(line: &str) -> Option<DeviceMessage> {
     if line.len() >= 255 {
         return None;
     }
     if is_hello_line(line) {
-        return parse_hello(line);
+        return crate::handshake::parse_hello(line).map(DeviceMessage::Hello);
     }
     let parts = line.split_whitespace().collect::<Vec<_>>();
     match parts.as_slice() {
@@ -250,21 +176,6 @@ pub fn parse_device(line: &str) -> Option<DeviceMessage> {
             let run_id = run_id.parse().ok()?;
             let step = step.parse().ok()?;
             (run_id > 0 && step > 0).then_some(DeviceMessage::Done { run_id, step })
-        }
-        ["LEARN_OK", revision] => Some(DeviceMessage::LearnOk {
-            revision: revision.parse().ok()?,
-        }),
-        ["LEARN_DIRECT", gpio, state] => Some(DeviceMessage::LearnDirect {
-            gpio: gpio.parse().ok()?,
-            state: parse_state(state)?,
-        }),
-        ["LEARN_CONTACT", pin_a, pin_b, state] => {
-            let (pin_a, pin_b) = normalized_pair(pin_a.parse().ok()?, pin_b.parse().ok()?);
-            Some(DeviceMessage::LearnContact {
-                pin_a,
-                pin_b,
-                state: parse_state(state)?,
-            })
         }
         ["DISPLAY_OK", revision] => Some(DeviceMessage::DisplayOk {
             revision: revision.parse().ok()?,
@@ -394,110 +305,6 @@ fn push_display_line(lines: &mut Vec<String>, line: String) -> Result<(), String
     }
     lines.push(line);
     Ok(())
-}
-
-pub(crate) fn is_hello_line(line: &str) -> bool {
-    line.trim_start_matches(char::is_whitespace)
-        .starts_with("HELLO")
-}
-
-fn parse_hello(line: &str) -> Option<DeviceMessage> {
-    let line = line.strip_suffix('\n').unwrap_or(line);
-    let line = line.strip_suffix('\r').unwrap_or(line);
-    if line.is_empty()
-        || line.starts_with(' ')
-        || line.ends_with(' ')
-        || line
-            .chars()
-            .any(|character| character.is_whitespace() && character != ' ')
-    {
-        return None;
-    }
-    let parts = line.split(' ').collect::<Vec<_>>();
-    if parts.iter().any(|part| part.is_empty()) {
-        return None;
-    }
-    let ["HELLO", protocol, remainder @ ..] = parts.as_slice() else {
-        return None;
-    };
-    let protocol = protocol.parse::<u16>().ok()?;
-    if !(MIN_SUPPORTED_PROTOCOL_VERSION..=HOST_PROTOCOL_VERSION).contains(&protocol) {
-        return None;
-    }
-    let (
-        controller_family_id,
-        board_profile_id,
-        firmware_build_id,
-        product_version_id,
-        count,
-        pins,
-    ) = if protocol >= 9 {
-        let [
-            controller_family_id,
-            board_profile_id,
-            firmware_build_id,
-            product_version_id,
-            count,
-            pins @ ..,
-        ] = remainder
-        else {
-            return None;
-        };
-        let product_version_id =
-            (*product_version_id != "-").then(|| (*product_version_id).to_owned());
-        if product_version_id
-            .as_deref()
-            .is_some_and(|id| !crate::product::valid_product_version_id(id))
-        {
-            return None;
-        }
-        (
-            *controller_family_id,
-            *board_profile_id,
-            *firmware_build_id,
-            product_version_id,
-            *count,
-            pins,
-        )
-    } else {
-        let [
-            controller_family_id,
-            board_profile_id,
-            firmware_build_id,
-            count,
-            pins @ ..,
-        ] = remainder
-        else {
-            return None;
-        };
-        (
-            *controller_family_id,
-            *board_profile_id,
-            *firmware_build_id,
-            None,
-            *count,
-            pins,
-        )
-    };
-    let count = count.parse::<usize>().ok()?;
-    let pins = pins
-        .iter()
-        .map(|pin| pin.parse::<u8>())
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?;
-    (count > 0
-        && count == pins.len()
-        && pins.iter().copied().collect::<BTreeSet<_>>().len() == count)
-        .then(|| {
-            DeviceMessage::Hello(HelloCapabilities {
-                protocol,
-                controller_family_id: controller_family_id.to_owned(),
-                board_profile_id: board_profile_id.to_owned(),
-                firmware_build_id: firmware_build_id.to_owned(),
-                product_version_id,
-                pins,
-            })
-        })
 }
 
 fn valid_sha256(value: &str) -> bool {
@@ -1003,121 +810,6 @@ impl ActionSequence {
 pub enum InputState {
     Down,
     Up,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct EncodedChord {
-    pub modifier_mask: u8,
-    pub keycodes: Vec<u8>,
-}
-
-pub fn encode_hotkey(keys: &[String]) -> Result<EncodedChord, String> {
-    if keys.is_empty() {
-        return Err("empty hotkey".into());
-    }
-
-    let mut modifier_mask = 0;
-    let mut keycodes = BTreeSet::new();
-    for key in keys {
-        let key = key.to_ascii_lowercase();
-        let modifier = match key.as_str() {
-            "primary" if cfg!(target_os = "macos") => Some(0x08),
-            "primary" => Some(0x01),
-            "ctrl" => Some(0x01),
-            "shift" => Some(0x02),
-            "alt" | "option" => Some(0x04),
-            "cmd" => Some(0x08),
-            "left_ctrl" => Some(0x01),
-            "left_shift" => Some(0x02),
-            "left_alt" => Some(0x04),
-            "left_cmd" => Some(0x08),
-            "right_ctrl" => Some(0x10),
-            "right_shift" => Some(0x20),
-            "right_alt" => Some(0x40),
-            "right_cmd" => Some(0x80),
-            _ => None,
-        };
-        if let Some(modifier) = modifier {
-            if modifier_mask & modifier != 0 {
-                return Err(format!("duplicate modifier {key}"));
-            }
-            modifier_mask |= modifier;
-            continue;
-        }
-        let function_key = key
-            .strip_prefix('f')
-            .and_then(|number| number.parse::<u8>().ok())
-            .and_then(|number| match number {
-                1..=12 => Some(0x3a + number - 1),
-                13..=24 => Some(0x68 + number - 13),
-                _ => None,
-            });
-        let numpad_digit = key
-            .strip_prefix("numpad_")
-            .and_then(|number| number.parse::<u8>().ok())
-            .and_then(|number| match number {
-                1..=9 => Some(0x59 + number - 1),
-                0 => Some(0x62),
-                _ => None,
-            });
-        let code = match key.as_bytes() {
-            [letter @ b'a'..=b'z'] => letter - b'a' + 0x04,
-            [digit @ b'1'..=b'9'] => digit - b'1' + 0x1e,
-            b"0" => 0x27,
-            b"enter" => 0x28,
-            b"escape" => 0x29,
-            b"backspace" => 0x2a,
-            b"tab" => 0x2b,
-            b"space" => 0x2c,
-            b"minus" => 0x2d,
-            b"equal" => 0x2e,
-            b"left_bracket" => 0x2f,
-            b"right_bracket" => 0x30,
-            b"backslash" => 0x31,
-            b"semicolon" => 0x33,
-            b"quote" => 0x34,
-            b"backtick" => 0x35,
-            b"comma" => 0x36,
-            b"period" => 0x37,
-            b"slash" => 0x38,
-            b"caps_lock" => 0x39,
-            b"print_screen" => 0x46,
-            b"scroll_lock" => 0x47,
-            b"pause" => 0x48,
-            b"insert" => 0x49,
-            b"home" => 0x4a,
-            b"pageup" | b"page_up" => 0x4b,
-            b"delete" => 0x4c,
-            b"end" => 0x4d,
-            b"pagedown" | b"page_down" => 0x4e,
-            b"right" => 0x4f,
-            b"left" => 0x50,
-            b"down" => 0x51,
-            b"up" => 0x52,
-            b"num_lock" => 0x53,
-            b"numpad_divide" => 0x54,
-            b"numpad_multiply" => 0x55,
-            b"numpad_subtract" => 0x56,
-            b"numpad_add" => 0x57,
-            b"numpad_enter" => 0x58,
-            b"numpad_decimal" => 0x63,
-            b"application" => 0x65,
-            b"numpad_equal" => 0x67,
-            _ if function_key.is_some() => function_key.unwrap(),
-            _ if numpad_digit.is_some() => numpad_digit.unwrap(),
-            _ => return Err(format!("unknown key {key}")),
-        };
-        if !keycodes.insert(code) {
-            return Err(format!("duplicate key {key}"));
-        }
-    }
-    if keycodes.len() > 6 {
-        return Err("too many ordinary keys".into());
-    }
-    Ok(EncodedChord {
-        modifier_mask,
-        keycodes: keycodes.into_iter().collect(),
-    })
 }
 
 pub fn media_usage(command: MediaCommand) -> u16 {
