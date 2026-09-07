@@ -37,18 +37,6 @@ constexpr std::uint16_t kDisplayRotationDegrees = 0;
 constexpr std::array<std::uint8_t, 2> kSsd1306StatusBaselines = {10, 29};
 constexpr std::uint8_t kSsd1306InputBaseline = 20;
 constexpr std::array<std::uint8_t, 4> kSh1106LocalBaselines = {12, 28, 44, 60};
-constexpr std::uint8_t kUsageTitleX = 0;
-constexpr std::uint8_t kUsageTitleY = 3;
-constexpr std::uint8_t kUsageCostX = 10;
-constexpr std::uint8_t kUsageCostY = 17;
-constexpr std::uint8_t kUsageCostScale = 3;
-constexpr std::uint8_t kUsageFallbackCostScale = 2;
-constexpr std::uint8_t kUsageTokensX = 9;
-constexpr std::uint8_t kUsageTokensY = 54;
-constexpr std::uint8_t kUsageTpmX = 73;
-constexpr std::uint8_t kUsageTpmY = 54;
-constexpr std::uint8_t kUsageDividerY = 48;
-constexpr std::uint8_t kUsageSmallTextHeight = 7;
 constexpr std::uint8_t kDisplayBrightnessMagic = 0x4B;
 constexpr std::uint8_t kMinimumDisplayBrightnessPercent = 5;
 constexpr std::uint8_t kMaximumDisplayBrightnessPercent = 100;
@@ -323,157 +311,16 @@ void setDisplayBrightness(std::uint8_t percent) {
   display->setContrast(contrast);
 }
 
-struct UsageCostGlyph {
-  char character;
-  std::array<std::uint8_t, 7> rows;
-};
-
-constexpr std::array<UsageCostGlyph, 13> kUsageCostGlyphs = {{
-    {'$', {14, 20, 20, 14, 5, 5, 14}},
-    {'.', {0, 0, 0, 0, 0, 12, 12}},
-    {'+', {4, 4, 31, 4, 4, 0, 0}},
-    {'0', {14, 17, 19, 21, 25, 17, 14}},
-    {'1', {4, 12, 4, 4, 4, 4, 14}},
-    {'2', {14, 17, 1, 2, 4, 8, 31}},
-    {'3', {30, 1, 1, 14, 1, 1, 30}},
-    {'4', {2, 6, 10, 18, 31, 2, 2}},
-    {'5', {31, 16, 16, 30, 1, 1, 30}},
-    {'6', {14, 16, 16, 30, 17, 17, 14}},
-    {'7', {31, 1, 2, 4, 8, 8, 8}},
-    {'8', {14, 17, 17, 14, 17, 17, 14}},
-    {'9', {14, 17, 17, 15, 1, 1, 14}},
-}};
-
-const UsageCostGlyph *usageCostGlyph(char character) {
-  const auto found = std::find_if(
-      kUsageCostGlyphs.begin(), kUsageCostGlyphs.end(),
-      [character](const UsageCostGlyph &glyph) {
-        return glyph.character == character;
-      });
-  return found == kUsageCostGlyphs.end() ? nullptr : &*found;
-}
-
-std::uint16_t usageCostWidth(const std::string &text, std::uint8_t scale) {
-  if (text.empty()) return 0;
-  return static_cast<std::uint16_t>(text.size() * 6U * scale - scale);
-}
-
-std::uint8_t usageCostScale(const std::string &text) {
-  return usageCostWidth(text, kUsageCostScale) <= kDisplayWidth - kUsageCostX
-             ? kUsageCostScale
-             : kUsageFallbackCostScale;
-}
-
-void drawUsageCost(const std::string &text, std::uint8_t scale) {
-  std::uint16_t x = kUsageCostX;
-  for (const auto character : text) {
-    const auto *glyph = usageCostGlyph(character);
-    if (glyph) {
-      for (std::size_t row = 0; row < glyph->rows.size(); ++row) {
-        for (std::uint8_t column = 0; column < 5; ++column) {
-          if ((glyph->rows[row] & (1U << (4U - column))) != 0) {
-            display->drawBox(x + column * scale,
-                             kUsageCostY + row * scale, scale, scale);
-          }
-        }
-      }
-    }
-    x += 6U * scale;
-  }
-}
-
-void redrawUsageText(std::uint8_t x, std::uint8_t y,
-                     const std::string &previousText,
-                     const std::string &nextText) {
-  display->setFont(u8g2_font_5x7_tf);
-  display->setFontPosTop();
-  const auto previousWidth = display->getStrWidth(previousText.c_str());
-  const auto nextWidth = display->getStrWidth(nextText.c_str());
-  const DisplayRect bounds{
-      x, y,
-      static_cast<std::uint16_t>(
-          std::min<std::uint16_t>(kDisplayWidth - x,
-                                  std::max(previousWidth, nextWidth))),
-      kUsageSmallTextHeight};
-
-  display->setDrawColor(0);
-  display->drawBox(bounds.x, bounds.y, bounds.width, bounds.height);
-  display->setDrawColor(1);
-  display->drawStr(x, y, nextText.c_str());
-  dirtyTiles.markPixels(bounds);
-}
-
-void redrawUsageCost(const std::string &previousText,
-                     const std::string &nextText) {
-  const auto previousScale = usageCostScale(previousText);
-  const auto nextScale = usageCostScale(nextText);
-  const DisplayRect bounds{
-      kUsageCostX, kUsageCostY,
-      static_cast<std::uint16_t>(std::min<std::uint16_t>(
-          kDisplayWidth - kUsageCostX,
-          std::max(usageCostWidth(previousText, previousScale),
-                   usageCostWidth(nextText, nextScale)))),
-      static_cast<std::uint16_t>(7U * std::max(previousScale, nextScale))};
-  display->setDrawColor(0);
-  display->drawBox(bounds.x, bounds.y, bounds.width, bounds.height);
-  display->setDrawColor(1);
-  drawUsageCost(nextText, nextScale);
-  dirtyTiles.markPixels(bounds);
-}
-
-void renderUsageChanges(const DisplayFrame &previous,
-                        const DisplayFrame &next,
-                        std::uint8_t changedLines) {
-  if ((changedLines & 0x01U) != 0) {
-    redrawUsageText(kUsageTitleX, kUsageTitleY, previous.lines[0],
-                    next.lines[0]);
-  }
-  if ((changedLines & 0x02U) != 0) {
-    redrawUsageCost(previous.lines[1], next.lines[1]);
-  }
-  if ((changedLines & 0x04U) != 0) {
-    redrawUsageText(kUsageTokensX, kUsageTokensY,
-                    "TOK " + previous.lines[2],
-                    "TOK " + next.lines[2]);
-  }
-  if ((changedLines & 0x08U) != 0) {
-    redrawUsageText(kUsageTpmX, kUsageTpmY,
-                    "TPM " + previous.lines[3],
-                    "TPM " + next.lines[3]);
-  }
-}
-
 bool renderLocalDisplay(const DisplayFrame &frame) {
   if (!display || !displayHealthy) return !displayRequested;
   if (displayBufferSource == DisplayBufferSource::Local &&
       lastDisplayFrame.has_value() && *lastDisplayFrame == frame) {
     return true;
   }
-  if (displayDriver == OledDriver::Sh1106 &&
-      frame.layout == DisplayFrameLayout::UsageEmphasis &&
-      displayBufferSource == DisplayBufferSource::Local &&
-      lastDisplayFrame.has_value() &&
-      lastDisplayFrame->layout == DisplayFrameLayout::UsageEmphasis) {
-    renderUsageChanges(*lastDisplayFrame, frame,
-                       changedDisplayFrameLines(*lastDisplayFrame, frame));
-    lastDisplayFrame = frame;
-    return true;
-  }
   display->setFont(u8g2_font_6x13_tf);
   display->setFontPosBaseline();
   display->clearBuffer();
-  if (displayDriver == OledDriver::Sh1106 &&
-      frame.layout == DisplayFrameLayout::UsageEmphasis) {
-    display->setFont(u8g2_font_5x7_tf);
-    display->setFontPosTop();
-    display->drawStr(kUsageTitleX, kUsageTitleY, frame.lines[0].c_str());
-    drawUsageCost(frame.lines[1], usageCostScale(frame.lines[1]));
-    display->drawHLine(0, kUsageDividerY, kDisplayWidth);
-    const std::string tokens = "TOK " + frame.lines[2];
-    const std::string tpm = "TPM " + frame.lines[3];
-    display->drawStr(kUsageTokensX, kUsageTokensY, tokens.c_str());
-    display->drawStr(kUsageTpmX, kUsageTpmY, tpm.c_str());
-  } else if (displayDriver == OledDriver::Sh1106) {
+  if (displayDriver == OledDriver::Sh1106) {
     for (std::size_t index = 0; index < kSh1106LocalBaselines.size(); ++index) {
       display->drawStr(0, kSh1106LocalBaselines[index],
                        frame.lines[index].c_str());

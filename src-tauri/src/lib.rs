@@ -20,7 +20,6 @@ mod studio;
 mod tray;
 #[allow(dead_code)]
 mod trigger;
-mod usage;
 mod workspace;
 
 use coordinator::{
@@ -47,7 +46,6 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{Emitter, Manager};
-use usage::{UsageService, UsageSettingsPatch, UsageSnapshot, UsageView};
 use workspace::{
     AppError, AssignmentResolution, BackupPreview, CreateProductConfigurationRequest,
     DuplicateProfileForDeviceRequest, EditorSettingsPatch, ImportPreview, Language,
@@ -209,11 +207,9 @@ struct AppState {
     metrics: Option<Arc<MetricsStore>>,
     coordinator: Option<Arc<Mutex<RuntimeCoordinator>>>,
     paste: Option<Arc<PasteCoordinator>>,
-    usage: Option<Arc<UsageService>>,
     stop: Arc<AtomicBool>,
     scan_requested: Arc<AtomicBool>,
     display_thread: Mutex<Option<JoinHandle<()>>>,
-    usage_thread: Mutex<Option<JoinHandle<()>>>,
     coordinator_thread: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -228,7 +224,6 @@ struct AppSnapshot {
     candidates: Vec<CandidateStatus>,
     language: Language,
     home_metrics: Option<HomeMetricsSnapshot>,
-    usage: Option<UsageView>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -335,7 +330,6 @@ fn snapshot(state: &AppState) -> Result<AppSnapshot, AppError> {
             .as_deref()
             .and_then(|profile_id| metrics.home_snapshot(profile_id, None, now_ms()).ok())
     });
-    let usage = state.usage.as_ref().map(|usage| usage.view());
     Ok(AppSnapshot {
         device_profiles,
         product_configurations,
@@ -348,7 +342,6 @@ fn snapshot(state: &AppState) -> Result<AppSnapshot, AppError> {
         candidates,
         language,
         home_metrics,
-        usage,
     })
 }
 
@@ -467,18 +460,6 @@ fn save_settings_inner(
     settings: EditorSettingsPatch,
 ) -> Result<AppSnapshot, AppError> {
     mutate_workspace(state, move |workspace, _| workspace.save_settings(settings))
-}
-
-fn save_usage_settings_inner(
-    state: &AppState,
-    settings: UsageSettingsPatch,
-) -> Result<AppSnapshot, AppError> {
-    state
-        .usage
-        .as_ref()
-        .ok_or_else(|| state_error("usage_service_unavailable"))?
-        .save(settings)?;
-    snapshot(state)
 }
 
 fn import_profile_inner(state: &AppState, path: &Path) -> Result<AppSnapshot, AppError> {
@@ -920,22 +901,6 @@ fn save_settings(
 }
 
 #[tauri::command]
-fn save_usage_settings(
-    state: tauri::State<'_, AppState>,
-    settings: UsageSettingsPatch,
-) -> Result<AppSnapshot, AppError> {
-    let context = serde_json::json!({
-        "enabled": settings.enabled,
-        "baseUrl": settings.base_url,
-        "email": settings.email,
-        "intervalSeconds": settings.interval_seconds,
-    });
-    runtime_log::operation(now_ms(), "usage_settings_saved", context, || {
-        save_usage_settings_inner(&state, settings)
-    })
-}
-
-#[tauri::command]
 fn rename_device(
     state: tauri::State<'_, AppState>,
     device_id: hardware::DeviceId,
@@ -1304,18 +1269,10 @@ pub fn run() {
                     )));
                 let stop = Arc::new(AtomicBool::new(false));
                 let scan_requested = Arc::new(AtomicBool::new(false));
-                let (usage_snapshot_sender, usage_snapshots) =
-                    mpsc::channel::<Arc<UsageSnapshot>>();
-                let (usage, usage_thread) = UsageService::spawn(
-                    &app_data_directory,
-                    Arc::clone(&stop),
-                    usage_snapshot_sender,
-                )?;
                 let display_thread =
                     DisplayService::spawn(providers, Arc::clone(&stop), display_snapshot_sender)?;
                 let coordinator_thread = {
                     let coordinator = Arc::clone(&coordinator);
-                    let usage = Arc::clone(&usage);
                     let workspace = Arc::clone(&workspace);
                     let metrics = metrics.clone();
                     let stop = Arc::clone(&stop);
@@ -1325,7 +1282,6 @@ pub fn run() {
                         let _stop_on_drop = StopOnDrop::new(Arc::clone(&stop));
                         let mut scanner = BackgroundDeviceScanner::new(enumerator);
                         let mut log_inventory = runtime_log::DeviceLogInventory::default();
-                        let mut usage_active = false;
                         while !stop.load(Ordering::Relaxed) {
                             if scan_requested.swap(false, Ordering::Relaxed) {
                                 scanner.request_scan();
@@ -1365,26 +1321,11 @@ pub fn run() {
                                 runtime_log::emit_runtime_event(&payload);
                                 let _ = app_handle.emit("runtime-event", payload);
                             }
-                            let usage_requested = coordinator
-                                .lock()
-                                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                .usage_requested();
-                            if usage_requested != usage_active
-                                && usage.set_active(usage_requested).is_ok()
-                            {
-                                usage_active = usage_requested;
-                            }
                             if let Some(snapshot) = newest_display_snapshot(&display_snapshots) {
                                 coordinator
                                     .lock()
                                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                                     .update_display(snapshot);
-                            }
-                            if let Some(snapshot) = usage_snapshots.try_iter().last() {
-                                coordinator
-                                    .lock()
-                                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                    .update_usage(Arc::clone(&snapshot));
                             }
                             thread::sleep(RUNTIME_EVENT_POLL_INTERVAL);
                         }
@@ -1400,11 +1341,9 @@ pub fn run() {
                     metrics,
                     coordinator: Some(coordinator),
                     paste: Some(paste),
-                    usage: Some(usage),
                     stop,
                     scan_requested,
                     display_thread: Mutex::new(Some(display_thread)),
-                    usage_thread: Mutex::new(Some(usage_thread)),
                     coordinator_thread: Mutex::new(Some(coordinator_thread)),
                 });
                 runtime_log::emit_lifecycle(runtime_log::RuntimeLogEntry::new(
@@ -1428,7 +1367,6 @@ pub fn run() {
         create_device_profile,
         duplicate_profile_for_device,
         save_settings,
-        save_usage_settings,
         rename_device,
         save_product_configuration,
         select_product_configuration,
@@ -1458,7 +1396,6 @@ pub fn run() {
         create_device_profile,
         duplicate_profile_for_device,
         save_settings,
-        save_usage_settings,
         rename_device,
         save_product_configuration,
         select_product_configuration,
@@ -1547,14 +1484,6 @@ pub fn run() {
                     .take()
                 {
                     let _ = display.join();
-                }
-                if let Some(usage) = state
-                    .usage_thread
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .take()
-                {
-                    let _ = usage.join();
                 }
                 if let Some(coordinator) = state
                     .coordinator_thread
@@ -1984,11 +1913,9 @@ mod tests {
                 .map(Arc::new),
             coordinator: None,
             paste: None,
-            usage: None,
             stop: Arc::new(AtomicBool::new(false)),
             scan_requested: Arc::new(AtomicBool::new(false)),
             display_thread: Mutex::new(None),
-            usage_thread: Mutex::new(None),
             coordinator_thread: Mutex::new(None),
         }
     }

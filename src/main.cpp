@@ -35,7 +35,6 @@ DisplayController displayController;
 OledControlPanel oledControlPanel;
 std::optional<RemoteDisplay> remoteDisplay{std::in_place};
 bool helperConnected = false;
-bool usageViewSubscribed = false;
 bool standaloneDisplayPending = false;
 std::uint32_t standaloneDisplayStartedMs = 0;
 
@@ -54,17 +53,8 @@ void writeLine(const std::string &line) {
   platform::flush();
 }
 
-void writeUsageViewState() {
-  writeLine(oledControlPanel.usageActive() ? "USAGE_VIEW 1\n"
-                                           : "USAGE_VIEW 0\n");
-}
-
 void resetOledControlPanel() {
-  const bool usageWasActive = oledControlPanel.usageActive();
   oledControlPanel.reset();
-  if (usageWasActive && helperConnected && usageViewSubscribed) {
-    writeUsageViewState();
-  }
 }
 
 std::string encodeBase64(const std::uint8_t *data, std::size_t length) {
@@ -352,19 +342,6 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
       writeLine("CONFIG_OK " + std::to_string(command->revision) + "\n");
       return;
     }
-    case HelperCommandKind::UsageView:
-      usageViewSubscribed = true;
-      writeUsageViewState();
-      return;
-    case HelperCommandKind::Usage:
-      oledControlPanel.setUsageSnapshot(OledUsageSnapshot{
-          static_cast<OledUsageState>(command->usageState),
-          command->usageCostMicros,
-          command->usageTodayTokens,
-          command->usageTpm,
-      });
-      if (oledControlPanel.usageActive()) showControlPanel();
-      return;
     case HelperCommandKind::DisplayBegin:
     case HelperCommandKind::DisplayRegion:
     case HelperCommandKind::DisplayClear:
@@ -533,13 +510,8 @@ void scanOledControlPanel(std::uint32_t nowMs) {
       digitalRead(panel->encoderB) == HIGH,
       digitalRead(panel->back) == LOW,
   };
-  const bool usageWasActive = oledControlPanel.usageActive();
   const auto update = oledControlPanel.update(
       sample, nowMs, controller.topology().debounceMs);
-  if (usageWasActive != oledControlPanel.usageActive() && helperConnected &&
-      usageViewSubscribed) {
-    writeUsageViewState();
-  }
   switch (update) {
     case OledControlPanelUpdate::Render:
       showControlPanel();
@@ -634,7 +606,6 @@ void loop() {
     actionRuns.reset();
     resetHelperInput();
     remoteDisplay.emplace();
-    usageViewSubscribed = false;
     platform::resetRemoteDisplay();
     displayStatus.setUsbConnected(connected);
     if (connected) {

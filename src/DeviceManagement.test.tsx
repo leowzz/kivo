@@ -270,6 +270,16 @@ test("switches Product Device configurations by Product Version and creates from
   expect(onCreateProductConfiguration).toHaveBeenCalledWith({
     deviceId: "rp-a",
     name: "会议配置",
+    copyCurrent: false,
+  });
+
+  await user.selectOptions(selector, "__duplicate__");
+  const dialog = screen.getByRole("dialog", { name: "复制当前配置" });
+  expect(within(dialog).getByLabelText("配置名称")).toHaveValue("默认配置 副本");
+  await user.click(within(dialog).getByRole("button", { name: "创建配置" }));
+  expect(onCreateProductConfiguration).toHaveBeenLastCalledWith({
+    deviceId: "rp-a",
+    name: "默认配置 副本",
     copyCurrent: true,
   });
 });
@@ -906,4 +916,25 @@ test("shows a persistent shared configuration warning with save action", async (
   await openAdvanced(user);
   await user.click(screen.getByRole("tab", { name: "高级 I/O" }));
   expect(screen.getByRole("button", { name: "保存共享配置" })).toBeInTheDocument();
+});
+
+test("duplicates a legacy device configuration from its selector and retains errors for retry", async () => {
+  const user = userEvent.setup();
+  const onDuplicateProfileForDevice = vi.fn().mockRejectedValueOnce(new Error("copy_failed")).mockResolvedValue(undefined);
+  renderManagement({ studioMode: false, onDuplicateProfileForDevice });
+  await user.selectOptions(screen.getByRole("combobox", { name: "使用配置" }), "__duplicate__");
+  const dialog = screen.getByRole("dialog", { name: "复制当前配置" });
+  const name = within(dialog).getByLabelText("配置名称");
+  expect(name).toHaveValue("Counter Profile 副本");
+  await user.clear(name);
+  expect(within(dialog).getByRole("button", { name: "创建配置" })).toBeDisabled();
+  await user.type(name, "My copy");
+  await user.click(within(dialog).getByRole("button", { name: "创建配置" }));
+  expect(onDuplicateProfileForDevice).toHaveBeenCalledWith({
+    deviceId: "rp-a", sourceProfile: profiles[0], name: "My copy",
+  });
+  expect(screen.getByRole("dialog", { name: "复制当前配置" })).toBeInTheDocument();
+  expect(screen.getByText("copy_failed")).toBeInTheDocument();
+  await user.click(within(dialog).getByRole("button", { name: "创建配置" }));
+  expect(screen.queryByRole("dialog", { name: "复制当前配置" })).not.toBeInTheDocument();
 });

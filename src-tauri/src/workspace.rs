@@ -4646,6 +4646,7 @@ actions: {}
             Some(shared_id.as_str())
         );
         let mut shared = workspace.settings.product_configurations[&shared_id].clone();
+        shared.trigger_settings.long_press_ms = 750;
         shared.actions = BTreeMap::from([(
             "A".into(),
             TriggerActions::press(vec![ButtonAction::Delay { duration_ms: 25 }]),
@@ -4657,6 +4658,35 @@ actions: {}
             workspace
                 .settings
                 .product_configuration_for_device(workspace.device(&second).unwrap())
+                .unwrap()
+                .actions,
+            shared.actions,
+        );
+
+        workspace
+            .create_product_configuration(CreateProductConfigurationRequest {
+                device_id: second.clone(),
+                name: "Copy".into(),
+                copy_current: true,
+            })
+            .unwrap();
+        let mut copied = workspace
+            .settings
+            .product_configuration_for_device(workspace.device(&second).unwrap())
+            .unwrap()
+            .clone();
+        assert_ne!(copied.id, shared_id);
+        assert_eq!(copied.name, "Copy");
+        assert_eq!(copied.actions, shared.actions);
+        assert_eq!(copied.trigger_settings, shared.trigger_settings);
+        copied.actions.clear();
+        workspace
+            .save_product_configuration(&second, &definition, copied)
+            .unwrap();
+        assert_eq!(
+            workspace
+                .settings
+                .product_configuration_for_device(workspace.device(&first).unwrap())
                 .unwrap()
                 .actions,
             shared.actions,

@@ -555,15 +555,23 @@ export function DeviceManagement({
     }
   };
   const createProductConfiguration = async () => {
-    if (!selectedDevice || !productConfigurationName.trim() || !onCreateProductConfiguration) return;
+    if (!selectedDevice || !productConfigurationName.trim() || (isProductDevice ? !onCreateProductConfiguration : !editingProfile || !onDuplicateProfileForDevice)) return;
     setProductConfigurationSaving(true);
     setError(null);
     try {
-      await onCreateProductConfiguration({
-        deviceId: selectedDevice.deviceId,
-        name: productConfigurationName.trim(),
-        copyCurrent: copyCurrentProductConfiguration,
-      });
+      if (isProductDevice) {
+        await onCreateProductConfiguration!({
+          deviceId: selectedDevice.deviceId,
+          name: productConfigurationName.trim(),
+          copyCurrent: copyCurrentProductConfiguration,
+        });
+      } else if (editingProfile) {
+        await onDuplicateProfileForDevice!({
+          deviceId: selectedDevice.deviceId,
+          sourceProfile: editingProfile,
+          name: productConfigurationName.trim(),
+        });
+      }
       setProductConfigurationCreating(false);
       setProductConfigurationName("");
     } catch (reason) {
@@ -646,10 +654,16 @@ export function DeviceManagement({
     }
   };
   const selectTitleConfiguration = (value: string) => {
+    if (value === "__duplicate__" && editingProfile) {
+      setProductConfigurationName(t(language, "productConfiguration.copyName", { name: selectedDevice?.productConfig?.name ?? editingProfile.profile.name }));
+      setCopyCurrentProductConfiguration(true);
+      setProductConfigurationCreating(true);
+      return;
+    }
     if (value === "__create__") {
       if (selectedDevice?.productVersionId) {
         setProductConfigurationName("");
-        setCopyCurrentProductConfiguration(true);
+        setCopyCurrentProductConfiguration(false);
         setProductConfigurationCreating(true);
       } else {
         onCreateFromTemplate?.(editingProfile?.profile.id ?? "");
@@ -925,6 +939,7 @@ export function DeviceManagement({
                       .map((configuration) => (
                         <option key={configuration.id} value={configuration.id}>{configuration.name}</option>
                       ))}
+                    {editingProfile && <option value="__duplicate__">{t(language, "productConfiguration.duplicate")}</option>}
                     <option value="__create__">+ {t(language, "profile.create")}</option>
                   </select>
                   {sharedDeviceCount > 1 && selectedDevice.productVersionId && (
@@ -1216,7 +1231,7 @@ export function DeviceManagement({
             aria-labelledby="product-configuration-create-title"
           >
             <header>
-              <h2 id="product-configuration-create-title">{t(language, "productConfiguration.create")}</h2>
+              <h2 id="product-configuration-create-title">{t(language, copyCurrentProductConfiguration ? "productConfiguration.duplicate" : "productConfiguration.create")}</h2>
               <button
                 className="icon-button"
                 type="button"
@@ -1238,16 +1253,7 @@ export function DeviceManagement({
                   onChange={(event) => setProductConfigurationName(event.target.value)}
                 />
               </label>
-              <label className="product-configuration-copy-option">
-                <input
-                  type="checkbox"
-                  checked={copyCurrentProductConfiguration}
-                  disabled={productConfigurationSaving}
-                  onChange={(event) => setCopyCurrentProductConfiguration(event.target.checked)}
-                />
-                <span>{t(language, "productConfiguration.copyCurrent")}</span>
-              </label>
-              <p>{t(language, "productConfiguration.scope")}</p>
+              <p>{t(language, isProductDevice ? "productConfiguration.scope" : "settings.duplicateHint")}</p>
               <footer>
                 <button type="button" disabled={productConfigurationSaving} onClick={() => setProductConfigurationCreating(false)}>
                   {t(language, "common.cancel")}

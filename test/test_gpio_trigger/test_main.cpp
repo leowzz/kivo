@@ -116,19 +116,6 @@ void test_rotated_or_unsupported_panel_requests_full_refresh() {
   TEST_ASSERT_EQUAL(RefreshMode::Tiles, selectRefreshMode(true, 0));
 }
 
-void test_usage_frame_diff_marks_only_changed_values_and_layout_transitions() {
-  DisplayFrame before{{"SUB2API", "$1.00", "10K", "2K"},
-                      DisplayFrameLayout::UsageEmphasis};
-  auto tokensChanged = before;
-  tokensChanged.lines[2] = "11K";
-
-  TEST_ASSERT_EQUAL_HEX8(0x04,
-                         changedDisplayFrameLines(before, tokensChanged));
-
-  auto rows = tokensChanged;
-  rows.layout = DisplayFrameLayout::Rows;
-  TEST_ASSERT_EQUAL_HEX8(0x0F, changedDisplayFrameLines(tokensChanged, rows));
-}
 
 GpioTriggerController directController(std::uint32_t startMs) {
   TopologyBuilder builder(kYdEsp32S3);
@@ -466,12 +453,10 @@ void test_oled_control_panel_navigates_status_and_back_to_live_view() {
   panel.update(sample, 12, 10);
   panel.update(sample, 22, 10);
   std::uint32_t nowMs = 22;
-  for (int step = 0; step < 2; ++step) {
-    TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
-                      rotateOledEncoder(panel, sample, nowMs, true));
-  }
+  TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
+                    rotateOledEncoder(panel, sample, nowMs, true));
   TEST_ASSERT_EQUAL_STRING("> SYSTEM STATUS",
-                           panel.frame(status).lines[3].c_str());
+                           panel.frame(status).lines[2].c_str());
 
   sample.confirmPressed = true;
   panel.update(sample, nowMs + 20, 10);
@@ -510,7 +495,7 @@ void test_oled_control_panel_opens_on_encoder_rotation_when_closed() {
                     rotateOledEncoder(panel, sample, nowMs, true));
   TEST_ASSERT_TRUE(panel.active());
   TEST_ASSERT_EQUAL_STRING("  LIVE VIEW", panel.frame(DisplayFrame{}).lines[1].c_str());
-  TEST_ASSERT_EQUAL_STRING("> SUB2API", panel.frame(DisplayFrame{}).lines[2].c_str());
+  TEST_ASSERT_EQUAL_STRING("> SYSTEM STATUS", panel.frame(DisplayFrame{}).lines[2].c_str());
 }
 
 void test_oled_control_panel_ignores_push_noise_during_encoder_rotation() {
@@ -545,7 +530,7 @@ void test_oled_control_panel_ignores_push_noise_during_encoder_rotation() {
   TEST_ASSERT_EQUAL(OledControlPanelUpdate::None,
                     panel.update(sample, nowMs, 10));
   TEST_ASSERT_TRUE(panel.active());
-  TEST_ASSERT_EQUAL_STRING("> SUB2API",
+  TEST_ASSERT_EQUAL_STRING("> SYSTEM STATUS",
                            panel.frame(DisplayFrame{}).lines[2].c_str());
 }
 
@@ -573,40 +558,6 @@ OledControlPanelUpdate rotateOledEncoder(OledControlPanel &panel,
   return panel.update(sample, ++nowMs, 10);
 }
 
-void test_oled_control_panel_renders_cost_token_and_tpm_on_sub2api_page() {
-  const OledUsageSnapshot usage{OledUsageState::Stale, 12345678ULL,
-                                1234567ULL, 98765ULL};
-  OledControlPanel panel;
-  OledControlPanelSample sample;
-  std::uint32_t nowMs = 0;
-  panel.setUsageSnapshot(usage);
-  TEST_ASSERT_FALSE(panel.usageActive());
-  panel.update(sample, nowMs, 10);
-  sample.encoderPressed = true;
-  panel.update(sample, ++nowMs, 10);
-  nowMs += 10;
-  panel.update(sample, nowMs, 10);
-  sample.encoderPressed = false;
-  panel.update(sample, ++nowMs, 10);
-  nowMs += 10;
-  panel.update(sample, nowMs, 10);
-  rotateOledEncoder(panel, sample, nowMs, true);
-  nowMs += 20;
-  sample.confirmPressed = true;
-  panel.update(sample, ++nowMs, 10);
-  nowMs += 10;
-  panel.update(sample, nowMs, 10);
-  TEST_ASSERT_TRUE(panel.usageActive());
-
-  const auto frame = panel.frame(DisplayFrame{});
-  TEST_ASSERT_EQUAL(DisplayFrameLayout::UsageEmphasis, frame.layout);
-  TEST_ASSERT_EQUAL_STRING("SUB2API / STALE", frame.lines[0].c_str());
-  TEST_ASSERT_EQUAL_STRING("$12.35", frame.lines[1].c_str());
-  TEST_ASSERT_EQUAL_STRING("1M", frame.lines[2].c_str());
-  TEST_ASSERT_EQUAL_STRING("98K", frame.lines[3].c_str());
-  panel.reset();
-  TEST_ASSERT_FALSE(panel.usageActive());
-}
 
 void test_oled_control_panel_adjusts_brightness_with_the_encoder() {
   OledControlPanel panel;
@@ -625,7 +576,7 @@ void test_oled_control_panel_adjusts_brightness_with_the_encoder() {
   nowMs += 10;
   panel.update(sample, nowMs, 10);
 
-  for (int step = 0; step < 4; ++step) {
+  for (int step = 0; step < 3; ++step) {
     TEST_ASSERT_EQUAL(OledControlPanelUpdate::Render,
                       rotateOledEncoder(panel, sample, nowMs, true));
   }
@@ -1303,23 +1254,7 @@ void test_parses_runtime_configuration_commands() {
   TEST_ASSERT_TRUE(commit.has_value());
   TEST_ASSERT_EQUAL(HelperCommandKind::ConfigCommit, commit->kind);
 
-  const auto usage = parseHelperCommand(
-      "USAGE 3 18446744073709551615 1234567890123 987654321\n");
-  TEST_ASSERT_TRUE(usage.has_value());
-  TEST_ASSERT_EQUAL(HelperCommandKind::Usage, usage->kind);
-  TEST_ASSERT_EQUAL_UINT8(3, usage->usageState);
-  TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, usage->usageCostMicros);
-  TEST_ASSERT_EQUAL_UINT64(1234567890123ULL, usage->usageTodayTokens);
-  TEST_ASSERT_EQUAL_UINT64(987654321ULL, usage->usageTpm);
-  TEST_ASSERT_FALSE(parseHelperCommand("USAGE 8 1 2 3\n").has_value());
-  TEST_ASSERT_FALSE(parseHelperCommand(
-                        "USAGE 2 18446744073709551616 2 3\n")
-                        .has_value());
 
-  const auto usageView = parseHelperCommand("USAGE_VIEW\n");
-  TEST_ASSERT_TRUE(usageView.has_value());
-  TEST_ASSERT_EQUAL(HelperCommandKind::UsageView, usageView->kind);
-  TEST_ASSERT_FALSE(parseHelperCommand("USAGE_VIEW 1\n").has_value());
 }
 
 void test_oled_configuration_requires_supported_distinct_safe_pins() {
@@ -2130,8 +2065,6 @@ int main(int, char **) {
   RUN_TEST(test_dirty_tiles_round_outward_clip_and_stay_within_one_row);
   RUN_TEST(test_dirty_tiles_reject_sub_tile_budget_and_clear_explicitly);
   RUN_TEST(test_rotated_or_unsupported_panel_requests_full_refresh);
-  RUN_TEST(
-      test_usage_frame_diff_marks_only_changed_values_and_layout_transitions);
   RUN_TEST(test_startup_stays_local_until_first_full_remote_scene);
   RUN_TEST(test_startup_refresh_does_not_demote_remote_or_critical_content);
   RUN_TEST(test_display_reconfiguration_redraws_the_current_visible_source);
@@ -2147,7 +2080,6 @@ int main(int, char **) {
   RUN_TEST(test_oled_control_panel_navigates_status_and_back_to_live_view);
   RUN_TEST(test_oled_control_panel_opens_on_encoder_rotation_when_closed);
   RUN_TEST(test_oled_control_panel_ignores_push_noise_during_encoder_rotation);
-  RUN_TEST(test_oled_control_panel_renders_cost_token_and_tpm_on_sub2api_page);
   RUN_TEST(test_oled_control_panel_adjusts_brightness_with_the_encoder);
   RUN_TEST(test_oled_control_panel_clamps_loaded_brightness);
   RUN_TEST(test_display_transaction_commits_atomically);

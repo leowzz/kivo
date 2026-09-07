@@ -4,7 +4,6 @@ use crate::{
     display::{DrawOperation, SceneMode, SceneUpdate},
     hardware::{BoardProfile, board_by_id},
     profile::{ActionTrigger, ButtonAction, HardwareProfile, InputSource, MediaCommand},
-    usage::UsageSnapshot,
     workspace::AppError,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -18,8 +17,6 @@ pub const ACTION_RUN_PROTOCOL_VERSION: u16 = 6;
 pub const OLED_PROTOCOL_VERSION: u16 = 4;
 pub const SH1106_PROTOCOL_VERSION: u16 = 11;
 pub const OLED_CONTROL_PANEL_PROTOCOL_VERSION: u16 = 10;
-pub const USAGE_PROTOCOL_VERSION: u16 = 12;
-pub const USAGE_VIEW_PROTOCOL_VERSION: u16 = 13;
 pub const ADVANCED_ACTION_PROTOCOL_VERSION: u16 = 5;
 const PRODUCT_DEFINITION_PROTOCOL_VERSION: u16 = 9;
 const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 3;
@@ -99,9 +96,6 @@ pub enum DeviceMessage {
     DisplayError {
         revision: u32,
         code: String,
-    },
-    UsageView {
-        active: bool,
     },
 }
 
@@ -282,8 +276,6 @@ pub fn parse_device(line: &str) -> Option<DeviceMessage> {
             revision: revision.parse().ok()?,
             code: (*code).to_owned(),
         }),
-        ["USAGE_VIEW", "0"] => Some(DeviceMessage::UsageView { active: false }),
-        ["USAGE_VIEW", "1"] => Some(DeviceMessage::UsageView { active: true }),
         _ => None,
     }
 }
@@ -394,18 +386,6 @@ pub(crate) fn display_commands(update: &SceneUpdate) -> Result<Vec<String>, Stri
         format!("DISPLAY_COMMIT {}\n", update.new_revision),
     )?;
     Ok(lines)
-}
-
-pub(crate) fn usage_command(snapshot: &UsageSnapshot) -> String {
-    let (cost_micros, today_tokens, tpm) = if snapshot.has_data {
-        (snapshot.cost_micros, snapshot.today_tokens, snapshot.tpm)
-    } else {
-        (0, 0, 0)
-    };
-    format!(
-        "USAGE {} {cost_micros} {today_tokens} {tpm}\n",
-        snapshot.state.protocol_code()
-    )
 }
 
 fn push_display_line(lines: &mut Vec<String>, line: String) -> Result<(), String> {
@@ -1317,20 +1297,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_sub2api_view_state() {
-        assert_eq!(
-            parse_device("USAGE_VIEW 1\n"),
-            Some(DeviceMessage::UsageView { active: true })
-        );
-        assert_eq!(
-            parse_device("USAGE_VIEW 0\n"),
-            Some(DeviceMessage::UsageView { active: false })
-        );
-        assert!(parse_device("USAGE_VIEW 2\n").is_none());
-        assert!(parse_device("USAGE_VIEW 1 trailing\n").is_none());
-    }
-
-    #[test]
     fn rejects_display_region_and_operation_count_overflow() {
         let mut too_many_regions = display_update(2, 1, SceneMode::Delta, "4 RUN");
         too_many_regions.regions = (0..9)
@@ -1819,23 +1785,6 @@ mod tests {
         assert_eq!(
             encode_hotkey(&["print_screen".into()]).unwrap(),
             chord(0, &[0x46])
-        );
-    }
-
-    #[test]
-    fn formats_usage_values_without_losing_u64_precision() {
-        let snapshot = UsageSnapshot {
-            state: crate::usage::UsageState::Ready,
-            has_data: true,
-            cost_micros: 12_345_678,
-            today_tokens: u64::MAX,
-            tpm: 98_765,
-            updated_at_ms: Some(1_788_224_400_000),
-        };
-
-        assert_eq!(
-            usage_command(&snapshot),
-            "USAGE 2 12345678 18446744073709551615 98765\n"
         );
     }
 

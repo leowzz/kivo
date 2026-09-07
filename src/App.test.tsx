@@ -814,11 +814,10 @@ test("keeps an existing profile history when an unrelated profile is added", asy
     }),
   ), { timeout: 1600 });
 
-  await user.click(screen.getByRole("button", { name: "设置" }));
-  await user.click(screen.getByRole("button", { name: "新建配置" }));
+  await user.selectOptions(screen.getByRole("combobox", { name: "使用配置" }), "__create__");
   await user.type(screen.getByRole("textbox", { name: "配置名称" }), "另一个配置");
   await user.click(screen.getByRole("button", { name: "创建配置" }));
-  await screen.findByRole("heading", { name: "数据与备份" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
   await user.click(screen.getByRole("button", { name: "我的键盘" }));
   expect(screen.getByRole("button", { name: "撤销" })).not.toBeDisabled();
@@ -1033,37 +1032,6 @@ test("does not reopen when Candidate becomes the same unassigned Device", async 
     ),
   );
   expect(screen.getAllByRole("dialog", { name: "添加键盘" })).toHaveLength(1);
-});
-
-test("configuration page creates a profile while no device is usable", async () => {
-  const user = userEvent.setup();
-  currentSnapshot.devices = [];
-  currentSnapshot.candidates = [
-    rpCandidate({ issue: "firmware_not_responding" }),
-  ];
-  currentSnapshot.boardProfiles = [rpBoard];
-  render(<App />);
-  await user.click(await screen.findByRole("button", { name: "稍后处理" }));
-  await user.click(screen.getByRole("button", { name: "设置" }));
-  await user.click(screen.getByRole("button", { name: "新建配置" }));
-  await user.click(screen.getByRole("radio", { name: "空白配置" }));
-  await user.type(screen.getByRole("textbox", { name: "配置名称" }), "Offline RP");
-  await user.selectOptions(screen.getByRole("combobox", { name: "板型" }), "rp");
-  await user.click(screen.getByRole("button", { name: "创建配置" }));
-
-  await waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith("create_device_profile", {
-      request: {
-        kind: "blank",
-        name: "Offline RP",
-        board_profile_id: "rp",
-      },
-    }),
-  );
-  expect(await screen.findByRole("heading", { name: "数据与备份" })).toBeInTheDocument();
-  expect(screen.getByText("Offline RP")).toBeInTheDocument();
-  expect(screen.queryByLabelText("当前编辑配置")).not.toBeInTheDocument();
-  expect(currentSnapshot.devices).toHaveLength(0);
 });
 
 test("clones a template for one exact Device and waits for physical verification", async () => {
@@ -1347,7 +1315,8 @@ test("keeps the keyboard workspace and backup tools as separate topbar destinati
     .setup()
     .click(screen.getByRole("button", { name: "设置" }));
   expect(screen.queryByLabelText("当前编辑配置")).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /删除.*碳膜电话键盘/ })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /删除.*碳膜电话键盘/ })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "备份设备行为" })).toBeInTheDocument();
   expect(
     screen.queryByRole("button", { name: /^保存$/ }),
   ).not.toBeInTheDocument();
@@ -2463,25 +2432,6 @@ test("previews a Product Device backup as a non-destructive merge", async () => 
   );
 });
 
-test("deletes the last device profile and keeps configuration-file actions available", async () => {
-  const user = userEvent.setup();
-  render(<App />);
-  await screen.findByRole("button", { name: "设置" });
-
-  await user.click(screen.getByRole("button", { name: "设置" }));
-  await user.click(screen.getByRole("button", { name: /删除.*碳膜电话键盘/ }));
-  const dialog = await screen.findByRole("dialog", { name: "删除设备配置" });
-  await user.click(within(dialog).getByRole("button", { name: "确认" }));
-
-  expect(await screen.findByText("还没有设备配置")).toBeInTheDocument();
-  expect(
-    screen.getAllByRole("button", { name: "导入设备配置" }).length,
-  ).toBeGreaterThan(0);
-  expect(
-    screen.getAllByRole("button", { name: "恢复备份" }).length,
-  ).toBeGreaterThan(0);
-});
-
 test("keeps key learning secondary and collapsed by default", async () => {
   const user = userEvent.setup();
   render(<App embedded />);
@@ -2850,6 +2800,20 @@ test("keeps a captured draft through Device switches until an ordinary edit", as
       })],
     }),
   }), { timeout: 1600 });
+});
+
+test("settings keeps backup tools without global profile management even with no devices", async () => {
+  currentSnapshot.devices = [];
+  currentSnapshot.candidates = [];
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "设置" }));
+  expect(screen.getByRole("heading", { name: "数据与备份" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "导入设备配置" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "备份设备行为" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "恢复备份" })).toBeInTheDocument();
+  expect(screen.queryByLabelText("配置文件列表")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "新建配置" })).not.toBeInTheDocument();
 });
 
 test("keeps an older captured draft suppressed when a second begin fails", async () => {

@@ -7,10 +7,7 @@ import {
   DatabaseBackup,
   FileInput,
   Keyboard,
-  Plus,
   Settings2,
-  Trash2,
-  Upload,
   X,
 } from "lucide-react";
 import { RedoCircle } from "reicon-react/icons/RedoCircle";
@@ -54,10 +51,8 @@ import type {
   RuntimeEvent,
   StartupFailure,
   TriggerActions,
-  UsageView,
 } from "./types";
 import { SerializedSaveQueue, useAutosave } from "./useAutosave";
-import { UsageSettingsPanel, type UsageSettingsPatch } from "./UsageSettingsPanel";
 import {
   useProductConfigHistory,
   useProfileHistory,
@@ -68,7 +63,6 @@ type View = "devices" | "data";
 type Confirmation =
   | { kind: "import"; path: string; preview: ImportPreview }
   | { kind: "restore"; path: string; preview: BackupPreview }
-  | { kind: "delete"; profile: DeviceProfile }
   | { kind: "forget"; device: AppSnapshot["devices"][number] };
 
 type RegistryState = Pick<
@@ -124,17 +118,6 @@ function productConfigHistoryEntries(
   }));
 }
 
-function formatSnapshotDate(language: Language, timestamp: number | undefined) {
-  if (!timestamp) return null;
-  try {
-    return new Intl.DateTimeFormat(language, {
-      dateStyle: "medium",
-      timeStyle: "short",
-    }).format(new Date(timestamp));
-  } catch {
-    return null;
-  }
-}
 
 function isValidDraft(
   profile: DeviceProfile | undefined,
@@ -332,7 +315,6 @@ export default function App({
   const [language, setLanguage] = useState<Language>("zh-CN");
   const [view, setView] = useState<View>("devices");
   const [homeMetrics, setHomeMetrics] = useState<AppSnapshot["homeMetrics"]>(null);
-  const [usage, setUsage] = useState<UsageView | null>(null);
   const [selectedButtonId, setSelectedButtonId] = useState<string | null>(null);
   const [selectedManagedDeviceId, setSelectedManagedDeviceId] = useState<string | null>(null);
   const [hardwareEditorTarget, setHardwareEditorTarget] = useState<HardwareEditorTarget | null>(null);
@@ -473,7 +455,6 @@ export default function App({
       devices: visibleDevices,
       candidates: snapshot.candidates,
     }));
-    setUsage(snapshot.usage ?? null);
     const currentDevices = new Map(snapshot.devices.map((device) => [device.deviceId, device]));
     const nextOwners = new Map(pressedOwnersRef.current);
     for (const [deviceId, owner] of nextOwners) {
@@ -568,7 +549,6 @@ export default function App({
     )));
     setLanguage(snapshot.language);
     setHomeMetrics(snapshot.homeMetrics);
-    setUsage(snapshot.usage ?? null);
     pressedOwnersRef.current = new Map();
     setPressedButtonIds(new Set());
   }, [productConfigHistory.get, productConfigHistory.reset, productConfigHistory.sync, profileHistory.reset, profileHistory.sync]);
@@ -720,26 +700,6 @@ export default function App({
         configurationId,
       }));
       if (mountedRef.current) applySnapshot(snapshot, true);
-    } catch (operationError) {
-      setError(`${t(language, "error.save")}: ${errorMessage(operationError)}`);
-      throw operationError;
-    }
-  }, [applySnapshot, language, queue]);
-
-  const createManagedProductConfiguration = useCallback(async (request: {
-    deviceId: string;
-    name: string;
-    copyCurrent: boolean;
-  }) => {
-    try {
-      const snapshot = await queue.enqueue(() => invoke<AppSnapshot>("create_product_configuration", {
-        request: {
-          device_id: request.deviceId,
-          name: request.name,
-          copy_current: request.copyCurrent,
-        },
-      }));
-      if (mountedRef.current) applySnapshot(snapshot);
     } catch (operationError) {
       setError(`${t(language, "error.save")}: ${errorMessage(operationError)}`);
       throw operationError;
@@ -1261,6 +1221,27 @@ export default function App({
     updateProfile(profile.profile.id, () => profile);
   }, [devices, saveProductConfig, selectedManagedDeviceId, updateProfile]);
 
+  const createManagedProductConfiguration = useCallback(async (request: {
+    deviceId: string;
+    name: string;
+    copyCurrent: boolean;
+  }) => {
+    try {
+      await autosave.flush();
+      const snapshot = await queue.enqueue(() => invoke<AppSnapshot>("create_product_configuration", {
+        request: {
+          device_id: request.deviceId,
+          name: request.name,
+          copy_current: request.copyCurrent,
+        },
+      }));
+      if (mountedRef.current) applySnapshot(snapshot);
+    } catch (operationError) {
+      setError(`${t(language, "error.save")}: ${errorMessage(operationError)}`);
+      throw operationError;
+    }
+  }, [applySnapshot, autosave.flush, language, queue]);
+
   const saveManagedSharedProfile = useCallback(async (profile: DeviceProfile) => {
     try {
       await autosave.flush();
@@ -1313,17 +1294,6 @@ export default function App({
     }));
     applySnapshot(snapshot, true);
   };
-
-  const saveUsageSettings = useCallback(async (settings: UsageSettingsPatch) => {
-    if (PREVIEW_MODE) return;
-    try {
-      const snapshot = await invoke<AppSnapshot>("save_usage_settings", { settings });
-      if (mountedRef.current) applySnapshot(snapshot, true);
-    } catch (operationError) {
-      setError(`${t(language, "error.save")}: ${errorMessage(operationError)}`);
-      throw operationError;
-    }
-  }, [applySnapshot, language]);
 
   const completeDeviceSetup = async (
     deviceId: string,
@@ -1469,15 +1439,6 @@ export default function App({
     if (path) await invoke("export_backup", { path });
   });
 
-  const exportProfile = useCallback((profile: DeviceProfile) => run(t(language, "error.export"), async () => {
-    await autosave.flush();
-    const path = await saveFile({
-      defaultPath: `${profile.profile.id}.yaml`,
-      filters: [{ name: "Kivo", extensions: ["yaml"] }],
-    });
-    if (path) await invoke("export_device_profile", { id: profile.profile.id, path });
-  }), [autosave.flush, language]);
-
   const openProfileCreator = useCallback((sourceProfileId: string | null = null) => {
     setProfileCreatorSourceId(sourceProfileId);
     setProfileCreatorOpen(true);
@@ -1491,24 +1452,20 @@ export default function App({
       t(language,
         current.kind === "restore"
           ? "error.restore"
-          : current.kind === "delete"
-            ? "error.delete"
-            : current.kind === "forget"
-              ? "error.forget"
-              : "error.import",
+          : current.kind === "forget"
+            ? "error.forget"
+            : "error.import",
       ),
       async () => {
         const snapshot = current.kind === "import"
           ? await invoke<AppSnapshot>("import_device_profile", { path: current.path })
           : current.kind === "restore"
             ? await invoke<AppSnapshot>("restore_backup", { path: current.path })
-            : current.kind === "delete"
-              ? await invoke<AppSnapshot>("delete_device_profile", { id: current.profile.profile.id })
-              : await invoke<AppSnapshot>("forget_device", { deviceId: current.device.deviceId });
+            : await invoke<AppSnapshot>("forget_device", { deviceId: current.device.deviceId });
         applySnapshot(
           snapshot,
           current.kind === "forget",
-          current.kind === "import" || current.kind === "delete" || current.kind === "forget",
+          current.kind === "import" || current.kind === "forget",
         );
       },
     );
@@ -1764,55 +1721,8 @@ export default function App({
                   <h2>{t(language, "nav.data")}</h2>
                   <p className="content-subtitle">{t(language, "data.subtitle")}</p>
                 </div>
-                <button className="primary-button" type="button" onClick={() => openProfileCreator()}>
-                  <Plus size={16} />{t(language, "profile.create")}
-                </button>
               </div>
               <div className="data-page-body">
-                <UsageSettingsPanel
-                  language={language}
-                  usage={usage}
-                  onSave={saveUsageSettings}
-                />
-                <section className="profile-list" aria-label={t(language, "data.profileList")}>
-                  {deviceProfiles.length === 0 && <p className="empty-workspace-copy">{t(language, "model.empty")}</p>}
-                  {deviceProfiles.map((profile) => {
-                    const usage = devices.filter((device) => device.runtimeAssignment?.device_profile_id === profile.profile.id).length;
-                    return (
-                      <article className="profile-row" key={profile.profile.id}>
-                        <div className="profile-row-main">
-                          <div className="profile-row-title">
-                            <h3>{profile.profile.name}</h3>
-                            {profile.profile.id === editorProfile && <span className="profile-badge">{t(language, "data.editorBadge")}</span>}
-                          </div>
-                          <p>{t(language, "data.usedBy", { count: usage })}</p>
-                          {formatSnapshotDate(language, profile.snapshot_metadata?.created_at) && (
-                            <p>{t(language, "data.createdAt", {
-                              time: formatSnapshotDate(language, profile.snapshot_metadata?.created_at) ?? "",
-                            })}</p>
-                          )}
-                          {profile.snapshot_metadata?.source_device_name && (
-                            <p>{t(language, "data.sourceDevice", {
-                              name: profile.snapshot_metadata.source_device_name,
-                            })}</p>
-                          )}
-                          <code>{profile.profile.id}</code>
-                        </div>
-                        <div className="profile-row-actions">
-                          <button type="button" aria-label={`${t(language, "data.exportProfile")} ${profile.profile.name}`} title={t(language, "data.exportProfile")} onClick={() => void exportProfile(profile)}>
-                            <Upload size={15} />{t(language, "data.exportProfile")}
-                          </button>
-                          <button type="button" aria-label={`${t(language, "data.duplicateProfile")} ${profile.profile.name}`} title={t(language, "data.duplicateProfile")} onClick={() => openProfileCreator(profile.profile.id)}>
-                            <Plus size={15} />{t(language, "data.duplicateProfile")}
-                          </button>
-                          <button className="is-danger" type="button" aria-label={`${t(language, "data.deleteProfile")} ${profile.profile.name}`} title={t(language, "data.deleteProfile")} onClick={() => setConfirmation({ kind: "delete", profile })}>
-                            <Trash2 size={15} />{t(language, "data.deleteProfile")}
-                          </button>
-                        </div>
-                      </article>
-                    );
-                  })}
-                </section>
                 <section className="data-card">
                   <h3>{t(language, "data.groupTransfer")}</h3>
                   <div className="data-menu">
@@ -1934,20 +1844,16 @@ export default function App({
             ? t(language, confirmation.preview.kind === "product_devices"
               ? "dialog.restoreProductTitle"
               : "dialog.restoreTitle")
-            : confirmation.kind === "delete"
-              ? t(language, "dialog.deleteTitle")
-              : confirmation.kind === "forget"
-                ? t(language, "devices.forget")
-                : t(language, confirmation.preview.replacesExisting ? "dialog.replaceTitle" : "dialog.importTitle")}
+            : confirmation.kind === "forget"
+              ? t(language, "devices.forget")
+              : t(language, confirmation.preview.replacesExisting ? "dialog.replaceTitle" : "dialog.importTitle")}
           body={confirmation.kind === "restore"
             ? t(language, confirmation.preview.kind === "product_devices"
               ? "dialog.restoreProductBody"
               : "dialog.restoreBody")
-            : confirmation.kind === "delete"
-              ? t(language, "dialog.deleteBody", { name: confirmation.profile.profile.name })
-              : confirmation.kind === "forget"
-                ? t(language, "devices.forgetBody", { name: confirmation.device.name })
-                : t(language, confirmation.preview.replacesExisting ? "dialog.replaceBody" : "dialog.importBody")}
+            : confirmation.kind === "forget"
+              ? t(language, "devices.forgetBody", { name: confirmation.device.name })
+              : t(language, confirmation.preview.replacesExisting ? "dialog.replaceBody" : "dialog.importBody")}
           summary={confirmation.kind === "restore"
             ? confirmation.preview.kind === "product_devices"
               ? t(language, "dialog.productBackupSummary", {
@@ -1971,12 +1877,10 @@ export default function App({
               )
             : confirmation.kind === "import"
               ? profileChangeSummary ?? ""
-              : confirmation.kind === "delete"
-                ? confirmation.profile.profile.name
-                : confirmation.device.name}
+              : confirmation.device.name}
           confirmLabel={t(language, "common.confirm")}
           cancelLabel={t(language, "common.cancel")}
-          danger={confirmation.kind === "delete" || confirmation.kind === "forget" ||
+          danger={confirmation.kind === "forget" ||
             (confirmation.kind === "restore" && confirmation.preview.kind !== "product_devices") ||
             (confirmation.kind === "import" && confirmation.preview.replacesExisting)}
           onCancel={() => setConfirmation(null)}
