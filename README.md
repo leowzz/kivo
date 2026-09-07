@@ -1,6 +1,6 @@
 # Kivo
 
-把实体按键变成电脑里的文字与快捷键。
+把实体按键变成电脑里的文字、快捷键和自动化动作。
 
 [下载最新版本](https://github.com/leowzz/kivo/releases/latest) · [快速上手](#快速上手) · [刷入固件](#刷入固件) · [本地开发](#本地开发)
 
@@ -10,31 +10,39 @@ Kivo 包含两个独立的 Tauri 桌面入口：日常使用的 **Kivo APP**，�
 
 ## 能做什么
 
-- **执行桌面动作**：一个按键可以依次执行文字粘贴和快捷键动作。
+- **执行桌面动作**：按顺序组合文字粘贴、快捷键、等待、媒体控制，以及打开应用、网址、文件或文件夹。
+- **配置触发方式**：为按下、松开、长按和双击分别配置动作，并调整长按、双击的判定时间。
 - **配置产品硬件**：Studio 编辑按键布局、直连 GPIO、触点矩阵、功能开关和显示模块。
 - **测试 GPIO 电平**：Studio 实时展示板卡允许使用的 GPIO 高低电平，支持 YD-ESP32-S3 和 YD-RP2040。
-- **管理多台设备**：每台设备保留独立的 Runtime Assignment，切换编辑中的配置不会改动其他设备。
-- **复用设备配置**：一个 Device Profile 可以包含多个 Hardware Profile，适配不同板卡或接线版本。
+- **管理多台设备**：每台产品设备独立选择动作配置；相同产品版本的设备可以共享配置，也可以复制一份单独修改。
+- **兼容旧版配置**：通用固件仍可使用包含布局、动作和多个 Hardware Profile 的 Device Profile。
 - **功能开关门控**：Hardware Profile 可把一个 GPIO 开关绑定到若干按钮；开关断开时，这些按钮不会执行动作。
 - **编辑按键动作**：APP 展示设备键盘，支持动作列表、自动保存、撤销和重做。
-- **迁移与恢复**：支持单个设备配置导入导出，以及包含设备分配和统计数据的完整备份恢复。
+- **迁移与恢复**：导入旧版设备配置，备份和恢复产品设备的动作配置及其选择关系；仍兼容恢复旧版全量备份。
 
-![Kivo 首页显示设备状态、按键统计和最近活动](assets/readme/app-overview.jpg)
+![Kivo 应用界面示意，具体布局以当前版本为准](assets/readme/app-overview.jpg)
 
 ## 快速上手
 
 1. 从 [Releases](https://github.com/leowzz/kivo/releases/latest) 下载 macOS 安装包或 Windows x64 安装程序。
-2. 按照[刷入固件](#刷入固件)为受支持的控制器刷入对应固件，然后连接控制器。通过身份与协议校验后，Kivo 会自动登记这台设备。
+2. 已刷入产品固件的设备直接连接 USB 即可。裸板或需要更换固件的设备，先按[刷入固件](#刷入固件)选择产品固件或通用固件。通过身份与协议校验后，Kivo 会自动登记设备。
 3. 产品固件会直接提供按键布局和硬件定义。在 APP 的“我的键盘”中选中设备，再选择或新建动作配置。
-4. 点击按键编辑动作。修改自动保存，顶栏提供撤销和重做。
+4. 点击按键，为不同触发方式编辑动作。修改自动保存，提供撤销和重做；修改共享配置会影响所有正在使用它的设备，需要独立设置时先复制配置。
 5. 改接线、布局或显示模块时，使用 Studio 修改产品定义并重新构建固件。
-6. 通用固件仍可使用已有 Device Profile：通过“添加键盘”选择兼容配置，或从设置页导入旧配置。
+6. 通用固件仍可使用已有 Device Profile：通过“添加键盘”选择兼容配置，或从“数据与备份”导入旧配置。
 
 产品设备会按 Product Version ID 选择已有或默认动作配置。通用固件设备在获得有效 Runtime Assignment 前不会执行动作；编辑中的 Device Profile 不会自动替换其他设备正在使用的配置。
 
+“数据与备份”中的“备份设备行为”导出产品动作配置与设备选择关系，不包含固件、布局、接线、统计数据或旧版 Device Profile，不能当作整个工作区的全量备份。设备 Flash 的备份与恢复在 Studio 的工具台完成。
+
 ## 刷入固件
 
-从 [最新 Release](https://github.com/leowzz/kivo/releases/latest) 下载与板卡对应的固件：
+先区分两类固件：
+
+- **产品固件**：由 Studio 根据 `products/<product-version-id>/product.yaml` 构建，内嵌布局和接线，APP 可自动识别。使用已有产品时应选择对应产品产物；构建与刷写步骤见[本地开发](#本地开发)和[固件](#固件)。
+- **通用固件**：Release 中按板卡命名的文件，不含具体产品定义，需要在 APP 中分配兼容的旧版 Device Profile。不要把它当作某个产品的预配置固件。
+
+从 [Releases](https://github.com/leowzz/kivo/releases/latest) 下载的通用固件命名如下：
 
 | 板卡 | 选择这个文件 |
 |---|---|
@@ -68,7 +76,7 @@ ESP32-S3 的下载模式不会显示成磁盘。请使用 Chrome 或 Edge：
 | 概念 | 负责什么 |
 |---|---|
 | Product Definition | Studio 编辑并嵌入固件的产品身份、布局和硬件定义 |
-| Product Configuration Profile | APP 编辑的触发设置与动作；同一 Product Version ID 的设备可以共享 |
+| Product Configuration Profile | APP 编辑的触发设置与动作；同一 Product Version ID 的设备可以共享，修改影响所有选用它的设备 |
 | Device Profile | 通用固件的旧版兼容格式，包含布局、动作及一个或多个 Hardware Profile |
 | Hardware Profile | 面向具体板卡的接线拓扑、输入绑定和去抖设置 |
 | Device | 一台有稳定硬件序列号的实体控制器；USB 端口不是设备身份 |
@@ -79,20 +87,21 @@ ESP32-S3 的下载模式不会显示成磁盘。请使用 Chrome 或 Edge：
 
 ## 硬件产品命名
 
-Kivo 实体产品使用 `<product-family>-k<key-count>-<capabilities>-r<hardware-revision>`
+Kivo 实体产品使用 `<product-family>-<controller>-k<key-count>[-<capability>...]-r<hardware-revision>`
 形式的 Product Version ID。产品能力变体和 PCB 修订彼此独立，软件发布版本、固件
 版本、生产批次和单台设备序列号不进入该 ID。
 
-当前规划中的 **Kivo Workbench One** 包含 18 个独立实体按键、麦克风、集成显示屏，
-以及可旋转、可按压的编码器，其首版命名为：
+仓库目前包含 WBRP-K18 的 r02、r03 产品定义：RP2040、18 个独立实体按键、显示屏，
+以及可旋转、可按压的编码器。例如：
 
 ```text
-workbench-one-k18-mic-disp-encp-r01
+kivo-workbench-rp-k18-disp-encp-r03
 ```
 
-其中 `k18` 不包含编码器按压，`encp` 明确表示编码器同时支持旋转和按压。该名称
-记录的是计划目标，不代表硬件、固件或实体设备已经完成验收。完整字段定义、token
-顺序和升级规则见[产品版本 ID 命名规范](docs/product-version-id-naming.md)。
+其中 `rp` 表示 RP2040，`k18` 不包含编码器按压，`encp` 表示编码器同时支持旋转和按压。
+当前这两份产品定义不声明麦克风能力。产品 YAML 的存在不代表对应 PCB 已可投产；
+[`hardware/workbench-r03/`](hardware/workbench-r03/README.md) 仍标记为未布线的设计草稿。
+完整字段定义、token 顺序和升级规则见[产品版本 ID 命名规范](docs/product-version-id-naming.md)。
 
 ## 支持的控制器
 
@@ -109,13 +118,13 @@ YD-RP2040 的 Hardware Profile 支持两种地址为 `0x3C` 的 OLED：原有 SS
 
 启用 OLED 的设备会显示本机 Codex 任务的低干扰状态：汇总画面为 `CODEX <N> RUN`，需要操作时显示 `NEEDS INPUT` 或 `APPROVAL NEEDED`，响应生成后短暂显示 `RESPONSE READY`，数据源不可用时显示 `CODEX OFFLINE`。Codex 数据源异常不会停止 Kivo 的按键 Runtime。
 
-Kivo 只消费任务身份、工作目录和状态/生命周期信号；对话正文、推理、工具内容和最终回复不会显示或保留。SSD1306 继续使用原有 `ssd1306` 配置和 128x32 渲染器；SH1106 使用独立的 `sh1106` 配置、128x64 渲染器和协议 11 固件。两种屏均固定为 rotation 0，互不迁移。
+状态屏使用任务身份、工作目录和状态/生命周期信号，不展示对话正文、推理、工具内容或最终回复。SSD1306 使用 `ssd1306` 配置和 128x32 渲染器；SH1106 使用独立的 `sh1106` 配置和 128x64 渲染器。当前仓库的运行固件握手为 `HELLO 13`，不应再按旧协议版本选择显示固件。两种屏均固定为 rotation 0，互不迁移。
 
 刷入固件后仍需分别在实体 SSD1306 和 SH1106 上检查文字与状态切换，并在 SH1106 模块上检查旋钮方向、按压、确认和返回。自动测试和固件构建不能替代物理屏幕与输入验收。
 
 ![小黑同时给 ESP32-S3 和 YD-RP2040 两台设备上弦](assets/readme-illustrations/03-parallel-devices.png)
 
-两种控制器共享按键扫描、去抖、协议和运行状态机，各自只保留很薄的 USB/HID 平台适配。多台 ESP32-S3 与 YD-RP2040 可以同时在线，每台设备继续使用自己的 Runtime Assignment。
+两种控制器共享按键扫描、去抖、协议和运行状态机，各自保留 USB/HID 平台适配。多台 ESP32-S3 与 YD-RP2040 可以同时在线：产品设备使用各自选择的产品动作配置，通用固件设备使用各自的 Runtime Assignment。
 
 ## 本地开发
 
@@ -126,7 +135,7 @@ Kivo 只消费任务身份、工作目录和状态/生命周期信号；对话�
 - Rust stable 和 Tauri 2 所需的系统构建依赖
 - Python `3.13`、[`uv`](https://docs.astral.sh/uv/) 与 PlatformIO
 - macOS 或 Windows；发行工作流构建 macOS universal DMG 和 Windows x64 NSIS 安装程序
-- 固件相关的 `make` 目标还需要 GNU Make；Windows 可使用 Git for Windows 附带的 shell
+- 使用 `make` 目标需要 GNU Make；Windows 还需可用的 Bash。Git for Windows 可以提供 Bash，但 GNU Make 需要单独安装
 
 ```bash
 git clone https://github.com/leowzz/kivo.git
@@ -157,6 +166,8 @@ make client
 APP 的 `/?preview` 仅在开发环境提供交互预览；真实串口和文件操作需要 Tauri。
 
 Studio 使用独立的应用标识和配置目录，不会启动 APP 的设备运行服务。产品定义编辑可以与 APP 同时运行；GPIO 测试需要独占目标串口，测试前退出 APP 或其他串口工具。
+
+安装版 Studio 首次使用时需要选择包含 `products/` 和固件源码的 Kivo 仓库；构建、备份和刷写还依赖本机的 `uv`、PlatformIO 等工具链，安装桌面包本身并不等于已配置固件开发环境。
 
 已保存产品的 Capabilities 可直接修改；能力变化会同步更新产品 ID，保存时创建对应的新变体。
 构建完成后，日志面板提供“复制输出路径”和“刷入固件”。后者直接使用本次构建文件，筛选匹配板卡的设备，校验文件后确认覆盖；未保存的修改需要先保存并重新构建。
@@ -200,7 +211,7 @@ Copy-Item .env.example .env
 uv sync
 npm ci
 uv run python scripts/kill_helper.py
-make
+npm run tauri dev
 ```
 
 本地环境只要落在上述兼容范围内即可，不要求与 CI 的参考版本完全一致。
@@ -209,7 +220,7 @@ make
 
 ## 固件
 
-分别构建两个固件目标：
+分别构建两个通用固件目标（不内嵌产品定义）：
 
 ```bash
 make build-esp32s3
@@ -223,7 +234,13 @@ make upload-esp32s3
 make upload-rp2040
 ```
 
-Product Studio 生成的生产固件会写入 `output/products/<product-version-id>/<build-id>/`，其中包含固件、产品定义和 `manifest.json`。批量刷写时使用：
+产品固件可以在 Studio 中构建，也可以指定产品 YAML：
+
+```bash
+make build-product PRODUCT=products/kivo-workbench-rp-k18-disp-encp-r03/product.yaml
+```
+
+产物写入 `output/products/<product-version-id>/<build-id>/`，其中包含固件、产品定义和 `manifest.json`。刷写已有产品产物时使用：
 
 ```bash
 make upload-prod
@@ -282,8 +299,9 @@ src-tauri/src/studio.rs  Studio 启动、产品仓库和构建命令
 src-tauri/src/studio/    独立串口诊断会话
 firmware/src/        固件入口与 ESP32-S3、RP2040 平台适配
 lib/gpio_trigger/    板卡无关的输入拓扑、去抖与协议状态机
-models/prod/         随应用发布的 Device Profile
+models/prod/         随应用发布的旧版 Device Profile
 products/            Studio 管理的产品定义
+hardware/            PCB、接线与硬件设计资料（完成状态见各目录说明）
 scripts/             固件选择、上传与运行时验证工具
 test/                Python、PlatformIO 与发布流程测试
 docs/                硬件改造、兼容性与设计记录
