@@ -7,7 +7,7 @@ import { beforeEach, expect, test, vi } from "vitest";
 import StudioApp, { HardwareEditor, LayoutEditor } from "./StudioApp";
 import type { ProductDefinition, StudioBoard, StudioSnapshot } from "./types";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), Channel: class { onmessage = () => {}; } }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 beforeEach(() => {
@@ -490,6 +490,82 @@ test("adding a key to a saved product derives a new ID and remains saveable", as
       }),
     }),
   ));
+});
+
+test("saved product capabilities can change, preserve exclusivity, and save as a new variant", async () => {
+  const snapshot: StudioSnapshot = {
+    repoRoot: "/repo", boards: [board],
+    products: [{ productVersionId: definition.product.product_version_id, displayName: "Test Product", boardProfileId: board.id, sha256: "saved", error: null }],
+  };
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "studio_get_snapshot" || command === "studio_copy_product") return snapshot;
+    if (command === "studio_load_product") return structuredClone(definition);
+    if (command === "studio_validate_product") {
+      const current = (args as { definition: ProductDefinition }).definition;
+      return { definition: current, json: JSON.stringify(current), sha256: "valid", byteLength: 1 };
+    }
+    throw new Error(`Unexpected command: ${command}`);
+  });
+  const user = userEvent.setup();
+  render(<StudioApp />);
+  await user.click(await screen.findByRole("button", { name: /Test Product/ }));
+  const mic = screen.getByRole("checkbox", { name: "mic" });
+  expect(mic).toBeEnabled();
+  await user.click(mic);
+  expect(mic).toBeChecked();
+  await user.click(screen.getByRole("checkbox", { name: "encp" }));
+  await user.click(screen.getByRole("checkbox", { name: "enc" }));
+  expect(screen.getByRole("checkbox", { name: "encp" })).not.toBeChecked();
+  expect(screen.getByRole("checkbox", { name: "enc" })).toBeChecked();
+  expect(screen.getByRole("textbox", { name: "Product Version ID" })).toHaveValue("test-rp-k0-mic-enc-r01");
+  await user.click(screen.getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("studio_copy_product", {
+    sourceProductVersionId: definition.product.product_version_id,
+    definition: expect.objectContaining({ product: expect.objectContaining({ capabilities: ["mic", "enc"], product_version_id: "test-rp-k0-mic-enc-r01" }) }),
+  }));
+  expect(invoke).not.toHaveBeenCalledWith("studio_save_product", expect.anything());
+});
+
+test("build completion exposes the output directory and disables flashing an edited draft", async () => {
+  const snapshot: StudioSnapshot = {
+    repoRoot: "/repo", boards: [board],
+    products: [{ productVersionId: definition.product.product_version_id, displayName: "Test Product", boardProfileId: board.id, sha256: "saved", error: null }],
+  };
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "studio_get_snapshot" || command === "studio_save_product") return snapshot;
+    if (command === "studio_load_product") return structuredClone(definition);
+    if (command === "studio_validate_product") {
+      const current = (args as { definition: ProductDefinition }).definition;
+      return { definition: current, json: JSON.stringify(current), sha256: "valid", byteLength: 1 };
+    }
+    if (command === "studio_build_product") return {
+      logs: ["Published firmware"],
+      output: { outputDirectory: "/repo/output/product/dev", firmwarePath: "/repo/output/product/dev/firmware.uf2" },
+    };
+    throw new Error(`Unexpected command: ${command}`);
+  });
+  const user = userEvent.setup();
+  render(<StudioApp />);
+  await user.click(await screen.findByRole("button", { name: /Test Product/ }));
+  await user.click(screen.getByRole("button", { name: "构建" }));
+  const result = await screen.findByRole("region", { name: "构建结果" });
+  expect(within(result).getByText("构建完成")).toBeVisible();
+  const clipboard = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+  await user.click(within(result).getByRole("button", { name: "复制输出路径" }));
+  expect(clipboard).toHaveBeenCalledWith("/repo/output/product/dev");
+  expect(within(result).getByRole("button", { name: "已复制路径" })).toBeVisible();
+  clipboard.mockRejectedValueOnce(new Error("Clipboard unavailable"));
+  await user.click(within(result).getByRole("button", { name: "已复制路径" }));
+  expect(await within(result).findByRole("alert")).toHaveTextContent("复制失败");
+  expect(within(result).getByRole("button", { name: "复制输出路径" })).toBeVisible();
+  expect(within(result).getByRole("button", { name: "刷入固件" })).toBeEnabled();
+  await user.click(screen.getByRole("checkbox", { name: "mic" }));
+  expect(within(result).getByRole("button", { name: "刷入固件" })).toBeDisabled();
+  await user.click(screen.getByRole("checkbox", { name: "mic" }));
+  await user.type(screen.getByRole("textbox", { name: "Display Name" }), " Updated");
+  await user.click(screen.getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("studio_save_product", expect.anything()));
+  expect(within(result).getByRole("button", { name: "刷入固件" })).toBeDisabled();
 });
 
 test("deleting a saved product confirms and clears the editor", async () => {

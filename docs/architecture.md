@@ -28,6 +28,8 @@ Studio 的 Tauri window 明确加载 `studio.html`。不再把 Studio 页面复�
 - `src/studio/StudioApp.tsx`：产品定义编辑、校验、保存、复制、删除和固件构建。
 - `src/studio/Toolbox.tsx`：工具台，负责设备选择、GPIO 采样、临时固件的输入模式和连接释放。
 - `src/studio/FirmwareActions.tsx`：固件文件选择、备份和刷写确认、进度与结果展示。
+- `src/studio/BuildResultPanel.tsx`：构建日志、输出路径复制和构建产物操作；`BuildFlashDialog.tsx` 负责目标设备选择和刷写确认。
+- `src/studio/firmware.ts`：工具台和构建产物入口共用的固件 IPC、进度及错误格式。
 - `src/shared/`：共享领域类型、颜色与基础控件样式，不持有运行服务或应用状态。
 - `src/app/types.ts`：APP 独有的设备状态、动作配置和 IPC 快照；产品定义由共享类型统一维护。
 - `src-tauri/src/app/mod.rs`：APP 启动、后台服务装配和关闭；`commands.rs` 负责 IPC 及工作区变更，`tests.rs` 验证行为。

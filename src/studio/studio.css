@@ -119,7 +119,26 @@
 .build-log { width: min(720px, calc(100% - 32px)); max-height: 300px; position: absolute; right: 16px; bottom: 42px; display: grid; grid-template-rows: 38px minmax(0, 1fr); border: 1px solid var(--border-default); border-radius: var(--radius-8); background: #1f2422; box-shadow: var(--shadow-3); color: #dbe7df; }
 .build-log header { padding: 0 10px 0 14px; border-bottom: 1px solid #39413d; font-size: var(--text-12); }
 .build-log header button { color: #dbe7df; }
-.build-log pre { min-height: 0; margin: 0; overflow: auto; padding: 12px 14px; font: 11px/1.5 ui-monospace, monospace; white-space: pre-wrap; }
+.build-log pre { min-height: 0; margin: 0; overflow: auto; padding: 12px 14px; font: 11px/1.5 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.build-log.has-result { grid-template-rows: 38px minmax(0, 1fr) auto; }
+.build-log > footer { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 10px 14px; border-top: 1px solid #39413d; }
+.build-log > footer button { min-height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 10px; border: 1px solid #58625c; border-radius: 6px; background: #303934; color: #f0f5f2; font-size: var(--text-12); }
+.build-log > footer .primary { border-color: var(--green-9); background: var(--green-9); color: white; }
+.build-log > footer [role="alert"] { margin-right: auto; color: #ffb4aa; font-size: var(--text-12); }
+.build-flash-dialog { max-height: calc(100dvh - 32px); margin: auto; padding: 0; overflow-y: auto; color: var(--gray-12); }
+.build-flash-dialog::backdrop { background: rgba(26, 33, 30, .4); }
+.build-flash-body { grid-template-columns: minmax(0, 1fr); font-size: var(--text-13); line-height: 1.6; }
+.build-flash-devices { display: flex; align-items: center; gap: 8px; }
+.build-flash-devices select { min-width: 0; flex: 1; }
+.build-flash-body dl { display: grid; gap: 8px; margin: 0; }
+.build-flash-body dl > div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 12px; }
+.build-flash-body dt { color: var(--gray-10); }
+.build-flash-body dd { margin: 0; overflow-wrap: anywhere; }
+.build-flash-body code { font-size: var(--text-11); }
+.build-flash-body p { margin: 0; overflow-wrap: anywhere; }
+.build-flash-warning, .build-flash-error { color: var(--red-text); }
+.build-flash-warning, .build-flash-status { display: flex; align-items: flex-start; gap: 6px; }
+.build-flash-warning svg, .build-flash-status svg { flex: 0 0 auto; margin-top: 3px; }
 .studio-empty, .studio-loading { height: 100%; display: grid; place-content: center; justify-items: center; gap: 10px; color: var(--gray-9); }
 .studio-empty { grid-row: 2 / -1; }
 .studio-loading { display: flex; align-items: center; }

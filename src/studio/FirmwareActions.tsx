@@ -1,72 +1,15 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { Download, LoaderCircle, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import TestFirmwareDialog from "./TestFirmwareDialog";
-
-interface Device {
-  id: string;
-  name: string;
-  serial: string;
-  boardProfileId: string;
-}
-
-interface FirmwareResult {
-  path: string;
-  bytes: number;
-  sha256: string;
-  productVersionId?: string;
-  buildId?: string;
-  warning?: string;
-  backupPath?: string;
-}
-
-interface Progress {
-  phase: string;
-  backupPath?: string;
-}
-
-const phases: Record<string, string> = {
-  checking: "正在核对设备产品",
-  connecting: "正在进入刷写模式",
-  reading: "正在读取原有固件",
-  rebooting: "正在重启设备",
-  writing: "正在刷入固件，请勿断开设备",
-  verifying: "正在验证设备固件",
-  building: "正在构建 I/O 测试固件",
-  backup_saved: "原固件备份已保存",
-};
-
-type Operation = "inspect" | "backup" | "flash" | "install_test" | "status";
-
-function invokeFirmware<T = FirmwareResult>(
-  deviceId: string,
-  operation: Operation,
-  onProgress: (event: Progress) => void,
-  path?: string,
-  sha256?: string,
-) {
-  const progress = new Channel<Progress>();
-  progress.onmessage = onProgress;
-  return invoke<T>("studio_firmware_operation", {
-    operation,
-    deviceId,
-    path: path ?? null,
-    sha256: sha256 ?? null,
-    progress,
-  });
-}
-
-function failureText(reason: unknown): string {
-  if (typeof reason === "object" && reason && "code" in reason) {
-    if (reason.code === "studio_repository_not_configured")
-      return "请先在产品定义中选择 Kivo 仓库。";
-    if (reason.code === "studio_firmware_busy") return "已有固件操作正在进行。";
-    if ("detail" in reason && reason.detail) return String(reason.detail);
-    return String(reason.code);
-  }
-  return String(reason);
-}
+import {
+  firmwareFailureText,
+  firmwarePhases,
+  invokeFirmware,
+  type FirmwareDevice,
+  type FirmwareOperation,
+  type FirmwareResult,
+} from "./firmware";
 
 export default function FirmwareActions({
   device,
@@ -74,7 +17,7 @@ export default function FirmwareActions({
   onBusyChange,
   onFlashed,
 }: {
-  device: Device;
+  device: FirmwareDevice;
   disabled: boolean;
   onBusyChange: (busy: boolean) => void;
   onFlashed: (testing: boolean) => void;
@@ -112,12 +55,13 @@ export default function FirmwareActions({
     setError("");
     setResult(null);
     setStatus(operation === "install_test" ? "等待刷写确认" : "正在选择文件");
-    const run = (action: Operation, path?: string, sha256?: string) => {
+    const run = (action: FirmwareOperation, path?: string, sha256?: string) => {
       return invokeFirmware(
         device.id,
         action,
         ({ phase, backupPath }) => {
-          if (mounted.current && phases[phase]) setStatus(phases[phase]);
+          if (mounted.current && firmwarePhases[phase])
+            setStatus(firmwarePhases[phase]);
           if (mounted.current && backupPath) setBackupPath(backupPath);
         },
         path,
@@ -186,7 +130,7 @@ export default function FirmwareActions({
       }
     } catch (reason) {
       if (mounted.current) {
-        setError(failureText(reason));
+        setError(firmwareFailureText(reason));
         setStatus(operation === "backup" ? "备份失败" : "刷写失败");
       }
     } finally {

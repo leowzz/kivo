@@ -35,7 +35,7 @@ export default function StudioRoot() {
         </nav>
       </header>
       <div className="studio-hub-panel" hidden={view !== "definition"}>
-        <StudioApp />
+        <StudioApp onFirmwareBusyChange={setFirmwareBusy} />
       </div>
       {view === "tools" && (
         <div className="studio-hub-panel">

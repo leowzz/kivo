@@ -46,3 +46,8 @@ export interface ProductBuildResult {
   };
   logs: string[];
 }
+
+export type BuiltFirmware = ProductBuildResult["output"] & {
+  productVersionId: string;
+  boardProfileId: string;
+};
