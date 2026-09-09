@@ -15,6 +15,8 @@
 
 驱动分析：[CH552G 按键、RGB 与触控条驱动方案](ch552g-driver-analysis.md)。
 
+官方固件资料：[丐17Touch_Ver202 HEX 静态解析与提取产物](firmware/gai17touch-ver202/README.md)。该文件使用四线按键扫描、五路触摸和单路 PWM 灯光，与本目录 17+4TPRO 原理图不同；实物版本仍需核对。
+
 ### 已知设备信息
 
 用户提供的 `wchisp info` 输出：
