@@ -317,6 +317,10 @@ fn get_startup_failure(state: tauri::State<'_, StartupState>) -> Option<StartupF
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             app.manage(StartupState::default());
             let result: SetupResult = (|| {

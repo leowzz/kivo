@@ -15,6 +15,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import brandIcon from "../../src-tauri/icons/128x128.png";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { AutostartSettings } from "./AutostartSettings";
 import { CreateDeviceProfileForm } from "./CreateDeviceProfileForm";
 import {
   DeviceManagement,
@@ -1882,13 +1883,14 @@ export default function App() {
             <div className="data-page">
               <div className="content-heading">
                 <div>
-                  <h2>{t(language, "nav.data")}</h2>
+                  <h2>{t(language, "nav.settings")}</h2>
                   <p className="content-subtitle">
                     {t(language, "data.subtitle")}
                   </p>
                 </div>
               </div>
               <div className="data-page-body">
+                <AutostartSettings language={language} preview={PREVIEW_MODE} />
                 <section className="data-card">
                   <h3>{t(language, "data.groupTransfer")}</h3>
                   <div className="data-menu">

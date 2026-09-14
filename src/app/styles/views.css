@@ -355,6 +355,14 @@
 .empty-workspace-copy { margin: 0; border: 1px dashed var(--border-strong); border-radius: var(--radius-8); padding: 24px; color: var(--gray-9); background: var(--bg-surface); text-align: center; }
 .data-card { border: 1px solid var(--border-subtle); border-radius: var(--radius-10); padding: var(--space-16); background: var(--bg-surface); box-shadow: var(--shadow-1); }
 .data-card > h3 { margin: 0 0 var(--space-12); color: var(--gray-11); font-size: var(--text-13); font-weight: var(--weight-semibold); }
+.autostart-setting { display: flex; align-items: center; justify-content: space-between; gap: var(--space-16); }
+.autostart-setting label { font-size: var(--text-13); }
+.settings-switch { flex-shrink: 0; width: 36px; height: 22px; padding: 3px; border: 0; border-radius: 12px; background: var(--gray-6); cursor: pointer; }
+.settings-switch span { display: block; width: 16px; height: 16px; border-radius: 50%; background: white; transition: transform .15s ease; }
+.settings-switch[aria-checked="true"] { background: var(--green-9); }
+.settings-switch[aria-checked="true"] span { transform: translateX(14px); }
+.settings-switch:disabled { opacity: .5; cursor: default; }
+.settings-switch:focus-visible { outline: 2px solid var(--green-9); outline-offset: 3px; }
 .data-card.is-danger { border-color: var(--red-border); background: var(--red-bg); }
 .data-card.is-danger > h3 { color: var(--red-text); }
 .data-menu { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-8); }

@@ -2026,7 +2026,8 @@ test("settings keeps backup tools without global profile management even with no
   const user = userEvent.setup();
   render(<App />);
   await user.click(await screen.findByRole("button", { name: "设置" }));
-  expect(screen.getByRole("heading", { name: "数据与备份" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "设置" })).toBeInTheDocument();
+  expect(screen.getByRole("switch", { name: "开机自启" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "导入设备配置" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "备份设备行为" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "恢复备份" })).toBeInTheDocument();
