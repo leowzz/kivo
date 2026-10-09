@@ -12,8 +12,11 @@ import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import App from "./App";
+import * as releaseUpdateHook from "../shared/useReleaseUpdate";
+import { initialUpdateState } from "../shared/releaseUpdate";
 import type {
   AppSnapshot,
+  ButtonAction,
   CreateDeviceProfileRequest,
   DeviceProfile,
   DeviceStatus,
@@ -233,7 +236,7 @@ function deferred<Value>() {
   return { promise, resolve };
 }
 
-async function openActionDialog(user: ReturnType<typeof userEvent.setup>, type: "paste" | "hotkey" = "hotkey") {
+async function openActionDialog(user: ReturnType<typeof userEvent.setup>, type: ButtonAction["type"] = "hotkey") {
   await user.click(screen.getByRole("button", { name: "添加行为" }));
   await user.selectOptions(screen.getByLabelText("行为类型"), type);
 }
@@ -1737,6 +1740,23 @@ test("builds an ordered action list and autosaves it", async () => {
   ).toBeInTheDocument();
 });
 
+test.each([
+  { type: "open_app" as const, label: "应用路径", value: "/Applications/Safari.app", action: { type: "open_app", path: "/Applications/Safari.app" } },
+  { type: "open_website" as const, label: "网站地址", value: "example.com", action: { type: "open_website", url: "https://example.com/" } },
+])("autosaves a configured $type action", async ({ type, label, value, action }) => {
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByRole("complementary", { name: "2" });
+  await openActionDialog(user, type);
+  await user.type(screen.getByLabelText(label), value);
+  await user.click(screen.getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_device_profile", {
+    profile: expect.objectContaining({ actions: {
+      DIGIT_2: { press: [action], release: [], long_press: [], double_press: [] },
+    } }),
+  }), { timeout: 1600 });
+});
+
 test("autosaves Button Behavior after Device Management enables shared-profile confirmation", async () => {
   currentSnapshot.devices.push(device({
     deviceId: "device-second",
@@ -2033,4 +2053,51 @@ test("settings keeps backup tools without global profile management even with no
   expect(screen.getByRole("button", { name: "恢复备份" })).toBeInTheDocument();
   expect(screen.queryByLabelText("配置文件列表")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "新建配置" })).not.toBeInTheDocument();
+});
+
+test("update preparation waits for product saves and refuses a failed queued save", async () => {
+  let prepare: (() => Promise<void>) | undefined;
+  const hook = vi.spyOn(releaseUpdateHook, "useReleaseUpdate").mockImplementation((options) => {
+    prepare = options?.beforeInstall;
+    return { ...initialUpdateState, native: false, hasUpdate: false, check: vi.fn(), install: vi.fn() };
+  });
+  const config: ProductConfigurationProfile = {
+    id: "update-test", name: "更新测试", product_version_id: "key-esp-k1-r01",
+    trigger_settings: deviceProfile.trigger_settings, actions: {},
+  };
+  currentSnapshot.productConfigurations = [config];
+  currentSnapshot.devices = [device({
+    productVersionId: config.product_version_id, productConfigurationId: config.id,
+    productConfig: config,
+    productDefinition: {
+      schema_version: 1,
+      product: { display_name: "Kivo", family_id: "key", variant_id: "key-esp-k1", hardware_revision: 1,
+        product_version_id: config.product_version_id, capabilities: [] },
+      layout: deviceProfile.profile, hardware_profile: deviceProfile.hardware_profiles[0],
+    },
+  })];
+  let finishSave!: () => void;
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "get_startup_failure") return null;
+    if (command === "save_product_configuration") {
+      await new Promise<void>(resolve => { finishSave = resolve; });
+      throw new Error("write failed");
+    }
+    return structuredClone(currentSnapshot);
+  });
+  try {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "2，0 项行为" }));
+    await addPasteAction(user, "不能丢失的修改");
+    await waitFor(() => expect(finishSave).toBeTypeOf("function"));
+    let completed = false;
+    const preparation = prepare!().finally(() => { completed = true; });
+    const rejected = expect(preparation).rejects.toThrow("Product configuration save failed");
+    await Promise.resolve();
+    expect(completed).toBe(false);
+    await act(async () => { finishSave(); await rejected; });
+  } finally {
+    hook.mockRestore();
+  }
 });

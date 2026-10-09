@@ -55,11 +55,13 @@ jobs:
             platform: windows-latest
             args: --bundles nsis
             studio_bundle_dir: src-tauri/target/release/bundle/nsis
+            updater_bundle_root: src-tauri/target/release/bundle
             rust_targets: ""
           - name: macOS universal
             platform: macos-latest
             args: --target universal-apple-darwin --bundles dmg
             studio_bundle_dir: src-tauri/target/universal-apple-darwin/release/bundle/dmg
+            updater_bundle_root: src-tauri/target/universal-apple-darwin/release/bundle
             rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
     runs-on: ${{ matrix.platform }}
 
@@ -101,18 +103,47 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Kivo ${{ github.ref_name }}"
           releaseBody: "Kivo and Kivo Product Studio desktop installers, plus ESP32-S3 and RP2040 firmware."
           releaseDraft: false
           prerelease: false
-          args: ${{ matrix.args }}
+          uploadUpdaterJson: false
+          args: --config src-tauri/tauri.updater.conf.json ${{ matrix.args }}
+
+      - name: Stage APP update package
+        shell: bash
+        run: >-
+          python scripts/updater_manifest.py stage
+          "${{ matrix.updater_bundle_root }}" release-updater
+          --version "${GITHUB_REF_NAME}" --product app
 
       - name: Build Product Studio installer
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: >-
           npm run tauri build -- --features product-studio
-          --config src-tauri/tauri.studio.conf.json ${{ matrix.args }}
+          --config src-tauri/tauri.studio.conf.json
+          --config src-tauri/tauri.updater.conf.json ${{ matrix.args }}
+
+      - name: Stage Product Studio update package
+        shell: bash
+        run: >-
+          python scripts/updater_manifest.py stage
+          "${{ matrix.updater_bundle_root }}" release-updater
+          --version "${GITHUB_REF_NAME}" --product studio
+
+      - name: Upload staged update packages
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-updater-${{ runner.os }}
+          path: release-updater/
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Upload Product Studio installer
         shell: bash
@@ -142,4 +173,46 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >-
           gh release upload "${GITHUB_REF_NAME}" release-firmware/* --clobber
+          --repo "${GITHUB_REPOSITORY}"
+
+  updater-publish:
+    name: Publish signed desktop updates
+    needs: [release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Download staged update packages
+        uses: actions/download-artifact@v7
+        with:
+          pattern: release-updater-*
+          path: release-updater
+          merge-multiple: true
+
+      - name: Generate separate APP and Studio update feeds
+        run: >-
+          python scripts/updater_manifest.py manifest release-updater
+          --version "${GITHUB_REF_NAME}" --repository "${GITHUB_REPOSITORY}"
+
+      - name: Upload signed update packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          gh release upload "${GITHUB_REF_NAME}"
+          release-updater/*.exe release-updater/*.exe.sig
+          release-updater/*.tar.gz release-updater/*.tar.gz.sig --clobber
+          --repo "${GITHUB_REPOSITORY}"
+
+      - name: Publish APP and Studio update feeds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          gh release upload "${GITHUB_REF_NAME}"
+          release-updater/latest.json release-updater/latest-studio.json --clobber
           --repo "${GITHUB_REPOSITORY}"

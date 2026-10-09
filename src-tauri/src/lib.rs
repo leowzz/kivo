@@ -4,6 +4,7 @@ pub mod error;
 mod handshake;
 pub mod hardware;
 pub mod input;
+mod launch_target;
 pub mod model;
 pub mod product;
 pub mod profile;

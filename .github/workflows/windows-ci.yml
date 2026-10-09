@@ -58,6 +58,7 @@ jobs:
           test/test_firmware_target_selector.py
           test/test_kill_helper.py
           test/test_runtime_smoke.py
+          test/test_updater_manifest.py
 
       - name: Initialize repository version
         run: Copy-Item .env.example .env

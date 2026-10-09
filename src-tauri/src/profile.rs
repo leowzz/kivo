@@ -80,6 +80,8 @@ pub enum ButtonAction {
     Delay { duration_ms: u32 },
     Media { command: MediaCommand },
     Open { target: String },
+    OpenApp { path: String },
+    OpenWebsite { url: String },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -417,7 +419,9 @@ impl DeviceProfile {
                     }
                     ButtonAction::Delay { .. }
                     | ButtonAction::Media { .. }
-                    | ButtonAction::Open { .. } => {
+                    | ButtonAction::Open { .. }
+                    | ButtonAction::OpenApp { .. }
+                    | ButtonAction::OpenWebsite { .. } => {
                         required = required.max(ADVANCED_ACTION_PROTOCOL_VERSION);
                     }
                     ButtonAction::Paste { .. } => {}
@@ -661,10 +665,26 @@ impl DeviceProfile {
                             AppError::new("invalid_open_target").with_param("button", button)
                         );
                     }
+                    ButtonAction::OpenApp { path }
+                        if !crate::launch_target::valid_application_path(path) =>
+                    {
+                        return Err(
+                            AppError::new("invalid_application_path").with_param("button", button)
+                        );
+                    }
+                    ButtonAction::OpenWebsite { url }
+                        if !crate::launch_target::valid_website_url(url) =>
+                    {
+                        return Err(
+                            AppError::new("invalid_website_url").with_param("button", button)
+                        );
+                    }
                     ButtonAction::Paste { .. }
                     | ButtonAction::Delay { .. }
                     | ButtonAction::Media { .. }
-                    | ButtonAction::Open { .. } => {}
+                    | ButtonAction::Open { .. }
+                    | ButtonAction::OpenApp { .. }
+                    | ButtonAction::OpenWebsite { .. } => {}
                 }
             }
         }
@@ -681,6 +701,8 @@ impl DeviceProfile {
                     ButtonAction::Delay { .. }
                         | ButtonAction::Media { .. }
                         | ButtonAction::Open { .. }
+                        | ButtonAction::OpenApp { .. }
+                        | ButtonAction::OpenWebsite { .. }
                 )
             })
     }
@@ -929,6 +951,48 @@ mod tests {
             TriggerActions::press(vec![ButtonAction::Open { target: " ".into() }]),
         );
         assert_eq!(profile.validate().unwrap_err().code, "invalid_open_target");
+    }
+
+    #[test]
+    fn launch_actions_round_trip_and_require_host_protocol() {
+        let mut profile = profile();
+        profile.actions.insert(
+            "UP".into(),
+            TriggerActions::press(vec![
+                ButtonAction::OpenApp {
+                    path: "/Applications/Missing.app".into(),
+                },
+                ButtonAction::OpenWebsite {
+                    url: "https://example.com/?a=1&b=2".into(),
+                },
+            ]),
+        );
+        // Saving/importing a mapping must not depend on this computer's installed apps.
+        profile.validate().unwrap();
+        assert!(profile.uses_advanced_actions());
+        assert!(profile.minimum_protocol_version() >= ADVANCED_ACTION_PROTOCOL_VERSION);
+        let yaml = serde_yaml_ng::to_string(&profile).unwrap();
+        let loaded: DeviceProfile = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(loaded.actions, profile.actions);
+        for (action, code) in [
+            (
+                ButtonAction::OpenApp {
+                    path: "relative.exe".into(),
+                },
+                "invalid_application_path",
+            ),
+            (
+                ButtonAction::OpenWebsite {
+                    url: "javascript:alert(1)".into(),
+                },
+                "invalid_website_url",
+            ),
+        ] {
+            profile
+                .actions
+                .insert("UP".into(), TriggerActions::press(vec![action]));
+            assert_eq!(profile.validate().unwrap_err().code, code);
+        }
     }
 
     #[test]

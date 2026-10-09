@@ -13,7 +13,9 @@ export type ButtonAction =
   | { type: "hotkey"; keys: string[] }
   | { type: "delay"; duration_ms: number }
   | { type: "media"; command: MediaCommand }
-  | { type: "open"; target: string };
+  | { type: "open"; target: string }
+  | { type: "open_app"; path: string }
+  | { type: "open_website"; url: string };
 
 export type MediaCommand =
   | "play_pause"

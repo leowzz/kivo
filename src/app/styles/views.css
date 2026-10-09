@@ -121,6 +121,10 @@
 .dialog-heading h2 { margin: 0; color: var(--gray-12); font-size: var(--text-17); }
 .action-dialog-fields { min-height: 0; overflow: auto; display: grid; gap: 13px; padding: 16px 18px; }
 .action-dialog-fields > .hotkey-picker { min-width: 0; }
+.launch-target-row { display: flex; align-items: center; gap: 8px; }
+.launch-target-row input { flex: 1; min-width: 0; }
+.launch-target-row .icon-button { flex: 0 0 34px; width: 34px; height: 34px; }
+.action-dialog.is-drop-target { border-color: var(--main-accent, var(--green-7)); }
 .dialog-actions { display: flex; align-items: center; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border-subtle); }
 .dialog-actions-spacer { flex: 1; }
 .hotkey-picker { display: grid; gap: 10px; min-width: 0; }

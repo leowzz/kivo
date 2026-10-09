@@ -227,7 +227,9 @@ fn format_action(action: &ButtonAction, kind: SummaryKind) -> String {
             MediaCommand::Mute => "Mute",
         }
         .into(),
-        ButtonAction::Open { target } => {
+        ButtonAction::Open { target }
+        | ButtonAction::OpenApp { path: target }
+        | ButtonAction::OpenWebsite { url: target } => {
             let limit = match kind {
                 SummaryKind::Primary => PRIMARY_PASTE_LIMIT,
                 SummaryKind::Detail => DETAIL_PASTE_LIMIT,

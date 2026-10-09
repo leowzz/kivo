@@ -1,7 +1,11 @@
-import { useEffect, useState } from "react";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { open as chooseFile } from "@tauri-apps/plugin-dialog";
+import { FolderOpen } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { HotkeyPicker, hotkeyValidationMessage } from "./HotkeyPicker";
 import { validateHotkey } from "./hotkey";
 import { t, type MessageKey } from "./i18n";
+import { normalizeApplicationPath, normalizeWebsiteUrl, validLaunchTargetLength } from "./launchTarget";
 import type { ActionTrigger, ButtonAction, Language, MediaCommand } from "./types";
 
 export type ActionDraft = { trigger: ActionTrigger; action: ButtonAction };
@@ -40,6 +44,8 @@ function defaultAction(type: ButtonAction["type"]): ButtonAction {
     case "delay": return { type, duration_ms: 100 };
     case "media": return { type, command: "play_pause" };
     case "open": return { type, target: "" };
+    case "open_app": return { type, path: "" };
+    case "open_website": return { type, url: "" };
   }
 }
 
@@ -57,6 +63,16 @@ function validateAction(action: ButtonAction, language: Language): string | null
       if (action.target.includes("\0")) return t(language, "behavior.openTargetNul");
       return null;
     case "media": return null;
+    case "open_app": {
+      const path = normalizeApplicationPath(action.path);
+      if (!path) return t(language, "behavior.applicationPathInvalid");
+      return validLaunchTargetLength(path) ? null : t(language, "behavior.openTargetTooLong");
+    }
+    case "open_website": {
+      const url = normalizeWebsiteUrl(action.url);
+      if (!url) return t(language, "behavior.websiteUrlInvalid");
+      return validLaunchTargetLength(url) ? null : t(language, "behavior.openTargetTooLong");
+    }
   }
 }
 
@@ -64,6 +80,12 @@ export function ActionDialog({ open, language, mode, initial, onSave, onDelete, 
   const [draft, setDraft] = useState<ActionDraft>(initial ?? { trigger: "press", action: { type: "hotkey", keys: [] } });
   const [error, setError] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const dialogRef = useRef<HTMLElement>(null);
+  const pickerGeneration = useRef(0);
+  const nativeRuntime = "__TAURI_INTERNALS__" in window;
+  const macOS = navigator.platform.includes("Mac");
 
   useEffect(() => {
     if (!open) return;
@@ -72,18 +94,84 @@ export function ActionDialog({ open, language, mode, initial, onSave, onDelete, 
   }, [initial, open]);
 
   useEffect(() => {
+    pickerGeneration.current += 1;
+    setPicking(false);
+    setDragOver(false);
+    return () => { pickerGeneration.current += 1; };
+  }, [open, initial, draft.action.type]);
+
+  useEffect(() => {
+    if (!open || !nativeRuntime || draft.action.type !== "open_app") return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void getCurrentWebviewWindow().onDragDropEvent(({ payload }) => {
+      if (disposed) return;
+      if (payload.type === "leave") {
+        setDragOver(false);
+        return;
+      }
+      const rect = dialogRef.current?.getBoundingClientRect();
+      const scale = window.devicePixelRatio || 1;
+      const x = payload.position.x / scale;
+      const y = payload.position.y / scale;
+      const inside = Boolean(rect && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom);
+      setDragOver(payload.type !== "drop" && inside);
+      if (payload.type !== "drop" || !inside) return;
+      if (payload.paths.length !== 1) {
+        setError(t(language, "behavior.applicationDropInvalid"));
+        return;
+      }
+      const path = normalizeApplicationPath(payload.paths[0]);
+      if (!path) {
+        setError(t(language, "behavior.applicationPathInvalid"));
+        return;
+      }
+      setDraft((current) => ({ ...current, action: { type: "open_app", path } }));
+      setError(null);
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    }).catch(() => {
+      // Manual entry and the picker remain available if native drops are unavailable.
+    });
+    return () => { disposed = true; unlisten?.(); };
+  }, [open, nativeRuntime, draft.action.type, language]);
+
+  useEffect(() => {
     if (!open) return;
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (recording) return;
+      if (recording || picking) return;
       event.preventDefault();
       onCancel();
     };
     window.addEventListener("keydown", handleEscape, true);
     return () => window.removeEventListener("keydown", handleEscape, true);
-  }, [onCancel, open, recording]);
+  }, [onCancel, open, recording, picking]);
 
   if (!open) return null;
+
+  const chooseApplication = async () => {
+    const generation = pickerGeneration.current;
+    setPicking(true);
+    setError(null);
+    try {
+      const path = await chooseFile({
+        title: t(language, "behavior.chooseApplication"),
+        multiple: false,
+        defaultPath: macOS ? "/Applications" : undefined,
+        filters: [{ name: t(language, "behavior.openApp"), extensions: macOS ? ["app"] : ["exe", "com", "lnk"] }],
+      });
+      if (generation !== pickerGeneration.current) return;
+      if (typeof path === "string") {
+        setDraft((current) => ({ ...current, action: { type: "open_app", path } }));
+      }
+    } catch {
+      if (generation === pickerGeneration.current) setError(t(language, "behavior.applicationPickFailed"));
+    } finally {
+      if (generation === pickerGeneration.current) setPicking(false);
+    }
+  };
 
   const save = () => {
     const validation = validateAction(draft.action, language);
@@ -92,7 +180,12 @@ export function ActionDialog({ open, language, mode, initial, onSave, onDelete, 
       return;
     }
     setError(null);
-    onSave(draft);
+    const action = draft.action.type === "open_app"
+      ? { ...draft.action, path: normalizeApplicationPath(draft.action.path)! }
+      : draft.action.type === "open_website"
+        ? { ...draft.action, url: normalizeWebsiteUrl(draft.action.url)! }
+        : draft.action;
+    onSave({ ...draft, action });
   };
 
   const changeType = (type: ButtonAction["type"]) => {
@@ -102,7 +195,7 @@ export function ActionDialog({ open, language, mode, initial, onSave, onDelete, 
 
   return (
     <div className="dialog-backdrop" role="presentation">
-      <section className="action-dialog" role="dialog" aria-modal="true" aria-labelledby="action-dialog-title">
+      <section ref={dialogRef} className={`action-dialog${dragOver ? " is-drop-target" : ""}`} role="dialog" aria-modal="true" aria-labelledby="action-dialog-title">
         <div className="dialog-heading">
           <h2 id="action-dialog-title">{t(language, mode === "edit" ? "behavior.editAction" : "behavior.add")}</h2>
         </div>
@@ -121,6 +214,8 @@ export function ActionDialog({ open, language, mode, initial, onSave, onDelete, 
               <option value="delay">{t(language, "behavior.delay")}</option>
               <option value="media">{t(language, "behavior.media")}</option>
               <option value="open">{t(language, "behavior.open")}</option>
+              <option value="open_app">{t(language, "behavior.openApp")}</option>
+              <option value="open_website">{t(language, "behavior.openWebsite")}</option>
             </select>
           </label>
 
@@ -153,13 +248,30 @@ export function ActionDialog({ open, language, mode, initial, onSave, onDelete, 
               <input aria-label={t(language, "behavior.openTarget")} value={draft.action.target} onChange={(event) => { setDraft((current) => ({ ...current, action: { type: "open", target: event.target.value } })); setError(null); }} />
             </label>
           )}
+          {draft.action.type === "open_app" && (
+            <div className="field-stack">
+              <label htmlFor="application-path">{t(language, "behavior.applicationPath")}</label>
+              <div className="launch-target-row">
+                <input id="application-path" value={draft.action.path} placeholder={macOS ? "/Applications/Safari.app" : "C:\\Program Files\\App\\App.exe"} spellCheck={false} onChange={(event) => { setDraft((current) => ({ ...current, action: { type: "open_app", path: event.target.value } })); setError(null); }} />
+                <button className="icon-button" type="button" aria-label={t(language, "behavior.chooseApplication")} title={t(language, nativeRuntime ? "behavior.chooseApplication" : "behavior.desktopPickerOnly")} disabled={!nativeRuntime || picking} onClick={() => void chooseApplication()}><FolderOpen size={18} /></button>
+              </div>
+              <small>{t(language, "behavior.applicationHint")}</small>
+            </div>
+          )}
+          {draft.action.type === "open_website" && (
+            <label className="field-stack">
+              <span>{t(language, "behavior.websiteUrl")}</span>
+              <input aria-label={t(language, "behavior.websiteUrl")} value={draft.action.url} placeholder="https://example.com" spellCheck={false} onChange={(event) => { setDraft((current) => ({ ...current, action: { type: "open_website", url: event.target.value } })); setError(null); }} />
+              <small>{t(language, "behavior.websiteHint")}</small>
+            </label>
+          )}
           {error && draft.action.type !== "hotkey" && <small className="field-error">{error}</small>}
         </div>
         <div className="dialog-actions">
           {mode === "edit" && <button type="button" className="danger-button" aria-label={t(language, "behavior.deleteAction")} onClick={onDelete}>{t(language, "behavior.deleteAction")}</button>}
           <span className="dialog-actions-spacer" />
           <button type="button" className="secondary-button" onClick={onCancel}>{t(language, "behavior.cancel")}</button>
-          <button type="button" className="primary-button" onClick={save}>{t(language, "behavior.save")}</button>
+          <button type="button" className="primary-button" disabled={picking} onClick={save}>{t(language, "behavior.save")}</button>
         </div>
       </section>
     </div>

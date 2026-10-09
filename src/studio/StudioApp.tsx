@@ -226,8 +226,9 @@ function nextGroupId(groups: ButtonGroup[]) {
   return `group-${index}`;
 }
 
-export default function StudioApp({ onFirmwareBusyChange }: {
+export default function StudioApp({ onFirmwareBusyChange, onUpdateBlockedChange }: {
   onFirmwareBusyChange?: (busy: boolean) => void;
+  onUpdateBlockedChange?: (blocked: boolean) => void;
 }) {
   const [snapshot, setSnapshot] = useState<StudioSnapshot | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -248,6 +249,9 @@ export default function StudioApp({ onFirmwareBusyChange }: {
   const [selectingRepository, setSelectingRepository] = useState(false);
 
   const dirty = definition ? JSON.stringify(definition) !== saved : false;
+  useEffect(() => {
+    onUpdateBlockedChange?.(dirty || busy || selectingRepository || modal !== null || deleteOpen);
+  }, [dirty, busy, selectingRepository, modal, deleteOpen, onUpdateBlockedChange]);
   const conflictingProduct = definition && selectedId !== definition.product.product_version_id
     ? snapshot?.products.find(
         (product) => product.productVersionId === definition.product.product_version_id,

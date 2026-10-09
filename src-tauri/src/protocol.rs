@@ -576,7 +576,9 @@ impl ActionStep {
                 self.total,
                 media_usage(*command)
             )),
-            ButtonAction::Open { .. } => Ok(format!(
+            ButtonAction::Open { .. }
+            | ButtonAction::OpenApp { .. }
+            | ButtonAction::OpenWebsite { .. } => Ok(format!(
                 "HOST {} {} {}\n",
                 self.run_id, self.step, self.total
             )),
@@ -626,7 +628,9 @@ impl ActionStep {
                 self.total,
                 media_usage(*command)
             )),
-            ButtonAction::Open { .. } => Ok(format!(
+            ButtonAction::Open { .. }
+            | ButtonAction::OpenApp { .. }
+            | ButtonAction::OpenWebsite { .. } => Ok(format!(
                 "HOST {} {} {}\n",
                 self.run_id, self.step, self.total
             )),
@@ -1492,6 +1496,37 @@ mod tests {
             step.command_v6(|_| Ok(())).unwrap(),
             "CHORD 7 1 1 128 2 4 5\n"
         );
+    }
+
+    #[test]
+    fn launch_actions_use_host_acknowledgements_on_both_protocols() {
+        for action in [
+            ButtonAction::OpenApp {
+                path: "/Applications/Test.app".into(),
+            },
+            ButtonAction::OpenWebsite {
+                url: "https://example.com/".into(),
+            },
+        ] {
+            let step = ActionStep {
+                run_id: 12,
+                button: "A".into(),
+                trigger: ActionTrigger::Press,
+                step: 2,
+                total: 4,
+                action,
+            };
+            assert_eq!(
+                step.command_legacy(|_| panic!("launch must not touch clipboard"))
+                    .unwrap(),
+                "HOST 12 2 4\n"
+            );
+            assert_eq!(
+                step.command_v6(|_| panic!("launch must not touch clipboard"))
+                    .unwrap(),
+                "HOST 12 2 4\n"
+            );
+        }
     }
 
     #[test]

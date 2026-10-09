@@ -164,13 +164,20 @@ pub struct DeviceSession {
 
 trait TargetOpener: Send + Sync {
     fn open(&self, target: &str) -> Result<(), String>;
+    fn open_application(&self, path: &str) -> Result<(), String> {
+        self.open(path)
+    }
 }
 
 struct SystemTargetOpener;
 
 impl TargetOpener for SystemTargetOpener {
     fn open(&self, target: &str) -> Result<(), String> {
-        open_target(target)
+        open_target(target, false)
+    }
+
+    fn open_application(&self, path: &str) -> Result<(), String> {
+        open_target(path, true)
     }
 }
 
@@ -1249,6 +1256,26 @@ impl DeviceSession {
                 .open(target)
                 .map_err(|_| "open_target_failed".to_owned())
                 .and_then(|()| self.command_step(&step)),
+            crate::profile::ButtonAction::OpenApp { path } => {
+                if crate::launch_target::installed_application(path) {
+                    target_opener
+                        .open_application(path)
+                        .map_err(|_| "open_target_failed".to_owned())
+                        .and_then(|()| self.command_step(&step))
+                } else {
+                    Err("open_target_failed".to_owned())
+                }
+            }
+            crate::profile::ButtonAction::OpenWebsite { url } => {
+                if crate::launch_target::valid_website_url(url) {
+                    target_opener
+                        .open(url)
+                        .map_err(|_| "open_target_failed".to_owned())
+                        .and_then(|()| self.command_step(&step))
+                } else {
+                    Err("open_target_failed".to_owned())
+                }
+            }
         };
         match result {
             Ok(line) => output.lines.push(line),
@@ -1274,7 +1301,12 @@ impl DeviceSession {
             sequence.abort();
         }
         output.lines.push(format!("SKIP {}\n", step.run_id));
-        let detail = if matches!(&step.action, crate::profile::ButtonAction::Open { .. }) {
+        let detail = if matches!(
+            &step.action,
+            crate::profile::ButtonAction::Open { .. }
+                | crate::profile::ButtonAction::OpenApp { .. }
+                | crate::profile::ButtonAction::OpenWebsite { .. }
+        ) {
             "open_target_failed".into()
         } else {
             error
@@ -1387,8 +1419,15 @@ fn action_activity(code: &str, step: &crate::protocol::ActionStep) -> RuntimeAct
             };
             activity.params.insert("command".into(), command.into());
         }
-        crate::profile::ButtonAction::Open { target } => {
-            activity.params.insert("actionKind".into(), "open".into());
+        crate::profile::ButtonAction::Open { target }
+        | crate::profile::ButtonAction::OpenApp { path: target }
+        | crate::profile::ButtonAction::OpenWebsite { url: target } => {
+            let kind = match &step.action {
+                crate::profile::ButtonAction::OpenApp { .. } => "open_app",
+                crate::profile::ButtonAction::OpenWebsite { .. } => "open_website",
+                _ => "open",
+            };
+            activity.params.insert("actionKind".into(), kind.into());
             activity.params.insert(
                 "targetKind".into(),
                 if target.contains("://") {
@@ -2529,7 +2568,7 @@ fn write_display_lines<W: Write + ?Sized>(
 }
 
 #[cfg(target_os = "macos")]
-fn open_target(target: &str) -> Result<(), String> {
+fn open_target(target: &str, _application: bool) -> Result<(), String> {
     let status = Command::new("/usr/bin/open")
         .arg("--")
         .arg(target)
@@ -2542,10 +2581,34 @@ fn open_target(target: &str) -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
-fn open_target(target: &str) -> Result<(), String> {
+fn open_target(target: &str, application: bool) -> Result<(), String> {
     use std::{iter, ptr};
+    use windows_sys::Win32::System::Com::{
+        COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize,
+    };
     use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
 
+    struct ComApartment(bool);
+    impl Drop for ComApartment {
+        fn drop(&mut self) {
+            if self.0 {
+                unsafe { CoUninitialize() };
+            }
+        }
+    }
+    let _apartment =
+        ComApartment(unsafe { CoInitializeEx(ptr::null(), COINIT_APARTMENTTHREADED as u32) } >= 0);
+    let directory = application
+        .then(|| std::path::Path::new(target).parent())
+        .flatten()
+        .map(|parent| {
+            use std::os::windows::ffi::OsStrExt;
+            parent
+                .as_os_str()
+                .encode_wide()
+                .chain(iter::once(0))
+                .collect::<Vec<_>>()
+        });
     let operation = "open\0".encode_utf16().collect::<Vec<_>>();
     let target = target
         .encode_utf16()
@@ -2557,7 +2620,7 @@ fn open_target(target: &str) -> Result<(), String> {
             operation.as_ptr(),
             target.as_ptr(),
             ptr::null(),
-            ptr::null(),
+            directory.as_ref().map_or(ptr::null(), |path| path.as_ptr()),
             SW_SHOWNORMAL,
         )
     };
@@ -2572,7 +2635,7 @@ fn open_target(target: &str) -> Result<(), String> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn open_target(_: &str) -> Result<(), String> {
+fn open_target(_: &str, _: bool) -> Result<(), String> {
     Err("opening targets is unsupported on this platform".into())
 }
 
@@ -4731,6 +4794,88 @@ mod tests {
         assert_eq!(third.activities[1].params["actionKind"], "media");
         assert_eq!(third.activities[1].params["command"], "play_pause");
         assert!(!third.activities[1].params.contains_key("mediaCommand"));
+    }
+
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn launch_actions_run_on_the_host_in_order_and_abort_for_missing_apps() {
+        let directory = tempfile::tempdir().unwrap();
+        #[cfg(target_os = "macos")]
+        let app = directory.path().join("Test & Space.app");
+        #[cfg(target_os = "windows")]
+        let app = directory.path().join("Test & Space.exe");
+        #[cfg(target_os = "macos")]
+        std::fs::create_dir(&app).unwrap();
+        #[cfg(target_os = "windows")]
+        std::fs::write(&app, []).unwrap();
+        let path = app.to_str().unwrap();
+        let url = "https://example.com/private?token=secret&a=1&b=2";
+        let targets = Arc::new(Mutex::new(Vec::new()));
+        let mut runtime = runtime_model();
+        runtime.profile.actions.insert(
+            "A".into(),
+            TriggerActions::press(vec![
+                ButtonAction::OpenApp { path: path.into() },
+                ButtonAction::OpenWebsite { url: url.into() },
+                ButtonAction::OpenApp {
+                    path: directory
+                        .path()
+                        .join("Missing.app")
+                        .to_string_lossy()
+                        .into(),
+                },
+                ButtonAction::Delay { duration_ms: 100 },
+            ]),
+        );
+        let mut session = DeviceSession::new(runtime);
+        session.target_opener = Arc::new(RecordingTargetOpener {
+            targets: Arc::clone(&targets),
+            error: None,
+        });
+        session.ready = true;
+        let first = session.on_message_deferred(
+            DeviceMessage::State {
+                event_id: 46,
+                input: PhysicalInput::Direct { gpio: 6 },
+                state: InputState::Down,
+            },
+            12,
+            130,
+        );
+        assert_eq!(first.lines, ["HOST 46 1 4\n"]);
+        assert_eq!(targets.lock().unwrap().as_slice(), [path]);
+        assert_eq!(first.activities[1].params["actionKind"], "open_app");
+        let second = session.on_message_deferred(
+            DeviceMessage::Done {
+                run_id: 46,
+                step: 1,
+            },
+            0,
+            131,
+        );
+        assert_eq!(second.lines, ["HOST 46 2 4\n"]);
+        assert_eq!(targets.lock().unwrap().as_slice(), [path, url]);
+        assert_eq!(second.activities[1].params["actionKind"], "open_website");
+        assert!(
+            !serde_json::to_string(&second.activities)
+                .unwrap()
+                .contains("secret")
+        );
+        let third = session.on_message_deferred(
+            DeviceMessage::Done {
+                run_id: 46,
+                step: 2,
+            },
+            0,
+            132,
+        );
+        assert_eq!(third.lines, ["SKIP 46\n"]);
+        assert_eq!(targets.lock().unwrap().len(), 2);
+        assert_eq!(
+            third.activities[2].detail.as_deref(),
+            Some("open_target_failed")
+        );
+        assert!(session.active.is_none());
     }
 
     #[test]

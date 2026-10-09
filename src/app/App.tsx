@@ -16,6 +16,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import brandIcon from "../../src-tauri/icons/128x128.png";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { AutostartSettings } from "./AutostartSettings";
+import { UpdateSettings, UpdateProgressDialog } from "../shared/UpdateSettings";
+import { updateIsBusy } from "../shared/releaseUpdate";
+import { useReleaseUpdate } from "../shared/useReleaseUpdate";
 import { CreateDeviceProfileForm } from "./CreateDeviceProfileForm";
 import {
   DeviceManagement,
@@ -28,6 +31,7 @@ import {
 import { hardwareProfilesAreValid } from "./hardwareValidation";
 import { reconcileSetupSession, setupPresence } from "./deviceSetupSession";
 import { t } from "./i18n";
+import { normalizeApplicationPath, normalizeWebsiteUrl, validLaunchTargetLength } from "./launchTarget";
 import {
   projectImportedProfiles,
   summarizeProfiles,
@@ -157,6 +161,10 @@ function isValidDraft(
               );
             case "media":
               return action.command.length > 0;
+            case "open_app":
+              return normalizeApplicationPath(action.path) !== null && validLaunchTargetLength(action.path);
+            case "open_website":
+              return normalizeWebsiteUrl(action.url) !== null && validLaunchTargetLength(action.url);
             case "open":
               return (
                 action.target.trim().length > 0 &&
@@ -289,6 +297,7 @@ function runtimeFeedbackIdentity(
 
 export default function App() {
   const queue = useRef(new SerializedSaveQueue()).current;
+  const productSaveFailuresRef = useRef(new Set<string>());
   const [registry, setRegistry] = useState<RegistryState>({
     deviceProfiles: [],
     productConfigurations: [],
@@ -498,6 +507,7 @@ export default function App() {
       preserveHistory = preserveDrafts,
     ) => {
       registryEpochRef.current += 1;
+      if (!preserveHistory) productSaveFailuresRef.current.clear();
       const serverProfiles = snapshot.deviceProfiles.map(
         normalizeDeviceProfile,
       );
@@ -831,6 +841,18 @@ export default function App() {
     valid: autosaveProfiles.length > 0,
     save: (target) => saveProfiles(target.profiles),
     queue,
+  });
+  const updateBlocked = dirtyProfiles.some((profile) => !autosaveProfiles.includes(profile)) || setupOpen;
+  const update = useReleaseUpdate({
+    enabled: loaded && !PREVIEW_MODE && !startupFailure,
+    beforeInstall: async () => {
+      if (updateBlocked) throw new Error("Unsaved draft or device setup");
+      await autosave.flush();
+      await queue.flush();
+      if ([...productSaveFailuresRef.current].some((id) => productConfigurations.some((config) => config.id === id))) {
+        throw new Error("Product configuration save failed");
+      }
+    },
   });
 
   const navigate = useCallback(
@@ -1305,12 +1327,19 @@ export default function App() {
         ),
       }));
       void queue
-        .enqueue(() =>
-          invoke<AppSnapshot>("save_product_configuration", {
-            deviceId,
-            config: nextConfig,
-          }),
-        )
+        .enqueue(async () => {
+          try {
+            const snapshot = await invoke<AppSnapshot>("save_product_configuration", {
+              deviceId,
+              config: nextConfig,
+            });
+            productSaveFailuresRef.current.delete(nextConfig.id);
+            return snapshot;
+          } catch (operationError) {
+            productSaveFailuresRef.current.add(nextConfig.id);
+            throw operationError;
+          }
+        })
         .then((snapshot) => {
           if (mountedRef.current) replaceRegistrySnapshot(snapshot, true);
         })
@@ -1769,7 +1798,8 @@ export default function App() {
   }
 
   return (
-    <main className="product-shell">
+    <>
+    <main className="product-shell" inert={updateIsBusy(update.phase)}>
       <header className="topbar">
         <div className="brand">
           <img src={brandIcon} alt="" />
@@ -1795,6 +1825,7 @@ export default function App() {
           >
             <Settings2 size={16} />
             {t(language, "nav.settings")}
+            {update.hasUpdate && <span className="update-badge" aria-label={t(language, "update.title")} />}
           </button>
         </nav>
         <div
@@ -1891,6 +1922,7 @@ export default function App() {
               </div>
               <div className="data-page-body">
                 <AutostartSettings language={language} preview={PREVIEW_MODE} />
+                <UpdateSettings update={update} language={language} blocked={updateBlocked} />
                 <section className="data-card">
                   <h3>{t(language, "data.groupTransfer")}</h3>
                   <div className="data-menu">
@@ -2059,5 +2091,7 @@ export default function App() {
         />
       )}
     </main>
+    <UpdateProgressDialog update={update} language={language} />
+    </>
   );
 }

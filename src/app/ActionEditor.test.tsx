@@ -48,6 +48,23 @@ function configuredActions() {
   return JSON.parse(screen.getByTestId("actions-json").textContent ?? "{}") as TriggerActions;
 }
 
+test("launch library entries configure a target before adding an action", async () => {
+  const user = userEvent.setup();
+  const onChange = vi.fn();
+  render(<Harness onChange={onChange} />);
+  const items = screen.getByRole("region", { name: "Action library" }).querySelector(".action-library-items") as HTMLElement;
+  await user.click(within(items).getByRole("button", { name: /Open website/ }));
+  expect(onChange).not.toHaveBeenCalled();
+  await user.type(screen.getByLabelText("Website address"), "example.com");
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  expect(configuredActions().press).toEqual([{ type: "open_website", url: "https://example.com/" }]);
+  await user.click(within(items).getByRole("button", { name: /Open app/ }));
+  await user.type(screen.getByLabelText("Application path"), "/Applications/Safari.app");
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(configuredActions().press).toHaveLength(1);
+  expect(onChange).toHaveBeenCalledOnce();
+});
+
 test("edits and trims the selected button note", async () => {
   const user = userEvent.setup();
   render(<Harness language="zh-CN" />);

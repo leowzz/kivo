@@ -33,6 +33,10 @@ Kivo 包含两个独立的 Tauri 桌面入口：日常使用的 **Kivo APP**，�
 
 产品设备会按 Product Version ID 选择已有或默认动作配置。通用固件设备在获得有效 Runtime Assignment 前不会执行动作；编辑中的 Device Profile 不会自动替换其他设备正在使用的配置。
 
+动作库中的“打开应用”可选择应用、拖入应用或快捷方式，也可填写完整路径：macOS 支持 `.app`，Windows 支持 `.exe`、`.com` 和 `.lnk`。“打开网址”使用默认浏览器，支持 HTTP 和 HTTPS，未填写协议时自动使用 HTTPS。选择目标并保存后，这些动作会按配置顺序执行。
+
+APP 的“设置 → 应用更新”和 Studio 的“应用更新”可手动检查新版。桌面应用也会在启动及重新回到前台时检查更新；发现新版后，点击“更新并重启”即可下载、验证并安装更新。更新应用前请先保存修改并完成设备操作。应用更新不会刷写设备固件。
+
 “数据与备份”中的“备份设备行为”导出产品动作配置与设备选择关系，不包含固件、布局、接线、统计数据或旧版 Device Profile，不能当作整个工作区的全量备份。设备 Flash 的备份与恢复在 Studio 的工具台完成。
 
 ## 刷入固件
@@ -287,6 +291,8 @@ make helper-build
 ```
 
 `make test` 会运行发布脚本测试、Python 上传/选择测试、PlatformIO native 测试、Rust 测试与 Clippy、前端测试和生产构建。`make helper-build` 会连续构建 Kivo 和 Kivo Product Studio 两套包：macOS 生成应用包，Windows 生成对应的 NSIS 安装程序。Windows CI 也会在每次 pull request 中验证两套 NSIS 安装程序。
+
+Tag 发布会使用 GitHub Secret `TAURI_SIGNING_PRIVATE_KEY` 签名桌面更新包，并在 Windows x64 和 macOS universal 产物齐备后生成 `latest.json`（APP）及 `latest-studio.json`（Studio）。两个入口分别读取自己的清单。签名公钥保存在 Tauri 配置中；私钥需安全备份，不能提交到仓库。普通本地构建不生成签名更新包；需要验证更新包时，设置 `TAURI_SIGNING_PRIVATE_KEY` 并额外使用 `--config src-tauri/tauri.updater.conf.json`。首次支持应用内更新的版本仍需手动安装，之后即可通过应用内更新升级。
 
 ## 项目结构
 

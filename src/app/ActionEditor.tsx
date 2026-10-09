@@ -5,6 +5,8 @@ import {
   Check,
   Clock3,
   ExternalLink,
+  FolderOpen,
+  Globe,
   Keyboard,
   Library,
   Pencil,
@@ -45,6 +47,8 @@ const ACTION_SUMMARY_LABELS: Record<ButtonAction["type"], MessageKey> = {
   delay: "behavior.summary.delay",
   media: "behavior.summary.media",
   open: "behavior.summary.open",
+  open_app: "behavior.openApp",
+  open_website: "behavior.openWebsite",
 };
 
 type LibraryCategory = "common" | "recent" | ButtonAction["type"];
@@ -57,6 +61,18 @@ interface ActionLibraryItem {
 }
 
 const ACTION_LIBRARY: readonly ActionLibraryItem[] = [
+  {
+    type: "open_app",
+    label: "behavior.openApp",
+    description: "behavior.library.openAppDescription",
+    action: { type: "open_app", path: "" },
+  },
+  {
+    type: "open_website",
+    label: "behavior.openWebsite",
+    description: "behavior.library.openWebsiteDescription",
+    action: { type: "open_website", url: "" },
+  },
   {
     type: "paste",
     label: "behavior.paste",
@@ -95,6 +111,8 @@ const LIBRARY_CATEGORIES: ReadonlyArray<{ value: LibraryCategory; label: Message
   { value: "paste", label: "behavior.paste" },
   { value: "hotkey", label: "behavior.hotkey" },
   { value: "open", label: "behavior.open" },
+  { value: "open_app", label: "behavior.openApp" },
+  { value: "open_website", label: "behavior.openWebsite" },
   { value: "media", label: "behavior.media" },
   { value: "delay", label: "behavior.delay" },
 ];
@@ -133,6 +151,10 @@ function actionSummary(action: ButtonAction, language: Language): string {
     }
     case "open":
       return `${prefix} - ${action.target || "-"}`;
+    case "open_app":
+      return `${prefix} - ${action.path.split(/[\\/]/).pop() || "-"}`;
+    case "open_website":
+      return `${prefix} - ${action.url || "-"}`;
   }
 }
 
@@ -143,6 +165,8 @@ function actionIcon(action: ButtonAction) {
     case "delay": return Clock3;
     case "media": return AudioLines;
     case "open": return ExternalLink;
+    case "open_app": return FolderOpen;
+    case "open_website": return Globe;
   }
 }
 
@@ -257,6 +281,11 @@ export function ActionEditor({
   };
 
   const addLibraryAction = (item: ActionLibraryItem, trigger: ActionTrigger = "press") => {
+    if (item.type === "open_app" || item.type === "open_website") {
+      setDialogDraft({ trigger, action: cloneAction(item.action) });
+      setEditingTarget("create");
+      return;
+    }
     updateGroup(trigger, [...groups[trigger], cloneAction(item.action)]);
     setRecentTypes((current) => [item.type, ...current.filter((type) => type !== item.type)]);
   };
