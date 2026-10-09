@@ -226,11 +226,19 @@ impl DispatchClassState {
     }
 
     fn reserve(&self) -> bool {
-        self.reserved
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |reserved| {
-                (reserved < self.capacity).then_some(reserved + 1)
-            })
-            .is_ok()
+        let mut reserved = self.reserved.load(Ordering::Acquire);
+        while reserved < self.capacity {
+            match self.reserved.compare_exchange_weak(
+                reserved,
+                reserved + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return true,
+                Err(current) => reserved = current,
+            }
+        }
+        false
     }
 
     fn release(&self) {
@@ -836,10 +844,10 @@ pub(crate) fn install<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::{
-        DeviceLogInventory, DispatchOutcome, LogDispatcher, LogSink, QueuedLogEntry,
-        RuntimeLogEntry, RuntimeLogLevel, log_directory, metrics_initialization_failure_detail,
-        operation, operation_entry, runtime_event_entry, serialize_entry,
-        stable_runtime_activity_code,
+        DeviceLogInventory, DispatchClassState, DispatchOutcome, LogDispatcher, LogSink,
+        QueuedLogEntry, RuntimeLogEntry, RuntimeLogLevel, log_directory,
+        metrics_initialization_failure_detail, operation, operation_entry, runtime_event_entry,
+        serialize_entry, stable_runtime_activity_code,
     };
     use crate::{
         coordinator::{
@@ -857,7 +865,7 @@ mod tests {
         cell::Cell,
         collections::BTreeSet,
         path::Path,
-        sync::{Arc, Mutex, mpsc},
+        sync::{Arc, Barrier, Mutex, atomic::Ordering, mpsc},
         time::Duration,
     };
 
@@ -1056,6 +1064,41 @@ mod tests {
         assert_eq!(success, Ok("original value"));
         assert_eq!(failed_calls.get(), 1);
         assert_eq!(failed, Err(expected_error));
+    }
+
+    #[test]
+    fn dispatch_reservations_enforce_capacity_under_contention_and_can_be_reused() {
+        for capacity in [0, 1, 8] {
+            let state = DispatchClassState::new(capacity);
+            let start = Barrier::new(32);
+            let accepted = std::thread::scope(|scope| {
+                let attempts = (0..32)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            start.wait();
+                            state.reserve()
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                attempts
+                    .into_iter()
+                    .map(|attempt| attempt.join().unwrap())
+                    .filter(|accepted| *accepted)
+                    .count()
+            });
+
+            assert_eq!(accepted, capacity);
+            assert_eq!(state.reserved.load(Ordering::Acquire), capacity);
+            assert!(!state.reserve());
+            for _ in 0..accepted {
+                state.release();
+            }
+            assert_eq!(state.reserved.load(Ordering::Acquire), 0);
+            for _ in 0..capacity {
+                assert!(state.reserve());
+            }
+            assert!(!state.reserve());
+        }
     }
 
     #[test]
