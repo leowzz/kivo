@@ -3,6 +3,9 @@
 #include "DisplayRuntime.h"
 #include "ControlPanel.h"
 
+void setUp() {}
+void tearDown() {}
+
 namespace {
 class FakeSurface : public DisplaySurface {
  public:
