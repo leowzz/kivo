@@ -38,6 +38,8 @@ grep -Fq 'ESP32-S3 and RP2040 firmware' "$RELEASE_WORKFLOW"
 grep -Fq 'Build Product Studio installer' "$RELEASE_WORKFLOW"
 grep -Fq 'Upload Product Studio installer' "$RELEASE_WORKFLOW"
 grep -Fq 'studio_bundle_dir:' "$RELEASE_WORKFLOW"
+# macOS updater archives are only generated when the app bundle is explicitly selected.
+grep -Fq -- '--target universal-apple-darwin --bundles app,dmg' "$RELEASE_WORKFLOW"
 grep -Fq 'Build Windows Product Studio NSIS installer' "$WINDOWS_WORKFLOW"
 grep -Fq 'helper-build-studio:' "$MAKEFILE"
 grep -Fq 'product-studio' "$MAKEFILE"

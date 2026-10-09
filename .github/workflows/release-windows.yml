@@ -59,7 +59,7 @@ jobs:
             rust_targets: ""
           - name: macOS universal
             platform: macos-latest
-            args: --target universal-apple-darwin --bundles dmg
+            args: --target universal-apple-darwin --bundles app,dmg
             studio_bundle_dir: src-tauri/target/universal-apple-darwin/release/bundle/dmg
             updater_bundle_root: src-tauri/target/universal-apple-darwin/release/bundle
             rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
