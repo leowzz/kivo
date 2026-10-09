@@ -188,7 +188,7 @@ impl ProductDefinition {
                         .with_param("board_profile", &self.hardware_profile.board_profile_id)
                 })?;
         validate_product_identity(&self.product, controller_token, button_count(&self.layout))?;
-        if (self.hardware_profile.ssd1306.is_some() || self.hardware_profile.sh1106.is_some())
+        if self.hardware_profile.display.is_some()
             && !self
                 .product
                 .capabilities
@@ -197,18 +197,7 @@ impl ProductDefinition {
         {
             return Err(AppError::new("display_capability_required"));
         }
-        if (self
-            .hardware_profile
-            .ssd1306
-            .as_ref()
-            .and_then(|oled| oled.control_panel.as_ref())
-            .is_some()
-            || self
-                .hardware_profile
-                .sh1106
-                .as_ref()
-                .and_then(|oled| oled.control_panel.as_ref())
-                .is_some())
+        if self.hardware_profile.controls.is_some()
             && !self
                 .product
                 .capabilities
@@ -386,29 +375,17 @@ pub fn generated_header(normalized: &NormalizedProductDefinition) -> Result<Stri
         "  TopologyBuilder builder(profile);\n  constexpr std::uint32_t revision = 1;\n  if (std::string_view(profile.boardProfileId) != \"{}\" ||\n      !builder.begin(revision, {})) return std::nullopt;\n",
         hardware.board_profile_id, hardware.debounce_ms
     );
-    if let Some(oled) = &hardware.ssd1306 {
+    if let Some(display) = &hardware.display {
         topology.push_str(&format!(
-            "  if (!builder.addOled(revision, {}, {})) return std::nullopt;\n",
-            oled.sda, oled.scl
+            "  if (!builder.addDisplay(revision, {{DisplayPanel::{}, {}, {}, {}}})) return std::nullopt;\n",
+            display.panel.cpp_name(), display.sda, display.scl, display.address
         ));
-        if let Some(control_panel) = &oled.control_panel {
-            let [confirm, encoder_press, encoder_a, encoder_b, back] = control_panel.pins();
-            topology.push_str(&format!(
-                "  if (!builder.addOledControlPanel(revision, {confirm}, {encoder_press}, {encoder_a}, {encoder_b}, {back})) return std::nullopt;\n"
-            ));
-        }
     }
-    if let Some(oled) = &hardware.sh1106 {
+    if let Some(controls) = &hardware.controls {
+        let [confirm, encoder_press, encoder_a, encoder_b, back] = controls.pins();
         topology.push_str(&format!(
-            "  if (!builder.addSh1106(revision, {}, {})) return std::nullopt;\n",
-            oled.sda, oled.scl
+            "  if (!builder.addControlPanel(revision, {confirm}, {encoder_press}, {encoder_a}, {encoder_b}, {back})) return std::nullopt;\n"
         ));
-        if let Some(control_panel) = &oled.control_panel {
-            let [confirm, encoder_press, encoder_a, encoder_b, back] = control_panel.pins();
-            topology.push_str(&format!(
-                "  if (!builder.addOledControlPanel(revision, {confirm}, {encoder_press}, {encoder_a}, {encoder_b}, {back})) return std::nullopt;\n"
-            ));
-        }
     }
     for (index, source) in sources.iter().enumerate() {
         match source {
@@ -482,7 +459,7 @@ mod tests {
     use super::*;
     use crate::{
         model::{ButtonDefinition, ButtonGroup},
-        profile::{InputSource, OledControlPanelConfig, Sh1106Config, Ssd1306Config},
+        profile::{ControlPanelConfig, InputSource},
     };
 
     fn definition() -> ProductDefinition {
@@ -513,8 +490,8 @@ mod tests {
                 name: "Default hardware".into(),
                 board_profile_id: "yd-rp2040".into(),
                 debounce_ms: 30,
-                ssd1306: None,
-                sh1106: None,
+                display: None,
+                controls: None,
                 inputs: vec![InputSource::Direct {
                     id: "direct".into(),
                     keys: BTreeMap::from([("K1".into(), 1)]),
@@ -584,16 +561,23 @@ mod tests {
     #[test]
     fn generated_header_keeps_the_ssd1306_topology_path() {
         let mut definition = definition();
-        definition.hardware_profile.ssd1306 = Some(Ssd1306Config {
+        definition.hardware_profile.display = Some(crate::display_hardware::DisplayConfig {
+            panel: crate::display_hardware::DisplayPanel::Ssd1306_128x32,
+            address: 60,
+
             sda: 28,
             scl: 29,
-            control_panel: None,
         });
+        definition.hardware_profile.controls = None;
 
         let header = generated_header(&definition.normalize().unwrap()).unwrap();
 
-        assert!(header.contains("builder.addOled(revision, 28, 29)"));
-        assert!(!header.contains("builder.addSh1106"));
+        assert!(
+            header.contains(
+                "builder.addDisplay(revision, {DisplayPanel::Ssd1306_128x32, 28, 29, 60})"
+            )
+        );
+        assert!(!header.contains("DisplayPanel::Sh1106_128x64"));
     }
 
     #[test]
@@ -603,35 +587,45 @@ mod tests {
         definition.product.variant_id = "key-rp-k1-disp-encp".into();
         definition.product.product_version_id = "key-rp-k1-disp-encp-r01".into();
         definition.layout.id = "key-rp-k1-disp-encp".into();
-        definition.hardware_profile.sh1106 = Some(Sh1106Config {
+        definition.hardware_profile.display = Some(crate::display_hardware::DisplayConfig {
+            panel: crate::display_hardware::DisplayPanel::Sh1106_128x64,
+            address: 60,
+
             sda: 28,
             scl: 29,
-            control_panel: Some(OledControlPanelConfig::Ec11ConfirmBack {
-                confirm: 19,
-                encoder_press: 20,
-                encoder_a: 21,
-                encoder_b: 22,
-                back: 26,
-            }),
+        });
+        definition.hardware_profile.controls = Some(ControlPanelConfig::Ec11ConfirmBack {
+            confirm: 19,
+            encoder_press: 20,
+            encoder_a: 21,
+            encoder_b: 22,
+            back: 26,
         });
 
         let normalized = definition.normalize().unwrap();
         let header = generated_header(&normalized).unwrap();
-        assert!(header.contains("builder.addSh1106(revision, 28, 29)"));
-        assert!(header.contains("builder.addOledControlPanel(revision, 19, 20, 21, 22, 26)"));
+        assert!(
+            header.contains(
+                "builder.addDisplay(revision, {DisplayPanel::Sh1106_128x64, 28, 29, 60})"
+            )
+        );
+        assert!(header.contains("builder.addControlPanel(revision, 19, 20, 21, 22, 26)"));
         assert_eq!(button_count(&definition.layout), 1);
 
         let mut duplicate = definition.clone();
-        duplicate.hardware_profile.sh1106 = Some(Sh1106Config {
+        duplicate.hardware_profile.display = Some(crate::display_hardware::DisplayConfig {
+            panel: crate::display_hardware::DisplayPanel::Sh1106_128x64,
+            address: 60,
+
             sda: 28,
             scl: 29,
-            control_panel: Some(OledControlPanelConfig::Ec11ConfirmBack {
-                confirm: 19,
-                encoder_press: 19,
-                encoder_a: 21,
-                encoder_b: 22,
-                back: 26,
-            }),
+        });
+        duplicate.hardware_profile.controls = Some(ControlPanelConfig::Ec11ConfirmBack {
+            confirm: 19,
+            encoder_press: 19,
+            encoder_a: 21,
+            encoder_b: 22,
+            back: 26,
         });
         assert_eq!(
             duplicate.validate().unwrap_err().code,

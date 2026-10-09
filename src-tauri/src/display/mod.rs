@@ -21,9 +21,9 @@ pub(crate) use model::{DisplayItem, DisplayPriority, DisplaySnapshot, DisplaySta
 pub(crate) use provider::{DisplayProvider, ProviderRegistry, ProviderUpdate};
 #[allow(unused_imports)]
 pub(crate) use render::{
-    DisplayCapabilities, DisplayRegion, DisplayRenderer, DrawOperation, MonoText128x32Renderer,
-    MonoText128x64Renderer, PixelFormat, Rect, RenderedScene, RendererRegistry, SH1106_PANEL_ID,
-    SSD1306_PANEL_ID, ascii_project_title, built_in_renderer_registry,
+    DisplayCapabilities, DisplayRegion, DisplayRenderer, DrawOperation, MONO_128X32_LAYOUT_ID,
+    MONO_128X64_LAYOUT_ID, MonoText128x32Renderer, MonoText128x64Renderer, Rect, RenderedScene,
+    RendererRegistry, ascii_project_title, built_in_renderer_registry,
 };
 #[allow(unused_imports)]
 pub(crate) use scene::{SceneMode, SceneTracker, SceneUpdate};
@@ -200,9 +200,6 @@ mod tests {
     #[test]
     fn built_in_renderer_registry_contains_both_oled_panels() {
         let registry = built_in_renderer_registry();
-        assert_eq!(
-            registry.panel_ids(),
-            vec!["sh1106-1.3-128x64-ec11", "ssd1306_128x32_mono"]
-        );
+        assert_eq!(registry.layout_ids(), vec!["mono_128x32", "mono_128x64"]);
     }
 }

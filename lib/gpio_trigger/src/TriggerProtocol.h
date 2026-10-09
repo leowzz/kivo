@@ -17,9 +17,8 @@ enum class HelperCommandKind {
   ConfigBegin,
   ConfigDirect,
   ConfigMatrix,
-  ConfigOled,
-  ConfigSh1106,
-  ConfigOledControl,
+  ConfigDisplay,
+  ConfigControls,
   ConfigCommit,
   DisplayBegin,
   DisplayRegion,
@@ -49,8 +48,10 @@ struct HelperCommand {
   std::vector<std::uint8_t> keycodes;
   std::uint16_t consumerUsage = 0;
   std::uint32_t durationMs = 0;
-  std::uint8_t oledSda = 0;
-  std::uint8_t oledScl = 0;
+  DisplayPanel displayPanel = DisplayPanel::Ssd1306_128x32;
+  std::uint8_t displayAddress = 0x3C;
+  std::uint8_t displaySda = 0;
+  std::uint8_t displayScl = 0;
   bool displayFull = false;
   std::uint8_t displaySlot = 0;
   std::uint16_t displayX = 0;

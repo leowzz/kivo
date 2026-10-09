@@ -7,15 +7,15 @@
 
 #include "ActionRunController.h"
 #include "ActionRunDispatcher.h"
-#include "DisplayController.h"
+#include "DisplayRuntime.h"
+#include "display/U8g2Display.h"
 #include "DisplayStatus.h"
 #include "EmbeddedProduct.h"
 #include "GpioTriggerController.h"
 #include "GpioMonitor.h"
 #include "Handshake.h"
 #include "KeyActivityIndicator.h"
-#include "OledControlPanel.h"
-#include "RemoteDisplay.h"
+#include "ControlPanel.h"
 #include "StandaloneDebugTopology.h"
 #include "TriggerProtocol.h"
 #include "platform/Platform.h"
@@ -32,9 +32,9 @@ KeyActivityIndicator keyIndicator;
 ResponseLineBuffer responseLines(kMaxResponseLineLength);
 TopologyBuilder topologyBuilder(platform::boardProfile());
 DisplayStatusModel displayStatus;
-DisplayController displayController;
-OledControlPanel oledControlPanel;
-std::optional<RemoteDisplay> remoteDisplay{std::in_place};
+U8g2Display displaySurface;
+DisplayRuntime displayRuntime(displaySurface);
+ControlPanel controls;
 bool helperConnected = false;
 bool standaloneDisplayPending = false;
 std::uint32_t standaloneDisplayStartedMs = 0;
@@ -52,10 +52,6 @@ std::optional<PendingDelay> pendingDelay;
 void writeLine(const std::string &line) {
   platform::write(line.c_str(), line.size());
   platform::flush();
-}
-
-void resetOledControlPanel() {
-  oledControlPanel.reset();
 }
 
 std::string encodeBase64(const std::uint8_t *data, std::size_t length) {
@@ -111,42 +107,12 @@ bool pasteClipboard() {
   return platform::sendHotkey(0x08, 0x19);
 }
 
-DisplayFrame displayFailureFrame() {
-  auto frame = displayStatus.frame();
-  frame.lines[1] = "DISPLAY ERROR   ";
-  frame.lines[2].clear();
-  return frame;
-}
-
-bool applyDisplayUpdate(const DisplayUpdate &update) {
-  bool rendered = true;
-  if (update.kind == DisplayUpdateKind::Local && update.local != nullptr) {
-    rendered = platform::renderLocalDisplay(*update.local);
-  } else if (update.kind == DisplayUpdateKind::Remote &&
-             update.remote != nullptr) {
-    rendered =
-        platform::renderRemoteDisplay(*update.remote, update.fullRedraw);
-  } else if (update.kind != DisplayUpdateKind::None) {
-    rendered = false;
-  }
-  if (!rendered) {
-    const auto failure =
-        displayController.displayFailed(displayFailureFrame());
-    if (failure.local != nullptr) {
-      (void)platform::renderLocalDisplay(*failure.local);
-    }
-  }
-  return rendered;
-}
-
 void showStatus(LocalDisplayPriority priority) {
-  applyDisplayUpdate(displayController.showLocal(displayStatus.frame(),
-                                                 priority));
+  displayRuntime.showLocal(displayStatus.frame(), priority);
 }
 
 void showControlPanel() {
-  applyDisplayUpdate(displayController.showInteractive(
-      oledControlPanel.frame(displayStatus.frame())));
+  displayRuntime.showInteractive(controls.frame(displayStatus.frame(), *controller.topology().display));
 }
 
 DisplayFrame helperOfflineFrame() {
@@ -156,13 +122,13 @@ DisplayFrame helperOfflineFrame() {
   return frame;
 }
 
-bool isActiveOledPin(std::uint8_t pin) {
-  const auto &oled = controller.topology().oled;
-  return oled.has_value() && (pin == oled->sda || pin == oled->scl);
+bool isActiveDisplayPin(std::uint8_t pin) {
+  const auto &display = controller.topology().display;
+  return display.has_value() && (pin == display->sda || pin == display->scl);
 }
 
-void applyOledControlPanelPinModes() {
-  if (const auto &panel = controller.topology().oledControlPanel;
+void applyControlPanelPinModes() {
+  if (const auto &panel = controller.topology().controls;
       panel.has_value()) {
     pinMode(panel->confirm, INPUT_PULLUP);
     pinMode(panel->encoderPress, INPUT_PULLUP);
@@ -176,7 +142,7 @@ void applyRuntimePinModes() {
   const auto &profile = platform::boardProfile();
   for (std::size_t index = 0; index < profile.safePinCount; ++index) {
     const auto pin = profile.safePins[index];
-    if (!isActiveOledPin(pin)) pinMode(pin, INPUT);
+    if (!isActiveDisplayPin(pin)) pinMode(pin, INPUT);
   }
   for (const auto &source : controller.topology().directs) {
     for (const auto gpio : source.pins) pinMode(gpio, INPUT_PULLUP);
@@ -185,11 +151,11 @@ void applyRuntimePinModes() {
     for (const auto gpio : source.rows) pinMode(gpio, INPUT_PULLUP);
     for (const auto gpio : source.columns) pinMode(gpio, INPUT_PULLUP);
   }
-  applyOledControlPanelPinModes();
+  applyControlPanelPinModes();
 }
 
 void configError(std::uint32_t revision, const char *code) {
-  resetOledControlPanel();
+  controls.reset();
   displayStatus.setConfigError();
   showStatus(LocalDisplayPriority::Critical);
   writeLine("CONFIG_ERROR " + std::to_string(revision) + " " + code + "\n");
@@ -201,8 +167,8 @@ void resetKeyIndicator() {
 }
 
 void applyTopologyState(const RuntimeTopology &topology, std::uint32_t nowMs) {
-  resetOledControlPanel();
-  (void)displayController.clearInteractive();
+  controls.reset();
+  displayRuntime.dismissInteractive();
   resetKeyIndicator();
   pendingDelay.reset();
   actionRuns.reset();
@@ -215,19 +181,13 @@ void applyTopologyState(const RuntimeTopology &topology, std::uint32_t nowMs) {
 void activateTopology(const RuntimeTopology &topology, std::uint32_t nowMs) {
   standaloneDisplayPending = false;
   displayStatus.setStandaloneDebug(false);
-  // Release the old display before its I2C pins are reassigned by the topology.
-  const bool displayReady = platform::configureDisplay(topology.oled);
+  displayStatus.setReady(topology.keyCount());
+  displayStatus.clearLastInput();
+  // configure releases the previous display's bus before GPIO reassignment.
+  const auto status = displayStatus.frame();
+  displayRuntime.configure(topology.display, status, controls.brightnessPercent());
   applyTopologyState(topology, nowMs);
-  displayController.showLocal(displayStatus.frame(),
-                              LocalDisplayPriority::Normal);
-  if (!displayReady) {
-    applyDisplayUpdate(
-        displayController.displayFailed(displayFailureFrame()));
-    return;
-  }
-  platform::setDisplayBrightness(oledControlPanel.brightnessPercent());
-  displayController.clearLocalOverride();
-  applyDisplayUpdate(displayController.displayReconfigured());
+  showStatus(LocalDisplayPriority::Normal);
 }
 
 void activateStandaloneTopology(const RuntimeTopology &topology,
@@ -244,18 +204,8 @@ void initializeStandaloneDisplay(std::uint32_t nowMs) {
     return;
   }
   standaloneDisplayPending = false;
-  // Let TinyUSB service its first cycles and the OLED power stabilize first.
-  const bool displayReady =
-      platform::configureDisplay(controller.topology().oled);
-  displayController.showLocal(displayStatus.frame(),
-                              LocalDisplayPriority::Startup);
-  if (!displayReady) {
-    applyDisplayUpdate(
-        displayController.displayFailed(displayFailureFrame()));
-    return;
-  }
-  platform::setDisplayBrightness(oledControlPanel.brightnessPercent());
-  applyDisplayUpdate(displayController.displayReconfigured());
+  displayRuntime.configure(controller.topology().display, displayStatus.frame(),
+                           controls.brightnessPercent());
 }
 
 void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
@@ -263,7 +213,7 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
   if (!command.has_value()) {
     topologyBuilder.cancel();
     const auto displayError =
-        discardMalformedDisplayCommand(*remoteDisplay, line);
+        displayRuntime.malformed(line);
     if (displayError.has_value()) writeLine(*displayError);
     return;
   }
@@ -303,26 +253,20 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
         configError(command->revision, "invalid_matrix");
       }
       return;
-    case HelperCommandKind::ConfigOled:
-      if (!topologyBuilder.addOled(command->revision, command->oledSda,
-                                   command->oledScl)) {
+    case HelperCommandKind::ConfigDisplay:
+      if (!topologyBuilder.addDisplay(command->revision,
+              {command->displayPanel, command->displaySda, command->displayScl,
+               command->displayAddress})) {
         topologyBuilder.cancel();
-        configError(command->revision, "invalid_oled");
+        configError(command->revision, "invalid_display");
       }
       return;
-    case HelperCommandKind::ConfigSh1106:
-      if (!topologyBuilder.addSh1106(command->revision, command->oledSda,
-                                     command->oledScl)) {
-        topologyBuilder.cancel();
-        configError(command->revision, "invalid_sh1106");
-      }
-      return;
-    case HelperCommandKind::ConfigOledControl:
-      if (!topologyBuilder.addOledControlPanel(
+    case HelperCommandKind::ConfigControls:
+      if (!topologyBuilder.addControlPanel(
               command->revision, command->pins[0], command->pins[1],
               command->pins[2], command->pins[3], command->pins[4])) {
         topologyBuilder.cancel();
-        configError(command->revision, "invalid_oled_control");
+        configError(command->revision, "invalid_controls");
       }
       return;
     case HelperCommandKind::ConfigCommit: {
@@ -340,14 +284,7 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
     case HelperCommandKind::DisplayClear:
     case HelperCommandKind::DisplayText:
     case HelperCommandKind::DisplayCommit: {
-      const auto reply = dispatchDisplayCommand(
-          *remoteDisplay, *command, controller.topology().oled.has_value());
-      if (command->kind == HelperCommandKind::DisplayCommit &&
-          reply == formatDisplayOk(command->revision) &&
-          remoteDisplay->lastCommit().has_value()) {
-        applyDisplayUpdate(
-            displayController.commitRemote(*remoteDisplay->lastCommit()));
-      }
+      const auto reply = displayRuntime.handle(*command);
       if (reply.has_value()) writeLine(*reply);
       return;
     }
@@ -425,7 +362,7 @@ void readHelperResponses(std::uint32_t nowMs) {
     if (!line.has_value()) continue;
     if (line->overflow) {
       const auto displayError =
-          discardMalformedDisplayCommand(*remoteDisplay, line->line);
+          displayRuntime.malformed(line->line);
       if (displayError.has_value()) writeLine(*displayError);
       continue;
     }
@@ -443,7 +380,7 @@ void resetHelperInput() {
 void emitInput(const std::optional<InputEvent> &event) {
   if (event.has_value()) {
     displayStatus.recordInput(*event);
-    if (oledControlPanel.active()) {
+    if (controls.active()) {
       showControlPanel();
     } else {
       showStatus(LocalDisplayPriority::Normal);
@@ -462,31 +399,31 @@ void emitInput(const std::optional<InputEvent> &event) {
   }
 }
 
-void scanOledControlPanel(std::uint32_t nowMs) {
-  const auto &panel = controller.topology().oledControlPanel;
+void scanControlPanel(std::uint32_t nowMs) {
+  const auto &panel = controller.topology().controls;
   if (!panel.has_value()) return;
-  const OledControlPanelSample sample{
+  const ControlPanelSample sample{
       digitalRead(panel->confirm) == LOW,
       digitalRead(panel->encoderPress) == LOW,
       digitalRead(panel->encoderA) == HIGH,
       digitalRead(panel->encoderB) == HIGH,
       digitalRead(panel->back) == LOW,
   };
-  const auto update = oledControlPanel.update(
+  const auto update = controls.update(
       sample, nowMs, controller.topology().debounceMs);
   switch (update) {
-    case OledControlPanelUpdate::Render:
+    case ControlPanelUpdate::Render:
       showControlPanel();
       break;
-    case OledControlPanelUpdate::Dismiss:
-      applyDisplayUpdate(displayController.clearInteractive());
+    case ControlPanelUpdate::Dismiss:
+      displayRuntime.dismissInteractive();
       break;
-    case OledControlPanelUpdate::BrightnessChanged:
-      platform::setDisplayBrightness(oledControlPanel.brightnessPercent());
-      platform::saveDisplayBrightness(oledControlPanel.brightnessPercent());
+    case ControlPanelUpdate::BrightnessChanged:
+      displayRuntime.setBrightness(controls.brightnessPercent());
+      platform::saveDisplayBrightness(controls.brightnessPercent());
       showControlPanel();
       break;
-    case OledControlPanelUpdate::None:
+    case ControlPanelUpdate::None:
       break;
   }
 }
@@ -518,7 +455,7 @@ void setup() {
   helloLine = formatHello(platform::boardProfile(), KIVO_FIRMWARE_BUILD_ID,
                           kKivoProductVersionId);
   platform::begin();
-  oledControlPanel.setBrightnessPercent(platform::loadDisplayBrightness());
+  controls.setBrightnessPercent(platform::loadDisplayBrightness());
   const auto productTopology =
       makeEmbeddedProductTopology(platform::boardProfile());
   if (productTopology.has_value()) {
@@ -540,25 +477,20 @@ void loop() {
     pendingDelay.reset();
     actionRuns.reset();
     resetHelperInput();
-    remoteDisplay.emplace();
-    platform::resetRemoteDisplay();
     displayStatus.setUsbConnected(connected);
-    if (connected) {
-      applyDisplayUpdate(
-          displayController.helperConnected(displayStatus.frame()));
-      writeLine(helloLine);
-    } else {
-      applyDisplayUpdate(
-          displayController.helperDisconnected(helperOfflineFrame()));
-    }
-    if (oledControlPanel.active()) showControlPanel();
+    displayRuntime.connectionChanged(connected,
+        connected ? displayStatus.frame() : helperOfflineFrame());
+    if (connected) writeLine(helloLine);
+    if (controls.active()) showControlPanel();
   }
   helperConnected = connected;
   servicePendingDelay(nowMs);
   actionRuns.expire(nowMs);
   if (helperConnected) readHelperResponses(nowMs);
   scanRuntimeInputs(nowMs);
-  scanOledControlPanel(nowMs);
-  platform::serviceDisplay();
+  scanControlPanel(nowMs);
+  if (const auto error = displayRuntime.service(); error && helperConnected) {
+    writeLine(*error);
+  }
   platform::delayMs(1);
 }

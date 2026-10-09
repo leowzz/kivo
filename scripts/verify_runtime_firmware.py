@@ -65,7 +65,7 @@ def verify_runtime_firmware(
 ) -> None:
     serial_number = require_serial(serial_number)
     port = wait_for_runtime_port(serial_number, usb_id)
-    expected = ["HELLO", "13", family, board, build, product_version_id]
+    expected = ["HELLO", "14", family, board, build, product_version_id]
     wait_for_expected_hello(port.device, expected)
 
 

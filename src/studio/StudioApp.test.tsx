@@ -46,7 +46,7 @@ const board: StudioBoard = {
   controllerToken: "rp",
   displayName: "YD-RP2040",
   safePins: [0, 1, 2, 3, 4],
-  supportsOled: true,
+  supportsDisplay: true,
 };
 
 const espBoard: StudioBoard = {
@@ -55,7 +55,7 @@ const espBoard: StudioBoard = {
   controllerToken: "s3",
   displayName: "YD-ESP32-S3",
   safePins: [0, 1, 2, 3, 4],
-  supportsOled: false,
+  supportsDisplay: false,
 };
 
 const definition: ProductDefinition = {
@@ -280,20 +280,20 @@ test("automatic GPIO assignment never falls back to GPIO 0", async () => {
   expect(within(screen.getByRole("combobox", { name: "K2" })).getByRole("option", { name: "GPIO 0" })).toBeEnabled();
 });
 
-test("keeps the two-pin SSD1306 separate from the seven-pin SH1106 module", async () => {
+test("configures either screen independently of the control inputs", async () => {
   const user = userEvent.setup();
   render(<DisplayModuleHarness />);
 
   await user.click(screen.getByRole("button", { name: "Direct" }));
   const displayComponent = screen.getByRole("combobox", { name: "显示组件" });
   expect(within(displayComponent).getByRole("option", {
-    name: "SSD1306 128x32 @ 0x3C（2 IO）",
+    name: "SSD1306 128x32（2 IO）",
   })).toBeEnabled();
   expect(within(displayComponent).getByRole("option", {
-    name: "SH1106 1.3 英寸 128x64 + EC11 + 确认/返回（7 IO）",
+    name: "SH1106 128x64（2 IO）",
   })).toBeEnabled();
 
-  await user.selectOptions(displayComponent, "ssd1306");
+  await user.selectOptions(displayComponent, "ssd1306_128x32");
 
   expect(screen.getByRole("combobox", { name: "SDA" })).toHaveValue("9");
   expect(screen.getByRole("combobox", { name: "SCL" })).toHaveValue("10");
@@ -302,9 +302,11 @@ test("keeps the two-pin SSD1306 separate from the seven-pin SH1106 module", asyn
 
   await user.selectOptions(
     displayComponent,
-    "sh1106_ec11",
+    "sh1106_128x64",
   );
 
+  expect(screen.queryByRole("combobox", { name: "确认 KEY1" })).toBeNull();
+  await user.selectOptions(screen.getByRole("combobox", { name: "控制输入" }), "ec11_confirm_back");
   expect(screen.getByRole("combobox", { name: "K1" })).toHaveValue("1");
   expect(screen.getByRole("combobox", { name: "K2" })).toHaveValue("2");
   expect(screen.getByRole("combobox", { name: "K3" })).toHaveValue("3");

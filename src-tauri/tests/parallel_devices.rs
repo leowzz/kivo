@@ -502,8 +502,8 @@ fn profile(
             name: hardware_id.into(),
             board_profile_id: board_id.into(),
             debounce_ms: 30,
-            ssd1306: None,
-            sh1106: None,
+            display: None,
+            controls: None,
             inputs: vec![InputSource::Direct {
                 id: "direct".into(),
                 keys: BTreeMap::from([("HOT".into(), hot_pin), ("PASTE".into(), paste_pin)]),

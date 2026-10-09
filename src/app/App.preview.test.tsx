@@ -28,9 +28,9 @@ test("preview exposes an editable RP2040 SSD1306 configuration", async () => {
     .flatMap(({ hardware_profiles }) => hardware_profiles)
     .find(({ id }) => id === "phone-rp-workbench");
 
-  expect(rp2040?.supportsOled).toBe(true);
+  expect(rp2040?.supportsDisplay).toBe(true);
   expect(rp2040?.safePins).toContain(23);
-  expect(hardware?.ssd1306).toEqual({ sda: 18, scl: 19 });
+  expect(hardware?.display).toEqual({ panel: "ssd1306_128x32", sda: 18, scl: 19, address: 60 });
 });
 
 test("does not offer profile creation for an unidentifiable candidate", async () => {

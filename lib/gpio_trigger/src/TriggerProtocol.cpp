@@ -220,27 +220,35 @@ std::optional<HelperCommand> parseHelperCommand(std::string_view line) {
     return command;
   }
 
-  if (*kind == "CONFIG_OLED" || *kind == "CONFIG_SH1106") {
+  if (*kind == "CONFIG_DISPLAY") {
     const auto revision = takeNumber(line);
+    const auto panel = takeToken(line);
     const auto sda = takeNumber(line);
     const auto scl = takeNumber(line);
-    if (!revision.has_value() || !sda.has_value() || *sda > 255 ||
-        !scl.has_value() || *scl > 255 || takeToken(line).has_value()) {
+    const auto address = takeNumber(line);
+    if (!revision || !panel || !sda || *sda > 255 || !scl || *scl > 255 ||
+        !address || *address < 0x08 || *address > 0x77 || takeToken(line)) {
       return std::nullopt;
     }
-    HelperCommand command{*kind == "CONFIG_OLED"
-                              ? HelperCommandKind::ConfigOled
-                              : HelperCommandKind::ConfigSh1106};
+    HelperCommand command{HelperCommandKind::ConfigDisplay};
+    if (*panel == "ssd1306_128x32") {
+      command.displayPanel = DisplayPanel::Ssd1306_128x32;
+    } else if (*panel == "sh1106_128x64") {
+      command.displayPanel = DisplayPanel::Sh1106_128x64;
+    } else {
+      return std::nullopt;
+    }
     command.revision = *revision;
-    command.oledSda = static_cast<std::uint8_t>(*sda);
-    command.oledScl = static_cast<std::uint8_t>(*scl);
+    command.displaySda = static_cast<std::uint8_t>(*sda);
+    command.displayScl = static_cast<std::uint8_t>(*scl);
+    command.displayAddress = static_cast<std::uint8_t>(*address);
     return command;
   }
 
-  if (*kind == "CONFIG_OLED_CONTROL") {
+  if (*kind == "CONFIG_CONTROLS") {
     const auto revision = takeNumber(line);
     if (!revision.has_value()) return std::nullopt;
-    HelperCommand command{HelperCommandKind::ConfigOledControl};
+    HelperCommand command{HelperCommandKind::ConfigControls};
     command.revision = *revision;
     if (!takePins(line, 5, command.pins) || takeToken(line).has_value()) {
       return std::nullopt;

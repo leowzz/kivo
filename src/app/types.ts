@@ -121,7 +121,7 @@ export interface BoardProfileSummary {
   runtimeUsb: string;
   bootloaderUsb: string | null;
   safePins: number[];
-  supportsOled?: boolean;
+  supportsDisplay?: boolean;
 }
 
 export type ConnectionDimension = "online" | "offline";

@@ -115,3 +115,54 @@ Studio 产物不得包含 APP 的运行分配、配置保存或运行事件桥�
 
 真实固件构建使用 `make build-esp32s3 build-rp2040`。自动测试验证协议和生命周期，
 物理电平、接线与 HID 输出仍需要目标板卡验收。
+
+## 显示模块
+
+硬件定义使用单一 `display` 和独立的 `controls`，两个桌面入口共用
+`src-tauri/src/display_hardware.rs` 中的屏幕规格与接线校验。屏幕规格当前为
+`ssd1306_128x32`、`sh1106_128x64`；EC11 控制输入可搭配任一规格。
+Studio 的配置和引脚分配分别在 `src/studio/displayHardware.ts` 与
+`src/shared/hardwarePins.ts`，不在编辑器内重复维护型号分支。
+
+```yaml
+display:
+  panel: sh1106_128x64
+  sda: 26
+  scl: 27
+  address: 60
+controls:
+  type: ec11_confirm_back
+  confirm: 22
+  encoder_press: 28
+  encoder_a: 21
+  encoder_b: 20
+  back: 19
+```
+
+- `lib/gpio_trigger/src/DisplayRuntime.*`：显示重配、连接变化、远程命令与错误回报。
+  使用 `DisplaySurface` 接口，不依赖 Arduino 或具体 MCU。
+- `DisplayController.*`：本地状态、远程场景、交互菜单和错误页面的优先级。
+- `RemoteDisplay.*`：固定容量的场景事务与 revision；按当前屏幕尺寸校验，
+  在提交前拒绝越界内容。屏幕重配和断连均清空远程事务。
+- `ControlPanel.*`：菜单与编码器状态，接收采样值和实际屏幕配置；32 像素高
+  的屏幕显示两行，当前选项始终可见。输入采样与屏幕驱动独立。
+- `firmware/src/display/U8g2Display.*`：两个屏幕规格的 U8g2 设置、字体、
+  framebuffer 和脏区域刷新。初始化不发送整帧；本地与远程画面统一每次
+  `service()` 最多刷新一个 8 字节 tile，控制输入先于显示刷新执行。
+- `firmware/src/platform/I2cBus.*`：硬件总线租用、GPIO 路由、收发和传输状态。
+  同一引脚配置允许共享租用，最后一个使用者释放总线；仍有使用者时拒绝
+  改变总线引脚。RP2040 的非硬件 I²C 引脚组合使用 U8g2 软件 I²C。
+- `firmware/src/platform/DisplaySettings.cpp`：亮度持久化，独立于 USB/HID。
+- `src-tauri/src/display/render.rs`：按 `mono_128x32` / `mono_128x64` 布局渲染
+  业务快照，不使用屏幕芯片或控制输入型号选择布局。
+
+显示接线协议为版本 14：`CONFIG_DISPLAY <revision> <panel> <sda> <scl> <address>`
+与 `CONFIG_CONTROLS <revision> <confirm> <press> <a> <b> <back>`。
+旧的 `ssd1306` / `sh1106` 配置字段和嵌套 `control_panel` 不再接受，
+解析时直接报错，避免屏幕配置被静默丢弃。
+`DISPLAY_OK` 表示场景已通过校验并被接受，物理刷新在后台分块执行；
+渲染失败返回 `render_failed`，后续硬件 I²C 传输失败返回 `transfer_failed`。
+软件 I²C 沿用 U8g2 的传输能力，不能据此确认屏幕实际应答。
+
+S3 编译复用相同显示实现，但其 Board Profile 的显示能力仍未开放。
+Workbench S3 的 MCP23017 扫描与共享总线的实机时序验收仍是独立的硬件接入工作。

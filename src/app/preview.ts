@@ -88,7 +88,7 @@ const phoneProfile: DeviceProfile = {
       name: "工作台 RP2040 接线",
       board_profile_id: "yd-rp2040",
       debounce_ms: 25,
-      ssd1306: { sda: 18, scl: 19 },
+      display: { panel: "ssd1306_128x32", sda: 18, scl: 19, address: 60 },
       inputs: [{ type: "direct", id: "workbench-keys", keys: { UP: 6, DOWN: 7, DEL: 8 } }],
     },
   ],
@@ -212,7 +212,7 @@ export const previewSnapshot: AppSnapshot = {
       runtimeUsb: "303a:4002",
       bootloaderUsb: null,
       safePins: esp32SafePins,
-      supportsOled: false,
+      supportsDisplay: false,
     },
     {
       id: "yd-rp2040",
@@ -221,7 +221,7 @@ export const previewSnapshot: AppSnapshot = {
       runtimeUsb: "2e8a:102e",
       bootloaderUsb: "2e8a:0003",
       safePins: rp2040SafePins,
-      supportsOled: true,
+      supportsDisplay: true,
     },
   ],
   devices: [

@@ -1,3 +1,4 @@
+import { hardwarePins, controlPins } from "../shared/hardwarePins";
 import type {
   BoardProfileSummary,
   HardwareProfile,
@@ -13,36 +14,10 @@ function boardSafePins(board: BoardProfileSummary | undefined) {
     : board.safePins;
 }
 
-function ownedInputPins(hardware: HardwareProfile) {
-  return hardware.inputs.flatMap((source) =>
-    source.type === "direct"
-      ? Object.values(source.keys)
-      : source.type === "contact_matrix"
-        ? source.pins
-        : [source.gpio],
-  );
-}
-
 function conflictingPins(hardware: HardwareProfile) {
   const counts = new Map<number, number>();
   const add = (pin: number) => counts.set(pin, (counts.get(pin) ?? 0) + 1);
-  ownedInputPins(hardware).forEach(add);
-  if (hardware.ssd1306) {
-    add(hardware.ssd1306.sda);
-    add(hardware.ssd1306.scl);
-  }
-  if (hardware.sh1106) {
-    add(hardware.sh1106.sda);
-    add(hardware.sh1106.scl);
-    if (hardware.sh1106.control_panel) {
-      const panel = hardware.sh1106.control_panel;
-      add(panel.confirm);
-      add(panel.encoder_press);
-      add(panel.encoder_a);
-      add(panel.encoder_b);
-      add(panel.back);
-    }
-  }
+  hardwarePins(hardware).forEach(add);
   return new Set(
     [...counts.entries()].filter(([, count]) => count > 1).map(([pin]) => pin),
   );
@@ -118,29 +93,13 @@ function hasUnknownHardwareButton(
   });
 }
 
-function hasInvalidOled(
-  hardware: HardwareProfile,
-  board: BoardProfileSummary | undefined,
-) {
-  if (hardware.ssd1306 && hardware.sh1106) return true;
-  const oled = hardware.sh1106 ?? hardware.ssd1306;
-  if (!oled) return false;
-  if (!board?.supportsOled) return true;
+function hasInvalidDisplay(hardware: HardwareProfile, board: BoardProfileSummary | undefined) {
+  const display = hardware.display;
+  if (!display) return Boolean(hardware.controls);
+  if (!board?.supportsDisplay || display.address < 8 || display.address > 119) return true;
   const safe = new Set(boardSafePins(board));
-  const pins = [oled.sda, oled.scl];
-  if (oled.control_panel) {
-    const panel = oled.control_panel;
-    pins.push(
-      panel.confirm,
-      panel.encoder_press,
-      panel.encoder_a,
-      panel.encoder_b,
-      panel.back,
-    );
-  }
-  return (
-    pins.some((pin) => !safe.has(pin)) || new Set(pins).size !== pins.length
-  );
+  const pins = [display.sda, display.scl, ...controlPins(hardware.controls)];
+  return pins.some((pin) => !safe.has(pin)) || new Set(pins).size !== pins.length;
 }
 
 export function hardwareProfilesAreValid(
@@ -157,7 +116,7 @@ export function hardwareProfilesAreValid(
       invalidBoardPins(profile, boardProfiles).size === 0 &&
       conflictingPins(profile).size === 0 &&
       !hasInvalidContactPair(profile) &&
-      !hasInvalidOled(profile, board) &&
+      !hasInvalidDisplay(profile, board) &&
       (!layout ||
         (!hasInvalidFeatureSwitch(
           profile,

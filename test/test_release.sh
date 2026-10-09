@@ -80,70 +80,8 @@ grep -Fq 'https://espressif.github.io/esptool-js/' "$README"
 grep -Fq '地址填写 `0x0`' "$README"
 grep -Fq '点击 **Program**' "$README"
 
-grep -Fq 'bool configureDisplay(const std::optional<OledConfig> &config);' \
-  "$PLATFORM_HEADER"
-grep -Fq 'bool renderLocalDisplay(const DisplayFrame &frame);' "$PLATFORM_HEADER"
-grep -Fq 'bool renderRemoteDisplay(const RemoteDisplayCommit &scene,' "$PLATFORM_HEADER"
-grep -Fq 'void resetRemoteDisplay();' "$PLATFORM_HEADER"
-grep -Fq 'void serviceDisplay();' "$PLATFORM_HEADER"
-grep -Fq 'bool configureDisplay(const std::optional<OledConfig> &config)' \
-  "$RP2040_PLATFORM"
-grep -Fq 'new (std::nothrow)' "$RP2040_PLATFORM"
-grep -Fq 'U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C' "$RP2040_PLATFORM"
-grep -Fq 'U8G2_SH1106_128X64_NONAME_F_HW_I2C' "$RP2040_PLATFORM"
-grep -Fq 'if (!display->begin())' "$RP2040_PLATFORM"
-grep -Fq 'bool renderLocalDisplay(const DisplayFrame &frame)' "$RP2040_PLATFORM"
-grep -Fq 'bool renderRemoteDisplay(const RemoteDisplayCommit &scene,' "$RP2040_PLATFORM"
-grep -Fq 'operation.fontId > kRemoteDisplayMaxFontId' "$RP2040_PLATFORM"
-grep -Fq 'display->setFont(u8g2_font_6x13_tf);' "$RP2040_PLATFORM"
-grep -Fq 'u8g2_font_9x18_tf' "$RP2040_PLATFORM"
-grep -Fq 'u8g2_font_10x20_tf' "$RP2040_PLATFORM"
-grep -Fq 'display->drawBox(bounds.x, bounds.y, bounds.width, bounds.height);' \
-  "$RP2040_PLATFORM"
-grep -Fq 'display->sendBuffer();' "$RP2040_PLATFORM"
-grep -Fq 'bool configureDisplay(const std::optional<OledConfig> &config)' \
-  "$ESP32S3_PLATFORM"
-grep -Fq 'return !config.has_value();' "$ESP32S3_PLATFORM"
-grep -Fq 'bool renderRemoteDisplay(const RemoteDisplayCommit &, bool)' \
-  "$ESP32S3_PLATFORM"
-grep -Fq 'DisplayUpdate commitRemote(const RemoteDisplayCommit &scene);' \
-  "$DISPLAY_CONTROLLER"
-grep -Fq 'DisplayUpdate helperConnected(const DisplayFrame &ready);' \
-  "$DISPLAY_CONTROLLER"
-grep -Fq 'DisplayController displayController;' "$FIRMWARE_MAIN"
-grep -Fq 'platform::renderLocalDisplay(*update.local);' "$FIRMWARE_MAIN"
-grep -Fq 'platform::renderRemoteDisplay(*update.remote, update.fullRedraw);' \
-  "$FIRMWARE_MAIN"
-grep -Fq 'platform::resetRemoteDisplay();' "$FIRMWARE_MAIN"
-grep -Fq 'displayController.displayReconfigured()' "$FIRMWARE_MAIN"
-grep -Fq 'displayController.displayFailed(displayFailureFrame())' \
-  "$FIRMWARE_MAIN"
-grep -Fq 'displayController.helperConnected(displayStatus.frame())' \
-  "$FIRMWARE_MAIN"
-grep -Fq 'responseLines = ResponseLineBuffer(kMaxResponseLineLength);' \
-  "$FIRMWARE_MAIN"
-grep -Fq 'if (helperConnected) readHelperResponses(nowMs);' "$FIRMWARE_MAIN"
-grep -Fq 'remoteDisplay.emplace();' "$FIRMWARE_MAIN"
-! grep -Fq 'remoteDisplay = RemoteDisplay{};' "$FIRMWARE_MAIN"
-grep -Fq 'platform::serviceDisplay();' "$FIRMWARE_MAIN"
-! grep -Fq 'renderDisplay(' "$FIRMWARE_MAIN"
-grep -Fq 'makeRp2040StandaloneDebugTopology(platform::boardProfile())' \
-  "$FIRMWARE_MAIN"
-grep -Fq 'initializeStandaloneDisplay(nowMs);' "$FIRMWARE_MAIN"
-grep -Fq 'displayStatus.setStandaloneDebug(false);' "$FIRMWARE_MAIN"
-! grep -Fq 'standalone_mismatch' "$FIRMWARE_MAIN"
-activate_topology_body="$(awk '
-  /^void activateTopology\(/ { capture = 1 }
-  capture { print }
-  capture && /^}/ { exit }
-' "$FIRMWARE_MAIN")"
-configure_display_line="$(grep -n 'platform::configureDisplay(topology.oled);' \
-  <<<"$activate_topology_body" | cut -d: -f1)"
-apply_topology_line="$(grep -n 'applyTopologyState(topology, nowMs);' \
-  <<<"$activate_topology_body" | cut -d: -f1)"
-grep -Fq 'displayController.clearLocalOverride()' <<<"$activate_topology_body"
-test "$configure_display_line" -lt "$apply_topology_line"
-
+# Screen behavior is covered by native runtime tests and both firmware builds.
+# Keep release checks focused on packaging rather than implementation spelling.
 target_body() {
   awk -v target="$1" '
     $0 ~ "^" target ":" { found = 1; next }
@@ -158,7 +96,7 @@ done
 
 require_serial_body="$(target_body require-serial)"
 grep -Fq 'test -n "$(SERIAL)"' <<<"$require_serial_body"
-grep -Fq 'expected = ["HELLO", "13", family, board, build, product_version_id]' "$ROOT/scripts/verify_runtime_firmware.py"
+grep -Fq 'expected = ["HELLO", "14", family, board, build, product_version_id]' "$ROOT/scripts/verify_runtime_firmware.py"
 
 for target in upload-esp32s3 upload-rp2040; do
   ! grep -Eq "^${target}:[[:space:]].*require-serial([[:space:]]|$)" "$MAKEFILE"

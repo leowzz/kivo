@@ -345,8 +345,8 @@ mod tests {
                 name: "Hardware".into(),
                 board_profile_id: "yd-esp32-s3".into(),
                 debounce_ms: 30,
-                ssd1306: None,
-                sh1106: None,
+                display: None,
+                controls: None,
                 inputs: Vec::new(),
             }],
             actions: BTreeMap::from([(

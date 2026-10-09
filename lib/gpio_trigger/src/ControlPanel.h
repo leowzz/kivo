@@ -3,8 +3,9 @@
 #include <cstdint>
 
 #include "DisplayStatus.h"
+#include "DisplayConfig.h"
 
-struct OledControlPanelSample {
+struct ControlPanelSample {
   bool confirmPressed = false;
   bool encoderPressed = false;
   bool encoderAHigh = true;
@@ -12,18 +13,18 @@ struct OledControlPanelSample {
   bool backPressed = false;
 };
 
-enum class OledControlPanelUpdate { None, Render, Dismiss, BrightnessChanged };
+enum class ControlPanelUpdate { None, Render, Dismiss, BrightnessChanged };
 
-class OledControlPanel {
+class ControlPanel {
  public:
   void reset();
   void setBrightnessPercent(std::uint8_t percent);
-  OledControlPanelUpdate update(const OledControlPanelSample &sample,
+  ControlPanelUpdate update(const ControlPanelSample &sample,
                                 std::uint32_t nowMs,
                                 std::uint16_t debounceMs);
   bool active() const { return view_ != View::Closed; }
   std::uint8_t brightnessPercent() const { return brightnessPercent_; }
-  DisplayFrame frame(const DisplayFrame &status) const;
+  DisplayFrame frame(const DisplayFrame &status, const DisplayConfig &display) const;
 
  private:
   struct DebouncedButton {
@@ -47,9 +48,9 @@ class OledControlPanel {
     DeviceInfo
   };
 
-  int encoderStep(const OledControlPanelSample &sample,
+  int encoderStep(const ControlPanelSample &sample,
                   std::uint32_t nowMs);
-  OledControlPanelUpdate select();
+  ControlPanelUpdate select();
 
   View view_ = View::Closed;
   std::uint8_t selected_ = 0;

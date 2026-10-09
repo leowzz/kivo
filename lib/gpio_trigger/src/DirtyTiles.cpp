@@ -21,12 +21,6 @@ void clearBit(std::array<std::uint64_t, 2> &bits, std::size_t bit) {
 }
 }  // namespace
 
-RefreshMode selectRefreshMode(bool partialUpdateSupported,
-                              std::uint16_t rotationDegrees) {
-  return partialUpdateSupported && rotationDegrees == 0 ? RefreshMode::Tiles
-                                                         : RefreshMode::Full;
-}
-
 DirtyTiles::DirtyTiles(std::uint8_t widthTiles, std::uint8_t heightTiles)
     : widthTiles_(widthTiles), heightTiles_(heightTiles) {}
 

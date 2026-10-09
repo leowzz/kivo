@@ -7,11 +7,6 @@
 
 #include "RemoteDisplay.h"
 
-enum class RefreshMode : std::uint8_t { Full, Tiles };
-
-RefreshMode selectRefreshMode(bool partialUpdateSupported,
-                              std::uint16_t rotationDegrees);
-
 struct TileRun {
   std::uint8_t tx = 0;
   std::uint8_t ty = 0;

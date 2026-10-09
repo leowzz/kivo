@@ -380,8 +380,9 @@ Kivo product/profile schema**. It is deliberately outside `products/`.
 The current direct-GPIO matrix schema cannot represent MCP23017 port names.
 This hardware revision requires new firmware; the r02 product cannot run it.
 
-- `src/platform/esp32s3.cpp` currently has no display implementation, and
-  `kYdEsp32S3.supportsOled` is false. SH1106 support must be implemented.
+- `firmware/src/display/U8g2Display.cpp` now provides a shared SH1106 driver,
+  but `kYdEsp32S3.supportsDisplay` remains false until the MCP23017 input
+  backend and shared-bus hardware timing are validated.
 - Implement an MCP23017 backend with GPA5-GPA7 output rows, GPB0-GPB5
   pulled-up column inputs and GPA0-GPA4 pulled-up control inputs. Read both
   encoder channels together from GPIOA; avoid output read-modify-write on

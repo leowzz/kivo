@@ -1,8 +1,7 @@
-#include "OledControlPanel.h"
+#include "ControlPanel.h"
 
 #include <algorithm>
 #include <array>
-#include <cstdio>
 #include <string>
 
 namespace {
@@ -35,9 +34,9 @@ std::string brightnessBar(std::uint8_t percent) {
 
 }  // namespace
 
-bool OledControlPanel::DebouncedButton::update(bool pressed,
-                                                std::uint32_t nowMs,
-                                                std::uint16_t debounceMs) {
+bool ControlPanel::DebouncedButton::update(bool pressed,
+                                          std::uint32_t nowMs,
+                                          std::uint16_t debounceMs) {
   if (pressed != rawPressed) {
     rawPressed = pressed;
     rawChangedMs = nowMs;
@@ -49,7 +48,7 @@ bool OledControlPanel::DebouncedButton::update(bool pressed,
   return stablePressed;
 }
 
-void OledControlPanel::reset() {
+void ControlPanel::reset() {
   view_ = View::Closed;
   selected_ = 0;
   confirm_ = {};
@@ -62,13 +61,13 @@ void OledControlPanel::reset() {
   lastEncoderActivityMs_ = 0;
 }
 
-void OledControlPanel::setBrightnessPercent(std::uint8_t percent) {
+void ControlPanel::setBrightnessPercent(std::uint8_t percent) {
   brightnessPercent_ = std::clamp(percent, kMinimumBrightnessPercent,
-                                  static_cast<std::uint8_t>(100));
+                                 static_cast<std::uint8_t>(100));
 }
 
-int OledControlPanel::encoderStep(const OledControlPanelSample &sample,
-                                  std::uint32_t nowMs) {
+int ControlPanel::encoderStep(const ControlPanelSample &sample,
+                              std::uint32_t nowMs) {
   const auto current = static_cast<std::uint8_t>(
       (sample.encoderAHigh ? 2U : 0U) | (sample.encoderBHigh ? 1U : 0U));
   if (!encoderInitialized_) {
@@ -77,7 +76,7 @@ int OledControlPanel::encoderStep(const OledControlPanelSample &sample,
     return 0;
   }
   const auto transition = static_cast<std::uint8_t>((encoderState_ << 2U) |
-                                                     current);
+                                                    current);
   if (current != encoderState_) {
     encoderActivityInitialized_ = true;
     lastEncoderActivityMs_ = nowMs;
@@ -95,19 +94,19 @@ int OledControlPanel::encoderStep(const OledControlPanelSample &sample,
   return 0;
 }
 
-OledControlPanelUpdate OledControlPanel::select() {
+ControlPanelUpdate ControlPanel::select() {
   if (view_ == View::Closed) {
     view_ = View::Menu;
-    return OledControlPanelUpdate::Render;
+    return ControlPanelUpdate::Render;
   }
   if (view_ != View::Menu) {
     view_ = View::Menu;
-    return OledControlPanelUpdate::Render;
+    return ControlPanelUpdate::Render;
   }
   switch (selected_) {
     case 0:
       view_ = View::Closed;
-      return OledControlPanelUpdate::Dismiss;
+      return ControlPanelUpdate::Dismiss;
     case 1:
       view_ = View::Status;
       break;
@@ -121,11 +120,11 @@ OledControlPanelUpdate OledControlPanel::select() {
       view_ = View::DeviceInfo;
       break;
   }
-  return OledControlPanelUpdate::Render;
+  return ControlPanelUpdate::Render;
 }
 
-OledControlPanelUpdate OledControlPanel::update(
-    const OledControlPanelSample &sample, std::uint32_t nowMs,
+ControlPanelUpdate ControlPanel::update(
+    const ControlPanelSample &sample, std::uint32_t nowMs,
     std::uint16_t debounceMs) {
   const int step = encoderStep(sample, nowMs);
   const bool confirmPressed =
@@ -156,45 +155,50 @@ OledControlPanelUpdate OledControlPanel::update(
           static_cast<int>(brightnessPercent_) +
               step * static_cast<int>(kBrightnessStepPercent),
           static_cast<int>(kMinimumBrightnessPercent), 100);
-      if (next == brightnessPercent_) return OledControlPanelUpdate::None;
+      if (next == brightnessPercent_) return ControlPanelUpdate::None;
       brightnessPercent_ = static_cast<std::uint8_t>(next);
-      return OledControlPanelUpdate::BrightnessChanged;
+      return ControlPanelUpdate::BrightnessChanged;
     }
     if (view_ == View::Closed) {
       // Rotation is also a useful menu entry gesture when the panel is idle.
       view_ = View::Menu;
     } else if (view_ != View::Menu) {
-      return OledControlPanelUpdate::None;
+      return ControlPanelUpdate::None;
     }
 
     const auto entryCount = static_cast<int>(kMenuEntries.size());
     selected_ = static_cast<std::uint8_t>(
         (static_cast<int>(selected_) + step + entryCount) % entryCount);
-    return OledControlPanelUpdate::Render;
+    return ControlPanelUpdate::Render;
   }
-  if (!encoderSettled) return OledControlPanelUpdate::None;
+  if (!encoderSettled) return ControlPanelUpdate::None;
   if (selectPressed) return select();
   if (backPressed && !backStartedDuringMotion) {
-    if (view_ == View::Closed) return OledControlPanelUpdate::None;
+    if (view_ == View::Closed) return ControlPanelUpdate::None;
     if (view_ == View::Menu) {
       view_ = View::Closed;
-      return OledControlPanelUpdate::Dismiss;
+      return ControlPanelUpdate::Dismiss;
     }
     view_ = View::Menu;
-    return OledControlPanelUpdate::Render;
+    return ControlPanelUpdate::Render;
   }
-  return OledControlPanelUpdate::None;
+  return ControlPanelUpdate::None;
 }
 
-DisplayFrame OledControlPanel::frame(const DisplayFrame &status) const {
+DisplayFrame ControlPanel::frame(const DisplayFrame &status,
+                                const DisplayConfig &display) const {
   DisplayFrame result{};
+  result.stacked = true;
+  const bool compact = displayCapabilities(display.panel).height == 32;
   switch (view_) {
     case View::Closed:
       return status;
     case View::Menu: {
       result.lines[0] = "KIVO MENU";
-      const std::size_t start = selected_ < 3 ? 0 : selected_ - 2;
-      for (std::size_t row = 0; row < 3; ++row) {
+      const std::size_t start =
+          compact ? selected_ : selected_ < 3 ? 0 : selected_ - 2;
+      const std::size_t rows = compact ? 1 : 3;
+      for (std::size_t row = 0; row < rows; ++row) {
         const std::size_t entry = start + row;
         result.lines[row + 1] =
             menuLine(entry == selected_, kMenuEntries[entry]);
@@ -203,14 +207,15 @@ DisplayFrame OledControlPanel::frame(const DisplayFrame &status) const {
     }
     case View::Status:
       result.lines[0] = "SYSTEM STATUS";
-      result.lines[1] = fitLine(status.lines[0]);
+      result.lines[1] = fitLine(compact ? status.lines[1] : status.lines[0]);
       result.lines[2] = fitLine(status.lines[1]);
       result.lines[3] = status.lines[2].empty() ? "NO KEY EVENT"
                                                : fitLine(status.lines[2]);
       break;
     case View::InputTest:
       result.lines[0] = "INPUT TEST";
-      result.lines[1] = "PRESS ANY KEY";
+      result.lines[1] = compact && !status.lines[2].empty()
+                            ? fitLine(status.lines[2]) : "PRESS ANY KEY";
       result.lines[2] = status.lines[2].empty() ? "NO KEY EVENT"
                                                : fitLine(status.lines[2]);
       result.lines[3] = "BACK: MENU";
@@ -223,9 +228,16 @@ DisplayFrame OledControlPanel::frame(const DisplayFrame &status) const {
       break;
     case View::DeviceInfo:
       result.lines[0] = "DEVICE INFO";
-      result.lines[1] = "SH1106 128X64";
-      result.lines[2] = "I2C 0X3C / 1.3IN";
+      result.lines[1] = display.panel == DisplayPanel::Sh1106_128x64
+                            ? "SH1106 128X64" : "SSD1306 128X32";
+      result.lines[2] = "I2C 0X";
+      result.lines[2] += "0123456789ABCDEF"[display.address >> 4U];
+      result.lines[2] += "0123456789ABCDEF"[display.address & 0x0FU];
       result.lines[3] = "EC11 + OK/BACK";
+      if (compact) {
+        result.lines[0] = result.lines[1];
+        result.lines[1] = result.lines[2];
+      }
       break;
   }
   return result;

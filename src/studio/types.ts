@@ -21,7 +21,7 @@ export interface StudioBoard {
   controllerToken: string;
   displayName: string;
   safePins: number[];
-  supportsOled: boolean;
+  supportsDisplay: boolean;
 }
 
 export interface StudioSnapshot {

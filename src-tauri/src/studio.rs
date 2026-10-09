@@ -114,7 +114,7 @@ pub(super) struct StudioBoardSummary {
     controller_token: String,
     display_name: String,
     safe_pins: Vec<u8>,
-    supports_oled: bool,
+    supports_display: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -238,7 +238,7 @@ fn snapshot(repo_root: &Path) -> Result<StudioSnapshot, AppError> {
                     .into(),
                 display_name: board.display_name.into(),
                 safe_pins: board.safe_pins.to_vec(),
-                supports_oled: board.supports_oled,
+                supports_display: board.supports_display,
             })
             .collect(),
         repo_root: repo_root.to_path_buf(),

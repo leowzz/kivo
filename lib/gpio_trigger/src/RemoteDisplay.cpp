@@ -7,15 +7,15 @@
 #include "TriggerProtocol.h"
 
 namespace {
-bool isValidRect(const DisplayRect &bounds) {
+bool isValidRect(const DisplayRect &bounds, const DisplayCapabilities &capabilities) {
   if (bounds.width == 0 || bounds.height == 0 || bounds.x % 8 != 0 ||
       bounds.y % 8 != 0 || bounds.width % 8 != 0 || bounds.height % 8 != 0) {
     return false;
   }
   return static_cast<std::uint32_t>(bounds.x) + bounds.width <=
-             kRemoteDisplayWidth &&
+             capabilities.width &&
          static_cast<std::uint32_t>(bounds.y) + bounds.height <=
-             kRemoteDisplayHeight;
+             capabilities.height;
 }
 
 DisplayRect unionRect(const DisplayRect &left, const DisplayRect &right) {
@@ -99,6 +99,16 @@ bool isDisplayCommand(HelperCommandKind kind) {
 }
 }  // namespace
 
+void RemoteDisplay::reset(DisplayCapabilities capabilities) {
+  capabilities_ = capabilities;
+  revision_ = 0;
+  staged_.reset();
+  committed_.reset();
+  lastCommit_.reset();
+  candidate_.regionCount = 0;
+  candidate_.operationCount = 0;
+}
+
 DisplayResult RemoteDisplay::begin(std::uint32_t newRevision,
                                    std::uint32_t baseRevision,
                                    DisplayMode mode) {
@@ -119,7 +129,7 @@ DisplayResult RemoteDisplay::begin(std::uint32_t newRevision,
 }
 
 bool RemoteDisplay::region(std::uint8_t slot, DisplayRect bounds) {
-  if (!staged_.has_value() || !isValidRect(bounds) ||
+  if (!staged_.has_value() || !isValidRect(bounds, capabilities_) ||
       staged_->regionCount >= kMaxDisplayRegions ||
       findStagedRegion(slot) != nullptr) {
     return reject();
@@ -151,7 +161,7 @@ bool RemoteDisplay::text(std::uint8_t slot, std::uint16_t x,
   auto *regionState = findStagedRegion(slot);
   if (regionState == nullptr || staged_->operationCount >= kMaxDisplayOps ||
       value.size() > kMaxDisplayTextBytes ||
-      fontId > kRemoteDisplayMaxFontId) {
+      fontId > capabilities_.maxFontId) {
     return reject();
   }
   const auto right = static_cast<std::uint32_t>(regionState->bounds.x) +
@@ -289,7 +299,7 @@ void RemoteDisplay::appendDirty(DisplayRect bounds, bool &overflowed) {
     result.dirtyBounds[result.dirtyCount++] = bounds;
   } else {
     result.dirtyBounds[0] =
-        {0, 0, kRemoteDisplayWidth, kRemoteDisplayHeight};
+        {0, 0, capabilities_.width, capabilities_.height};
     result.dirtyCount = 1;
     overflowed = true;
   }

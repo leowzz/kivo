@@ -402,47 +402,11 @@ pub fn topology_commands(
         AppError::new("unknown_board_profile")
             .with_param("board_profile", &hardware.board_profile_id)
     })?;
-    if hardware.ssd1306.is_some() && hardware.sh1106.is_some() {
-        return Err(AppError::new("multiple_oled_displays"));
-    }
-    if let Some(ssd1306) = &hardware.ssd1306 {
-        if !board.supports_oled {
-            return Err(AppError::new("oled_not_supported").with_param("board_profile", board.id));
-        }
-        if ssd1306.sda == ssd1306.scl {
-            return Err(AppError::new("gpio_used_by_multiple_sources")
-                .with_param("gpio", ssd1306.sda.to_string()));
-        }
-        if let Some(control_panel) = &ssd1306.control_panel {
-            let pins = control_panel.pins();
-            let unique = pins
-                .into_iter()
-                .chain([ssd1306.sda, ssd1306.scl])
-                .collect::<BTreeSet<_>>();
-            if unique.len() != 7 {
-                return Err(AppError::new("gpio_used_by_multiple_sources"));
-            }
-        }
-    }
-    if let Some(sh1106) = &hardware.sh1106 {
-        if !board.supports_oled {
-            return Err(AppError::new("oled_not_supported").with_param("board_profile", board.id));
-        }
-        if sh1106.sda == sh1106.scl {
-            return Err(AppError::new("gpio_used_by_multiple_sources")
-                .with_param("gpio", sh1106.sda.to_string()));
-        }
-        if let Some(control_panel) = &sh1106.control_panel {
-            let pins = control_panel.pins();
-            let unique = pins
-                .into_iter()
-                .chain([sh1106.sda, sh1106.scl])
-                .collect::<BTreeSet<_>>();
-            if unique.len() != 7 {
-                return Err(AppError::new("gpio_used_by_multiple_sources"));
-            }
-        }
-    }
+    crate::display_hardware::wiring_pins(
+        hardware.display.as_ref(),
+        hardware.controls.as_ref(),
+        board,
+    )?;
     for pin in hardware_pins(hardware) {
         if !board.safe_pins.contains(&pin) || !reported_pins.contains(&pin) {
             return Err(AppError::new("capability_mismatch").with_param("gpio", pin.to_string()));
@@ -452,29 +416,20 @@ pub fn topology_commands(
         "CONFIG_BEGIN {revision} {}\n",
         hardware.debounce_ms
     )];
-    if let Some(ssd1306) = &hardware.ssd1306 {
+    if let Some(display) = &hardware.display {
         lines.push(format!(
-            "CONFIG_OLED {revision} {} {}\n",
-            ssd1306.sda, ssd1306.scl
+            "CONFIG_DISPLAY {revision} {} {} {} {}\n",
+            display.panel.id(),
+            display.sda,
+            display.scl,
+            display.address
         ));
-        if let Some(control_panel) = &ssd1306.control_panel {
-            let [confirm, encoder_press, encoder_a, encoder_b, back] = control_panel.pins();
-            lines.push(format!(
-                "CONFIG_OLED_CONTROL {revision} {confirm} {encoder_press} {encoder_a} {encoder_b} {back}\n"
-            ));
-        }
     }
-    if let Some(sh1106) = &hardware.sh1106 {
+    if let Some(controls) = &hardware.controls {
+        let [confirm, encoder_press, encoder_a, encoder_b, back] = controls.pins();
         lines.push(format!(
-            "CONFIG_SH1106 {revision} {} {}\n",
-            sh1106.sda, sh1106.scl
+            "CONFIG_CONTROLS {revision} {confirm} {encoder_press} {encoder_a} {encoder_b} {back}\n"
         ));
-        if let Some(control_panel) = &sh1106.control_panel {
-            let [confirm, encoder_press, encoder_a, encoder_b, back] = control_panel.pins();
-            lines.push(format!(
-                "CONFIG_OLED_CONTROL {revision} {confirm} {encoder_press} {encoder_a} {encoder_b} {back}\n"
-            ));
-        }
     }
     let mut source_index = 0u8;
     for input in &hardware.inputs {
@@ -528,19 +483,11 @@ fn hardware_pins(hardware: &HardwareProfile) -> BTreeSet<u8> {
             InputSource::FeatureSwitch { gpio, .. } => vec![*gpio],
         })
         .collect::<BTreeSet<_>>();
-    if let Some(ssd1306) = &hardware.ssd1306 {
-        pins.insert(ssd1306.sda);
-        pins.insert(ssd1306.scl);
-        if let Some(control_panel) = &ssd1306.control_panel {
-            pins.extend(control_panel.pins());
-        }
+    if let Some(display) = &hardware.display {
+        pins.extend([display.sda, display.scl]);
     }
-    if let Some(sh1106) = &hardware.sh1106 {
-        pins.insert(sh1106.sda);
-        pins.insert(sh1106.scl);
-        if let Some(control_panel) = &sh1106.control_panel {
-            pins.extend(control_panel.pins());
-        }
+    if let Some(controls) = &hardware.controls {
+        pins.extend(controls.pins());
     }
     pins
 }
@@ -832,8 +779,7 @@ mod tests {
         hardware::board_by_id,
         model::{ButtonDefinition, ButtonGroup, ModelLayout},
         profile::{
-            DeviceProfile, HardwareProfile, InputSource, OledControlPanelConfig,
-            PROFILE_SCHEMA_VERSION,
+            ControlPanelConfig, DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION,
         },
     };
     use std::collections::{BTreeMap, BTreeSet};
@@ -866,8 +812,8 @@ mod tests {
                 name: "ESP primary".into(),
                 board_profile_id: "yd-esp32-s3".into(),
                 debounce_ms: 30,
-                ssd1306: None,
-                sh1106: None,
+                display: None,
+                controls: None,
                 inputs: vec![InputSource::ContactMatrix {
                     id: "matrix".into(),
                     pins: vec![1, 2, 12, 13],
@@ -895,7 +841,9 @@ mod tests {
                 "name: RP primary\n",
                 "board_profile_id: {board_profile_id}\n",
                 "debounce_ms: 30\n",
-                "ssd1306:\n",
+                "display:\n",
+                "  panel: ssd1306_128x32\n",
+                "  address: 60\n",
                 "  sda: {sda}\n",
                 "  scl: {scl}\n",
                 "inputs:\n",
@@ -919,7 +867,7 @@ mod tests {
         serde_yaml_ng::from_str(
             &serde_yaml_ng::to_string(&ssd1306_hardware())
                 .unwrap()
-                .replace("ssd1306:", "sh1106:"),
+                .replace("ssd1306_128x32", "sh1106_128x64"),
         )
         .unwrap()
     }
@@ -1632,12 +1580,12 @@ mod tests {
     }
 
     #[test]
-    fn ssd1306_topology_commands_remain_backward_compatible() {
+    fn display_topology_emits_panel_and_address() {
         assert_eq!(
             topology_commands(&ssd1306_hardware(), 7, &BTreeSet::from([4, 5, 6])).unwrap(),
             vec![
                 "CONFIG_BEGIN 7 30\n",
-                "CONFIG_OLED 7 4 5\n",
+                "CONFIG_DISPLAY 7 ssd1306_128x32 4 5 60\n",
                 "CONFIG_DIRECT 7 0 1 6\n",
                 "CONFIG_COMMIT 7\n",
             ]
@@ -1645,12 +1593,12 @@ mod tests {
     }
 
     #[test]
-    fn sh1106_uses_its_own_topology_command() {
+    fn display_topology_selects_the_64_pixel_panel() {
         assert_eq!(
             topology_commands(&sh1106_hardware(), 7, &BTreeSet::from([4, 5, 6])).unwrap(),
             vec![
                 "CONFIG_BEGIN 7 30\n",
-                "CONFIG_SH1106 7 4 5\n",
+                "CONFIG_DISPLAY 7 sh1106_128x64 4 5 60\n",
                 "CONFIG_DIRECT 7 0 1 6\n",
                 "CONFIG_COMMIT 7\n",
             ]
@@ -1660,22 +1608,21 @@ mod tests {
     #[test]
     fn oled_control_panel_precedes_inputs_and_requires_all_reported_pins() {
         let mut hardware = sh1106_hardware();
-        hardware.sh1106.as_mut().unwrap().control_panel =
-            Some(OledControlPanelConfig::Ec11ConfirmBack {
-                confirm: 19,
-                encoder_press: 20,
-                encoder_a: 21,
-                encoder_b: 22,
-                back: 26,
-            });
+        hardware.controls = Some(ControlPanelConfig::Ec11ConfirmBack {
+            confirm: 19,
+            encoder_press: 20,
+            encoder_a: 21,
+            encoder_b: 22,
+            back: 26,
+        });
         let pins = BTreeSet::from([4, 5, 6, 19, 20, 21, 22, 26]);
 
         assert_eq!(
             topology_commands(&hardware, 7, &pins).unwrap(),
             vec![
                 "CONFIG_BEGIN 7 30\n",
-                "CONFIG_SH1106 7 4 5\n",
-                "CONFIG_OLED_CONTROL 7 19 20 21 22 26\n",
+                "CONFIG_DISPLAY 7 sh1106_128x64 4 5 60\n",
+                "CONFIG_CONTROLS 7 19 20 21 22 26\n",
                 "CONFIG_DIRECT 7 0 1 6\n",
                 "CONFIG_COMMIT 7\n",
             ]
@@ -1700,7 +1647,7 @@ mod tests {
 
         let error = topology_commands(&hardware, 7, &BTreeSet::from([4, 5, 6])).unwrap_err();
 
-        assert_eq!(error.code, "oled_not_supported");
+        assert_eq!(error.code, "display_not_supported");
     }
 
     #[test]

@@ -2,8 +2,8 @@ use std::{cmp::Reverse, collections::BTreeMap, sync::Arc};
 
 use super::{DisplayItem, DisplaySnapshot, DisplayState, SourceHealth};
 
-pub(crate) const SSD1306_PANEL_ID: &str = "ssd1306_128x32_mono";
-pub(crate) const SH1106_PANEL_ID: &str = "sh1106-1.3-128x64-ec11";
+pub(crate) const MONO_128X32_LAYOUT_ID: &str = "mono_128x32";
+pub(crate) const MONO_128X64_LAYOUT_ID: &str = "mono_128x64";
 const SUMMARY_ID: &str = "codex.summary";
 const EMPTY_TEXT: &str = "";
 
@@ -25,7 +25,7 @@ struct PanelLayout {
     large_baseline: u16,
 }
 
-const SSD1306_LAYOUT: PanelLayout = PanelLayout {
+const MONO_128X32_LAYOUT: PanelLayout = PanelLayout {
     height: 32,
     split_y: 16,
     top_baseline: 12,
@@ -34,7 +34,7 @@ const SSD1306_LAYOUT: PanelLayout = PanelLayout {
     medium_baseline: 21,
     large_baseline: 22,
 };
-const SH1106_LAYOUT: PanelLayout = PanelLayout {
+const MONO_128X64_LAYOUT: PanelLayout = PanelLayout {
     height: 64,
     split_y: 32,
     top_baseline: 23,
@@ -132,68 +132,40 @@ impl RenderedScene {
 pub(crate) struct DisplayCapabilities {
     pub width: u16,
     pub height: u16,
-    pub ascii_font_id: u8,
     pub max_font_id: u8,
     pub max_regions: u8,
     pub max_operations: u8,
     pub max_text_bytes: u8,
-    pub tile_width: u8,
-    pub tile_height: u8,
-    pub pixel_format: PixelFormat,
-    pub rotation_degrees: u16,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PixelFormat {
-    Mono1,
 }
 
 impl DisplayCapabilities {
-    pub(crate) const fn ssd1306_128x32_mono() -> Self {
+    pub(crate) const fn mono_128x32() -> Self {
         Self {
             width: 128,
             height: 32,
-            ascii_font_id: 0,
             max_font_id: 2,
             max_regions: 8,
             max_operations: 24,
             max_text_bytes: 48,
-            tile_width: 8,
-            tile_height: 8,
-            pixel_format: PixelFormat::Mono1,
-            rotation_degrees: 0,
         }
     }
 
-    pub(crate) const fn sh1106_128x64_mono() -> Self {
+    pub(crate) const fn mono_128x64() -> Self {
         Self {
             width: 128,
             height: 64,
-            ascii_font_id: 0,
             max_font_id: 2,
             max_regions: 8,
             max_operations: 24,
             max_text_bytes: 48,
-            tile_width: 8,
-            tile_height: 8,
-            pixel_format: PixelFormat::Mono1,
-            rotation_degrees: 0,
         }
     }
 }
 
 pub(crate) trait DisplayRenderer: Send + Sync {
-    fn panel_id(&self) -> &'static str;
+    fn layout_id(&self) -> &'static str;
     fn capabilities(&self) -> &DisplayCapabilities;
     fn render(&self, snapshot: &DisplaySnapshot) -> Result<RenderedScene, &'static str>;
-
-    fn render_with_font_limit(
-        &self,
-        snapshot: &DisplaySnapshot,
-        _max_font_id: u8,
-    ) -> Result<RenderedScene, &'static str> {
-        self.render(snapshot)
-    }
 }
 
 #[derive(Default)]
@@ -206,25 +178,25 @@ impl RendererRegistry {
         &mut self,
         renderer: Arc<dyn DisplayRenderer>,
     ) -> Result<(), &'static str> {
-        let panel_id = renderer.panel_id();
-        if self.renderers.contains_key(panel_id) {
-            return Err("display_renderer_duplicate_panel");
+        let layout_id = renderer.layout_id();
+        if self.renderers.contains_key(layout_id) {
+            return Err("display_renderer_duplicate_layout");
         }
-        self.renderers.insert(panel_id, renderer);
+        self.renderers.insert(layout_id, renderer);
         Ok(())
     }
 
     pub(crate) fn renderer(
         &self,
-        panel_id: &str,
+        layout_id: &str,
     ) -> Result<Arc<dyn DisplayRenderer>, &'static str> {
         self.renderers
-            .get(panel_id)
+            .get(layout_id)
             .cloned()
             .ok_or("display_renderer_unsupported")
     }
 
-    pub(crate) fn panel_ids(&self) -> Vec<&'static str> {
+    pub(crate) fn layout_ids(&self) -> Vec<&'static str> {
         self.renderers.keys().copied().collect()
     }
 }
@@ -244,48 +216,40 @@ pub(crate) struct MonoText128x64Renderer;
 pub(crate) struct MonoText128x32Renderer;
 
 impl DisplayRenderer for MonoText128x32Renderer {
-    fn panel_id(&self) -> &'static str {
-        SSD1306_PANEL_ID
+    fn layout_id(&self) -> &'static str {
+        MONO_128X32_LAYOUT_ID
     }
 
     fn capabilities(&self) -> &DisplayCapabilities {
-        static CAPABILITIES: DisplayCapabilities = DisplayCapabilities::ssd1306_128x32_mono();
+        static CAPABILITIES: DisplayCapabilities = DisplayCapabilities::mono_128x32();
         &CAPABILITIES
     }
 
     fn render(&self, snapshot: &DisplaySnapshot) -> Result<RenderedScene, &'static str> {
-        render_snapshot(snapshot, self.capabilities().max_font_id, SSD1306_LAYOUT)
-    }
-
-    fn render_with_font_limit(
-        &self,
-        snapshot: &DisplaySnapshot,
-        max_font_id: u8,
-    ) -> Result<RenderedScene, &'static str> {
-        render_snapshot(snapshot, max_font_id, SSD1306_LAYOUT)
+        render_snapshot(
+            snapshot,
+            self.capabilities().max_font_id,
+            MONO_128X32_LAYOUT,
+        )
     }
 }
 
 impl DisplayRenderer for MonoText128x64Renderer {
-    fn panel_id(&self) -> &'static str {
-        SH1106_PANEL_ID
+    fn layout_id(&self) -> &'static str {
+        MONO_128X64_LAYOUT_ID
     }
 
     fn capabilities(&self) -> &DisplayCapabilities {
-        static CAPABILITIES: DisplayCapabilities = DisplayCapabilities::sh1106_128x64_mono();
+        static CAPABILITIES: DisplayCapabilities = DisplayCapabilities::mono_128x64();
         &CAPABILITIES
     }
 
     fn render(&self, snapshot: &DisplaySnapshot) -> Result<RenderedScene, &'static str> {
-        render_snapshot(snapshot, self.capabilities().max_font_id, SH1106_LAYOUT)
-    }
-
-    fn render_with_font_limit(
-        &self,
-        snapshot: &DisplaySnapshot,
-        max_font_id: u8,
-    ) -> Result<RenderedScene, &'static str> {
-        render_snapshot(snapshot, max_font_id, SH1106_LAYOUT)
+        render_snapshot(
+            snapshot,
+            self.capabilities().max_font_id,
+            MONO_128X64_LAYOUT,
+        )
     }
 }
 
@@ -696,8 +660,8 @@ mod tests {
 
     #[test]
     fn single_row_falls_back_through_the_declared_font_sizes() {
-        let medium = single_line_region("CODEX 999+ RUN".into(), 2, SH1106_LAYOUT);
-        let compact = single_line_region("1234567890123456".into(), 2, SH1106_LAYOUT);
+        let medium = single_line_region("CODEX 999+ RUN".into(), 2, MONO_128X64_LAYOUT);
+        let compact = single_line_region("1234567890123456".into(), 2, MONO_128X64_LAYOUT);
 
         assert_eq!(
             region_text_details(&medium),
@@ -707,25 +671,6 @@ mod tests {
             region_text_details(&compact),
             Some((16, 37, 0, "1234567890123456"))
         );
-    }
-
-    #[test]
-    fn font_zero_limit_preserves_the_legacy_three_region_layout() {
-        let scene = MonoText128x64Renderer
-            .render_with_font_limit(&summary_snapshot(3, 0), 0)
-            .unwrap();
-
-        assert_eq!(
-            region_layout(&scene),
-            vec![
-                (0, "row0_left", Rect::new(0, 0, 64, 32)),
-                (1, "row0_right", Rect::new(64, 0, 64, 32)),
-                (2, "row1", Rect::new(0, 32, 128, 32)),
-            ]
-        );
-        assert_eq!(scene.text("row0_left"), "CODEX");
-        assert_eq!(scene.text("row0_right"), "3 RUN");
-        assert_eq!(scene.text("row1"), "");
     }
 
     #[test]
@@ -802,14 +747,6 @@ mod tests {
         assert_eq!(text_position(&scene, "row0_left"), Some((0, 23)));
         assert_eq!(text_position(&scene, "row0_right"), Some((64, 23)));
         assert_eq!(text_position(&scene, "row1"), Some((0, 55)));
-    }
-
-    #[test]
-    fn capabilities_declare_mono_one_bit_pixels_without_rotation() {
-        let capabilities = MonoText128x64Renderer.capabilities();
-
-        assert_eq!(capabilities.pixel_format, PixelFormat::Mono1);
-        assert_eq!(capabilities.rotation_degrees, 0);
     }
 
     #[test]
@@ -1182,7 +1119,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_rejects_duplicate_panel_ids() {
+    fn registry_rejects_duplicate_layout_ids() {
         let mut registry = RendererRegistry::default();
         registry.register(Arc::new(MonoText128x64Renderer)).unwrap();
 
@@ -1190,7 +1127,7 @@ mod tests {
             registry
                 .register(Arc::new(MonoText128x64Renderer))
                 .unwrap_err(),
-            "display_renderer_duplicate_panel"
+            "display_renderer_duplicate_layout"
         );
         assert_eq!(
             registry.renderer("unknown").map(|_| ()),
@@ -1201,9 +1138,9 @@ mod tests {
     #[test]
     fn content_hash_changes_with_text_and_stays_stable() {
         let bounds = Rect::new(0, 0, 64, 16);
-        let first = text_region(0, "row0_left", bounds, "CODEX".into(), SH1106_LAYOUT);
-        let same = text_region(0, "row0_left", bounds, "CODEX".into(), SH1106_LAYOUT);
-        let changed = text_region(0, "row0_left", bounds, "KIVO".into(), SH1106_LAYOUT);
+        let first = text_region(0, "row0_left", bounds, "CODEX".into(), MONO_128X64_LAYOUT);
+        let same = text_region(0, "row0_left", bounds, "CODEX".into(), MONO_128X64_LAYOUT);
+        let changed = text_region(0, "row0_left", bounds, "KIVO".into(), MONO_128X64_LAYOUT);
 
         assert_eq!(first.content_hash, same.content_hash);
         assert_ne!(first.content_hash, changed.content_hash);

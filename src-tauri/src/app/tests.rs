@@ -126,8 +126,8 @@ fn board_summaries_report_sh1106_support() {
         .map(|summary| serde_json::to_value(summary).unwrap())
         .collect::<Vec<_>>();
 
-    assert_eq!(summaries[0]["supportsOled"], false);
-    assert_eq!(summaries[1]["supportsOled"], true);
+    assert_eq!(summaries[0]["supportsDisplay"], false);
+    assert_eq!(summaries[1]["supportsDisplay"], true);
 }
 
 #[test]
@@ -358,8 +358,8 @@ fn product_profile() -> DeviceProfile {
             name: "ESP primary".into(),
             board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
             debounce_ms: 30,
-            ssd1306: None,
-            sh1106: None,
+            display: None,
+            controls: None,
             inputs: vec![InputSource::Direct {
                 id: "direct".into(),
                 keys: BTreeMap::from([("UP".into(), 6)]),

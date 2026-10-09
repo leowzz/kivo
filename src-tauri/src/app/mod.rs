@@ -184,7 +184,7 @@ struct BoardProfileSummary {
     display_name: String,
     runtime_usb: String,
     bootloader_usb: Option<String>,
-    supports_oled: bool,
+    supports_display: bool,
     safe_pins: Vec<u8>,
 }
 
@@ -201,7 +201,7 @@ impl From<&BoardProfile> for BoardProfileSummary {
             bootloader_usb: board
                 .bootloader_usb
                 .map(|usb| format!("{:04x}:{:04x}", usb.vid, usb.pid)),
-            supports_oled: board.supports_oled,
+            supports_display: board.supports_display,
             safe_pins: board.safe_pins.to_vec(),
         }
     }

@@ -8,8 +8,8 @@ use crate::{
         WorkerLauncher, WorkerRendererRegistry, WorkerStart,
     },
     display::{
-        DisplayRenderer, DisplaySnapshot, RenderedScene, RendererRegistry, SH1106_PANEL_ID,
-        SSD1306_PANEL_ID, SceneTracker, SceneUpdate, built_in_renderer_registry,
+        DisplayRenderer, DisplaySnapshot, MONO_128X32_LAYOUT_ID, MONO_128X64_LAYOUT_ID,
+        RenderedScene, RendererRegistry, SceneTracker, SceneUpdate, built_in_renderer_registry,
     },
     hardware::BoardProfile,
     metrics::{HomeMetricsSnapshot, MetricAttribution, MetricsStore},
@@ -17,11 +17,9 @@ use crate::{
     product::{PRODUCT_DEFINITION_SCHEMA_VERSION, ProductDefinition, ProductDefinitionCache},
     profile::{ActionTrigger, DeviceProfile, InputSource, SwitchState},
     protocol::{
-        ACTION_RUN_PROTOCOL_VERSION, ActionSequence, DISPLAY_LARGE_FONT_PROTOCOL_VERSION,
-        DISPLAY_PROTOCOL_VERSION, DeviceMessage, HelloCapabilities, InputState,
-        OLED_PROTOCOL_VERSION, PhysicalInput, ProductDefinitionTransfer, SH1106_PROTOCOL_VERSION,
-        display_commands, format_paste_command, is_hello_line, parse_device, topology_commands,
-        validate_hello,
+        ACTION_RUN_PROTOCOL_VERSION, ActionSequence, DISPLAY_PROTOCOL_VERSION, DeviceMessage,
+        HelloCapabilities, InputState, PhysicalInput, ProductDefinitionTransfer, display_commands,
+        format_paste_command, is_hello_line, parse_device, topology_commands, validate_hello,
     },
     trigger::{TriggerEdge, TriggerOccurrence, TriggerTracker},
 };
@@ -925,22 +923,6 @@ impl DeviceSession {
                 .push(RuntimeActivity::new("assignment_board_mismatch"));
             return;
         }
-        let required_oled_protocol = if hardware.sh1106.is_some() {
-            Some(SH1106_PROTOCOL_VERSION)
-        } else if hardware.ssd1306.is_some() {
-            Some(OLED_PROTOCOL_VERSION)
-        } else {
-            None
-        };
-        if let Some(required) = required_oled_protocol.filter(|required| hello.protocol < *required)
-        {
-            output.activities.push(activity_from_error(
-                crate::workspace::AppError::new("protocol_mismatch")
-                    .with_param("expected", required.to_string())
-                    .with_param("actual", hello.protocol.to_string()),
-            ));
-            return;
-        }
         let minimum_protocol = runtime.profile.minimum_protocol_version();
         if hello.protocol < minimum_protocol {
             output.activities.push(activity_from_error(
@@ -1479,7 +1461,7 @@ fn merge_output(target: &mut SessionOutput, mut source: SessionOutput) {
 
 fn configuration_error_code(code: &str) -> &str {
     match code {
-        "invalid_begin" | "invalid_direct" | "invalid_matrix" | "invalid_oled"
+        "invalid_begin" | "invalid_direct" | "invalid_matrix" | "invalid_display"
         | "invalid_commit" => code,
         _ => "device_configuration_error",
     }
@@ -1657,7 +1639,6 @@ pub struct DeviceDisplayLink {
     tracker: SceneTracker,
     enabled: bool,
     renderer: Option<Arc<dyn DisplayRenderer>>,
-    max_font_id: u8,
     pending_since: Option<Instant>,
     queued_update: Option<SceneUpdate>,
     desired_scene: Option<RenderedScene>,
@@ -1672,46 +1653,36 @@ impl DeviceDisplayLink {
         profile: Option<&RuntimeProfileSnapshot>,
         registry: &RendererRegistry,
     ) {
-        let panel_id = profile
+        let layout_id = profile
             .and_then(|runtime| {
                 runtime
                     .profile
                     .hardware_profile(&runtime.hardware_profile_id)
             })
-            .and_then(|hardware| {
-                if hardware.sh1106.is_some() && protocol >= SH1106_PROTOCOL_VERSION {
-                    Some(SH1106_PANEL_ID)
-                } else if hardware.ssd1306.is_some() && protocol >= OLED_PROTOCOL_VERSION {
-                    Some(SSD1306_PANEL_ID)
+            .and_then(|hardware| hardware.display.as_ref())
+            .filter(|_| protocol >= DISPLAY_PROTOCOL_VERSION)
+            .map(|display| {
+                if display.panel.height() == 64 {
+                    MONO_128X64_LAYOUT_ID
                 } else {
-                    None
+                    MONO_128X32_LAYOUT_ID
                 }
             });
-        self.configure_panel(protocol, panel_id, registry);
+        self.configure_layout(protocol, layout_id, registry);
     }
 
-    fn configure_panel(
+    fn configure_layout(
         &mut self,
         protocol: u16,
-        panel_id: Option<&str>,
+        layout_id: Option<&str>,
         registry: &RendererRegistry,
     ) {
         let renderer = (protocol >= DISPLAY_PROTOCOL_VERSION)
-            .then(|| panel_id.and_then(|id| registry.renderer(id).ok()))
+            .then(|| layout_id.and_then(|id| registry.renderer(id).ok()))
             .flatten();
-        let selected_panel = renderer.as_ref().map(|renderer| renderer.panel_id());
-        let current_panel = self.renderer.as_ref().map(|renderer| renderer.panel_id());
-        let max_font_id = renderer.as_ref().map_or(0, |renderer| {
-            if protocol >= DISPLAY_LARGE_FONT_PROTOCOL_VERSION {
-                renderer.capabilities().max_font_id
-            } else {
-                renderer.capabilities().ascii_font_id
-            }
-        });
-        if self.enabled == renderer.is_some()
-            && current_panel == selected_panel
-            && self.max_font_id == max_font_id
-        {
+        let selected_layout = renderer.as_ref().map(|renderer| renderer.layout_id());
+        let current_layout = self.renderer.as_ref().map(|renderer| renderer.layout_id());
+        if self.enabled == renderer.is_some() && current_layout == selected_layout {
             return;
         }
 
@@ -1722,7 +1693,6 @@ impl DeviceDisplayLink {
         self.needs_resync = false;
         self.enabled = renderer.is_some();
         self.renderer = renderer;
-        self.max_font_id = max_font_id;
         let _ = self.render_latest();
     }
 
@@ -1735,7 +1705,6 @@ impl DeviceDisplayLink {
         self.tracker = SceneTracker::default();
         self.enabled = false;
         self.renderer = None;
-        self.max_font_id = 0;
         self.pending_since = None;
         self.queued_update = None;
         self.desired_scene = None;
@@ -1755,11 +1724,7 @@ impl DeviceDisplayLink {
             self.desired_scene = None;
             return Ok(());
         };
-        self.desired_scene = Some(
-            renderer
-                .render_with_font_limit(snapshot, self.max_font_id)
-                .map_err(str::to_owned)?,
-        );
+        self.desired_scene = Some(renderer.render(snapshot).map_err(str::to_owned)?);
         Ok(())
     }
 
@@ -2688,12 +2653,8 @@ mod tests {
         product::{PRODUCT_DEFINITION_SCHEMA_VERSION, ProductDefinition, ProductIdentity},
         profile::{
             ButtonAction, DeviceProfile, HardwareProfile, InputSource, PROFILE_SCHEMA_VERSION,
-            Sh1106Config, Ssd1306Config,
         },
-        protocol::{
-            DISPLAY_LARGE_FONT_PROTOCOL_VERSION, DISPLAY_PROTOCOL_VERSION, DeviceMessage,
-            PhysicalInput,
-        },
+        protocol::{DISPLAY_PROTOCOL_VERSION, DeviceMessage, PhysicalInput},
     };
     use serialport::{SerialPortInfo, SerialPortType, UsbPortInfo};
     use std::{
@@ -2759,8 +2720,8 @@ mod tests {
                 name: "Hardware".into(),
                 board_profile_id: crate::hardware::YD_RP2040_BOARD_ID.into(),
                 debounce_ms: 30,
-                ssd1306: None,
-                sh1106: None,
+                display: None,
+                controls: None,
                 inputs: vec![InputSource::Direct {
                     id: "direct".into(),
                     keys: BTreeMap::from([("K1".into(), 0)]),
@@ -2881,8 +2842,8 @@ mod tests {
                     name: "ESP primary".into(),
                     board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
                     debounce_ms: 30,
-                    ssd1306: None,
-                    sh1106: None,
+                    display: None,
+                    controls: None,
                     inputs: vec![InputSource::Direct {
                         id: "direct".into(),
                         keys: BTreeMap::from([("A".into(), 6)]),
@@ -2907,11 +2868,14 @@ mod tests {
         let mut runtime = runtime_model();
         let hardware = &mut runtime.profile.hardware_profiles[0];
         hardware.board_profile_id = crate::hardware::YD_RP2040_BOARD_ID.into();
-        hardware.ssd1306 = Some(Ssd1306Config {
+        hardware.display = Some(crate::display_hardware::DisplayConfig {
+            panel: crate::display_hardware::DisplayPanel::Ssd1306_128x32,
+            address: 60,
+
             sda: 4,
             scl: 5,
-            control_panel: None,
         });
+        hardware.controls = None;
         runtime.metric_attribution.device_id =
             DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "ABCDEF123456").unwrap();
         runtime
@@ -2920,12 +2884,15 @@ mod tests {
     fn sh1106_runtime_model() -> RuntimeProfileSnapshot {
         let mut runtime = oled_runtime_model();
         let hardware = &mut runtime.profile.hardware_profiles[0];
-        let ssd1306 = hardware.ssd1306.take().unwrap();
-        hardware.sh1106 = Some(Sh1106Config {
+        let ssd1306 = hardware.display.take().unwrap();
+        hardware.display = Some(crate::display_hardware::DisplayConfig {
+            panel: crate::display_hardware::DisplayPanel::Sh1106_128x64,
+            address: 60,
+
             sda: ssd1306.sda,
             scl: ssd1306.scl,
-            control_panel: None,
         });
+        hardware.controls = None;
         runtime
     }
 
@@ -2961,7 +2928,7 @@ mod tests {
     }
 
     struct TestDisplayRenderer {
-        panel_id: &'static str,
+        layout_id: &'static str,
         text: &'static str,
     }
 
@@ -2978,12 +2945,12 @@ mod tests {
     }
 
     impl DisplayRenderer for TestDisplayRenderer {
-        fn panel_id(&self) -> &'static str {
-            self.panel_id
+        fn layout_id(&self) -> &'static str {
+            self.layout_id
         }
 
         fn capabilities(&self) -> &DisplayCapabilities {
-            static CAPABILITIES: DisplayCapabilities = DisplayCapabilities::ssd1306_128x32_mono();
+            static CAPABILITIES: DisplayCapabilities = DisplayCapabilities::mono_128x32();
             &CAPABILITIES
         }
 
@@ -3023,7 +2990,7 @@ mod tests {
     }
 
     #[test]
-    fn protocol_seven_ssd1306_starts_with_a_full_scene_at_base_zero() {
+    fn configured_display_starts_with_a_full_scene_at_base_zero() {
         let registry = built_in_renderer_registry();
         let mut link = DeviceDisplayLink::default();
         link.configure(
@@ -3040,57 +3007,12 @@ mod tests {
     }
 
     #[test]
-    fn protocol_seven_keeps_compact_layout_and_protocol_eight_uses_large_font() {
-        let registry = built_in_renderer_registry();
-        let now = Instant::now();
-        let mut version_seven = DeviceDisplayLink::default();
-        version_seven.configure(
-            DISPLAY_PROTOCOL_VERSION,
-            Some(&oled_runtime_model()),
-            &registry,
-        );
-        version_seven.update_desired(display_snapshot(3)).unwrap();
-        let version_seven_lines = version_seven.next_lines(now).unwrap();
-
-        assert!(
-            version_seven_lines
-                .iter()
-                .any(|line| line == "DISPLAY_REGION 0 0 0 64 16\n")
-        );
-        assert!(
-            version_seven_lines
-                .iter()
-                .all(|line| !line.starts_with("DISPLAY_TEXT 0 9 22 2 "))
-        );
-
-        let mut version_eight = DeviceDisplayLink::default();
-        version_eight.configure(
-            DISPLAY_LARGE_FONT_PROTOCOL_VERSION,
-            Some(&oled_runtime_model()),
-            &registry,
-        );
-        version_eight.update_desired(display_snapshot(3)).unwrap();
-        let version_eight_lines = version_eight.next_lines(now).unwrap();
-
-        assert!(
-            version_eight_lines
-                .iter()
-                .any(|line| line == "DISPLAY_REGION 0 0 0 128 32\n")
-        );
-        assert!(
-            version_eight_lines
-                .iter()
-                .any(|line| line.starts_with("DISPLAY_TEXT 0 9 22 2 "))
-        );
-    }
-
-    #[test]
-    fn sh1106_requires_protocol_eleven_and_uses_the_full_panel() {
+    fn sh1106_requires_current_display_protocol_and_uses_the_full_panel() {
         let registry = built_in_renderer_registry();
         let now = Instant::now();
         let mut version_ten = DeviceDisplayLink::default();
         version_ten.configure(
-            SH1106_PROTOCOL_VERSION - 1,
+            DISPLAY_PROTOCOL_VERSION - 1,
             Some(&sh1106_runtime_model()),
             &registry,
         );
@@ -3099,7 +3021,7 @@ mod tests {
 
         let mut version_eleven = DeviceDisplayLink::default();
         version_eleven.configure(
-            SH1106_PROTOCOL_VERSION,
+            DISPLAY_PROTOCOL_VERSION,
             Some(&sh1106_runtime_model()),
             &registry,
         );
@@ -3142,23 +3064,23 @@ mod tests {
         let mut registry = RendererRegistry::default();
         registry
             .register(Arc::new(TestDisplayRenderer {
-                panel_id: "test_alpha",
+                layout_id: "test_alpha",
                 text: "ALPHA",
             }))
             .unwrap();
         registry
             .register(Arc::new(TestDisplayRenderer {
-                panel_id: "test_beta",
+                layout_id: "test_beta",
                 text: "BETA",
             }))
             .unwrap();
         let snapshot = display_snapshot(3);
         let now = Instant::now();
         let mut alpha = DeviceDisplayLink::default();
-        alpha.configure_panel(DISPLAY_PROTOCOL_VERSION, Some("test_alpha"), &registry);
+        alpha.configure_layout(DISPLAY_PROTOCOL_VERSION, Some("test_alpha"), &registry);
         alpha.update_desired(Arc::clone(&snapshot)).unwrap();
         let mut beta = DeviceDisplayLink::default();
-        beta.configure_panel(DISPLAY_PROTOCOL_VERSION, Some("test_beta"), &registry);
+        beta.configure_layout(DISPLAY_PROTOCOL_VERSION, Some("test_beta"), &registry);
         beta.update_desired(snapshot).unwrap();
 
         let alpha_lines = alpha.next_lines(now).unwrap();
@@ -3761,7 +3683,7 @@ mod tests {
             "invalid_begin",
             "invalid_direct",
             "invalid_matrix",
-            "invalid_oled",
+            "invalid_display",
             "invalid_commit",
         ] {
             let activity = configuration_rejection(code);
@@ -3848,13 +3770,13 @@ mod tests {
         assert!(rejected.lines.is_empty());
         assert_eq!(session.hello.as_ref().map(|hello| hello.protocol), Some(3));
         assert!(!session.ready);
-        assert_eq!(rejected.activities[0].code, "protocol_mismatch");
+        assert_eq!(rejected.activities[0].code, "firmware_update_required");
         assert_eq!(
             rejected.activities[0]
                 .params
                 .get("expected")
                 .map(String::as_str),
-            Some("4")
+            Some("14")
         );
         assert_eq!(
             rejected.activities[0]

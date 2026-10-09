@@ -39,35 +39,31 @@ export interface FeatureSwitchInputSource {
 export type InputSource =
   DirectInputSource | ContactInputSource | FeatureSwitchInputSource;
 
+export type DisplayPanel = "ssd1306_128x32" | "sh1106_128x64";
+
+export interface DisplayConfig {
+  panel: DisplayPanel;
+  sda: number;
+  scl: number;
+  address: number;
+}
+
+export interface ControlPanelConfig {
+  type: "ec11_confirm_back";
+  confirm: number;
+  encoder_press: number;
+  encoder_a: number;
+  encoder_b: number;
+  back: number;
+}
+
 export interface HardwareProfile {
   id: string;
   name: string;
   board_profile_id: string;
   debounce_ms: number;
-  ssd1306?: {
-    sda: number;
-    scl: number;
-    control_panel?: {
-      type: "ec11_confirm_back";
-      confirm: number;
-      encoder_press: number;
-      encoder_a: number;
-      encoder_b: number;
-      back: number;
-    };
-  };
-  sh1106?: {
-    sda: number;
-    scl: number;
-    control_panel?: {
-      type: "ec11_confirm_back";
-      confirm: number;
-      encoder_press: number;
-      encoder_a: number;
-      encoder_b: number;
-      back: number;
-    };
-  };
+  display?: DisplayConfig;
+  controls?: ControlPanelConfig;
   inputs: InputSource[];
 }
 

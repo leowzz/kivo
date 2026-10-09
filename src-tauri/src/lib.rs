@@ -1,4 +1,5 @@
 // Shared product schema and validation used by both desktop entries and the builder CLI.
+pub mod display_hardware;
 pub mod error;
 mod handshake;
 pub mod hardware;

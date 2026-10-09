@@ -1,6 +1,8 @@
 #pragma once
 
 #include <array>
+
+#include "DisplayConfig.h"
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -12,8 +14,6 @@ struct HelperCommand;
 constexpr std::size_t kMaxDisplayRegions = 8;
 constexpr std::size_t kMaxDisplayOps = 24;
 constexpr std::size_t kMaxDisplayTextBytes = 48;
-constexpr std::uint16_t kRemoteDisplayWidth = 128;
-constexpr std::uint16_t kRemoteDisplayHeight = 64;
 constexpr std::uint8_t kRemoteDisplayMaxFontId = 2;
 
 enum class DisplayMode : std::uint8_t { Full, Delta };
@@ -64,6 +64,10 @@ static_assert(sizeof(RemoteDisplayCommit) <= 1280,
 
 class RemoteDisplay {
  public:
+  explicit RemoteDisplay(DisplayCapabilities capabilities = {128, 64, 2})
+      : capabilities_(capabilities) {}
+  const DisplayCapabilities &capabilities() const { return capabilities_; }
+  void reset(DisplayCapabilities capabilities);
   DisplayResult begin(std::uint32_t newRevision, std::uint32_t baseRevision,
                       DisplayMode mode);
   bool region(std::uint8_t slot, DisplayRect bounds);
@@ -93,6 +97,7 @@ class RemoteDisplay {
   void appendDirty(DisplayRect bounds, bool &overflowed);
   bool reject();
 
+  DisplayCapabilities capabilities_;
   std::uint32_t revision_ = 0;
   std::optional<StagedTransaction> staged_;
   std::optional<RemoteDisplayScene> committed_;

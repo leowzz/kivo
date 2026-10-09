@@ -113,8 +113,8 @@ def generate(library_root, output):
     product = yaml.safe_load(PRODUCT.read_text())
     profile = product["hardware_profile"]
     key_map = profile["inputs"][0]["keys"]
-    display = profile["sh1106"]
-    control = display["control_panel"]
+    display = profile["display"]
+    control = profile["controls"]
     assert key_map == {f"KEY_{i}": i for i in range(1, 19)}
     assert len(set(key_map.values()) | {display["sda"], display["scl"], *[v for k, v in control.items() if k != "type"]}) == 25
     constants = literal_model_constants()

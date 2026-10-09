@@ -62,7 +62,9 @@ hardware_profile:
   name: 工作站v1
   board_profile_id: yd-rp2040
   debounce_ms: 30
-  ssd1306:
+  display:
+    panel: ssd1306_128x32
+    address: 60
     sda: 28
     scl: 29
   inputs:

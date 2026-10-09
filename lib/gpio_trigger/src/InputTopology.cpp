@@ -63,43 +63,32 @@ bool TopologyBuilder::addPins(std::uint8_t sourceIndex,
   return true;
 }
 
-bool TopologyBuilder::addOled(std::uint32_t revision, std::uint8_t sda,
-                              std::uint8_t scl) {
-  return addOled(revision, sda, scl, OledDriver::Ssd1306);
-}
-
-bool TopologyBuilder::addSh1106(std::uint32_t revision, std::uint8_t sda,
-                                std::uint8_t scl) {
-  return addOled(revision, sda, scl, OledDriver::Sh1106);
-}
-
-bool TopologyBuilder::addOled(std::uint32_t revision, std::uint8_t sda,
-                              std::uint8_t scl, OledDriver driver) {
-  const std::vector<std::uint8_t> pins{sda, scl};
+bool TopologyBuilder::addDisplay(std::uint32_t revision, DisplayConfig config) {
+  const std::vector<std::uint8_t> pins{config.sda, config.scl};
   if (!pending_.has_value() || pending_->revision != revision ||
-      !profile_.supportsOled || pending_->oled.has_value() ||
-      !pinsAvailable(pins)) {
+      !profile_.supportsDisplay || pending_->display.has_value() ||
+      config.address < 0x08 || config.address > 0x77 || !pinsAvailable(pins)) {
     return false;
   }
   ownedPins_.insert(ownedPins_.end(), pins.begin(), pins.end());
-  pending_->oled = OledConfig{sda, scl, driver};
+  pending_->display = config;
   return true;
 }
 
-bool TopologyBuilder::addOledControlPanel(
+bool TopologyBuilder::addControlPanel(
     std::uint32_t revision, std::uint8_t confirm,
     std::uint8_t encoderPress, std::uint8_t encoderA,
     std::uint8_t encoderB, std::uint8_t back) {
   const std::vector<std::uint8_t> pins{confirm, encoderPress, encoderA,
                                        encoderB, back};
   if (!pending_.has_value() || pending_->revision != revision ||
-      !pending_->oled.has_value() || pending_->oledControlPanel.has_value() ||
+      !pending_->display.has_value() || pending_->controls.has_value() ||
       !pinsAvailable(pins)) {
     return false;
   }
   ownedPins_.insert(ownedPins_.end(), pins.begin(), pins.end());
-  pending_->oledControlPanel =
-      OledControlPanelConfig{confirm, encoderPress, encoderA, encoderB, back};
+  pending_->controls =
+      ControlPanelConfig{confirm, encoderPress, encoderA, encoderB, back};
   return true;
 }
 

@@ -19,7 +19,7 @@ const boardProfiles: BoardProfileSummary[] = [
     runtimeUsb: "303a:4002",
     bootloaderUsb: null,
     safePins: [1, 2, 6, 12, 13],
-    supportsOled: false,
+    supportsDisplay: false,
   },
   {
     id: "yd-rp2040",
@@ -28,7 +28,7 @@ const boardProfiles: BoardProfileSummary[] = [
     runtimeUsb: "2e8a:000a",
     bootloaderUsb: "2e8a:0003",
     safePins: Array.from({ length: 24 }, (_, pin) => pin),
-    supportsOled: true,
+    supportsDisplay: true,
   },
 ];
 
@@ -66,7 +66,7 @@ test("accepts GPIO26 through GPIO29 across direct, matrix, and OLED ownership", 
     name: "High GPIO",
     board_profile_id: "yd-rp2040",
     debounce_ms: 30,
-    ssd1306: { sda: 28, scl: 29 },
+    display: { panel: "ssd1306_128x32", sda: 28, scl: 29, address: 60 },
     inputs: [
       { type: "direct", id: "direct", keys: { ONE: 26 } },
       {
@@ -101,10 +101,11 @@ test("rejects unsupported, unsafe, same-pin, conflicting, and duplicate pin owne
     debounce_ms: 30,
     inputs: [] as HardwareProfile["inputs"],
   };
-  const withOled = (sh1106: NonNullable<HardwareProfile["sh1106"]>, inputs = base.inputs) => ({
+  const withOled = (config: { sda: number; scl: number; control_panel?: HardwareProfile["controls"] }, inputs = base.inputs): HardwareProfile => ({
     ...base,
     inputs,
-    sh1106,
+    display: { panel: "sh1106_128x64", sda: config.sda, scl: config.scl, address: 60 },
+    controls: config.control_panel,
   });
 
   expect(hardwareProfilesAreValid([

@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "BoardProfile.h"
+#include "DisplayConfig.h"
 
 enum class PhysicalInputKind {
   Direct,
@@ -34,15 +35,7 @@ struct MatrixInputSource {
   std::vector<std::uint8_t> columns;
 };
 
-enum class OledDriver { Ssd1306, Sh1106 };
-
-struct OledConfig {
-  std::uint8_t sda;
-  std::uint8_t scl;
-  OledDriver driver = OledDriver::Ssd1306;
-};
-
-struct OledControlPanelConfig {
+struct ControlPanelConfig {
   std::uint8_t confirm;
   std::uint8_t encoderPress;
   std::uint8_t encoderA;
@@ -55,8 +48,8 @@ struct RuntimeTopology {
   std::uint16_t debounceMs = 30;
   std::vector<DirectInputSource> directs;
   std::vector<MatrixInputSource> matrices;
-  std::optional<OledConfig> oled;
-  std::optional<OledControlPanelConfig> oledControlPanel;
+  std::optional<DisplayConfig> display;
+  std::optional<ControlPanelConfig> controls;
 
   std::size_t keyCount() const;
 };
@@ -71,11 +64,8 @@ class TopologyBuilder {
   bool addMatrix(std::uint32_t revision, std::uint8_t sourceIndex,
                  std::vector<std::uint8_t> rows,
                  std::vector<std::uint8_t> columns);
-  bool addOled(std::uint32_t revision, std::uint8_t sda,
-               std::uint8_t scl);
-  bool addSh1106(std::uint32_t revision, std::uint8_t sda,
-                 std::uint8_t scl);
-  bool addOledControlPanel(std::uint32_t revision, std::uint8_t confirm,
+  bool addDisplay(std::uint32_t revision, DisplayConfig config);
+  bool addControlPanel(std::uint32_t revision, std::uint8_t confirm,
                            std::uint8_t encoderPress,
                            std::uint8_t encoderA, std::uint8_t encoderB,
                            std::uint8_t back);
@@ -86,8 +76,7 @@ class TopologyBuilder {
   bool pinsAvailable(const std::vector<std::uint8_t> &pins) const;
   bool addPins(std::uint8_t sourceIndex,
                const std::vector<std::uint8_t> &pins);
-  bool addOled(std::uint32_t revision, std::uint8_t sda, std::uint8_t scl,
-               OledDriver driver);
+
 
   std::optional<RuntimeTopology> pending_;
   const BoardProfile &profile_;

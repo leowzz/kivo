@@ -1,13 +1,9 @@
 use serde::Serialize;
 use std::collections::BTreeSet;
 
-pub const HOST_PROTOCOL_VERSION: u16 = 13;
-pub const DISPLAY_PROTOCOL_VERSION: u16 = 7;
-pub const DISPLAY_LARGE_FONT_PROTOCOL_VERSION: u16 = 8;
+pub const HOST_PROTOCOL_VERSION: u16 = 14;
+pub const DISPLAY_PROTOCOL_VERSION: u16 = 14;
 pub const ACTION_RUN_PROTOCOL_VERSION: u16 = 6;
-pub const OLED_PROTOCOL_VERSION: u16 = 4;
-pub const SH1106_PROTOCOL_VERSION: u16 = 11;
-pub const OLED_CONTROL_PANEL_PROTOCOL_VERSION: u16 = 10;
 pub const ADVANCED_ACTION_PROTOCOL_VERSION: u16 = 5;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]

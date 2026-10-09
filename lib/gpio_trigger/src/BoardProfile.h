@@ -9,7 +9,7 @@ struct BoardProfile {
   const char *boardProfileId;
   const std::uint8_t *safePins;
   std::size_t safePinCount;
-  bool supportsOled;
+  bool supportsDisplay;
 
   bool supports(std::uint8_t pin) const {
     for (std::size_t index = 0; index < safePinCount; ++index) {

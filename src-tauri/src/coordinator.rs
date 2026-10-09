@@ -2310,8 +2310,8 @@ mod tests {
                 name: "ESP".into(),
                 board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
                 debounce_ms: 30,
-                ssd1306: None,
-                sh1106: None,
+                display: None,
+                controls: None,
                 inputs: Vec::new(),
             }],
             actions: BTreeMap::new(),
@@ -2347,8 +2347,8 @@ mod tests {
                 name: "Hardware".into(),
                 board_profile_id: crate::hardware::YD_RP2040_BOARD_ID.into(),
                 debounce_ms: 30,
-                ssd1306: None,
-                sh1106: None,
+                display: None,
+                controls: None,
                 inputs: vec![InputSource::Direct {
                     id: "direct".into(),
                     keys: BTreeMap::from([("K1".into(), 0)]),
@@ -3795,8 +3795,8 @@ mod tests {
             name: "ESP secondary".into(),
             board_profile_id: crate::hardware::YD_ESP32_S3_BOARD_ID.into(),
             debounce_ms: 30,
-            ssd1306: None,
-            sh1106: None,
+            display: None,
+            controls: None,
             inputs: Vec::new(),
         });
         coordinator
