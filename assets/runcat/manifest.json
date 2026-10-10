@@ -1,0 +1,110 @@
+{
+  "source": "https://github.com/runcat-dev/RunnerGallery",
+  "archive_sha256": "2e8021e6024d02303ef0835a156170e58e126a50430597e46c2867042008dfe6",
+  "runners": [
+    {
+      "name": "classic-cat",
+      "author": "Takuto Nakamura (Kyome22)",
+      "displayName": "Classic Cat",
+      "type": "monochrome",
+      "tags": [
+        "animal"
+      ],
+      "frames": 5
+    },
+    {
+      "name": "rabbit",
+      "author": "Takuto Nakamura (Kyome22)",
+      "displayName": "Rabbit",
+      "type": "monochrome",
+      "tags": [
+        "animal"
+      ],
+      "frames": 5
+    },
+    {
+      "name": "welsh-corgi",
+      "author": "Takuto Nakamura (Kyome22)",
+      "displayName": "Welsh Corgi",
+      "type": "monochrome",
+      "tags": [
+        "animal",
+        "dog"
+      ],
+      "frames": 7
+    },
+    {
+      "name": "bird",
+      "author": "Takuto Nakamura (Kyome22)",
+      "displayName": "Bird",
+      "type": "monochrome",
+      "tags": [
+        "animal"
+      ],
+      "frames": 5
+    },
+    {
+      "name": "horse",
+      "author": "Takuto Nakamura (Kyome22)",
+      "displayName": "Horse",
+      "type": "monochrome",
+      "tags": [
+        "animal"
+      ],
+      "frames": 6
+    },
+    {
+      "name": "dinosaur",
+      "author": "Takuto Nakamura (Kyome22)",
+      "displayName": "Dinosaur",
+      "type": "monochrome",
+      "tags": [
+        "animal"
+      ],
+      "frames": 7
+    },
+    {
+      "name": "wankel-engine",
+      "author": "Takuto Nakamura (Kyome22)",
+      "displayName": "Wankel Engine",
+      "type": "monochrome",
+      "tags": [
+        "object",
+        "mechanism"
+      ],
+      "frames": 10
+    },
+    {
+      "name": "escapement",
+      "author": "Takuto Nakamura (Kyome22)",
+      "displayName": "Escapement",
+      "type": "monochrome",
+      "tags": [
+        "object",
+        "mechanism"
+      ],
+      "frames": 24
+    },
+    {
+      "name": "double-crank",
+      "author": "Takuto Nakamura (Kyome22)",
+      "displayName": "Double Crank",
+      "type": "monochrome",
+      "tags": [
+        "object",
+        "mechanism"
+      ],
+      "frames": 15
+    },
+    {
+      "name": "cow-abduction",
+      "author": "Takuto Nakamura (Kyome22)",
+      "displayName": "Cow Abduction",
+      "type": "monochrome",
+      "tags": [
+        "animal"
+      ],
+      "frames": 14
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 #include "U8g2Display.h"
 
 #include <algorithm>
+#include <array>
 
 namespace {
 const std::uint8_t *font(std::uint8_t id) {
@@ -63,6 +64,51 @@ bool U8g2Display::configure(const std::optional<DisplayConfig> &config) {
 bool U8g2Display::renderLocal(const DisplayFrame &frame) {
   if (!ready_ || !bus_.healthy()) return !requested_;
   if (source_ == Source::Local && lastLocal_ == frame) return true;
+  if (frame.runCat) {
+    std::array<std::uint8_t, 1024> previous{};
+    std::copy_n(screen_.getBufferPtr(), capabilities_.width * capabilities_.height / 8,
+                previous.begin());
+    // Reserve the rightmost four tiles for metrics. Artwork is already cropped
+    // across the whole cycle and fitted to the 96x64 animation area.
+    const DisplayRect bounds{0, 0, 96, capabilities_.height};
+    const auto width = kRunCatWidth * bounds.height / kRunCatHeight;
+    const auto left = (bounds.width - width) / 2;
+    const bool animationOnly = source_ == Source::Local && lastLocal_ &&
+        lastLocal_->runCat && lastLocal_->lines == frame.lines;
+    if (animationOnly) {
+      screen_.setDrawColor(0);
+      screen_.drawBox(bounds.x, bounds.y, bounds.width, bounds.height);
+      screen_.setDrawColor(1);
+    } else {
+      screen_.clearBuffer();
+      screen_.setFont(font(0));
+      screen_.setFontPosBaseline();
+      const auto right = capabilities_.width - 2;
+      screen_.drawStr(right - screen_.getStrWidth("CPU"), capabilities_.height / 2 - 2, "CPU");
+      screen_.drawStr(right - screen_.getStrWidth(frame.lines[1].c_str()),
+                      capabilities_.height / 2 + 12, frame.lines[1].c_str());
+    }
+    const auto &bitmap = runCatBitmap(frame.runCat->animation, frame.runCat->phase);
+    for (unsigned y = 0; y < bounds.height; ++y)
+      for (unsigned x = 0; x < width; ++x) {
+        const auto sx = x * kRunCatWidth / width;
+        const auto sy = y * kRunCatHeight / bounds.height;
+        if (bitmap[sy * kRunCatStride + sx / 8] & (0x80U >> (sx % 8)))
+          screen_.drawPixel(left + x, y);
+      }
+    // Re-marking the entire tall animation on every frame would starve its
+    // lower tiles at high CPU usage. Queue only tiles whose pixels changed.
+    const auto *buffer = screen_.getBufferPtr();
+    for (unsigned ty = 0; ty < capabilities_.height / 8; ++ty)
+      for (unsigned tx = 0; tx < capabilities_.width / 8; ++tx) {
+        const auto offset = ty * capabilities_.width + tx * 8;
+        if (!std::equal(previous.begin() + offset, previous.begin() + offset + 8, buffer + offset))
+          dirty_.markPixels({static_cast<std::uint16_t>(tx * 8), static_cast<std::uint16_t>(ty * 8), 8, 8});
+      }
+    lastLocal_ = frame;
+    source_ = Source::Local;
+    return true;
+  }
   screen_.clearBuffer();
   screen_.setFont(font(0));
   screen_.setFontPosBaseline();

@@ -218,6 +218,9 @@ void handleResponseLine(std::string_view line, std::uint32_t nowMs) {
     return;
   }
   switch (command->kind) {
+    case HelperCommandKind::DisplayCpu:
+      controls.setCpuPercent(command->cpuPercent, nowMs);
+      return;
     case HelperCommandKind::Hello:
       writeLine(helloLine);
       return;
@@ -423,6 +426,10 @@ void scanControlPanel(std::uint32_t nowMs) {
       platform::saveDisplayBrightness(controls.brightnessPercent());
       showControlPanel();
       break;
+    case ControlPanelUpdate::AnimationChanged:
+      platform::saveDisplayAnimation(controls.animation());
+      showControlPanel();
+      break;
     case ControlPanelUpdate::None:
       break;
   }
@@ -456,6 +463,7 @@ void setup() {
                           kKivoProductVersionId);
   platform::begin();
   controls.setBrightnessPercent(platform::loadDisplayBrightness());
+  controls.setAnimation(platform::loadDisplayAnimation());
   const auto productTopology =
       makeEmbeddedProductTopology(platform::boardProfile());
   if (productTopology.has_value()) {
@@ -474,6 +482,7 @@ void loop() {
   initializeStandaloneDisplay(nowMs);
   const bool connected = platform::connected();
   if (connected != helperConnected) {
+    controls.clearCpuPercent();
     pendingDelay.reset();
     actionRuns.reset();
     resetHelperInput();
@@ -489,6 +498,7 @@ void loop() {
   if (helperConnected) readHelperResponses(nowMs);
   scanRuntimeInputs(nowMs);
   scanControlPanel(nowMs);
+  if (controls.tickAnimation(nowMs)) showControlPanel();
   if (const auto error = displayRuntime.service(); error && helperConnected) {
     writeLine(*error);
   }

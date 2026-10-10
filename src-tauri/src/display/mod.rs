@@ -3,6 +3,7 @@ use std::path::Path;
 mod codex_events;
 mod codex_provider;
 mod codex_source;
+mod cpu_provider;
 mod hub;
 mod model;
 mod provider;
@@ -66,6 +67,9 @@ fn registry_with_codex_provider(
         }))
         .expect("the built-in provider source ID is unique");
     registry
+        .register(Box::new(cpu_provider::CpuDisplayProvider::new()))
+        .expect("the built-in provider source ID is unique");
+    registry
 }
 
 #[cfg(test)]
@@ -109,14 +113,14 @@ mod tests {
     }
 
     #[test]
-    fn built_in_registry_contains_exactly_the_codex_provider() {
+    fn built_in_registry_contains_codex_and_cpu_providers() {
         let temp = TempDir::new().unwrap();
         let registry = built_in_provider_registry(
             &temp.path().join(".codex"),
             &temp.path().join("display/codex-cursors-v1.json"),
         );
 
-        assert_eq!(registry.source_ids(), ["codex"]);
+        assert_eq!(registry.source_ids(), ["codex", "system"]);
     }
 
     #[test]
@@ -126,7 +130,7 @@ mod tests {
             &'static str,
         >("forced_source_failure"));
 
-        assert_eq!(registry.source_ids(), ["codex"]);
+        assert_eq!(registry.source_ids(), ["codex", "system"]);
         assert!(matches!(
             registry
                 .providers_mut()

@@ -47,7 +47,7 @@ def test_cli_defaults_to_current_protocol_version() -> None:
         ]
     )
 
-    assert args.protocol_version == 14
+    assert args.protocol_version == 15
 
 
 def test_smoke_requires_expected_protocol_responses() -> None:
@@ -195,7 +195,7 @@ def test_smoke_cli_requires_build_and_passes_it_to_run_arguments() -> None:
     assert args.build == "test-build"
     device = FakeSerial(
         [
-            b"HELLO 14 esp32s3 yd-esp32-s3 test-build - 2 1 2\n",
+            b"HELLO 15 esp32s3 yd-esp32-s3 test-build - 2 1 2\n",
             b"CONFIG_OK 1\n",
             b"CONFIG_ERROR 2 invalid_direct\n",
         ]

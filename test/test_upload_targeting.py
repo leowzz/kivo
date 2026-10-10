@@ -121,7 +121,7 @@ def test_runtime_verifier_retries_until_protocol_is_ready() -> None:
     assert runtime.write_count == 2
 
 
-def test_runtime_verifier_requires_generic_protocol_v14(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_runtime_verifier_requires_generic_protocol_v15(monkeypatch: pytest.MonkeyPatch) -> None:
     observed: list[tuple[str, list[str]]] = []
     monkeypatch.setattr(
         "scripts.verify_runtime_firmware.wait_for_runtime_port",
@@ -143,7 +143,7 @@ def test_runtime_verifier_requires_generic_protocol_v14(monkeypatch: pytest.Monk
     assert observed == [
         (
             "/dev/target",
-            ["HELLO", "14", "rp2040", "yd-rp2040", "v0.6.1", "-"],
+            ["HELLO", "15", "rp2040", "yd-rp2040", "v0.6.1", "-"],
         )
     ]
 
@@ -168,7 +168,7 @@ def test_runtime_verifier_can_require_embedded_product_version(monkeypatch: pyte
         "product-a",
     )
 
-    assert observed == [["HELLO", "14", "rp2040", "yd-rp2040", "dev", "product-a"]]
+    assert observed == [["HELLO", "15", "rp2040", "yd-rp2040", "dev", "product-a"]]
 
 
 def test_runtime_verifier_bounds_timeout_and_reports_expected_and_observed() -> None:

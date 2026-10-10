@@ -134,7 +134,7 @@ def read_runtime_hello(board: str, serial_number: str) -> dict | None:
             if len(fields) < 6 or fields[0] != "HELLO":
                 continue
             protocol = int(fields[1])
-            if not 3 <= protocol <= 14:
+            if not 3 <= protocol <= 15:
                 raise ValueError("Unrecognized installed firmware protocol")
             reported_board = LEGACY_BOARDS.get(fields[3], fields[3])
             if fields[2] != BOARDS[board][1] or reported_board != board:

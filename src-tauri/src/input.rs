@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::collections::BTreeSet;
 
-pub const HOST_PROTOCOL_VERSION: u16 = 14;
+pub const HOST_PROTOCOL_VERSION: u16 = 15;
 pub const DISPLAY_PROTOCOL_VERSION: u16 = 14;
 pub const ACTION_RUN_PROTOCOL_VERSION: u16 = 6;
 pub const ADVANCED_ACTION_PROTOCOL_VERSION: u16 = 5;

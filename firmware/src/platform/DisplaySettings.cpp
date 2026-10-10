@@ -1,6 +1,7 @@
 #include <EEPROM.h>
 #include <algorithm>
 #include "Platform.h"
+#include "RunCat.h"
 
 namespace {
 constexpr std::uint8_t kDisplayBrightnessMagic = 0x4B;
@@ -10,14 +11,14 @@ struct PersistedDisplaySettings {
   std::uint8_t magic;
   std::uint8_t brightnessPercent;
   std::uint8_t checksum;
-  std::uint8_t reserved;
+  std::uint8_t animation;
 };
 static_assert(sizeof(PersistedDisplaySettings) == 4);
 constexpr std::size_t kDisplaySettingsEepromSize =
     sizeof(PersistedDisplaySettings);
 std::uint8_t displaySettingsChecksum(
     const PersistedDisplaySettings &settings) {
-  return static_cast<std::uint8_t>(settings.magic ^ settings.brightnessPercent ^
+  return static_cast<std::uint8_t>(settings.magic ^ settings.brightnessPercent ^ settings.animation ^
                                    0xA5U);
 }
 
@@ -25,6 +26,7 @@ bool validDisplaySettings(const PersistedDisplaySettings &settings) {
   return settings.magic == kDisplayBrightnessMagic &&
          settings.brightnessPercent >= kMinimumDisplayBrightnessPercent &&
          settings.brightnessPercent <= kMaximumDisplayBrightnessPercent &&
+         settings.animation < static_cast<std::uint8_t>(RunCatAnimation::Count) &&
          settings.checksum == displaySettingsChecksum(settings);
 }
 
@@ -47,8 +49,24 @@ void saveDisplayBrightness(std::uint8_t percent) {
       kDisplayBrightnessMagic,
       static_cast<std::uint8_t>(clamped),
       0,
-      0,
+      loadDisplayAnimation(),
   };
+  settings.checksum = displaySettingsChecksum(settings);
+  EEPROM.put(0, settings);
+  EEPROM.commit();
+}
+
+std::uint8_t loadDisplayAnimation() {
+  EEPROM.begin(kDisplaySettingsEepromSize);
+  PersistedDisplaySettings settings{};
+  EEPROM.get(0, settings);
+  return validDisplaySettings(settings) ? settings.animation : 0;
+}
+
+void saveDisplayAnimation(std::uint8_t animation) {
+  const auto brightness = loadDisplayBrightness();
+  PersistedDisplaySettings settings{kDisplayBrightnessMagic, brightness, 0,
+      animation < static_cast<std::uint8_t>(RunCatAnimation::Count) ? animation : std::uint8_t{0}};
   settings.checksum = displaySettingsChecksum(settings);
   EEPROM.put(0, settings);
   EEPROM.commit();

@@ -73,6 +73,8 @@ std::optional<std::uint32_t> parseRevision(std::string_view token) {
 }
 
 std::optional<std::string_view> displayErrorCode(std::string_view kind) {
+  // Invalid telemetry must not cancel a staged scene transaction.
+  if (kind == "DISPLAY_CPU") return std::nullopt;
   if (kind == "DISPLAY_BEGIN") return "invalid_begin";
   if (kind == "DISPLAY_REGION" || kind == "DISPLAY_CLEAR") {
     return "invalid_region";

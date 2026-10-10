@@ -152,11 +152,22 @@ controls:
 - `firmware/src/platform/I2cBus.*`：硬件总线租用、GPIO 路由、收发和传输状态。
   同一引脚配置允许共享租用，最后一个使用者释放总线；仍有使用者时拒绝
   改变总线引脚。RP2040 的非硬件 I²C 引脚组合使用 U8g2 软件 I²C。
-- `firmware/src/platform/DisplaySettings.cpp`：亮度持久化，独立于 USB/HID。
+- `RunCat.*`：十套 Runner Gallery 动画，保留各自 5–24 帧的完整循环，
+  CPU 使用率映射为 8–20 fps。`assets/runcat` 保留原始 PNG、作者与许可证，
+  `scripts/generate_runcat_sprites.py` 按整套动画的稳定边界裁剪、缩放并生成
+  flash 中的 96x64 单色素材 `RunCatSprites.h`，正常构建无需图像依赖。
+  `ControlPanel` 按各套实际帧数驱动动画时钟和切换；`U8g2Display` 将动画
+  铺满屏幕高度，最右侧 32 像素显示 CPU 指标，不显示标题。
+  逐帧比较 framebuffer，只标记像素变化的 tile，继续沿用每次 8 字节的刷新预算。
+- `firmware/src/platform/DisplaySettings.cpp`：亮度与动画选择持久化，独立于 USB/HID。
+  复用原有四字节存储的保留字段，旧亮度设置保留并默认选择猫。
+- `src-tauri/src/display/cpu_provider.rs`：每秒采样电脑整体 CPU 使用率，
+  与 Codex Provider 共用快照分发。版本 15 的设备接收 `DISPLAY_CPU <0..100>`；
+  此命令独立于场景事务与 ACK。固件在 3 秒后丢弃过期数据。
 - `src-tauri/src/display/render.rs`：按 `mono_128x32` / `mono_128x64` 布局渲染
   业务快照，不使用屏幕芯片或控制输入型号选择布局。
 
-显示接线协议为版本 14：`CONFIG_DISPLAY <revision> <panel> <sda> <scl> <address>`
+显示接线协议从版本 14 开始：`CONFIG_DISPLAY <revision> <panel> <sda> <scl> <address>`
 与 `CONFIG_CONTROLS <revision> <confirm> <press> <a> <b> <back>`。
 旧的 `ssd1306` / `sh1106` 配置字段和嵌套 `control_panel` 不再接受，
 解析时直接报错，避免屏幕配置被静默丢弃。

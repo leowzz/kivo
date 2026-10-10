@@ -122,7 +122,11 @@ YD-RP2040 的 Hardware Profile 支持两种地址为 `0x3C` 的 OLED：原有 SS
 
 启用 OLED 的设备会显示本机 Codex 任务的低干扰状态：汇总画面为 `CODEX <N> RUN`，需要操作时显示 `NEEDS INPUT` 或 `APPROVAL NEEDED`，响应生成后短暂显示 `RESPONSE READY`，数据源不可用时显示 `CODEX OFFLINE`。Codex 数据源异常不会停止 Kivo 的按键 Runtime。
 
-状态屏使用任务身份、工作目录和状态/生命周期信号，不展示对话正文、推理、工具内容或最终回复。SSD1306 使用 `ssd1306` 配置和 128x32 渲染器；SH1106 使用独立的 `sh1106` 配置和 128x64 渲染器。当前仓库的运行固件握手为 `HELLO 13`，不应再按旧协议版本选择显示固件。两种屏均固定为 rotation 0，互不迁移。
+状态屏使用任务身份、工作目录和状态/生命周期信号，不展示对话正文、推理、工具内容或最终回复。SSD1306 使用 `ssd1306_128x32` 面板和 128x32 渲染器；SH1106 使用 `sh1106_128x64` 面板和 128x64 渲染器。当前仓库的运行固件握手为 `HELLO 15`。两种屏均固定为 rotation 0，互不迁移。
+
+带编码器的屏幕还提供 RunCat：按压编码器进入菜单，选择 `RUNCAT`，旋转编码器依次切换经典跑猫、兔子、柯基、飞鸟、奔马、恐龙、转子发动机、擒纵机构、双曲柄和 UFO 吸牛，共 10 套动画。素材来自 [Runner Gallery](https://github.com/runcat-dev/RunnerGallery)，保留各套完整的 5–24 帧循环；动画铺满屏幕高度，CPU 指标位于最右侧，不显示标题。动画选择会保存，按压编码器或返回键回到菜单，从 `LIVE VIEW` 恢复任务状态屏。电脑 CPU 使用率越高，动画播放越快；Kivo 未连接或 CPU 数据超过 3 秒未更新时显示 `CPU --`，动画以低速播放。此功能需要配套更新 Kivo 和运行固件。素材来源与许可证见 [assets/runcat/NOTICE.md](assets/runcat/NOTICE.md)。
+
+带编码器的 r02 工作站使用产品固件：先运行 `make build-product PRODUCT=kivo-workbench-rp-k18-disp-encp-r02`，再用 `make upload-prod` 选择刚构建的 r02 固件。`make upload` 上传通用固件，不包含产品的屏幕和编码器接线；刷入后无法独立使用该模块的菜单。
 
 刷入固件后仍需分别在实体 SSD1306 和 SH1106 上检查文字与状态切换，并在 SH1106 模块上检查旋钮方向、按压、确认和返回。自动测试和固件构建不能替代物理屏幕与输入验收。
 

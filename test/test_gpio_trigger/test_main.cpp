@@ -1216,23 +1216,23 @@ void test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins() {
                     platform::selectRp2040I2cRouting(5, 6));
 }
 
-void test_formats_protocol_v14_hello_with_board_and_build() {
+void test_formats_protocol_v15_hello_with_board_and_build() {
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 14 rp2040 yd-rp2040 0.1.0+gabc1234 - 28 "
+      "HELLO 15 rp2040 yd-rp2040 0.1.0+gabc1234 - 28 "
       "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 26 "
       "27 28 29\n",
       formatHello(kYdRp2040, "0.1.0+gabc1234").c_str());
 }
 
-void test_formats_protocol_v14_hello_with_product_identity() {
+void test_formats_protocol_v15_hello_with_product_identity() {
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 14 rp2040 yd-rp2040 0.1.0+gabc1234 key-k1-r01 28 "
+      "HELLO 15 rp2040 yd-rp2040 0.1.0+gabc1234 key-k1-r01 28 "
       "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 26 "
       "27 28 29\n",
       formatHello(kYdRp2040, "0.1.0+gabc1234", "key-k1-r01")
           .c_str());
   TEST_ASSERT_EQUAL_STRING(
-      "HELLO 14 rp2040 yd-rp2040 build - 28 "
+      "HELLO 15 rp2040 yd-rp2040 build - 28 "
       "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 26 "
       "27 28 29\n",
       formatHello(kYdRp2040, "build", "-").c_str());
@@ -2115,8 +2115,8 @@ int main(int, char **) {
   RUN_TEST(test_rp2040_standalone_debug_topology_matches_keyboard_wiring);
   RUN_TEST(test_rp2040_oled_selects_hardware_i2c_when_pin_roles_match);
   RUN_TEST(test_rp2040_oled_falls_back_to_software_i2c_for_arbitrary_safe_pins);
-  RUN_TEST(test_formats_protocol_v14_hello_with_board_and_build);
-  RUN_TEST(test_formats_protocol_v14_hello_with_product_identity);
+  RUN_TEST(test_formats_protocol_v15_hello_with_board_and_build);
+  RUN_TEST(test_formats_protocol_v15_hello_with_product_identity);
   RUN_TEST(test_rejects_empty_firmware_build_id);
   RUN_TEST(test_rejects_whitespace_in_firmware_build_id);
   RUN_TEST(test_contact_edge_reports_unordered_pair_once_after_debounce);

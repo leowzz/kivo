@@ -25,6 +25,7 @@ enum class HelperCommandKind {
   DisplayClear,
   DisplayText,
   DisplayCommit,
+  DisplayCpu,
   Paste,
   Hotkey,
   Chord,
@@ -60,6 +61,7 @@ struct HelperCommand {
   std::uint16_t displayHeight = 0;
   std::uint8_t displayFontId = 0;
   std::string displayText;
+  std::uint8_t cpuPercent = 0;
   std::vector<std::uint8_t> pins;
   std::vector<std::uint8_t> rows;
   std::vector<std::uint8_t> columns;

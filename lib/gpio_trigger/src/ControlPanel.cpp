@@ -9,9 +9,9 @@ constexpr std::size_t kDisplayColumns = 21;
 constexpr std::uint8_t kMinimumBrightnessPercent = 5;
 constexpr std::uint8_t kBrightnessStepPercent = 5;
 constexpr std::size_t kBrightnessBarColumns = 16;
-constexpr std::array<const char *, 5> kMenuEntries = {
+constexpr std::array<const char *, 6> kMenuEntries = {
     "LIVE VIEW", "SYSTEM STATUS", "INPUT TEST", "BRIGHTNESS",
-    "DEVICE INFO"};
+    "DEVICE INFO", "RUNCAT"};
 constexpr std::array<std::int8_t, 16> kEncoderTransitions = {
     0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
 
@@ -66,6 +66,28 @@ void ControlPanel::setBrightnessPercent(std::uint8_t percent) {
                                  static_cast<std::uint8_t>(100));
 }
 
+void ControlPanel::setAnimation(std::uint8_t animation) {
+  animation_ = animation < static_cast<std::uint8_t>(RunCatAnimation::Count)
+                   ? static_cast<RunCatAnimation>(animation) : RunCatAnimation::Cat;
+  animationPhase_ = 0;
+}
+
+void ControlPanel::setCpuPercent(std::uint8_t percent, std::uint32_t nowMs) {
+  if (percent > 100) return;
+  cpuPercent_ = percent;
+  cpuUpdatedMs_ = nowMs;
+}
+
+bool ControlPanel::tickAnimation(std::uint32_t nowMs) {
+  const bool expired = cpuPercent_ && nowMs - cpuUpdatedMs_ >= 3000;
+  if (expired) cpuPercent_.reset();
+  if (view_ != View::RunCat) return false;
+  if (nowMs - animationUpdatedMs_ < runCatFrameInterval(cpuPercent_)) return expired;
+  animationUpdatedMs_ = nowMs;
+  animationPhase_ = (animationPhase_ + 1) % runCatPhaseCount(animation_);
+  return true;
+}
+
 int ControlPanel::encoderStep(const ControlPanelSample &sample,
                               std::uint32_t nowMs) {
   const auto current = static_cast<std::uint8_t>(
@@ -116,8 +138,11 @@ ControlPanelUpdate ControlPanel::select() {
     case 3:
       view_ = View::Brightness;
       break;
-    default:
+    case 4:
       view_ = View::DeviceInfo;
+      break;
+    default:
+      view_ = View::RunCat;
       break;
   }
   return ControlPanelUpdate::Render;
@@ -150,6 +175,11 @@ ControlPanelUpdate ControlPanel::update(
       confirmPressed || (encoderPressed && !encoderPressStartedDuringMotion);
 
   if (step != 0) {
+    if (view_ == View::RunCat) {
+      const int count = static_cast<int>(RunCatAnimation::Count);
+      setAnimation((static_cast<int>(animation_) + step + count) % count);
+      return ControlPanelUpdate::AnimationChanged;
+    }
     if (view_ == View::Brightness) {
       const auto next = std::clamp(
           static_cast<int>(brightnessPercent_) +
@@ -238,6 +268,10 @@ DisplayFrame ControlPanel::frame(const DisplayFrame &status,
         result.lines[0] = result.lines[1];
         result.lines[1] = result.lines[2];
       }
+      break;
+    case View::RunCat:
+      result.lines[1] = cpuPercent_ ? std::to_string(*cpuPercent_) + "%" : "--";
+      result.runCat = RunCatFrame{animation_, animationPhase_, cpuPercent_};
       break;
   }
   return result;

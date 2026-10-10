@@ -265,6 +265,14 @@ std::optional<HelperCommand> parseHelperCommand(std::string_view line) {
   }
 
 
+  if (*kind == "DISPLAY_CPU") {
+    const auto percent = takeNumber(line);
+    if (!percent || *percent > 100 || takeToken(line)) return std::nullopt;
+    HelperCommand command{HelperCommandKind::DisplayCpu};
+    command.cpuPercent = static_cast<std::uint8_t>(*percent);
+    return command;
+  }
+
   if (*kind == "DISPLAY_BEGIN") {
     const auto revision = takeNumber(line);
     const auto baseRevision = takeNumber(line);

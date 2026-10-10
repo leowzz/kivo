@@ -20,6 +20,8 @@ bool sendHotkey(std::uint8_t modifiers, std::uint8_t keycode);
 bool sendConsumerControl(std::uint16_t usage);
 std::uint8_t loadDisplayBrightness();
 void saveDisplayBrightness(std::uint8_t percent);
+std::uint8_t loadDisplayAnimation();
+void saveDisplayAnimation(std::uint8_t animation);
 void showRandomKeyColor();
 void clearKeyColor();
 void delayMs(std::uint32_t milliseconds);

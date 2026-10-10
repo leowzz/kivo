@@ -1683,6 +1683,7 @@ pub struct DeviceDisplayLink {
     desired_scene: Option<RenderedScene>,
     latest_snapshot: Option<Arc<DisplaySnapshot>>,
     needs_resync: bool,
+    cpu_sent_at: Option<Instant>,
 }
 
 impl DeviceDisplayLink {
@@ -1730,6 +1731,7 @@ impl DeviceDisplayLink {
         self.queued_update = None;
         self.desired_scene = None;
         self.needs_resync = false;
+        self.cpu_sent_at = None;
         self.enabled = renderer.is_some();
         self.renderer = renderer;
         let _ = self.render_latest();
@@ -1744,6 +1746,7 @@ impl DeviceDisplayLink {
         self.tracker = SceneTracker::default();
         self.enabled = false;
         self.renderer = None;
+        self.cpu_sent_at = None;
         self.pending_since = None;
         self.queued_update = None;
         self.desired_scene = None;
@@ -1802,6 +1805,35 @@ impl DeviceDisplayLink {
         let lines = display_commands(&update)?;
         self.queued_update = Some(update);
         Ok(lines)
+    }
+
+    // Telemetry is independent of scene acknowledgements and is repeated even
+    // when the rounded CPU percentage stays unchanged, so firmware can expire it.
+    fn next_cpu_line(&mut self, now: Instant) -> Option<String> {
+        if !self.enabled
+            || self
+                .cpu_sent_at
+                .is_some_and(|sent| now.saturating_duration_since(sent) < Duration::from_secs(1))
+        {
+            return None;
+        }
+        let snapshot = self.latest_snapshot.as_ref()?;
+        if snapshot.health("system") != crate::display::SourceHealth::Healthy {
+            return None;
+        }
+        let item = snapshot
+            .items
+            .iter()
+            .find(|item| item.source == "system" && item.id == "system.cpu")?;
+        if item.expires_at.is_none_or(|expires| now >= expires) {
+            return None;
+        }
+        let percent = item
+            .metrics
+            .get("cpu_percent")
+            .filter(|percent| **percent <= 100)?;
+        self.cpu_sent_at = Some(now);
+        Some(format!("DISPLAY_CPU {percent}\n"))
     }
 
     pub(crate) fn mark_transmitted(&mut self, now: Instant) {
@@ -2063,6 +2095,9 @@ fn run_isolated_worker_inner(
         if !display_lines.is_empty() {
             write_display_lines(device.get_mut(), display_lines)?;
             display_link.mark_transmitted(clock.monotonic_now());
+        }
+        if let Some(line) = display_link.next_cpu_line(clock.monotonic_now()) {
+            write_display_lines(device.get_mut(), vec![line])?;
         }
 
         let monotonic_now_ms = monotonic_ms_since(monotonic_origin, clock.monotonic_now());
@@ -2988,6 +3023,74 @@ mod tests {
             ],
             health: BTreeMap::from([("codex".into(), SourceHealth::Healthy)]),
         })
+    }
+
+    #[test]
+    fn cpu_telemetry_repeats_independently_of_scene_acknowledgements() {
+        let now = Instant::now();
+        let registry = built_in_renderer_registry();
+        let mut snapshot = display_snapshot(1);
+        let data = Arc::make_mut(&mut snapshot);
+        data.health.insert("system".into(), SourceHealth::Healthy);
+        data.items.push(
+            DisplayItem::new(
+                "system.cpu",
+                "system",
+                DisplayPriority::Ambient,
+                DisplayState::Idle,
+                "CPU",
+            )
+            .unwrap()
+            .with_metric("cpu_percent", 42)
+            .with_updated_at(now)
+            .with_expiry(now + Duration::from_secs(3)),
+        );
+        let mut link = DeviceDisplayLink::default();
+        link.configure(15, Some(&oled_runtime_model()), &registry);
+        link.update_desired(snapshot).unwrap();
+        link.next_lines(now).unwrap();
+        link.mark_transmitted(now);
+        assert_eq!(link.next_cpu_line(now).as_deref(), Some("DISPLAY_CPU 42\n"));
+        assert!(
+            link.next_cpu_line(now + Duration::from_millis(999))
+                .is_none()
+        );
+        assert_eq!(
+            link.next_cpu_line(now + Duration::from_secs(1)).as_deref(),
+            Some("DISPLAY_CPU 42\n")
+        );
+        assert!(link.next_cpu_line(now + Duration::from_secs(3)).is_none());
+        link.reset_connection(15, Some(&oled_runtime_model()), &registry);
+        assert_eq!(link.next_cpu_line(now).as_deref(), Some("DISPLAY_CPU 42\n"));
+        link.configure(15, Some(&runtime_model()), &registry);
+        assert!(link.next_cpu_line(now).is_none());
+    }
+
+    #[test]
+    fn cpu_telemetry_drops_unhealthy_or_invalid_samples() {
+        let now = Instant::now();
+        let registry = built_in_renderer_registry();
+        let mut link = DeviceDisplayLink::default();
+        link.configure(15, Some(&oled_runtime_model()), &registry);
+        for (health, percent) in [(SourceHealth::Stale, 42), (SourceHealth::Healthy, 101)] {
+            let mut snapshot = display_snapshot(1);
+            let data = Arc::make_mut(&mut snapshot);
+            data.health.insert("system".into(), health);
+            data.items.push(
+                DisplayItem::new(
+                    "system.cpu",
+                    "system",
+                    DisplayPriority::Ambient,
+                    DisplayState::Idle,
+                    "CPU",
+                )
+                .unwrap()
+                .with_metric("cpu_percent", percent)
+                .with_expiry(now + Duration::from_secs(3)),
+            );
+            link.update_desired(snapshot).unwrap();
+            assert!(link.next_cpu_line(now).is_none());
+        }
     }
 
     struct TestDisplayRenderer {

@@ -7,13 +7,15 @@
 #include <string>
 
 #include "GpioTriggerController.h"
+#include "RunCat.h"
 
 struct DisplayFrame {
   std::array<std::string, 4> lines;
   bool stacked = false;
+  std::optional<RunCatFrame> runCat;
 
   bool operator==(const DisplayFrame &other) const {
-    return lines == other.lines && stacked == other.stacked;
+    return lines == other.lines && stacked == other.stacked && runCat == other.runCat;
   }
 };
 
