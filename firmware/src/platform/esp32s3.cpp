@@ -48,6 +48,9 @@ void begin() {
 
 bool connected() { return static_cast<bool>(usbSerial); }
 
+// The recovery watchdog is currently specific to the RP2040 platform.
+void feedWatchdog() {}
+
 int available() { return usbSerial.available(); }
 
 int read() { return usbSerial.read(); }

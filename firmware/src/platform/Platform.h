@@ -9,6 +9,7 @@
 namespace platform {
 const BoardProfile &boardProfile();
 void begin();
+void feedWatchdog();
 bool connected();
 int available();
 int read();

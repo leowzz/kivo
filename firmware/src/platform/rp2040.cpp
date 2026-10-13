@@ -5,6 +5,7 @@
 
 #include "HidReportTransport.h"
 #include "Platform.h"
+#include "SerialWrite.h"
 
 namespace {
 constexpr std::uint8_t kKeyboardReportId = 1;
@@ -27,7 +28,13 @@ void begin() {
   TinyUSBDevice.setProductDescriptor("Kivo Keyboard RP2040");
   Serial.begin(115200);
   keyboard.begin();
+  // RP2040's hardware limit is about 8.3 seconds. Feed only after a complete
+  // main-loop iteration, never from yield/USB interrupts that may keep running
+  // while application code is stuck.
+  rp2040.wdt_begin(8000);
 }
+
+void feedWatchdog() { rp2040.wdt_reset(); }
 
 bool connected() { return static_cast<bool>(Serial); }
 
@@ -36,7 +43,18 @@ int available() { return Serial.available(); }
 int read() { return Serial.read(); }
 
 void write(const char *data, std::size_t size) {
-  Serial.write(reinterpret_cast<const std::uint8_t *>(data), size);
+  const auto result = writeSerialWithDeadline(
+      data, size, 1000,
+      []() { return static_cast<bool>(Serial); },
+      []() { return Serial.availableForWrite(); },
+      [](const char *bytes, std::size_t count) {
+        return Serial.write(reinterpret_cast<const std::uint8_t *>(bytes), count);
+      },
+      []() { return millis(); }, []() { delay(1); });
+  // A timed-out line may have been partially sent. Re-enumerate from a clean
+  // boot rather than append another reply to it or leave the device hung.
+  // Ordinary USB disconnect/suspend exits without rebooting.
+  if (result == SerialWriteResult::TimedOut) rp2040.reboot();
 }
 
 void flush() { Serial.flush(); }

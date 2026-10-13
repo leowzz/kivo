@@ -22,6 +22,7 @@
 
 namespace {
 constexpr std::size_t kMaxResponseLineLength = 255;
+constexpr std::size_t kHelperReadBudget = 1024;
 constexpr std::size_t kProductChunkBytes = 144;
 constexpr std::uint32_t kStandaloneDisplayStartupDelayMs = 500;
 std::string helloLine;
@@ -355,7 +356,10 @@ void servicePendingDelay(std::uint32_t nowMs) {
 }
 
 void readHelperResponses(std::uint32_t nowMs) {
-  while (platform::available() > 0) {
+  // Keep input scanning and the watchdog progressing even during a stream of
+  // host commands. ResponseLineBuffer retains partial lines between loops.
+  for (std::size_t read = 0;
+       read < kHelperReadBudget && platform::available() > 0; ++read) {
     const int value = platform::read();
     if (value < 0) {
       return;
@@ -503,4 +507,5 @@ void loop() {
     writeLine(*error);
   }
   platform::delayMs(1);
+  platform::feedWatchdog();
 }
