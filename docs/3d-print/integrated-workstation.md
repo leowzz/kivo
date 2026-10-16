@@ -1,5 +1,9 @@
 # Kivo Integrated Workstation
 
+For the newer low-angle hand-wired design with a left toggle, right-hand
+display/encoder and perfboard wiring, see [Workbench serviceable](workbench-serviceable.md).
+This document preserves the earlier 30-degree integrated model.
+
 This model combines an 18-key mechanical keypad, a display PCB, either
 supported controller board, and a separately printed telephone handset base
 into a compact desktop workstation.

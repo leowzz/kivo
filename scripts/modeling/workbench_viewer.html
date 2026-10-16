@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workbench · 可拆装飞线版</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#edf0f2;color:#25303b;font:16px/1.6 system-ui,-apple-system,"PingFang SC",sans-serif}header{position:absolute;z-index:2;top:28px;left:32px;right:32px;pointer-events:none}h1{margin:0;font-size:26px;font-weight:650;letter-spacing:-.5px}header p{margin:4px 0;color:#596674;font-size:15px}canvas{width:100vw;height:100dvh;display:block;touch-action:none;cursor:grab}canvas:active{cursor:grabbing}nav{position:absolute;z-index:3;left:50%;bottom:30px;transform:translateX(-50%);display:flex;gap:6px;padding:7px;background:#ffffffed;border:1px solid #dce0e4;border-radius:14px;box-shadow:0 8px 32px #25303b16}button{font:inherit;border:0;background:transparent;color:#455260;border-radius:9px;white-space:nowrap;padding:9px 17px;cursor:pointer}button[aria-pressed=true]{background:#303c48;color:#fff}button:focus-visible{outline:3px solid #ee995e;outline-offset:2px}#note{position:absolute;bottom:100px;left:24px;right:24px;text-align:center;color:#566473;font-size:14px;pointer-events:none}#error{position:absolute;top:150px;left:32px;right:32px;max-width:650px;background:white;border-radius:12px;padding:24px}#error:empty{display:none}.badge{font-size:13px;margin-top:9px;color:#6b7480}#reset{position:absolute;right:28px;top:32px;z-index:4;background:white;border:1px solid #dce0e4;padding:6px 13px;font-size:14px}@media(max-width:600px){header{top:20px;left:20px;right:20px}h1{font-size:22px}header p{max-width:270px}nav{bottom:18px;gap:2px;padding:5px}nav button{padding:8px 10px;font-size:14px}#note{bottom:80px;font-size:13px}#reset{top:auto;bottom:140px;right:20px}}
+</style>
+<header><h1>Workbench · 可拆装飞线版</h1><p>左侧扭子 · 右侧屏幕与编码器 · 18 键</p><div class="badge">12° 斜面 / 148 × 132 mm / 机械设计草案，先打印轴孔试片</div></header>
+<button id="reset">复位视角</button>
+<canvas id="model" aria-label="可拖动旋转的 Workbench 三维模型"></canvas>
+<div id="note">拖动旋转，滚轮缩放。左侧单扭子、右侧屏幕与编码器，维修线束放在右侧空仓。</div>
+<nav aria-label="模型视图"><button data-mode="assembled" aria-pressed="true">整机</button><button data-mode="exploded" aria-pressed="false">拆解</button><button data-mode="lid" aria-pressed="false">面板</button><button data-mode="wiring" aria-pressed="false">底部接线</button><button data-mode="solder" aria-pressed="false">背面焊线</button><button data-mode="shell" aria-pressed="false">外壳</button></nav>
+<div id="error" role="alert"></div>
+<script id="payload" type="application/octet-stream">__MODEL_DATA__</script>
+<script>
+(async()=>{
+const canvas=document.querySelector('canvas'), gl=canvas.getContext('webgl2',{antialias:true,preserveDrawingBuffer:true});
+if(!gl)throw Error('浏览器未启用 WebGL 2。可改用同目录的 PNG 预览或 GLB 模型。');
+const unpack=s=>Uint8Array.from(atob(s.trim()),c=>c.charCodeAt(0));
+const stream=new Blob([unpack(document.querySelector('#payload').textContent)]).stream().pipeThrough(new DecompressionStream('deflate'));
+const data=JSON.parse(await new Response(stream).text());
+function shader(type,source){const s=gl.createShader(type);gl.shaderSource(s,source);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(s));return s}
+const program=gl.createProgram();
+gl.attachShader(program,shader(gl.VERTEX_SHADER,`#version 300 es
+in vec3 a;uniform mat3 r;uniform vec3 center;uniform vec3 shift;uniform vec2 scale;out vec3 world;
+void main(){vec3 p=a+shift-center;world=p;vec3 q=r*p;gl_Position=vec4(q.xy*scale,-q.z/700.,1.);}`));
+gl.attachShader(program,shader(gl.FRAGMENT_SHADER,`#version 300 es
+precision highp float;in vec3 world;uniform vec3 color;out vec4 pixel;
+void main(){vec3 n=normalize(cross(dFdx(world),dFdy(world)));float light=.60+.40*abs(dot(n,normalize(vec3(-.3,-.5,1.))));pixel=vec4(color*light,1.);}`));
+gl.linkProgram(program);if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(program));gl.useProgram(program);
+const locations=Object.fromEntries(['r','center','shift','scale','color'].map(n=>[n,gl.getUniformLocation(program,n)]));
+const attrib=gl.getAttribLocation(program,'a');
+const meshes=data.map(m=>{const vao=gl.createVertexArray();gl.bindVertexArray(vao);const vb=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,vb);const v=new Float32Array(unpack(m.v).buffer);gl.bufferData(gl.ARRAY_BUFFER,v,gl.STATIC_DRAW);gl.enableVertexAttribArray(attrib);gl.vertexAttribPointer(attrib,3,gl.FLOAT,false,0,0);const fb=gl.createBuffer();gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,fb);const f=new Uint32Array(unpack(m.f).buffer);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,f,gl.STATIC_DRAW);return{...m,vao,count:f.length,color:[1,3,5].map(i=>parseInt(m.color.slice(i,i+2),16)/255)}});
+gl.enable(gl.DEPTH_TEST);gl.clearColor(.9294,.9412,.9490,1);
+let yaw=-.57,elevation=.70,zoom=1,mode='assembled';
+const notes={assembled:'拖动旋转，滚轮缩放。左侧单扭子、右侧屏幕与编码器，键区用轴体自带卡扣固定。',exploded:'上方：18 键面板、左侧扭子和右侧屏幕。下方：外壳、洞洞板和独立底盖。',lid:'键区用 1.5 mm 卡扣边固定轴体；每颗轴保留独立软线。左侧扭子盖可拆卸。',wiring:'80 × 60 mm 洞洞板用四个压片固定；J1–J3 接三排键，J4 接屏幕编码器，J5 接扭子。',solder:'从洞洞板背面看焊线。彩线为绝缘跳线，只焊两端；粗黑线为 GND 汇流排。J4 是 2×5 转原模块 9 针。',shell:'上下盖分别拧入四个角柱；后部大开口给 USB 插头与不同板高留空间。'};
+if(!meshes.some(m=>m.name.startsWith('Perfboard wire'))){document.querySelector('[data-mode="solder"]').hidden=true;notes.wiring='控制板与排插为尺寸包络；逐点接线图对应默认 80 × 60 mm 洞洞板。'}
+function isElectronics(n){return /perfboard|Perfboard|RP2040|socket|USB|header/.test(n)}
+function isTop(n){return n==='lid'||n==='toggle_cap'||n.startsWith('K')||/Display|OLED|Encoder|Module|Toggle/.test(n)}
+function visible(n){if(mode==='shell')return n==='shell';if(mode==='lid')return isTop(n);if(mode==='solder')return /perfboard|Perfboard/.test(n);if(mode==='wiring')return n==='base'||n.startsWith('board clamp')||isElectronics(n)||n.startsWith('Perfboard')||n.includes('loop');return true}
+function shift(n){if(mode!=='exploded')return[0,0,0];if(isTop(n))return[0,0,40];if(n==='base'||n.startsWith('board clamp')||isElectronics(n))return[0,0,-24];return[0,0,0]}
+function draw(){
+const dpr=Math.min(devicePixelRatio,2),w=Math.round(innerWidth*dpr),h=Math.round(innerHeight*dpr);if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}gl.viewport(0,0,w,h);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+const cy=Math.cos(yaw),sy=Math.sin(yaw),ce=Math.cos(elevation),se=Math.sin(elevation);
+// Rows are screen-right, screen-up and camera-forward, supplied column-major.
+gl.uniformMatrix3fv(locations.r,false,new Float32Array([cy,-se*sy,ce*sy, sy,se*cy,-ce*cy, 0,ce,se]));
+const span=(mode==='exploded'?150:mode==='solder'?58:112)/zoom/Math.min(1,w/h);
+gl.uniform2f(locations.scale,1/(span*w/h),1/span);
+if(mode==='solder')gl.uniform3f(locations.center,67,98,8);else gl.uniform3f(locations.center,74,66,mode==='exploded'?61:mode==='wiring'?13:36);
+for(const m of meshes){if(!visible(m.name)||(mode==='exploded'&&m.name.includes('loop')))continue;gl.bindVertexArray(m.vao);gl.uniform3fv(locations.shift,shift(m.name));gl.uniform3fv(locations.color,m.color);gl.drawElements(gl.TRIANGLES,m.count,gl.UNSIGNED_INT,0)}
+window.workbenchState={ready:true,mode,visible:meshes.filter(m=>visible(m.name)).length,meshCount:meshes.length,drawError:gl.getError(),yaw,elevation,zoom};
+}
+function reset(){yaw=-.57;elevation=mode==='solder'?-.85:.70;zoom=1;draw()}
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{mode=b.dataset.mode;document.querySelectorAll('nav button').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));document.querySelector('#note').textContent=notes[mode];reset()});
+document.querySelector('#reset').onclick=reset;
+let drag=null;canvas.onpointerdown=e=>{drag=[e.clientX,e.clientY];canvas.setPointerCapture(e.pointerId)};
+canvas.onpointermove=e=>{if(!drag)return;yaw-=(e.clientX-drag[0])*.008;elevation=Math.max(-1.4,Math.min(1.5,elevation+(e.clientY-drag[1])*.008));drag=[e.clientX,e.clientY];draw()};
+canvas.onpointerup=canvas.onpointercancel=()=>drag=null;
+canvas.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.4,Math.min(3,zoom*Math.exp(-e.deltaY*.001)));draw()},{passive:false});
+window.addEventListener('resize',draw);draw();
+})().catch(error=>{document.querySelector('#error').textContent=error.message;window.workbenchState={ready:false,error:error.message}});
+</script>
+</html>

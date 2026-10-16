@@ -7,6 +7,8 @@ correctly.
 | Generator | Output |
 |---|---|
 | `integrated_workstation.py` | Integrated workstation shell, sloped panel, bottom cover, standalone controller-cradle test module, and side-mount handset base |
+| `workbench_serviceable.py` | Low-angle 18-key hand-wired Workbench, left toggle, right display/encoder, undrilled perfboard clamps, switch-fit coupon and wiring manifest |
+| `workbench_perfboard_wiring.py` | YD-RP2040 perfboard component/solder views, all 18 key pairs, verified display-module pin order, toggle, keyed connector faces and checked netlist |
 | `heat_set_insert_test_plate.py` | Labeled M3 heat-set insert calibration plate with 4.3-4.8 mm through holes |
 | `telephone_handset_switch_base.py` | Standalone telephone handset switch base |
 | `macro_pad_variants.py` | Macro-pad enclosure size variants |
@@ -15,6 +17,7 @@ Each file is a standalone PEP 723 script. For example:
 
 ```bash
 uv run --script scripts/modeling/integrated_workstation.py
+uv run --script scripts/modeling/workbench_serviceable.py
 uv run --script scripts/modeling/telephone_handset_switch_base.py
 uv run --script scripts/modeling/macro_pad_variants.py
 ```
