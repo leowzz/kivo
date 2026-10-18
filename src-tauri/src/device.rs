@@ -1627,8 +1627,18 @@ struct SystemSerialTransportFactory;
 
 impl SerialTransportFactory for SystemSerialTransportFactory {
     fn open(&self, port: &str) -> Result<Box<dyn SerialTransport>, String> {
-        let port = serialport::new(port, 115_200)
-            .timeout(SERIAL_COMMAND_POLL_INTERVAL)
+        let builder = serialport::new(port, 115_200).timeout(SERIAL_COMMAND_POLL_INTERVAL);
+        #[cfg(target_os = "windows")]
+        let port: Box<dyn serialport::SerialPort> = {
+            let port = builder
+                .open_native()
+                .map_err(|error| format!("serial_open_failed: {error}"))?;
+            crate::serial::set_windows_write_timeout(&port, 1_000)
+                .map_err(|error| format!("serial_open_failed: {error}"))?;
+            Box::new(port)
+        };
+        #[cfg(not(target_os = "windows"))]
+        let port = builder
             .open()
             .map_err(|error| format!("serial_open_failed: {error}"))?;
         Ok(Box::new(SystemSerialTransport(port)))
