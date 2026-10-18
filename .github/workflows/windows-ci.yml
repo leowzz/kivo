@@ -48,7 +48,10 @@ jobs:
       - name: Install dependencies
         run: |
           uv sync --locked
-          npm ci
+          npm ci --include=optional
+
+      - name: Verify TypeScript compiler
+        run: node node_modules/typescript/bin/tsc --version
 
       - name: Test firmware tooling
         run: >-

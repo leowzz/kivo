@@ -91,7 +91,10 @@ jobs:
           workspaces: "src-tauri -> target"
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --include=optional
+
+      - name: Verify TypeScript compiler
+        run: node node_modules/typescript/bin/tsc --version
 
       - name: Verify repository version
         shell: bash
