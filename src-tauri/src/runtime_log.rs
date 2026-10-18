@@ -510,7 +510,7 @@ impl<'a> From<&'a DeviceStatus> for DeviceLogSnapshot<'a> {
     }
 }
 
-fn stable_runtime_activity_code(code: &str) -> &'static str {
+pub(crate) fn stable_runtime_activity_code(code: &str) -> &'static str {
     for (prefix, stable) in [
         ("serial_open_failed:", "serial_open_failed"),
         ("serial_handshake_failed:", "serial_handshake_failed"),
@@ -518,6 +518,11 @@ fn stable_runtime_activity_code(code: &str) -> &'static str {
         ("serial_write_failed:", "serial_write_failed"),
         ("metrics_write_failed:", "metrics_write_failed"),
         ("paste_submit_failed:", "paste_submit_failed"),
+        ("product_info_write_failed:", "product_info_write_failed"),
+        ("product_info_read_failed:", "product_info_read_failed"),
+        ("product_info_failed:", "product_info_failed"),
+        ("product_read_write_failed:", "product_read_write_failed"),
+        ("product_read_failed:", "product_read_failed"),
     ] {
         if code.starts_with(prefix) {
             return stable;
@@ -527,6 +532,9 @@ fn stable_runtime_activity_code(code: &str) -> &'static str {
         "action_step_completed" => "action_step_completed",
         "action_step_failed" => "action_step_failed",
         "assignment_board_mismatch" => "assignment_board_mismatch",
+        "board_profile_mismatch" => "board_profile_mismatch",
+        "capability_mismatch" => "capability_mismatch",
+        "controller_family_mismatch" => "controller_family_mismatch",
         "device_disconnected" => "device_disconnected",
         "device_offline" => "device_offline",
         "device_worker_stopped" => "device_worker_stopped",
@@ -536,6 +544,10 @@ fn stable_runtime_activity_code(code: &str) -> &'static str {
         "input_state" => "input_state",
         "invalid_action_acknowledgement" => "invalid_action_acknowledgement",
         "invalid_assignment" => "invalid_assignment",
+        "invalid_product_info" => "invalid_product_info",
+        "invalid_product_definition_json" => "invalid_product_definition_json",
+        "invalid_product_transfer_sequence" => "invalid_product_transfer_sequence",
+        "invalid_product_version_id" => "invalid_product_version_id",
         "invalid_topology" => "invalid_topology",
         "metrics_write_failed" => "metrics_write_failed",
         "no_runtime_assignment" => "no_runtime_assignment",
@@ -544,6 +556,14 @@ fn stable_runtime_activity_code(code: &str) -> &'static str {
         "paste_submit_failed" => "paste_submit_failed",
         "firmware_update_required" => "firmware_update_required",
         "protocol_mismatch" => "protocol_mismatch",
+        "product_info_hello_mismatch" => "product_info_hello_mismatch",
+        "product_read_timeout" => "product_read_timeout",
+        "product_read_failed" => "product_read_failed",
+        "product_definition_sha_mismatch" => "product_definition_sha_mismatch",
+        "product_definition_too_large" => "product_definition_too_large",
+        "unsupported_product_definition_schema" => "unsupported_product_definition_schema",
+        "product_definition_identity_mismatch" => "product_definition_identity_mismatch",
+        "product_definition_not_canonical" => "product_definition_not_canonical",
         "serial_handshake_failed" => "serial_handshake_failed",
         "serial_handshake_timeout" => "serial_handshake_timeout",
         "serial_open_failed" => "serial_open_failed",

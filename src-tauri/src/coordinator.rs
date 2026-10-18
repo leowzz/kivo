@@ -19,7 +19,7 @@ use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, RwLock, mpsc},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const WORKER_RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
@@ -981,6 +981,27 @@ impl RuntimeCoordinator {
                 if !self.workers.contains_key(&device_id) {
                     return None;
                 }
+                // Capture the failure before stopping the worker clears its port and
+                // before the next scan can replace the device/candidate status.
+                let failure = error.as_ref().map(|error| {
+                    let timestamp_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    let profile = runtime_profile(
+                        &self.workspace_revision,
+                        &device_id,
+                        self.product_definitions.get(&device_id),
+                    );
+                    self.runtime_event(
+                        &device_id,
+                        RuntimeEventContext::from_snapshot(timestamp_ms, profile.as_ref())
+                            .with_port(self.workers[&device_id].port.clone()),
+                        RuntimeActivity::new(crate::runtime_log::stable_runtime_activity_code(
+                            error,
+                        )),
+                    )
+                });
                 if !self.recovering_devices.insert(device_id.clone()) {
                     self.reconnect_not_before
                         .insert(device_id.clone(), Instant::now() + WORKER_RECONNECT_BACKOFF);
@@ -1007,7 +1028,7 @@ impl RuntimeCoordinator {
                         candidate.latest_error.as_deref(),
                     );
                 }
-                None
+                failure
             }
         }
     }
@@ -1164,6 +1185,11 @@ impl RuntimeCoordinator {
         for id in self.workers.keys() {
             if let Some(status) = previous.get(id) {
                 self.devices.insert(id.clone(), status.clone());
+            }
+        }
+        for id in &self.recovering_devices {
+            if let (Some(status), Some(previous)) = (self.devices.get_mut(id), previous.get(id)) {
+                status.latest_error = previous.latest_error.clone();
             }
         }
     }
@@ -3367,6 +3393,90 @@ mod tests {
             .unwrap();
         assert_eq!(status.connection, ConnectionDimension::Online);
         assert_eq!(status.mode, Some(DeviceMode::Bootloader));
+    }
+
+    #[test]
+    fn disconnect_failure_is_logged_before_scans_for_enrolled_and_candidate_devices() {
+        for enrolled in [false, true] {
+            let (_directory, enumerator, _launcher, mut coordinator) = harness();
+            enumerator.set(
+                vec![serial("COM8", 0x2e8a, 0x102e, Some("FAILURE-LOG"))],
+                Vec::new(),
+            );
+            coordinator.scan_once().unwrap();
+            if enrolled {
+                coordinator.drain_worker_events();
+            } else {
+                // Leave the device in the pre-HELLO candidate state.
+                while coordinator.event_receiver.try_recv().is_ok() {}
+            }
+            let id = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "FAILURE-LOG").unwrap();
+            let failure = WorkerEvent::Disconnected {
+                generation: 1,
+                device_id: id.clone(),
+                error: Some("serial_open_failed: private operating system detail".into()),
+            };
+            coordinator.event_sender.send(failure.clone()).unwrap();
+            let events = coordinator.drain_worker_events();
+            assert_eq!(events.len(), 1, "failure must not depend on a later scan");
+            let event = &events[0];
+            assert_eq!(event.device_id, id);
+            assert_eq!(event.port.as_deref(), Some("COM8"));
+            assert_eq!(event.level, EventLevel::Error);
+            assert!(event.timestamp_ms > 0);
+            let entry = crate::runtime_log::runtime_event_entry(event).unwrap();
+            let json = crate::runtime_log::serialize_entry(&entry).unwrap();
+            let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(value["event"], "serial_open_failed");
+            assert_eq!(value["context"]["port"], "COM8");
+            assert!(!json.contains("private operating system detail"));
+            assert!(coordinator.handle_worker_event(failure).is_none());
+        }
+    }
+
+    #[test]
+    fn disconnect_error_survives_retry_scans_until_hello_succeeds() {
+        let (_directory, enumerator, _launcher, mut coordinator) = harness();
+        enumerator.set(
+            vec![serial("COM8", 0x2e8a, 0x102e, Some("RETAIN-ERROR"))],
+            Vec::new(),
+        );
+        scan(&mut coordinator);
+        let id = DeviceId::new(crate::hardware::YD_RP2040_BOARD_ID, "RETAIN-ERROR").unwrap();
+        for _ in 0..2 {
+            coordinator.handle_worker_event(WorkerEvent::Disconnected {
+                generation: 1,
+                device_id: id.clone(),
+                error: Some("serial_handshake_timeout".into()),
+            });
+            coordinator.scan_once().unwrap();
+            assert_eq!(
+                coordinator.devices[&id]
+                    .latest_error
+                    .as_ref()
+                    .map(|error| error.code.as_str()),
+                Some("serial_handshake_timeout")
+            );
+        }
+        // Repeated scans during backoff must preserve the failure too.
+        coordinator.scan_once().unwrap();
+        assert_eq!(
+            coordinator.devices[&id]
+                .latest_error
+                .as_ref()
+                .map(|error| error.code.as_str()),
+            Some("serial_handshake_timeout")
+        );
+        while coordinator.event_receiver.try_recv().is_ok() {}
+        coordinator
+            .reconnect_not_before
+            .insert(id.clone(), Instant::now() - Duration::from_millis(1));
+        scan(&mut coordinator);
+        assert!(coordinator.devices[&id].latest_error.is_none());
+        assert_eq!(
+            coordinator.devices[&id].connection,
+            ConnectionDimension::Online
+        );
     }
 
     #[test]

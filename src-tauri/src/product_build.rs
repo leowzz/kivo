@@ -104,8 +104,19 @@ pub fn build_product_cancellable(
         .current_dir(repo_root)
         .args(["run", "pio", "run", "-e", board.firmware_environment])
         .env("KIVO_FIRMWARE_BUILD_ID", build_id)
-        .env("KIVO_PRODUCT_GENERATED_DIR", &generated_directory)
-        .env("PLATFORMIO_BUILD_DIR", isolated_root.join("build"))
+        // PlatformIO's GNU toolchain does not accept Windows extended-path
+        // prefixes (\\?\) in response-file arguments. Repository roots are
+        // canonicalized by the studio and may carry that prefix, so strip it
+        // only at the process boundary while retaining canonical paths for
+        // filesystem operations in Rust.
+        .env(
+            "KIVO_PRODUCT_GENERATED_DIR",
+            platformio_path(&generated_directory),
+        )
+        .env(
+            "PLATFORMIO_BUILD_DIR",
+            platformio_path(&isolated_root.join("build")),
+        )
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
@@ -186,6 +197,20 @@ pub fn build_product_cancellable(
     })
 }
 
+fn platformio_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let value = path.as_os_str().to_string_lossy();
+        if let Some(unc_path) = value.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{unc_path}"));
+        }
+        if let Some(drive_path) = value.strip_prefix(r"\\?\") {
+            return PathBuf::from(drive_path);
+        }
+    }
+    path.to_path_buf()
+}
+
 fn validate_build_id(build_id: &str) -> Result<(), AppError> {
     (!build_id.is_empty()
         && build_id.len() <= 128
@@ -243,6 +268,19 @@ mod tests {
         assert!(validate_build_id("v1.2.3-dev_4").is_ok());
         assert!(validate_build_id("../escape").is_err());
         assert!(validate_build_id("has space").is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn platformio_paths_strip_windows_extended_prefixes() {
+        assert_eq!(
+            platformio_path(Path::new(r"\\?\C:\work\kivo\.pio")),
+            PathBuf::from(r"C:\work\kivo\.pio")
+        );
+        assert_eq!(
+            platformio_path(Path::new(r"\\?\UNC\server\share\.pio")),
+            PathBuf::from(r"\\server\share\.pio")
+        );
     }
 
     #[test]

@@ -8,6 +8,12 @@ endif
 PYTHON ?= python3
 UV ?= uv
 UV_CMD = "$(UV)"
+ifeq ($(OS),Windows_NT)
+NPM ?= npm.cmd
+else
+NPM ?= npm
+endif
+NPM_CMD = "$(NPM)"
 BAUD ?= 115200
 PRODUCT_OUTPUT_DIR ?= output/products
 FIRMWARE ?=
@@ -159,16 +165,16 @@ test:
 	cargo test --manifest-path src-tauri/Cargo.toml --all-features
 	cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 	cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
-	npm test
-	npm run build
+	$(NPM_CMD) test
+	$(NPM_CMD) run build
 
 client:
-	npm run tauri dev
+	$(NPM_CMD) run tauri dev
 
 helper: client
 
 studio:
-	CARGO_TARGET_DIR="$$(pwd -P)/src-tauri/target-studio" KIVO_REPOSITORY_ROOT="$$(pwd -P)" npm run tauri -- dev --features product-studio --config src-tauri/tauri.studio.conf.json
+	CARGO_TARGET_DIR="$$(pwd -P)/src-tauri/target-studio" KIVO_REPOSITORY_ROOT="$$(pwd -P)" $(NPM_CMD) run tauri -- dev --features product-studio --config src-tauri/tauri.studio.conf.json
 
 helper-kill:
 	@$(UV_CMD) run python scripts/kill_helper.py
@@ -179,10 +185,10 @@ helper-build: helper-build-app
 	$(MAKE) helper-build-studio
 
 helper-build-app:
-	npm run tauri build
+	$(NPM_CMD) run tauri build
 
 helper-build-studio:
-	npm run tauri build -- --features product-studio --config src-tauri/tauri.studio.conf.json
+	$(NPM_CMD) run tauri build -- --features product-studio --config src-tauri/tauri.studio.conf.json
 
 # Bump patch in .env and create annotated git tag. Override version: make release V=v1.2.3
 release:
