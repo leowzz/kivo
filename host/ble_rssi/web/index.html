@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>手机信号</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+    <script src="/assets/app.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>手机信号</h1>
+        <a class="export" href="/api/export.csv" download>
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path
+              d="M10 2.5v10m-3.5-3L10 13l3.5-3.5M3.5 13.5v3h13v-3"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          导出 CSV
+        </a>
+      </header>
+
+      <div class="reading-row">
+        <div>
+          <div class="reading">
+            <span class="number waiting" id="reading">等待新读数</span>
+            <span class="unit" id="unit" hidden>dBm</span>
+          </div>
+          <div class="freshness" id="freshness">正在连接采样服务…</div>
+        </div>
+        <div class="connection">
+          <div class="state warn" id="connection">
+            <span class="dot"></span>
+            <span id="connection-text">连接中</span>
+          </div>
+          <div class="peer" id="peer"></div>
+        </div>
+      </div>
+
+      <section class="chart-card" aria-label="RSSI 历史曲线">
+        <div class="toolbar">
+          <div class="windows" role="group" aria-label="显示时间范围">
+            <button data-window="60" aria-pressed="true">1 分钟</button>
+            <button data-window="300" aria-pressed="false">5 分钟</button>
+            <button data-window="900" aria-pressed="false">15 分钟</button>
+            <button data-window="all" aria-pressed="false">全部</button>
+          </div>
+          <div class="toolbar-right">
+            <div class="legend">
+              <span class="legend-item"><i class="swatch"></i>原始信号</span>
+              <label>
+                <input type="checkbox" id="smooth" checked>
+                <i class="swatch trend"></i>平滑趋势
+              </label>
+            </div>
+            <button class="quiet-button" id="pause" type="button">暂停画面</button>
+          </div>
+        </div>
+        <div class="plot" id="plot">
+          <canvas
+            id="chart"
+            aria-label="手机蓝牙信号强度随时间变化，数值越接近零信号越强"
+          ></canvas>
+          <div class="empty" id="empty">
+            <strong>等待手机信号</strong>
+            <span>保持手机与 Kivo RSSI Demo 连接</span>
+          </div>
+          <div class="tooltip" id="tooltip">
+            <strong id="tooltip-value"></strong>
+            <span id="tooltip-time"></span>
+          </div>
+        </div>
+        <div class="chart-footer">
+          <span class="live-note" id="live-note">实时记录</span>
+          <span>数值越接近 0，信号越强</span>
+        </div>
+      </section>
+
+      <div class="marker-row">
+        <form class="marker-form" id="marker-form">
+          <label class="visually-hidden" for="marker-label">位置标记</label>
+          <input
+            id="marker-label"
+            maxlength="64"
+            placeholder="例如：桌边、门口"
+            autocomplete="off"
+          >
+          <button id="marker-button" type="submit">标记位置</button>
+        </form>
+        <span class="marker-result" id="marker-result" role="status"></span>
+      </div>
+      <div class="error-note" id="error-note" role="status"></div>
+    </main>
+  </body>
+</html>

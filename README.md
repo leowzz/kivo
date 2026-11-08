@@ -287,6 +287,12 @@ make monitor-esp32s3 SERIAL=ABCDEF123456 BAUD=921600
 
 监控命令会先停止可能占用串口的 Kivo helper。按 `Ctrl+C` 退出监控。
 
+### BLE RSSI 实验
+
+ESP32-S3 的独立实验固件放在 [firmware/demos/ble-rssi](firmware/demos/ble-rssi/README.md)，支持手机系统蓝牙配对后读取连接 RSSI，以及扫描指定设备的 BLE 广播。电脑端 [host/ble_rssi](host/ble_rssi/README.md) 提供实时曲线、位置标记、历史保存与 CSV 导出。
+
+实测数据和离开、回来阈值的适用范围见[实验记录](docs/research/ble-rssi-presence.md)。当前只采集信号，尚未接入屏幕控制。
+
 ## 测试与构建
 
 ```bash
@@ -308,6 +314,8 @@ src-tauri/src/app/   APP 启动、运行服务装配与 IPC 命令
 src-tauri/src/studio.rs  Studio 启动、产品仓库和构建命令
 src-tauri/src/studio/    独立串口诊断会话
 firmware/src/        固件入口与 ESP32-S3、RP2040 平台适配
+firmware/demos/      独立实验固件，各自维护 PlatformIO 配置
+host/ble_rssi/       BLE RSSI 采集服务与网页静态资源
 lib/gpio_trigger/    板卡无关的输入拓扑、去抖与协议状态机
 models/prod/         随应用发布的旧版 Device Profile
 products/            Studio 管理的产品定义
